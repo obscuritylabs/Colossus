@@ -14,7 +14,11 @@ use rmcp::{
         },
     },
 };
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 /// Permit-bound configured MCP adapter.
 pub struct McpExecutor {
@@ -977,6 +981,7 @@ pub(super) async fn execute_remote_operation<C>(
     server: &ConfiguredServer,
     operation: &McpOperation,
     headers: HashMap<HeaderName, HeaderValue>,
+    call_dispatched: &AtomicBool,
 ) -> Result<RemoteOperationResult, ExecutionError>
 where
     C: StreamableHttpClient + Send + Sync,
@@ -1014,7 +1019,8 @@ where
                 PaginatedRequestParams::default().with_cursor(cursor.clone()),
             ))
             .await
-            .map(RemoteOperationResult::Tools),
+            .map(RemoteOperationResult::Tools)
+            .map_err(|_| failed("MCP Streamable HTTP operation failed")),
         McpOperation::CallTool {
             tool, arguments, ..
         } => {
@@ -1022,14 +1028,16 @@ where
                 .as_object()
                 .cloned()
                 .ok_or_else(|| failed("MCP tool arguments must be an object"))?;
+            call_dispatched.store(true, Ordering::Release);
             service
                 .call_tool(CallToolRequestParams::new(tool.clone()).with_arguments(arguments))
                 .await
                 .map(RemoteOperationResult::Call)
+                .map_err(|_| operation_error(operation, "MCP Streamable HTTP operation failed"))
         }
     };
     let _ = service.close_with_timeout(Duration::from_millis(500)).await;
-    result.map_err(|_| failed("MCP Streamable HTTP operation failed"))
+    result
 }
 
 pub(super) fn redact_value(value: &mut Value, secrets: &[String]) {
@@ -1101,6 +1109,19 @@ fn operation_error(operation: &McpOperation, error: impl std::fmt::Display) -> E
     }
 }
 
+pub(super) fn remote_timeout_error(
+    operation: &McpOperation,
+    call_dispatched: bool,
+) -> ExecutionError {
+    if operation.is_call() && call_dispatched {
+        operation_error(operation, "MCP HTTP operation timed out")
+    } else if operation.is_call() {
+        failed("MCP HTTP operation timed out before tool dispatch")
+    } else {
+        failed("MCP HTTP operation timed out")
+    }
+}
+
 fn bounded_result(
     value: &impl Serialize,
     max_output_bytes: u64,
@@ -1141,6 +1162,7 @@ impl EffectExecutor for McpExecutor {
             let http =
                 HardenedStreamableHttpClient::new(endpoint, &permit, &self.tls_roots).await?;
             let timeout = Duration::from_millis(permit.obligations().timeout_ms);
+            let call_dispatched = AtomicBool::new(false);
             let result = if server.oauth.is_some() {
                 let manager = self
                     .oauth_manager(
@@ -1160,18 +1182,31 @@ impl EffectExecutor for McpExecutor {
                 secrets.push(access_token);
                 tokio::time::timeout(
                     timeout,
-                    execute_remote_operation(http, &server, &input.operation, headers),
+                    execute_remote_operation(
+                        http,
+                        &server,
+                        &input.operation,
+                        headers,
+                        &call_dispatched,
+                    ),
                 )
                 .await
             } else {
                 tokio::time::timeout(
                     timeout,
-                    execute_remote_operation(http, &server, &input.operation, headers),
+                    execute_remote_operation(
+                        http,
+                        &server,
+                        &input.operation,
+                        headers,
+                        &call_dispatched,
+                    ),
                 )
                 .await
             }
-            .map_err(|_| operation_error(&input.operation, "MCP HTTP operation timed out"))?
-            .map_err(|error| operation_error(&input.operation, error))?;
+            .map_err(|_| {
+                remote_timeout_error(&input.operation, call_dispatched.load(Ordering::Acquire))
+            })??;
             return match (&input.operation, result) {
                 (McpOperation::ListTools { .. }, RemoteOperationResult::Tools(result)) => {
                     let page = parse_tools_result(result, &server)

@@ -953,29 +953,19 @@ impl RuntimeAgentRunApi {
                         }
                     }
                 };
-                let execution = async {
-                    let approved = self
-                        .runtime
-                        .approve_plan_at_revision(
-                            &run.session_id,
-                            &selection.plan.id,
-                            selection.plan.revision,
-                        )
-                        .await?;
-                    self.runtime
-                        .execute_public_plan_stream_controlled(
-                            &run.role,
-                            &run.session_id,
-                            &approved.id,
-                            approved.revision,
-                            strategy,
-                            max_turns,
-                            &run.id,
-                            &mut observer,
-                            &control,
-                        )
-                        .await
-                };
+                let execution = self
+                    .runtime
+                    .approve_and_execute_public_plan_stream_controlled(
+                        &run.role,
+                        &run.session_id,
+                        &selection.plan.id,
+                        selection.plan.revision,
+                        strategy,
+                        max_turns,
+                        &run.id,
+                        &mut observer,
+                        &control,
+                    );
                 match self
                     .interactions
                     .scope(Arc::clone(&writer), execution)
@@ -1538,9 +1528,11 @@ fn public_plan_execution(outcome: PlanExecutionOutcome) -> RunUpdateKind {
                 result.plan = Some(plan);
                 public_cancellation(result)
             }
-            ControlledAgentTerminal::Failed { message, .. } => {
-                plan_execution_failure(message, false)
-            }
+            ControlledAgentTerminal::Failed {
+                message,
+                outcome_unknown,
+                ..
+            } => plan_execution_failure(message, false, outcome_unknown),
         },
         PlanExecutionOutcome::Goal { plan, terminal } => match terminal {
             GoalRunOutcome::Completed { result } => public_goal_result(plan, result),
@@ -1561,9 +1553,10 @@ fn public_plan_execution(outcome: PlanExecutionOutcome) -> RunUpdateKind {
             },
             GoalRunOutcome::Failed {
                 message,
+                outcome_unknown,
                 result: _,
                 run_id: _,
-            } => plan_execution_failure(message, true),
+            } => plan_execution_failure(message, true, outcome_unknown),
         },
     }
 }
@@ -1603,14 +1596,31 @@ fn public_plan_status(status: PlanStatus) -> PublicPlanStatus {
     }
 }
 
-fn plan_execution_failure(message: String, recoverable: bool) -> RunUpdateKind {
+fn plan_execution_failure(
+    message: String,
+    recoverable_if_known: bool,
+    outcome_unknown: bool,
+) -> RunUpdateKind {
     RunUpdateKind::Failure {
-        status: RunStatus::Failed,
+        status: if outcome_unknown {
+            RunStatus::OutcomeUnknown
+        } else {
+            RunStatus::Failed
+        },
         failure: RunFailure {
-            code: "plan.execution_failed".into(),
+            code: if outcome_unknown {
+                "plan.execution_outcome_unknown"
+            } else {
+                "plan.execution_failed"
+            }
+            .into(),
             message,
-            outcome: OutcomeCertainty::Known,
-            recoverable,
+            outcome: if outcome_unknown {
+                OutcomeCertainty::Unknown
+            } else {
+                OutcomeCertainty::Known
+            },
+            recoverable: !outcome_unknown && recoverable_if_known,
             http_status: None,
             retry_after_ms: None,
         },
@@ -1741,7 +1751,7 @@ fn released_runtime_failure(error: &RuntimeError) -> RunFailure {
             "the provider repeatedly returned invalid tool arguments",
             OutcomeCertainty::Known,
         ),
-        _ if runtime_error_outcome_unknown(error) => generic_failure(
+        _ if error.outcome_unknown() => generic_failure(
             "runtime.outcome_unknown",
             "an external effect has no trustworthy terminal outcome",
             OutcomeCertainty::Unknown,
@@ -1871,73 +1881,6 @@ fn generic_failure(code: &str, message: &str, outcome: OutcomeCertainty) -> RunF
     }
 }
 
-fn runtime_error_outcome_unknown(error: &RuntimeError) -> bool {
-    match error {
-        RuntimeError::Store(error) => store_error_outcome_unknown(error),
-        RuntimeError::Gateway(error) => gateway_error_outcome_unknown(error),
-        RuntimeError::SearchPort(colossus_ports::SearchError::OutcomeUnknown(_)) => true,
-        RuntimeError::Agent(error) => agent_error_outcome_unknown(error),
-        RuntimeError::Context(error) => context_error_outcome_unknown(error),
-        RuntimeError::Config(_)
-        | RuntimeError::Io(_)
-        | RuntimeError::Provider(_)
-        | RuntimeError::Search(_)
-        | RuntimeError::SearchPort(_)
-        | RuntimeError::ToolCatalog(_)
-        | RuntimeError::Mcp(_)
-        | RuntimeError::Pack(_)
-        | RuntimeError::Workflow(_) => false,
-    }
-}
-
-fn agent_error_outcome_unknown(error: &colossus_agent::AgentError) -> bool {
-    match error {
-        colossus_agent::AgentError::Provider(error) => {
-            matches!(error, ModelProviderError::OutcomeUnknown(_))
-        }
-        colossus_agent::AgentError::Tool(error) => {
-            matches!(error, colossus_ports::ToolError::OutcomeUnknown(_))
-        }
-        colossus_agent::AgentError::Store(error) => store_error_outcome_unknown(error),
-        colossus_agent::AgentError::Context(error) => context_error_outcome_unknown(error),
-        colossus_agent::AgentError::Configuration(_)
-        | colossus_agent::AgentError::ToolArgumentRecoveryExhausted { .. }
-        | colossus_agent::AgentError::MaxTurns { .. }
-        | colossus_agent::AgentError::EmptyTurn
-        | colossus_agent::AgentError::PlanWriteRequired
-        | colossus_agent::AgentError::Cancelled { .. } => false,
-    }
-}
-
-fn context_error_outcome_unknown(error: &colossus_ports::ContextError) -> bool {
-    match error {
-        colossus_ports::ContextError::Store(error) => store_error_outcome_unknown(error),
-        colossus_ports::ContextError::Provider(error) => {
-            matches!(error, ModelProviderError::OutcomeUnknown(_))
-        }
-        colossus_ports::ContextError::Configuration(_) => false,
-    }
-}
-
-fn gateway_error_outcome_unknown(error: &colossus_policy::GatewayError) -> bool {
-    match error {
-        colossus_policy::GatewayError::OutcomeUnknown(_) => true,
-        colossus_policy::GatewayError::Journal(error) => store_error_outcome_unknown(error),
-        colossus_policy::GatewayError::Safety(_)
-        | colossus_policy::GatewayError::Denied(_)
-        | colossus_policy::GatewayError::Approval(_)
-        | colossus_policy::GatewayError::Policy(_)
-        | colossus_policy::GatewayError::Execution(_)
-        | colossus_policy::GatewayError::RecoverableExecution { .. }
-        | colossus_policy::GatewayError::HttpStatus { .. }
-        | colossus_policy::GatewayError::Contract(_) => false,
-    }
-}
-
-fn store_error_outcome_unknown(error: &StoreError) -> bool {
-    matches!(error, StoreError::OutcomeUnknown(_))
-}
-
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -1947,7 +1890,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use colossus_contracts::{PlanRecord, PlanStatus};
+    use colossus_contracts::{GoalRecord, GoalStatus, PlanRecord, PlanStatus};
 
     fn draft_plan() -> PlanRecord {
         PlanRecord {
@@ -1962,6 +1905,36 @@ mod tests {
             updated_at: "2026-07-29T00:00:00Z".into(),
             approved_at: None,
             executed_run_id: None,
+        }
+    }
+
+    fn executed_plan() -> PlanRecord {
+        let mut plan = draft_plan();
+        plan.status = PlanStatus::Executed;
+        plan.revision = 3;
+        plan.approved_at = Some("2026-07-29T00:01:00Z".into());
+        plan.executed_run_id = Some("run-1".into());
+        plan
+    }
+
+    fn active_goal_result() -> GoalRunResult {
+        GoalRunResult {
+            goal: GoalRecord {
+                id: "goal-1".into(),
+                session_id: "session-1".into(),
+                objective: "Execute the Plan".into(),
+                source_plan_id: Some("plan-1".into()),
+                status: GoalStatus::Active,
+                summary: String::new(),
+                blocked_reason: String::new(),
+                iteration_budget: 3,
+                iterations_completed: 1,
+                created_at: "2026-07-29T00:00:00Z".into(),
+                updated_at: "2026-07-29T00:01:00Z".into(),
+            },
+            iterations: Vec::new(),
+            iteration_budget_exhausted: false,
+            elapsed_seconds: 0.25,
         }
     }
 
@@ -2022,6 +1995,48 @@ mod tests {
             panic!("result must remain terminal");
         };
         assert_eq!(result.plan_id.as_deref(), Some("plan-1"));
+    }
+
+    #[test]
+    fn direct_plan_failure_preserves_unknown_outcome_certainty() {
+        let update = public_plan_execution(PlanExecutionOutcome::Direct {
+            plan: executed_plan(),
+            terminal: ControlledAgentTerminal::Failed {
+                run_id: "run-1".into(),
+                message: "effect outcome is unknown".into(),
+                outcome_unknown: true,
+            },
+        });
+
+        let RunUpdateKind::Failure { status, failure } = update else {
+            panic!("failure must remain terminal");
+        };
+        assert_eq!(status, RunStatus::OutcomeUnknown);
+        assert_eq!(failure.outcome, OutcomeCertainty::Unknown);
+        assert!(!failure.recoverable);
+    }
+
+    #[test]
+    fn goal_plan_failure_preserves_unknown_outcome_certainty() {
+        let update = public_plan_execution(PlanExecutionOutcome::Goal {
+            plan: executed_plan(),
+            terminal: GoalRunOutcome::Failed {
+                result: active_goal_result(),
+                run_id: Some("run-1".into()),
+                message: "effect outcome is unknown".into(),
+                outcome_unknown: true,
+            },
+        });
+
+        let RunUpdateKind::Failure { status, failure } = update else {
+            panic!("failure must remain terminal");
+        };
+        assert_eq!(status, RunStatus::OutcomeUnknown);
+        assert_eq!(failure.outcome, OutcomeCertainty::Unknown);
+        assert!(
+            !failure.recoverable,
+            "unknown Goal outcomes cannot be retried"
+        );
     }
 
     #[test]

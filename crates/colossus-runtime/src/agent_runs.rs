@@ -41,6 +41,22 @@ fn validate_plan_execution_selection(
     Ok(())
 }
 
+fn validate_public_plan_execution_selection(
+    plan: &PlanRecord,
+    expected_session_id: &str,
+    expected_revision: u64,
+) -> Result<(), RuntimeError> {
+    if plan.session_id != expected_session_id
+        || plan.status != PlanStatus::Draft
+        || plan.revision != expected_revision
+    {
+        return Err(RuntimeError::Config(
+            "public Plan execution requires the selected same-session draft revision".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_goal_resume_selection(
     goal: &GoalRecord,
     expected_session_id: &str,
@@ -92,6 +108,7 @@ fn failed_goal_outcome(
     iterations: Vec<GoalIterationResult>,
     run_id: Option<String>,
     message: String,
+    outcome_unknown: bool,
     elapsed_seconds: f64,
 ) -> GoalRunOutcome {
     let result = goal_run_result(goal, iterations, elapsed_seconds);
@@ -100,6 +117,7 @@ fn failed_goal_outcome(
             result,
             run_id,
             message,
+            outcome_unknown,
         }
     } else {
         GoalRunOutcome::Completed { result }
@@ -855,19 +873,20 @@ impl Runtime {
             strategy,
             max_turns,
             None,
+            true,
             observer,
             control,
         )
         .await
     }
 
-    /// Execute one exact approved Plan revision as an already-durable public run.
+    /// Approve and consume one exact draft Plan revision as an already-durable public run.
     ///
     /// Direct execution consumes the Plan with the public run identity so emitted
     /// events remain bound to the durable caller-owned run. Goal execution retains
     /// its canonical per-iteration run identities under the outer public Goal run.
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_public_plan_stream_controlled(
+    pub async fn approve_and_execute_public_plan_stream_controlled(
         &self,
         role: &str,
         expected_session_id: &str,
@@ -879,14 +898,26 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<PlanExecutionOutcome, RuntimeError> {
+        let selected = self
+            .work
+            .get_plan(plan_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+        validate_public_plan_execution_selection(&selected, expected_session_id, revision)?;
+        if control.is_cancelled() {
+            return Ok(PlanExecutionOutcome::CancelledBeforeStart { plan: selected });
+        }
+        let approved = self
+            .approve_plan_at_revision(expected_session_id, plan_id, revision)
+            .await?;
         self.execute_plan_stream_controlled_with_run_id(
             role,
             expected_session_id,
-            plan_id,
-            revision,
+            &approved.id,
+            approved.revision,
             strategy,
             max_turns,
             Some(public_run_id),
+            false,
             observer,
             control,
         )
@@ -903,6 +934,7 @@ impl Runtime {
         strategy: PlanExecutionStrategy,
         max_turns: Option<u16>,
         public_run_id: Option<&str>,
+        cancel_before_consumption: bool,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<PlanExecutionOutcome, RuntimeError> {
@@ -911,7 +943,7 @@ impl Runtime {
             .get_plan(plan_id)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
         validate_plan_execution_selection(&plan, expected_session_id, revision)?;
-        if control.is_cancelled() {
+        if cancel_before_consumption && control.is_cancelled() {
             return Ok(PlanExecutionOutcome::CancelledBeforeStart { plan });
         }
         match strategy {
@@ -939,6 +971,7 @@ impl Runtime {
                             terminal: ControlledAgentTerminal::Failed {
                                 run_id,
                                 message: bounded_execution_error(&error.to_string()),
+                                outcome_unknown: error.outcome_unknown(),
                             },
                         });
                     }
@@ -955,6 +988,7 @@ impl Runtime {
                                 message: bounded_execution_error(&format!(
                                     "consumed Plan result was invalid: {error}"
                                 )),
+                                outcome_unknown: false,
                             },
                         });
                     }
@@ -979,6 +1013,7 @@ impl Runtime {
                                 break ControlledAgentTerminal::Failed {
                                     run_id: run_id.clone(),
                                     message: bounded_execution_error(&error.to_string()),
+                                    outcome_unknown: error.outcome_unknown(),
                                 };
                             }
                         }
@@ -993,6 +1028,7 @@ impl Runtime {
                                 Err(error) => ControlledAgentTerminal::Failed {
                                     run_id: run_id.clone(),
                                     message: bounded_execution_error(&error.to_string()),
+                                    outcome_unknown: error.outcome_unknown(),
                                 },
                             };
                         }
@@ -1039,6 +1075,7 @@ impl Runtime {
                                 Vec::new(),
                                 None,
                                 bounded_execution_error(&error.to_string()),
+                                error.outcome_unknown(),
                                 0.0,
                             ),
                         });
@@ -1063,6 +1100,7 @@ impl Runtime {
                                     Vec::new(),
                                     None,
                                     "approved Plan Goal handoff omitted its consumed Plan".into(),
+                                    false,
                                     0.0,
                                 ),
                             });
@@ -1088,6 +1126,7 @@ impl Runtime {
                                     bounded_execution_error(&format!(
                                         "consumed Goal result was invalid: {error}"
                                     )),
+                                    false,
                                     0.0,
                                 ),
                             });
@@ -1146,6 +1185,7 @@ impl Runtime {
                         iterations,
                         None,
                         "the active goal disappeared".into(),
+                        false,
                         started.elapsed().as_secs_f64(),
                     );
                 }
@@ -1155,6 +1195,7 @@ impl Runtime {
                         iterations,
                         None,
                         bounded_execution_error(&error.to_string()),
+                        matches!(error, StoreError::OutcomeUnknown(_)),
                         started.elapsed().as_secs_f64(),
                     );
                 }
@@ -1198,6 +1239,7 @@ impl Runtime {
                     iterations,
                     Some(run_id),
                     bounded_execution_error(&error.to_string()),
+                    error.outcome_unknown(),
                     started.elapsed().as_secs_f64(),
                 );
             }
@@ -1255,6 +1297,7 @@ impl Runtime {
                         iterations,
                         Some(run_id.clone()),
                         bounded_execution_error(&error.to_string()),
+                        error.outcome_unknown(),
                         started.elapsed().as_secs_f64(),
                     );
                 }
@@ -1379,15 +1422,17 @@ mod plan_mode_instruction_tests {
     use super::{
         KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions, cancelled_goal_outcome,
         failed_goal_outcome, validate_goal_resume_selection, validate_plan_execution_selection,
-        with_plan_mode_instructions,
+        validate_public_plan_execution_selection, with_plan_mode_instructions,
     };
     use colossus_contracts::{
-        ExecutionContext, GoalRecord, GoalRunOutcome, GoalStatus, ModelCapabilities, ModelLimits,
-        ModelRequest, PlanDraftTarget, PlanRecord, PlanStatus, ProviderRoute, ProviderTurn,
-        RunEventEnvelope, ToolCall, ToolResult,
+        ApprovalProof, ControlledAgentTerminal, EffectRequest, ExecutionContext, GoalRecord,
+        GoalRunOutcome, GoalStatus, ModelCapabilities, ModelLimits, ModelRequest, PlanDraftTarget,
+        PlanExecutionOutcome, PlanExecutionStrategy, PlanRecord, PlanStatus, PlanStep,
+        PolicyDecision, ProviderRoute, ProviderTurn, RunEventEnvelope, ToolCall, ToolResult,
     };
     use colossus_ports::{
-        ModelProvider, ModelProviderError, RunControl, RunEventObserver, ToolError, ToolExecutor,
+        ApprovalProvider, ModelProvider, ModelProviderError, PolicyError, RunControl,
+        RunEventObserver, ToolError, ToolExecutor,
     };
     use std::{
         fs,
@@ -1458,6 +1503,26 @@ mod plan_mode_instruction_tests {
     impl RunEventObserver for SilentRunObserver {
         async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
             Ok(())
+        }
+    }
+
+    struct CancelOnApproval {
+        control: RunControl,
+        inner: colossus_policy::AllowApproval,
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalProvider for CancelOnApproval {
+        async fn request_approval(
+            &self,
+            request: &EffectRequest,
+            request_hash: &str,
+            decision: &PolicyDecision,
+        ) -> Result<Option<ApprovalProof>, PolicyError> {
+            self.control.cancel();
+            self.inner
+                .request_approval(request, request_hash, decision)
+                .await
         }
     }
 
@@ -1537,6 +1602,7 @@ mod plan_mode_instruction_tests {
             Vec::new(),
             Some("run-1".into()),
             "failed".into(),
+            false,
             0.1,
         );
         let GoalRunOutcome::Failed { result, run_id, .. } = failed else {
@@ -1544,6 +1610,22 @@ mod plan_mode_instruction_tests {
         };
         assert_eq!(result.goal.status, GoalStatus::Active);
         assert_eq!(run_id.as_deref(), Some("run-1"));
+
+        let unknown = failed_goal_outcome(
+            goal(GoalStatus::Active),
+            Vec::new(),
+            Some("run-2".into()),
+            "unknown".into(),
+            true,
+            0.1,
+        );
+        assert!(matches!(
+            unknown,
+            GoalRunOutcome::Failed {
+                outcome_unknown: true,
+                ..
+            }
+        ));
 
         assert!(matches!(
             cancelled_goal_outcome(goal(GoalStatus::Complete), Vec::new(), None, 0.1),
@@ -1555,6 +1637,7 @@ mod plan_mode_instruction_tests {
                 Vec::new(),
                 None,
                 "late failure".into(),
+                false,
                 0.1,
             ),
             GoalRunOutcome::Completed { .. }
@@ -1576,6 +1659,19 @@ mod plan_mode_instruction_tests {
     }
 
     #[test]
+    fn public_plan_execution_requires_the_selected_draft_revision() {
+        let mut selected = plan("session-1");
+        selected.status = PlanStatus::Draft;
+        selected.approved_at = None;
+        validate_public_plan_execution_selection(&selected, "session-1", 3)
+            .expect("selected draft");
+        assert!(validate_public_plan_execution_selection(&selected, "session-2", 3).is_err());
+        assert!(validate_public_plan_execution_selection(&selected, "session-1", 2).is_err());
+        selected.status = PlanStatus::Approved;
+        assert!(validate_public_plan_execution_selection(&selected, "session-1", 3).is_err());
+    }
+
+    #[test]
     fn goal_resume_requires_the_owning_session_active_status_and_remaining_budget() {
         let active = goal(GoalStatus::Active);
         validate_goal_resume_selection(&active, "session-1").expect("active same-session goal");
@@ -1586,6 +1682,165 @@ mod plan_mode_instruction_tests {
         let error = validate_goal_resume_selection(&exhausted, "session-1")
             .expect_err("an exhausted goal has no remaining work to resume");
         assert!(error.to_string().contains("remaining iteration budget"));
+    }
+
+    #[test]
+    fn public_plan_cancellation_cannot_strand_an_approved_plan() {
+        const CHILD_MARKER: &str = "COLOSSUS_RUNTIME_PLAN_CANCELLATION_TEST_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let status = Command::new(std::env::current_exe().expect("current test executable"))
+                .args([
+                    "--exact",
+                    "agent_runs::plan_mode_instruction_tests::public_plan_cancellation_cannot_strand_an_approved_plan",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .env("COLOSSUS_RUNTIME_PLAN_TEST_JOURNAL", "55".repeat(32))
+                .env("COLOSSUS_RUNTIME_PLAN_TEST_SIGNING", "66".repeat(32))
+                .status()
+                .expect("spawn isolated Plan cancellation test");
+            assert!(status.success(), "Plan cancellation child failed");
+            return;
+        }
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let directory = tempfile::tempdir().expect("runtime directory");
+                let root = fs::canonicalize(directory.path()).expect("canonical runtime directory");
+                let suffix = Uuid::now_v7().simple().to_string();
+                let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
+                config.storage.keys = KeyConfig::Environment {
+                    journal_variable: "COLOSSUS_RUNTIME_PLAN_TEST_JOURNAL".into(),
+                    journal_key_id: format!("journal-{suffix}"),
+                    signing_variable: "COLOSSUS_RUNTIME_PLAN_TEST_SIGNING".into(),
+                    anchor_path: root.join("anchor.json"),
+                };
+                config.workflows.repository = root.join("workflows-bundled");
+                config.workflows.user = root.join("workflows-user");
+                config.skills.bundled = root.join("skills-bundled");
+                config.skills.repository = root.join("skills-repository");
+                config.skills.user = root.join("skills-user");
+                config.packs.install_root = root.join("packs");
+                for path in [
+                    &config.workflows.repository,
+                    &config.workflows.user,
+                    &config.skills.bundled,
+                    &config.skills.repository,
+                    &config.skills.user,
+                    &config.packs.install_root,
+                ] {
+                    fs::create_dir_all(path).expect("fixture directory");
+                }
+
+                let approval_control = RunControl::default();
+                let runtime = Runtime::open_with_options(
+                    &config,
+                    Arc::new(CancelOnApproval {
+                        control: approval_control.clone(),
+                        inner: colossus_policy::AllowApproval {
+                            approved_by: "plan-cancellation-test".into(),
+                        },
+                    }),
+                    None,
+                    RuntimeOpenOptions::for_workspace(&root).expect("workspace options"),
+                )
+                .expect("runtime");
+                let session = runtime
+                    .create_session(Some("Plan cancellation"))
+                    .expect("session");
+                let mut observer = SilentRunObserver;
+
+                let draft = runtime
+                    .create_plan(
+                        &session.id,
+                        "Draft",
+                        "# Plan",
+                        vec![PlanStep {
+                            index: 1,
+                            title: "Execute".into(),
+                            detail: "Execute the bounded test Plan".into(),
+                            requires_mutation: false,
+                        }],
+                    )
+                    .await
+                    .expect("draft Plan");
+                let cancelled = RunControl::default();
+                cancelled.cancel();
+                let outcome = runtime
+                    .approve_and_execute_public_plan_stream_controlled(
+                        "primary",
+                        &session.id,
+                        &draft.id,
+                        draft.revision,
+                        PlanExecutionStrategy::Direct,
+                        Some(1),
+                        "public-run-before-approval",
+                        &mut observer,
+                        &cancelled,
+                    )
+                    .await
+                    .expect("pre-approval cancellation");
+                let PlanExecutionOutcome::CancelledBeforeStart { plan } = outcome else {
+                    panic!("cancellation before approval must leave an actionable draft");
+                };
+                assert_eq!(plan.status, PlanStatus::Draft);
+                assert_eq!(
+                    runtime
+                        .get_plan(&draft.id)
+                        .expect("draft readback")
+                        .expect("draft exists")
+                        .status,
+                    PlanStatus::Draft
+                );
+
+                let boundary = runtime
+                    .create_plan(
+                        &session.id,
+                        "Boundary",
+                        "# Plan",
+                        vec![PlanStep {
+                            index: 1,
+                            title: "Execute".into(),
+                            detail: "Execute the bounded test Plan".into(),
+                            requires_mutation: false,
+                        }],
+                    )
+                    .await
+                    .expect("boundary Plan");
+                let outcome = runtime
+                    .approve_and_execute_public_plan_stream_controlled(
+                        "primary",
+                        &session.id,
+                        &boundary.id,
+                        boundary.revision,
+                        PlanExecutionStrategy::Direct,
+                        Some(1),
+                        "public-run-after-approval",
+                        &mut observer,
+                        &approval_control,
+                    )
+                    .await
+                    .expect("approval-boundary cancellation");
+                let PlanExecutionOutcome::Direct { plan, terminal } = outcome else {
+                    panic!("approved Plan must be consumed before cancellation is returned");
+                };
+                assert_eq!(plan.status, PlanStatus::Executed);
+                assert!(matches!(
+                    terminal,
+                    ControlledAgentTerminal::Cancelled { .. }
+                ));
+                assert_eq!(
+                    runtime
+                        .get_plan(&boundary.id)
+                        .expect("executed readback")
+                        .expect("executed Plan exists")
+                        .status,
+                    PlanStatus::Executed
+                );
+            });
     }
 
     #[test]

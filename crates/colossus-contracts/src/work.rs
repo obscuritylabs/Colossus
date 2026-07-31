@@ -1,5 +1,9 @@
 use super::*;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Application-level behavior for one agent run.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -227,6 +231,9 @@ pub enum ControlledAgentTerminal {
         run_id: String,
         /// Bounded policy-released failure message.
         message: String,
+        /// True when an external effect may have occurred without a confirmed outcome.
+        #[serde(default, skip_serializing_if = "is_false")]
+        outcome_unknown: bool,
     },
 }
 
@@ -256,6 +263,9 @@ pub enum GoalRunOutcome {
         run_id: Option<String>,
         /// Bounded policy-released failure message.
         message: String,
+        /// True when an external effect may have occurred without a confirmed outcome.
+        #[serde(default, skip_serializing_if = "is_false")]
+        outcome_unknown: bool,
     },
 }
 
@@ -263,9 +273,9 @@ pub enum GoalRunOutcome {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "execution", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PlanExecutionOutcome {
-    /// Cancellation won before the approved Plan was consumed.
+    /// Cancellation won before the selected Plan was approved or consumed.
     CancelledBeforeStart {
-        /// Canonical still-approved Plan record.
+        /// Canonical still-actionable Plan record that was not consumed.
         plan: PlanRecord,
     },
     /// The Plan was consumed by one ordinary bounded agent run.

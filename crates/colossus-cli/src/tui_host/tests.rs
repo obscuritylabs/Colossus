@@ -73,6 +73,7 @@ fn plan_execution_mapping_distinguishes_pre_and_post_consumption() {
             terminal: ControlledAgentTerminal::Failed {
                 run_id: "run-1".into(),
                 message: "bounded failure".into(),
+                outcome_unknown: false,
             },
         },
         FooterState::default(),

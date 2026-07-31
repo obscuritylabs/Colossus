@@ -30,6 +30,34 @@ fn request_uses_official_protocol_models_and_no_secret_values() {
 }
 
 #[test]
+fn remote_call_timeout_certainty_follows_dispatch_stage() {
+    let call = McpOperation::CallTool {
+        server: "fixture".into(),
+        tool: "echo".into(),
+        arguments: json!({}),
+        input_schema: json!({"type": "object"}),
+    };
+    assert!(matches!(
+        remote_timeout_error(&call, false),
+        ExecutionError::Failed(_)
+    ));
+    assert!(matches!(
+        remote_timeout_error(&call, true),
+        ExecutionError::OutcomeUnknown(_)
+    ));
+    assert!(matches!(
+        remote_timeout_error(
+            &McpOperation::ListTools {
+                server: "fixture".into(),
+                cursor: None,
+            },
+            false,
+        ),
+        ExecutionError::Failed(_)
+    ));
+}
+
+#[test]
 fn discovered_schema_is_enforced_before_call() {
     let tool = McpToolSummary {
         server: "local".into(),
@@ -381,6 +409,215 @@ async fn encrypted_oauth_store_is_ciphertext_at_rest_and_reencrypts_after_rotati
     assert_eq!(record["key_id"], "key-2");
 }
 
+async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Option<Value>) {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut request = Vec::new();
+    let header_end = loop {
+        let mut chunk = [0_u8; 2048];
+        let count = stream.read(&mut chunk).await.expect("read request");
+        assert!(count > 0, "client disconnected before sending a request");
+        request.extend_from_slice(&chunk[..count]);
+        if let Some(index) = request.windows(4).position(|value| value == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    let headers = std::str::from_utf8(&request[..header_end]).expect("request headers");
+    let first = headers.lines().next().expect("request line").to_owned();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(str::trim)
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+    while request.len() < header_end + content_length {
+        let mut chunk = [0_u8; 2048];
+        let count = stream.read(&mut chunk).await.expect("read request body");
+        assert!(count > 0, "client disconnected before sending its body");
+        request.extend_from_slice(&chunk[..count]);
+    }
+    let body = &request[header_end..header_end + content_length];
+    (first, serde_json::from_slice(body).ok())
+}
+
+async fn write_http_response(
+    stream: &mut tokio::net::TcpStream,
+    status: &str,
+    extra_headers: &str,
+    body: &str,
+) {
+    use tokio::io::AsyncWriteExt as _;
+
+    let response = format!(
+        "HTTP/1.1 {status}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .expect("write response");
+}
+
+fn configured_http_server(endpoint: String) -> ConfiguredServer {
+    ConfiguredServer {
+        name: "fixture".into(),
+        transport: McpTransportKind::StreamableHttp,
+        command: PathBuf::new(),
+        args: Vec::new(),
+        cwd: None,
+        environment: BTreeMap::new(),
+        url: Some(endpoint),
+        headers: BTreeMap::new(),
+        credential_headers: BTreeMap::new(),
+        oauth: None,
+        allowed_tools: ToolAllowlist::All,
+        research_tools: Vec::new(),
+        timeout_ms: Some(5_000),
+        max_output_bytes: Some(1024 * 1024),
+        effect_action_prefix: None,
+        provenance: None,
+    }
+}
+
+#[tokio::test]
+async fn streamable_http_call_initialization_failure_has_a_known_outcome() {
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping loopback transport test: sandbox forbids listeners");
+            return;
+        }
+        Err(error) => panic!("listener: {error}"),
+    };
+    let address = listener.local_addr().expect("address");
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let (_, message) = read_http_request(&mut stream).await;
+        assert_eq!(
+            message
+                .and_then(|value| value["method"].as_str().map(str::to_owned))
+                .as_deref(),
+            Some("initialize")
+        );
+        write_http_response(&mut stream, "500 Internal Server Error", "", "").await;
+    });
+    let endpoint = format!("http://{address}/mcp");
+    let http = HardenedStreamableHttpClient::for_test(
+        endpoint.clone(),
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .expect("client"),
+        1024 * 1024,
+    );
+    let dispatched = std::sync::atomic::AtomicBool::new(false);
+    let result = execute_remote_operation(
+        http,
+        &configured_http_server(endpoint),
+        &McpOperation::CallTool {
+            server: "fixture".into(),
+            tool: "echo".into(),
+            arguments: json!({}),
+            input_schema: json!({"type": "object"}),
+        },
+        HashMap::new(),
+        &dispatched,
+    )
+    .await;
+    let Err(error) = result else {
+        panic!("initialization must fail");
+    };
+    assert!(matches!(error, ExecutionError::Failed(_)));
+    assert!(!dispatched.load(std::sync::atomic::Ordering::Acquire));
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn streamable_http_call_failure_after_dispatch_has_an_unknown_outcome() {
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping loopback transport test: sandbox forbids listeners");
+            return;
+        }
+        Err(error) => panic!("listener: {error}"),
+    };
+    let address = listener.local_addr().expect("address");
+    let server_task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let (first, message) = read_http_request(&mut stream).await;
+            let method = message
+                .as_ref()
+                .and_then(|value| value.get("method"))
+                .and_then(Value::as_str);
+            match method {
+                Some("initialize") => {
+                    let body = json!({
+                        "jsonrpc": "2.0",
+                        "id": message.as_ref().and_then(|value| value.get("id")).cloned().unwrap(),
+                        "result": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "fixture", "version": "1.0.0"}
+                        }
+                    })
+                    .to_string();
+                    write_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "Content-Type: application/json\r\nMcp-Session-Id: test-session\r\n",
+                        &body,
+                    )
+                    .await;
+                }
+                Some("notifications/initialized") => {
+                    write_http_response(&mut stream, "202 Accepted", "", "").await;
+                }
+                Some("tools/call") => break,
+                None if first.starts_with("GET ") => {
+                    write_http_response(&mut stream, "405 Method Not Allowed", "", "").await;
+                }
+                _ => panic!("unexpected MCP request: {first} {message:?}"),
+            }
+        }
+    });
+    let endpoint = format!("http://{address}/mcp");
+    let http = HardenedStreamableHttpClient::for_test(
+        endpoint.clone(),
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .expect("client"),
+        1024 * 1024,
+    );
+    let dispatched = std::sync::atomic::AtomicBool::new(false);
+    let result = execute_remote_operation(
+        http,
+        &configured_http_server(endpoint),
+        &McpOperation::CallTool {
+            server: "fixture".into(),
+            tool: "echo".into(),
+            arguments: json!({}),
+            input_schema: json!({"type": "object"}),
+        },
+        HashMap::new(),
+        &dispatched,
+    )
+    .await;
+    let Err(error) = result else {
+        panic!("dispatched call must fail without a response");
+    };
+    assert!(matches!(error, ExecutionError::OutcomeUnknown(_)));
+    assert!(dispatched.load(std::sync::atomic::Ordering::Acquire));
+    server_task.await.expect("server task");
+}
+
 #[tokio::test]
 async fn streamable_http_json_session_discovery_uses_fresh_stateful_transport() {
     use tokio::{
@@ -527,6 +764,7 @@ async fn streamable_http_json_session_discovery_uses_fresh_stateful_transport() 
             cursor: None,
         },
         HashMap::new(),
+        &std::sync::atomic::AtomicBool::new(false),
     )
     .await
     .expect("remote discovery");
@@ -589,6 +827,7 @@ async fn live_splunk_streamable_http_discovery() {
             http::HeaderName::from_static("authorization"),
             authorization,
         )]),
+        &std::sync::atomic::AtomicBool::new(false),
     )
     .await
     .expect("Splunk discovery");

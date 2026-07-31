@@ -1954,6 +1954,7 @@ async fn released_partial_stream_is_durable_before_unknown_outcome() {
         .run("primary", "test", "interrupt", 1)
         .await
         .expect_err("interrupted stream");
+    assert!(error.outcome_unknown());
     assert!(matches!(
         error,
         AgentError::Provider(ModelProviderError::OutcomeUnknown(_))

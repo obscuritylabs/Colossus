@@ -4,7 +4,7 @@ const BACKGROUND_PROJECTION_BATCH_LIMIT: usize = 32;
 const BACKGROUND_PROJECTION_MAX_ROUNDS: usize = 1;
 
 pub(super) async fn dispatch(
-    runtime: &Runtime,
+    runtime: &Arc<Runtime>,
     operation: WorkerOperation,
     maintenance: &tokio::sync::Mutex<()>,
 ) -> Result<Value, WorkerError> {
@@ -338,17 +338,31 @@ pub(super) async fn dispatch(
             session_id,
             max_iterations,
             source_plan_id,
-        } => Ok(serde_json::to_value(
-            runtime
-                .run_goal(
-                    &role,
-                    &objective,
-                    &session_id,
-                    max_iterations,
-                    source_plan_id.as_deref(),
-                )
-                .await?,
-        )?),
+        } => {
+            let runtime = Arc::clone(runtime);
+            let mut task = tokio::task::JoinSet::new();
+            task.spawn(async move {
+                runtime
+                    .run_goal(
+                        &role,
+                        &objective,
+                        &session_id,
+                        max_iterations,
+                        source_plan_id.as_deref(),
+                    )
+                    .await
+            });
+            let result = task
+                .join_next()
+                .await
+                .ok_or_else(|| WorkerError::Protocol("goal execution task disappeared".into()))?
+                .map_err(|error| {
+                    WorkerError::Runtime(RuntimeError::Config(format!(
+                        "goal execution task failed: {error}"
+                    )))
+                })??;
+            Ok(serde_json::to_value(result)?)
+        }
         WorkerOperation::AgentQueue {
             session_id,
             task,
