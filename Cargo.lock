@@ -1312,6 +1312,7 @@ dependencies = [
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
+ "colossus-tools",
  "futures",
  "rcgen",
  "reqwest 0.12.28",

@@ -1480,7 +1480,7 @@ sandbox:
             .contains("authorization: bearer terminal-secret")
     );
     assert!(requests[0].contains(r#""store":false"#));
-    assert!(requests[0].contains(r#""strict":true"#));
+    assert!(requests[0].contains(r#""strict":false"#));
     assert!(requests[0].contains("Use the Responses tool path and answer."));
     let first_body = requests[0]
         .split("\r\n\r\n")

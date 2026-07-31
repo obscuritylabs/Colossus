@@ -174,10 +174,15 @@ restored to their canonical names before runtime handling. A name that cannot be
 represented by that contract, or two canonical names that would produce the same
 alias, rejects the request locally rather than risking ambiguous tool authority.
 
-For `open_ai_compatible` profiles, provider-facing tool schemas omit `maxLength`
-annotations to interoperate with Chat Completions servers that compile tool definitions
-into bounded grammars. The canonical Colossus tool schema remains unchanged and is
-validated in full before execution.
+For both network provider kinds, every canonical tool schema must declare an object at
+its root. The provider adapter clones that schema and removes root-level `oneOf`,
+`anyOf`, `allOf`, `enum`, and `const` keywords to satisfy OpenAI function-tool request
+rules. Responses requests explicitly use non-strict function tools; Chat Completions
+requests omit `strict` and also remove `maxLength` annotations recursively for servers
+that compile tool definitions into bounded grammars. The canonical Colossus schema
+remains unchanged and is validated in full before policy or dispatch. Tool descriptions
+retain guidance for any projected cross-field rules, and execution handlers independently
+enforce their required argument relationships.
 
 `host:` references are resolved only by an application-managed runtime through its
 in-memory credential resolver. The standard CLI and daemon composition remain

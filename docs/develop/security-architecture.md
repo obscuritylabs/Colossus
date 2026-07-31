@@ -91,6 +91,16 @@ before they cross back into agent policy or dispatch. Unrepresentable names and 
 collisions fail closed before network execution. Diagnostic request bodies intentionally
 show the actual provider aliases because they are wire evidence, not authority records.
 
+Canonical tool schemas likewise remain the local authority. Before network execution,
+provider request validation requires every schema root to declare `type: object`. The
+adapter clones each schema and removes root-level `oneOf`, `anyOf`, `allOf`, `enum`, and
+`const` keywords from the provider copy; the Chat Completions copy also omits
+`maxLength` recursively. Responses marks the projected function as non-strict and Chat
+Completions leaves `strict` unset. These projections only shape model guidance. The tool
+registry validates model arguments against the unchanged canonical schema before policy
+or dispatch, and execution handlers independently recheck security-relevant cross-field
+invariants.
+
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and

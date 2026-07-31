@@ -12,7 +12,7 @@ pub struct ModelToolCall {
     pub arguments: Value,
 }
 
-/// One strict function tool exposed to a provider.
+/// One provider-neutral function tool definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelToolDefinition {
@@ -20,7 +20,7 @@ pub struct ModelToolDefinition {
     pub name: String,
     /// Bounded human-readable description.
     pub description: String,
-    /// JSON Schema for object arguments.
+    /// Canonical JSON Schema for object arguments; adapters may clone and project it on the wire.
     pub input_schema: Value,
 }
 

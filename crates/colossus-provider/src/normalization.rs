@@ -95,15 +95,40 @@ pub(super) fn validate_model_request(
     for tool in &request.tools {
         if tool.name.is_empty()
             || tool.description.len() > 16 * 1024
-            || !tool.input_schema.is_object()
             || !names.insert(tool.name.as_str())
         {
             return Err(ProviderError::Configuration(
-                "provider tools require unique names and object schemas".into(),
+                "provider tools require unique non-empty names and bounded descriptions".into(),
             ));
+        }
+        if object_tool_schema(&tool.input_schema).is_none() {
+            return Err(ProviderError::Configuration(format!(
+                "provider tool `{}` input schema root must declare type object",
+                tool.name
+            )));
         }
     }
     Ok(())
+}
+
+fn object_tool_schema(value: &Value) -> Option<&Map<String, Value>> {
+    value
+        .as_object()
+        .filter(|schema| schema.get("type").and_then(Value::as_str) == Some("object"))
+}
+
+fn compatible_openai_tool_schema(value: &Value) -> Result<Value, ProviderError> {
+    let mut projected = object_tool_schema(value)
+        .ok_or_else(|| {
+            ProviderError::Configuration(
+                "provider tool input schema root must declare type object".into(),
+            )
+        })?
+        .clone();
+    for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
+        projected.remove(keyword);
+    }
+    Ok(Value::Object(projected))
 }
 
 pub(super) fn responses_payload(
@@ -125,8 +150,8 @@ pub(super) fn responses_payload(
                 "type": "function",
                 "name": tool_names.provider_name(&tool.name)?,
                 "description": tool.description,
-                "parameters": tool.input_schema,
-                "strict": true,
+                "parameters": compatible_openai_tool_schema(&tool.input_schema)?,
+                "strict": false,
             }))
         })
         .collect::<Result<Vec<_>, ProviderError>>()?;
@@ -287,22 +312,28 @@ pub(super) fn chat_tool(
         "function": {
             "name": tool_names.provider_name(&tool.name)?,
             "description": tool.description,
-            "parameters": compatible_chat_tool_schema(&tool.input_schema),
+            "parameters": compatible_chat_tool_schema(&tool.input_schema)?,
         }
     }))
 }
 
-fn compatible_chat_tool_schema(value: &Value) -> Value {
+fn compatible_chat_tool_schema(value: &Value) -> Result<Value, ProviderError> {
+    Ok(schema_without_max_length(&compatible_openai_tool_schema(
+        value,
+    )?))
+}
+
+fn schema_without_max_length(value: &Value) -> Value {
     match value {
         Value::Object(object) => Value::Object(
             object
                 .iter()
                 .filter(|(key, _)| key.as_str() != "maxLength")
-                .map(|(key, value)| (key.clone(), compatible_chat_tool_schema(value)))
+                .map(|(key, value)| (key.clone(), schema_without_max_length(value)))
                 .collect(),
         ),
         Value::Array(values) => {
-            Value::Array(values.iter().map(compatible_chat_tool_schema).collect())
+            Value::Array(values.iter().map(schema_without_max_length).collect())
         }
         _ => value.clone(),
     }
