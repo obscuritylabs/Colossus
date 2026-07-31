@@ -1263,6 +1263,10 @@ pub(super) async fn dispatch_to_worker_if_active(
             Ok(true)
         }
         Command::Mcp(command) => {
+            if let McpAction::Auth(auth) = &command.command {
+                run_worker_mcp_auth(&client, &auth.command).await?;
+                return Ok(true);
+            }
             let operation = match &command.command {
                 McpAction::Servers => WorkerOperation::McpServers,
                 McpAction::Tools { server } => WorkerOperation::McpTools {
@@ -1277,6 +1281,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                     tool: tool.clone(),
                     arguments_source: arguments.clone(),
                 },
+                McpAction::Auth(_) => unreachable!("handled above"),
             };
             print_json(&client.call(operation).await?)?;
             Ok(true)

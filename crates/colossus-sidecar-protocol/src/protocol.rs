@@ -587,10 +587,6 @@ impl BootstrapGrant {
             || !valid_unique_tokens(&self.scopes)
             || !valid_unique_tokens(&self.allowed_roles)
             || !valid_unique_tokens(&self.allowed_tools)
-            || self
-                .allowed_tools
-                .iter()
-                .any(|tool| tool == "agent.delegate")
         {
             return Err(ProtocolError::InvalidFrame);
         }
@@ -1380,11 +1376,14 @@ mod tests {
     }
 
     #[test]
-    fn frames_fail_closed_on_oversize_and_delegation_authority() {
+    fn delegation_authority_is_accepted_as_a_bounded_tool() {
         let mut request = request();
         request.grant.allowed_tools.push("agent.delegate".into());
-        assert_eq!(request.validate(), Err(ProtocolError::InvalidFrame));
+        request.validate().expect("bounded delegation grant");
+    }
 
+    #[test]
+    fn frames_fail_closed_on_oversize() {
         let mut input = Cursor::new((u32::try_from(MAX_FRAME_BYTES).unwrap() + 1).to_be_bytes());
         assert_eq!(
             read_frame::<_, ParentFrame>(&mut input).err(),

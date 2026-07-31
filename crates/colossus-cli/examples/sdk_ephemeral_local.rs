@@ -192,6 +192,7 @@ async fn run_rust_prompt(
             role: "primary".to_owned(),
             mode: RunMode::Execute,
             selected_skills: Vec::new(),
+            plan_action: None,
             max_turns: 12,
             idempotency_key: IdempotencyKey::new(format!(
                 "sdk-ephemeral-create-{}",

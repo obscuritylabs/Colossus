@@ -1224,10 +1224,15 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
     config.mcp.servers.insert(
         "fixture".into(),
         McpServerConfig {
+            transport: colossus_mcp::McpTransportKind::Stdio,
             command,
             args: Vec::new(),
             working_directory: None,
             environment: BTreeMap::from([("CHILD_TOKEN".into(), "env:HOST_TOKEN".into())]),
+            url: None,
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: vec![McpResearchToolConfig {
                 tool: "search".into(),

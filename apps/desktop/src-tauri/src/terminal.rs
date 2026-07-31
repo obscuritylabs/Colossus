@@ -10,7 +10,7 @@ use std::{
 use colossus_sdk::WorkspaceIdentity;
 use portable_pty::{Child, MasterPty, PtySize};
 #[cfg(target_os = "macos")]
-use portable_pty::{NativePtySystem, PtySystem};
+use portable_pty::{CommandBuilder, NativePtySystem, PtySystem};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
@@ -24,11 +24,22 @@ const MIN_TERMINAL_DIMENSION: u16 = 2;
 const MAX_TERMINAL_DIMENSION: u16 = 512;
 const TERMINAL_OWNER: &str = "terminal";
 const TUI_AUTHENTICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(target_os = "macos")]
+const MACOS_SYSTEM_SHELL: &str = "/bin/zsh";
 
 /// Fixed process types the native desktop is allowed to open in a PTY.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TerminalKind {
     ColossusTui,
+    Shell,
+}
+
+/// Bounded read-only selection the dedicated terminal renderer may apply after
+/// opening the authenticated TUI. These values never become process arguments.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TerminalPlanContext {
+    pub(crate) session_id: String,
+    pub(crate) plan_id: String,
 }
 
 /// Native-only launch context. None of these paths cross into renderer state.
@@ -372,6 +383,7 @@ struct VerifiedTerminalExecutable {
 
 struct TerminalSession {
     owner: String,
+    kind: TerminalKind,
     master: Box<dyn MasterPty + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     process_tree: TerminalProcessTree,
@@ -384,7 +396,7 @@ pub(crate) struct SpawnedTerminal {
     pub(crate) writer: Box<dyn Write + Send>,
     pub(crate) child: Box<dyn Child + Send + Sync>,
     pub(crate) process_tree: TerminalProcessTree,
-    pub(crate) authentication_channel: TuiAuthenticationChannel,
+    pub(crate) authentication_channel: Option<TuiAuthenticationChannel>,
 }
 
 type EventSink = Arc<dyn Fn(TerminalEvent) -> bool + Send + Sync + 'static>;
@@ -505,19 +517,31 @@ impl TerminalManager {
             workspace.canonical_path(),
             &workspace,
         )?;
-        let authentication = terminal_workspace
-            .worker_authentication
-            .clone()
-            .ok_or(TerminalError::InvalidConfiguration)?;
-        if let Err(error) = authenticate_tui(
-            authentication_channel,
-            authentication,
-            workspace.clone(),
-            &process_tree,
-        ) {
-            let _ = process_tree.force_close();
-            let _ = child.wait();
-            return Err(error);
+        match kind {
+            TerminalKind::ColossusTui => {
+                let authentication_channel =
+                    authentication_channel.ok_or(TerminalError::InvalidConfiguration)?;
+                let authentication = terminal_workspace
+                    .worker_authentication
+                    .clone()
+                    .ok_or(TerminalError::InvalidConfiguration)?;
+                if let Err(error) = authenticate_tui(
+                    authentication_channel,
+                    authentication,
+                    workspace.clone(),
+                    &process_tree,
+                ) {
+                    let _ = process_tree.force_close();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            }
+            TerminalKind::Shell if authentication_channel.is_some() => {
+                let _ = process_tree.force_close();
+                let _ = child.wait();
+                return Err(TerminalError::Internal);
+            }
+            TerminalKind::Shell => {}
         }
 
         let session_id = Uuid::new_v4().simple().to_string();
@@ -525,6 +549,7 @@ impl TerminalManager {
             session_id.clone(),
             TerminalSession {
                 owner: owner.to_owned(),
+                kind,
                 master,
                 writer: Arc::new(Mutex::new(writer)),
                 process_tree: process_tree.clone(),
@@ -656,15 +681,35 @@ impl TerminalManager {
         }
     }
 
+    pub(crate) fn close_kind(&self, owner: &str, kind: TerminalKind) {
+        let removed = self.inner.sessions.lock().ok().map(|mut sessions| {
+            let session_ids = sessions
+                .iter()
+                .filter_map(|(id, session)| {
+                    (session.owner == owner && session.kind == kind).then_some(id.clone())
+                })
+                .collect::<Vec<_>>();
+            session_ids
+                .into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect::<Vec<_>>()
+        });
+        if let Some(removed) = removed {
+            for session in removed {
+                let _ = session.process_tree.force_close();
+            }
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn spawn(
         &self,
         size: PtySize,
-        _kind: TerminalKind,
+        kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
-        _workspace: &Path,
-        _workspace_binding: &BoundTerminalWorkspace,
+        workspace: &Path,
+        workspace_binding: &BoundTerminalWorkspace,
     ) -> Result<SpawnedTerminal, TerminalError> {
         let pair = NativePtySystem::default()
             .openpty(size)
@@ -677,45 +722,70 @@ impl TerminalManager {
             .master
             .take_writer()
             .map_err(|_| TerminalError::SpawnFailed)?;
-        let tty = pair.master.tty_name().ok_or(TerminalError::SpawnFailed)?;
-        let executable = self
-            .inner
-            .colossus_cli
-            .read()
-            .map_err(|_| TerminalError::Internal)?
-            .clone()
-            .ok_or(TerminalError::ProgramUnavailable)?;
-        if executable.path != program {
-            return Err(TerminalError::ProgramUnavailable);
+        match kind {
+            TerminalKind::ColossusTui => {
+                let tty = pair.master.tty_name().ok_or(TerminalError::SpawnFailed)?;
+                let executable = self
+                    .inner
+                    .colossus_cli
+                    .read()
+                    .map_err(|_| TerminalError::Internal)?
+                    .clone()
+                    .ok_or(TerminalError::ProgramUnavailable)?;
+                if executable.path != program {
+                    return Err(TerminalError::ProgramUnavailable);
+                }
+                drop(pair.slave);
+                let (child, process_tree, authentication_channel) =
+                    crate::terminal_process::spawn_verified_tui(
+                        &tty,
+                        program,
+                        arguments,
+                        &executable.macos_identity,
+                    )?;
+                Ok(SpawnedTerminal {
+                    master: pair.master,
+                    reader,
+                    writer,
+                    child,
+                    process_tree,
+                    authentication_channel: Some(authentication_channel),
+                })
+            }
+            TerminalKind::Shell => {
+                workspace_binding.revalidate()?;
+                let command = shell_command(program, arguments, workspace)?;
+                let child = pair
+                    .slave
+                    .spawn_command(command)
+                    .map_err(|_| TerminalError::SpawnFailed)?;
+                let process_tree = TerminalProcessTree::from_spawned_macos_session(child.as_ref())?;
+                drop(pair.slave);
+                Ok(SpawnedTerminal {
+                    master: pair.master,
+                    reader,
+                    writer,
+                    child,
+                    process_tree,
+                    authentication_channel: None,
+                })
+            }
         }
-        drop(pair.slave);
-        let (child, process_tree, authentication_channel) =
-            crate::terminal_process::spawn_verified_tui(
-                &tty,
-                program,
-                arguments,
-                &executable.macos_identity,
-            )?;
-        Ok(SpawnedTerminal {
-            master: pair.master,
-            reader,
-            writer,
-            child,
-            process_tree,
-            authentication_channel,
-        })
     }
 
     #[cfg(target_os = "windows")]
     fn spawn(
         &self,
         size: PtySize,
-        _kind: TerminalKind,
+        kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
         workspace: &Path,
         workspace_binding: &BoundTerminalWorkspace,
     ) -> Result<SpawnedTerminal, TerminalError> {
+        if kind != TerminalKind::ColossusTui {
+            return Err(TerminalError::ProgramUnavailable);
+        }
         let executable = self
             .inner
             .colossus_cli
@@ -740,13 +810,21 @@ impl TerminalManager {
     fn spawn(
         &self,
         size: PtySize,
-        _kind: TerminalKind,
+        kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
         workspace: &Path,
         workspace_binding: &BoundTerminalWorkspace,
     ) -> Result<SpawnedTerminal, TerminalError> {
-        let _ = (self, size, program, arguments, workspace, workspace_binding);
+        let _ = (
+            self,
+            size,
+            kind,
+            program,
+            arguments,
+            workspace,
+            workspace_binding,
+        );
         Err(TerminalError::ProgramUnavailable)
     }
 
@@ -790,8 +868,78 @@ impl TerminalManager {
                     ],
                 ))
             }
+            TerminalKind::Shell => {
+                #[cfg(target_os = "macos")]
+                {
+                    if terminal_workspace.config.is_some()
+                        || terminal_workspace.worker_authentication.is_some()
+                    {
+                        return Err(TerminalError::InvalidConfiguration);
+                    }
+                    Ok((
+                        validate_macos_system_shell(Path::new(MACOS_SYSTEM_SHELL))?,
+                        vec![PathBuf::from("-l")],
+                    ))
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = (terminal_workspace, workspace);
+                    Err(TerminalError::ProgramUnavailable)
+                }
+            }
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn shell_command(
+    program: &Path,
+    arguments: &[PathBuf],
+    workspace: &Path,
+) -> Result<CommandBuilder, TerminalError> {
+    if program != Path::new(MACOS_SYSTEM_SHELL) || arguments != [PathBuf::from("-l")] {
+        return Err(TerminalError::ProgramUnavailable);
+    }
+    let mut command = CommandBuilder::new(program);
+    command.args(arguments);
+    command.cwd(workspace);
+    command.env_clear();
+    for (name, value) in [
+        ("TERM", std::ffi::OsString::from("xterm-256color")),
+        ("COLORTERM", std::ffi::OsString::from("truecolor")),
+        ("LANG", std::ffi::OsString::from("en_US.UTF-8")),
+        (
+            "PATH",
+            std::ffi::OsString::from(
+                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            ),
+        ),
+        ("SHELL", std::ffi::OsString::from(MACOS_SYSTEM_SHELL)),
+    ] {
+        command.env(name, value);
+    }
+    if let Some(base_directories) = directories::BaseDirs::new() {
+        command.env("HOME", base_directories.home_dir());
+    }
+    Ok(command)
+}
+
+#[cfg(target_os = "macos")]
+fn validate_macos_system_shell(path: &Path) -> Result<PathBuf, TerminalError> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if path != Path::new(MACOS_SYSTEM_SHELL) {
+        return Err(TerminalError::ProgramUnavailable);
+    }
+    let shell = validate_executable(path)?;
+    let metadata = fs::metadata(&shell).map_err(|_| TerminalError::ProgramUnavailable)?;
+    if metadata.uid() != 0
+        || metadata.permissions().mode() & 0o022 != 0
+        || metadata.permissions().mode() & 0o111 == 0
+    {
+        return Err(TerminalError::ProgramUnavailable);
+    }
+    Ok(shell)
 }
 
 impl Drop for TerminalManagerInner {
@@ -1435,6 +1583,59 @@ mod tests {
                 &terminal_workspace.workspace
             ),
             Err(TerminalError::ProgramUnavailable)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shell_command_is_fixed_native_and_has_no_worker_authority() {
+        use std::ffi::OsStr;
+
+        let workspace = tempfile::tempdir().expect("shell workspace");
+        let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let terminal_workspace = TerminalWorkspace {
+            id: "workspace:shell".into(),
+            display_name: "Shell workspace".into(),
+            workspace: workspace.clone(),
+            workspace_identity: test_workspace_identity(&workspace),
+            config: None,
+            worker_authentication: None,
+        };
+        let manager = TerminalManager::new();
+        let (program, arguments) = manager
+            .command(TerminalKind::Shell, &terminal_workspace, &workspace)
+            .expect("fixed shell command");
+        assert_eq!(program, PathBuf::from(MACOS_SYSTEM_SHELL));
+        assert_eq!(arguments, [PathBuf::from("-l")]);
+
+        let command =
+            shell_command(&program, &arguments, &workspace).expect("native shell builder");
+        assert_eq!(
+            command.get_argv(),
+            &[
+                std::ffi::OsString::from(MACOS_SYSTEM_SHELL),
+                std::ffi::OsString::from("-l"),
+            ]
+        );
+        assert_eq!(command.get_cwd(), Some(&workspace.as_os_str().to_owned()));
+        assert_eq!(
+            command.get_env("PATH"),
+            Some(OsStr::new(
+                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            ))
+        );
+        assert_eq!(
+            command.get_env("SHELL"),
+            Some(OsStr::new(MACOS_SYSTEM_SHELL))
+        );
+
+        let privileged = TerminalWorkspace {
+            config: Some(workspace.join("managed.yaml")),
+            ..terminal_workspace
+        };
+        assert_eq!(
+            manager.command(TerminalKind::Shell, &privileged, &workspace),
+            Err(TerminalError::InvalidConfiguration)
         );
     }
 }

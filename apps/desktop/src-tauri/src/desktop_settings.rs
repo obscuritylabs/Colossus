@@ -30,6 +30,7 @@ const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 const MAX_PROVIDER_SECRET_BYTES: usize = 761;
+pub(crate) const LOCAL_TERMINAL_CONSENT_VERSION: u8 = 1;
 pub(crate) const MAX_EXTERNAL_TARGETS: usize = 32;
 const MAX_EXTERNAL_LABEL_BYTES: usize = 80;
 const MAX_CONNECTION_PATH_BYTES: usize = 2_048;
@@ -174,6 +175,11 @@ pub(crate) struct DesktopSettings {
     pub(crate) additional_ca_bundle: Option<CaBundleSetting>,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) terminal_enabled: bool,
+    /// Versioned native confirmation for local-user shell authority. A missing or
+    /// older value keeps previously persisted TUI consent from silently enabling
+    /// the more powerful shell surface.
+    #[serde(default)]
+    pub(crate) local_terminal_consent_version: u8,
     pub(crate) selected_target_id: Option<String>,
     #[serde(default)]
     pub(crate) external_targets: Vec<ExternalTargetSetting>,
@@ -224,6 +230,7 @@ impl Default for DesktopSettings {
             additional_ca_bundle: None,
             access_profile: AccessProfileSetting::Development,
             terminal_enabled: false,
+            local_terminal_consent_version: 0,
             selected_target_id: None,
             external_targets: Vec::new(),
             legacy_connection_migrated: false,
@@ -232,6 +239,11 @@ impl Default for DesktopSettings {
 }
 
 impl DesktopSettings {
+    pub(crate) fn local_terminal_enabled(&self) -> bool {
+        self.terminal_enabled
+            && self.local_terminal_consent_version == LOCAL_TERMINAL_CONSENT_VERSION
+    }
+
     pub(crate) fn managed_configured(&self) -> bool {
         self.primary_model().is_some() && self.primary_provider().is_some()
     }
@@ -634,6 +646,7 @@ fn migrate_v1_settings(
         additional_ca_bundle: None,
         access_profile: legacy.access_profile,
         terminal_enabled: legacy.terminal_enabled,
+        local_terminal_consent_version: 0,
         selected_target_id: legacy
             .selected_target_id
             .filter(|target| target != "managed-local"),
@@ -644,6 +657,7 @@ fn migrate_v1_settings(
 
 fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
     if settings.schema_version != SETTINGS_SCHEMA_VERSION
+        || settings.local_terminal_consent_version > LOCAL_TERMINAL_CONSENT_VERSION
         || !Uuid::parse_str(&settings.managed_instance_id).is_ok_and(|value| !value.is_nil())
         || settings.external_targets.len() > MAX_EXTERNAL_TARGETS
         || settings.pending_provider_cleanup_ids.len() > MAX_PENDING_PROVIDER_CLEANUPS
@@ -1226,6 +1240,27 @@ fn credential_error() -> CommandErrorDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_tui_consent_cannot_silently_enable_local_shell_authority() {
+        let mut settings = DesktopSettings {
+            terminal_enabled: true,
+            ..DesktopSettings::default()
+        };
+        assert!(
+            !settings.local_terminal_enabled(),
+            "a settings record without the versioned native warning is not shell consent"
+        );
+
+        settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION;
+        assert!(settings.local_terminal_enabled());
+
+        settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION + 1;
+        assert!(
+            validate_settings(&settings).is_err(),
+            "a newer unknown consent contract must fail closed"
+        );
+    }
 
     #[cfg(unix)]
     fn ca_pem(name: &str) -> String {

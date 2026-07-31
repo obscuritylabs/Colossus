@@ -6,13 +6,14 @@ use tauri::{
 };
 
 use crate::{
+    desktop_settings::{SettingsStore, application_support_root, revalidate_workspace},
     dto::{
         CloseTerminalInput, CommandErrorDto, OpenTerminalDto, OpenTerminalInput,
         ResizeTerminalInput, ShowTerminalInput, SignalTerminalInput, TerminalContextDto,
         TerminalEventDto, WriteTerminalInput,
     },
     state::{AppState, MANAGED_TARGET_ID},
-    terminal::{TerminalError, TerminalEvent},
+    terminal::{TerminalError, TerminalEvent, TerminalKind, TerminalWorkspace},
     terminal_protocol,
 };
 
@@ -31,18 +32,27 @@ pub(crate) async fn show_terminal_window(
     if !state.terminal_enabled() {
         return Err(CommandErrorDto::from_terminal(TerminalError::Disabled));
     }
-    if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID) {
-        return Err(CommandErrorDto::from_terminal(
-            TerminalError::InvalidWorkspace,
-        ));
+    let (kind, plan_context) = request.into_launch()?;
+    match kind {
+        TerminalKind::ColossusTui => {
+            if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
+                || !state.managed_lifecycle_ready()
+            {
+                return Err(CommandErrorDto::from_terminal(
+                    TerminalError::InvalidWorkspace,
+                ));
+            }
+            let (_, workspace, _) = state.terminal_workspace_context().await;
+            if workspace.is_none() {
+                return Err(CommandErrorDto::from_terminal(
+                    TerminalError::InvalidWorkspace,
+                ));
+            }
+        }
+        TerminalKind::Shell => {
+            shell_terminal_workspace()?;
+        }
     }
-    let (_, workspace, _) = state.terminal_workspace_context().await;
-    if workspace.is_none() {
-        return Err(CommandErrorDto::from_terminal(
-            TerminalError::InvalidWorkspace,
-        ));
-    }
-    let kind = request.kind.into();
 
     if let Some(window) = app.get_webview_window(TERMINAL_WEBVIEW) {
         let (window_epoch, _) = require_terminal_document(&state)?;
@@ -50,14 +60,14 @@ pub(crate) async fn show_terminal_window(
             return Err(CommandErrorDto::from_terminal(TerminalError::Internal));
         }
         state
-            .request_terminal_kind(kind, window_epoch)
+            .request_terminal_launch(kind, plan_context, window_epoch)
             .ok_or_else(|| CommandErrorDto::busy("A local terminal launch is already pending."))?;
         return Ok(());
     }
 
     let window_epoch = state.next_terminal_window_epoch();
     let launch_request_id = state
-        .request_terminal_kind(kind, window_epoch)
+        .request_terminal_launch(kind, plan_context, window_epoch)
         .ok_or_else(|| CommandErrorDto::busy("A local terminal launch is already pending."))?;
 
     let window = WebviewWindowBuilder::new(&app, TERMINAL_WEBVIEW, terminal_protocol::window_url())
@@ -123,15 +133,40 @@ pub(crate) async fn terminal_context(
     let (context_generation, workspace, selected_managed) =
         state.terminal_workspace_context().await;
     let launch = state.take_terminal_launch_request_for_window(window_epoch, document_generation);
+    let requested_plan_session_id = if launch.pending {
+        launch
+            .plan_context
+            .as_ref()
+            .map(|context| context.session_id.clone())
+    } else {
+        None
+    };
+    let requested_plan_id = if launch.pending {
+        launch
+            .plan_context
+            .as_ref()
+            .map(|context| context.plan_id.clone())
+    } else {
+        None
+    };
     let managed_ready = selected_managed && state.managed_lifecycle_ready();
-    let workspace = managed_ready.then_some(workspace).flatten();
+    let tui_workspace = managed_ready.then_some(workspace).flatten();
+    let shell_workspace = shell_terminal_workspace().ok();
+    let terminal_enabled = state.terminal_enabled();
+    let shell_enabled = terminal_enabled && shell_workspace.is_some();
+    let tui_enabled = terminal_enabled && tui_workspace.is_some();
+    let workspace = shell_workspace.as_ref().or(tui_workspace.as_ref());
     Ok(TerminalContextDto {
-        enabled: managed_ready && state.terminal_enabled(),
+        enabled: shell_enabled || tui_enabled,
+        shell_enabled,
+        tui_enabled,
         context_generation,
         launch_request_id: launch.generation,
-        workspace_id: workspace.as_ref().map(|workspace| workspace.id.clone()),
-        workspace_name: workspace.map(|workspace| workspace.display_name),
+        workspace_id: workspace.map(|workspace| workspace.id.clone()),
+        workspace_name: workspace.map(|workspace| workspace.display_name.clone()),
         requested_kind: launch.pending.then(|| launch.kind.into()),
+        requested_plan_session_id,
+        requested_plan_id,
     })
 }
 
@@ -148,23 +183,38 @@ pub(crate) async fn open_terminal(
     if !state.terminal_enabled() {
         return Err(CommandErrorDto::from_terminal(TerminalError::Disabled));
     }
-    if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID) {
-        return Err(CommandErrorDto::from_terminal(
-            TerminalError::InvalidWorkspace,
-        ));
-    }
-    if !state.managed_lifecycle_ready() {
-        return Err(CommandErrorDto::from_terminal(
-            TerminalError::InvalidWorkspace,
-        ));
-    }
     request.validate()?;
-    let workspace = state
-        .workspace_for_terminal(&request.workspace_id, request.context_generation)
-        .await
-        .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::InvalidWorkspace))?;
+    let kind = TerminalKind::from(request.kind);
+    let workspace = match kind {
+        TerminalKind::ColossusTui => {
+            if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
+                || !state.managed_lifecycle_ready()
+            {
+                return Err(CommandErrorDto::from_terminal(
+                    TerminalError::InvalidWorkspace,
+                ));
+            }
+            state
+                .workspace_for_terminal(&request.workspace_id, request.context_generation)
+                .await
+                .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::InvalidWorkspace))?
+        }
+        TerminalKind::Shell => {
+            if !state.terminal_context_is_current(request.context_generation) {
+                return Err(CommandErrorDto::from_terminal(
+                    TerminalError::InvalidWorkspace,
+                ));
+            }
+            let workspace = shell_terminal_workspace()?;
+            if workspace.id != request.workspace_id {
+                return Err(CommandErrorDto::from_terminal(
+                    TerminalError::InvalidWorkspace,
+                ));
+            }
+            workspace
+        }
+    };
     let manager = state.terminal_manager();
-    let kind = request.kind.into();
     let rows = request.rows;
     let cols = request.cols;
     let sink = Arc::new(move |event: TerminalEvent| on_event.send(event.into()).is_ok());
@@ -175,10 +225,18 @@ pub(crate) async fn open_terminal(
     .await
     .map_err(|_| CommandErrorDto::from_terminal(TerminalError::Internal))?
     .map_err(CommandErrorDto::from_terminal)?;
+    let kind_still_available = match kind {
+        TerminalKind::ColossusTui => {
+            state.selected_target_id().await.as_deref() == Some(MANAGED_TARGET_ID)
+                && state.managed_lifecycle_ready()
+        }
+        TerminalKind::Shell => {
+            shell_terminal_workspace().is_ok_and(|workspace| workspace.id == request.workspace_id)
+        }
+    };
     if !state.terminal_enabled()
         || state.terminal_document_authority().is_none()
-        || state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
-        || !state.managed_lifecycle_ready()
+        || !kind_still_available
         || !state.terminal_context_is_current(request.context_generation)
     {
         let close_session_id = session_id.clone();
@@ -283,6 +341,37 @@ fn require_terminal_document(state: &AppState) -> Result<(u64, u64), CommandErro
     state
         .terminal_document_authority()
         .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::NotReady))
+}
+
+fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
+    if !cfg!(target_os = "macos") {
+        return Err(CommandErrorDto::from_terminal(
+            TerminalError::ProgramUnavailable,
+        ));
+    }
+    let settings = SettingsStore::open(application_support_root()?)?.load()?;
+    if settings.selected_target_id.as_deref() != Some(MANAGED_TARGET_ID) {
+        return Err(CommandErrorDto::from_terminal(
+            TerminalError::InvalidWorkspace,
+        ));
+    }
+    let workspace = settings
+        .workspace
+        .as_ref()
+        .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::InvalidWorkspace))?;
+    let canonical_workspace = revalidate_workspace(workspace)?;
+    let workspace_identity = workspace
+        .identity
+        .clone()
+        .ok_or_else(|| CommandErrorDto::from_terminal(TerminalError::InvalidWorkspace))?;
+    Ok(TerminalWorkspace {
+        id: workspace.id.clone(),
+        display_name: workspace.display_name.clone(),
+        workspace: canonical_workspace,
+        workspace_identity,
+        config: None,
+        worker_authentication: None,
+    })
 }
 
 #[cfg(test)]

@@ -54,11 +54,11 @@ network authority.
 
 The public API is distinct from the private worker IPC protocol:
 
-| Boundary | Intended callers | Contract | Authentication |
-| --- | --- | --- | --- |
-| Public application API | Enrolled desktop and server applications | Protobuf `colossus.api.v1alpha1` | Per-application bearer credential over pinned TLS |
-| Private worker IPC | Colossus-owned CLI and TUI components | Internal Rust worker protocol | Independent worker key |
-| Embedded Rust backend | One trusted application process | `colossus-sdk` Rust traits and DTOs | Caller context bound during trusted composition |
+| Boundary               | Intended callers                         | Contract                            | Authentication                                    |
+| ---------------------- | ---------------------------------------- | ----------------------------------- | ------------------------------------------------- |
+| Public application API | Enrolled desktop and server applications | Protobuf `colossus.api.v1alpha1`    | Per-application bearer credential over pinned TLS |
+| Private worker IPC     | Colossus-owned CLI and TUI components    | Internal Rust worker protocol       | Independent worker key                            |
+| Embedded Rust backend  | One trusted application process          | `colossus-sdk` Rust traits and DTOs | Caller context bound during trusted composition   |
 
 The keys and credentials for these boundaries are independent. Do not derive one from
 another.
@@ -102,6 +102,27 @@ only product-level Tauri commands:
 - `watch_run`
 - `cancel_run`
 - `respond_interaction`
+
+Desktop’s composer exposes public Execute and Plan run modes. Public Plan Mode means
+“create one new durable Draft”; the runtime constrains its tools and returns the
+canonical Plan identity, revision, and status in terminal result or cancellation
+evidence. The native bridge preserves those typed fields rather than attempting to
+reconstruct a Plan from assistant text.
+
+For an actionable Draft, the main WebView can submit a typed `plan_action` on another
+public run. It supplies the caller-owned source run ID and exact visible revision,
+never a Plan ID. The server resolves that source run under the authenticated
+application, binds the action to its session and canonical Plan, and rejects stale or
+non-Draft revisions. Revision is structurally Plan Mode; Direct and bounded Goal
+execution are structurally Execute mode. They use the ordinary durable run,
+interaction, policy, permit, journal, audit, cancellation, and watch paths.
+
+Managed Local can also hand the identity to the embedded TUI for the advanced
+interactive workflow. The main WebView supplies only bounded session and Plan
+identifiers to `show_terminal_window`. Native code accepts them only for
+`colossus_tui`; the dedicated terminal document opens the authenticated TUI and submits
+the fixed read-only `/session resume ID` and `/plan use ID` selections. No PTY session
+ID or generic terminal write command is granted to the main WebView.
 
 The zero-input `desktop_release_channel` metadata command returns only the native
 compile-time `development`, `stable`, `developer_preview`, or `validation_only` enum. It
@@ -253,29 +274,47 @@ identity or notarization requirements.
 Terminal commands are available only to a dedicated local Tauri window capability.
 The main window may request that window be shown but cannot open or control a PTY. The
 terminal renderer receives random window-bound session IDs and can request only the
-bundled Colossus TUI for the native-selected workspace. It cannot choose a program,
-environment, absolute working directory, or arguments. The native DTO rejects a
-general Shell request.
+closed `colossus_tui` and `shell` kinds for the native-selected workspace. It cannot
+choose a program, environment, working directory, or arguments.
 
 Desktop does not inject managed credentials, persist transcripts, or send terminal
 bytes to models, remote nodes, telemetry, or run context. Output, input, and session
-count are bounded. On macOS, the bundled CLI starts suspended in a new session so
-native code can verify its live code identity against the sealed manifest before
-resuming it. The CLI independently opens and changes directory through the selected
-workspace, reports the same persistent object identity to the parent, and receives
-worker authentication only after that attestation succeeds. Authentication crosses
-bounded one-use inherited anonymous pipes, never the renderer-visible PTY. Closing the
-window or app freezes and kills that verified CLI session.
+count are bounded. First-time terminal enablement requires a fixed native confirmation
+that distinguishes local-user shell authority from the policy-controlled TUI.
+
+On macOS, the shell kind revalidates the persisted Managed Local workspace and launches
+exactly the validated system `/bin/zsh -l` with a native-constructed cleared
+environment. The shell receives no worker authentication. It remains available while
+the managed runtime is offline, but its commands and effects are outside Colossus
+policy, remote journal, and audit. A compromised terminal renderer can therefore type
+commands as the logged-in user while this feature is enabled; the main renderer cannot
+write to a PTY.
+
+The bundled CLI instead starts suspended in a new session so native code can verify its
+live code identity against the sealed manifest before resuming it. The CLI independently
+opens and changes directory through the selected workspace, reports the same persistent
+object identity to the parent, and receives worker authentication only after that
+attestation succeeds. Authentication crosses bounded one-use inherited anonymous
+pipes, never the renderer-visible PTY. Closing the window or app freezes and kills that
+verified CLI session.
 
 The PTY transports only terminal input and output. Native code passes worker
 authentication through separate bounded one-use inherited pipes at fixed child file
 descriptors; those descriptors are never renderer-selectable and never share the PTY
 stream.
 
-Desktop does not claim cleanup of arbitrary descendants after `setsid`, double-fork,
-or reparenting because macOS exposes no supported race-free job primitive for that
-boundary. Clipboard escape writes, automatic URL opening, remote navigation, and
-renderer-initiated spawning stay disabled. The release terminal surface is served from
+A plan handoff does not widen this boundary. Native code validates the opaque public
+session and plan identifiers, binds them to a `colossus_tui` launch request, and releases
+them only to the dedicated terminal document. That document may submit the two fixed
+selection commands after the verified TUI opens. The main document still has no
+`open_terminal` or `write_terminal` capability, and the selection performs no lifecycle
+transition by itself.
+
+Desktop does not claim cleanup of arbitrary shell descendants after `setsid`,
+double-fork, or reparenting because macOS exposes no supported race-free job primitive
+for that boundary. It retains and kills the original process group on a best-effort
+basis. Clipboard escape writes, automatic URL opening, remote navigation, and general
+renderer-selected spawning stay disabled. The release terminal surface is served from
 a label-bound local protocol with its own CSP so xterm may create
 its required runtime style sheets; the main Work WebView retains the stricter
 `style-src 'self'` policy. The TUI path is different: fixed arguments require the
@@ -350,10 +389,13 @@ caller's exact tool ceiling. Child runs receive that ceiling but remove
 prevents a child from acquiring the worker's broader internal authority.
 
 Authenticated server discovery reports optional capabilities such as artifacts,
-attachments, and delegation. Clients must hide or disable optional UI until the
-server advertises it. Artifact uploads are caller-owned, size- and digest-bound, and
-chunked; downloads revalidate the released length and digest. Run attachments contain
-only opaque artifact IDs, never client or server filesystem paths.
+attachments, delegation, and typed Plan continuation. Clients must hide or disable
+optional UI until the server advertises it. In particular, the SDK refuses to encode a
+`plan_action` unless the target advertises `plans.continue`; this prevents an older
+protobuf server from ignoring the unknown field and treating it as an ordinary run.
+Artifact uploads are caller-owned, size- and digest-bound, and chunked; downloads
+revalidate the released length and digest. Run attachments contain only opaque
+artifact IDs, never client or server filesystem paths.
 
 Public v1alpha1 runs also cannot activate installed skills. `selected_skills` must be
 empty, and prompt text such as `@skill-name` does not trigger skill discovery or

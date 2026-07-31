@@ -3,14 +3,16 @@ use colossus_sdk::{
     ArtifactState, CancelRunRequest, CreateRunRequest, FieldViolation, GetRunRequest,
     IdempotencyKey, InputContentPart, Interaction, InteractionAnswer, InteractionContent,
     InteractionKind, InteractionStatus, ListRunsRequest, MessageContentPart, MessageRole,
-    OutcomeCertainty, PageRequest, PromptAnswer, PromptChoice, RespondInteractionRequest, Run,
-    RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
-    RunUpdateKind, SdkError, SessionMessage, TokenUsage, ToolActivity, ToolActivityState,
-    WatchRunRequest,
+    OutcomeCertainty, PageRequest, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer,
+    PromptChoice, RespondInteractionRequest, Run, RunCancellation, RunFailure, RunMode, RunResult,
+    RunStatus, RunTerminal, RunUpdate, RunUpdateKind, SdkError, SessionMessage, TokenUsage,
+    ToolActivity, ToolActivityState, WatchRunRequest,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::terminal::{TerminalError, TerminalEvent, TerminalKind, TerminalSignal};
+use crate::terminal::{
+    TerminalError, TerminalEvent, TerminalKind, TerminalPlanContext, TerminalSignal,
+};
 
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_IDENTIFIER_BYTES: usize = 128;
@@ -238,12 +240,14 @@ impl CommandErrorDto {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TerminalKindDto {
     ColossusTui,
+    Shell,
 }
 
 impl From<TerminalKindDto> for TerminalKind {
     fn from(value: TerminalKindDto) -> Self {
         match value {
             TerminalKindDto::ColossusTui => Self::ColossusTui,
+            TerminalKindDto::Shell => Self::Shell,
         }
     }
 }
@@ -252,6 +256,7 @@ impl From<TerminalKind> for TerminalKindDto {
     fn from(value: TerminalKind) -> Self {
         match value {
             TerminalKind::ColossusTui => Self::ColossusTui,
+            TerminalKind::Shell => Self::Shell,
         }
     }
 }
@@ -260,17 +265,49 @@ impl From<TerminalKind> for TerminalKindDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ShowTerminalInput {
     pub(crate) kind: TerminalKindDto,
+    pub(crate) session_id: Option<String>,
+    pub(crate) plan_id: Option<String>,
+}
+
+impl ShowTerminalInput {
+    pub(crate) fn into_launch(
+        self,
+    ) -> Result<(TerminalKind, Option<TerminalPlanContext>), CommandErrorDto> {
+        let kind = TerminalKind::from(self.kind);
+        let plan_context = match (self.session_id, self.plan_id) {
+            (None, None) => None,
+            (Some(session_id), Some(plan_id)) if kind == TerminalKind::ColossusTui => {
+                validate_identifier(&session_id, "sessionId")?;
+                validate_identifier(&plan_id, "planId")?;
+                Some(TerminalPlanContext {
+                    session_id,
+                    plan_id,
+                })
+            }
+            _ => {
+                return Err(CommandErrorDto::invalid(
+                    "planId",
+                    "Plan context requires both identifiers and the Colossus TUI.",
+                ));
+            }
+        };
+        Ok((kind, plan_context))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TerminalContextDto {
     pub(crate) enabled: bool,
+    pub(crate) shell_enabled: bool,
+    pub(crate) tui_enabled: bool,
     pub(crate) context_generation: u64,
     pub(crate) launch_request_id: u64,
     pub(crate) workspace_id: Option<String>,
     pub(crate) workspace_name: Option<String>,
     pub(crate) requested_kind: Option<TerminalKindDto>,
+    pub(crate) requested_plan_session_id: Option<String>,
+    pub(crate) requested_plan_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -498,6 +535,14 @@ impl From<RunStatus> for RunStatusDto {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunResultDto {
     pub(crate) output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan_status: Option<PlanStatusDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) goal_id: Option<String>,
     pub(crate) profile: String,
     pub(crate) model_profile: String,
     pub(crate) provider_profile: String,
@@ -509,11 +554,35 @@ impl From<RunResult> for RunResultDto {
     fn from(value: RunResult) -> Self {
         Self {
             output: value.output,
+            plan_id: value.plan_id,
+            plan_revision: value.plan_revision,
+            plan_status: value.plan_status.map(Into::into),
+            goal_id: value.goal_id,
             profile: value.profile,
             model_profile: value.model_profile,
             provider_profile: value.provider_profile,
             model: value.model,
             elapsed_seconds: value.elapsed_seconds,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlanStatusDto {
+    Draft,
+    Approved,
+    Executed,
+    Discarded,
+}
+
+impl From<PlanStatus> for PlanStatusDto {
+    fn from(value: PlanStatus) -> Self {
+        match value {
+            PlanStatus::Draft => Self::Draft,
+            PlanStatus::Approved => Self::Approved,
+            PlanStatus::Executed => Self::Executed,
+            PlanStatus::Discarded => Self::Discarded,
         }
     }
 }
@@ -563,6 +632,14 @@ impl From<RunFailure> for RunFailureDto {
 pub(crate) struct RunCancellationDto {
     pub(crate) turn: u32,
     pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan_status: Option<PlanStatusDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) goal_id: Option<String>,
 }
 
 impl From<RunCancellation> for RunCancellationDto {
@@ -570,6 +647,10 @@ impl From<RunCancellation> for RunCancellationDto {
         Self {
             turn: value.turn,
             message: value.message,
+            plan_id: value.plan_id,
+            plan_revision: value.plan_revision,
+            plan_status: value.plan_status.map(Into::into),
+            goal_id: value.goal_id,
         }
     }
 }
@@ -1123,6 +1204,43 @@ pub(crate) enum RunModeInput {
     Plan,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum PlanExecutionStrategyInput {
+    Direct,
+    Goal {
+        #[serde(rename = "maxIterations")]
+        max_iterations: u16,
+    },
+}
+
+impl From<PlanExecutionStrategyInput> for PlanExecutionStrategy {
+    fn from(value: PlanExecutionStrategyInput) -> Self {
+        match value {
+            PlanExecutionStrategyInput::Direct => Self::Direct,
+            PlanExecutionStrategyInput::Goal { max_iterations } => Self::Goal { max_iterations },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum PlanRunActionInput {
+    Revise {
+        #[serde(rename = "sourceRunId")]
+        source_run_id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+    },
+    Execute {
+        #[serde(rename = "sourceRunId")]
+        source_run_id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+        strategy: PlanExecutionStrategyInput,
+    },
+}
+
 impl From<RunModeInput> for RunMode {
     fn from(value: RunModeInput) -> Self {
         match value {
@@ -1141,6 +1259,8 @@ pub(crate) struct CreateRunInput {
     session_id: Option<String>,
     role: String,
     mode: RunModeInput,
+    #[serde(default)]
+    plan_action: Option<PlanRunActionInput>,
     max_turns: u32,
     idempotency_key: String,
 }
@@ -1173,12 +1293,60 @@ impl CreateRunInput {
             validate_identifier(&artifact_id, "artifactIds")?;
             input.push(InputContentPart::Artifact(artifact_id));
         }
+        let plan_action = self
+            .plan_action
+            .map(|action| match action {
+                PlanRunActionInput::Revise {
+                    source_run_id,
+                    expected_revision,
+                } => {
+                    validate_identifier(&source_run_id, "planAction.sourceRunId")?;
+                    if expected_revision == 0 {
+                        return Err(CommandErrorDto::invalid(
+                            "planAction.expectedRevision",
+                            "The Plan revision must be greater than zero.",
+                        ));
+                    }
+                    Ok(PlanRunAction::Revise {
+                        source_run_id,
+                        expected_revision,
+                    })
+                }
+                PlanRunActionInput::Execute {
+                    source_run_id,
+                    expected_revision,
+                    strategy,
+                } => {
+                    validate_identifier(&source_run_id, "planAction.sourceRunId")?;
+                    if expected_revision == 0 {
+                        return Err(CommandErrorDto::invalid(
+                            "planAction.expectedRevision",
+                            "The Plan revision must be greater than zero.",
+                        ));
+                    }
+                    if let PlanExecutionStrategyInput::Goal { max_iterations } = strategy
+                        && !(1..=50).contains(&max_iterations)
+                    {
+                        return Err(CommandErrorDto::invalid(
+                            "planAction.strategy.maxIterations",
+                            "Goal iterations must be in 1..=50.",
+                        ));
+                    }
+                    Ok(PlanRunAction::Execute {
+                        source_run_id,
+                        expected_revision,
+                        strategy: strategy.into(),
+                    })
+                }
+            })
+            .transpose()?;
         Ok(CreateRunRequest {
             input,
             session_id: self.session_id,
             role: self.role,
             mode: self.mode.into(),
             selected_skills: Vec::new(),
+            plan_action,
             max_turns: self.max_turns,
             idempotency_key,
         })
@@ -1404,6 +1572,7 @@ mod tests {
         .expect("valid desktop request");
         let request = input.into_sdk().expect("valid SDK request");
         assert!(request.selected_skills.is_empty());
+        assert!(request.plan_action.is_none());
         assert_eq!(request.mode, RunMode::Plan);
 
         let oversized: CreateRunInput = serde_json::from_value(json!({
@@ -1419,6 +1588,62 @@ mod tests {
             oversized
                 .into_sdk()
                 .expect_err("oversized prompt rejected")
+                .code,
+            "invalid_argument"
+        );
+    }
+
+    #[test]
+    fn plan_action_is_exact_revision_bound_and_goal_budgeted() {
+        let input: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Run the reviewed plan",
+            "sessionId": "session-1",
+            "role": "primary",
+            "mode": "execute",
+            "planAction": {
+                "type": "execute",
+                "sourceRunId": "run-plan-source",
+                "expectedRevision": 4,
+                "strategy": {
+                    "type": "goal",
+                    "maxIterations": 5
+                }
+            },
+            "maxTurns": 12,
+            "idempotencyKey": "01968a3e-0ab3-7f10-bb27-4eadbd550008"
+        }))
+        .expect("valid Plan action");
+        assert!(matches!(
+            input.into_sdk().expect("valid SDK request").plan_action,
+            Some(PlanRunAction::Execute {
+                source_run_id,
+                expected_revision: 4,
+                strategy: PlanExecutionStrategy::Goal { max_iterations: 5 },
+            }) if source_run_id == "run-plan-source"
+        ));
+
+        let invalid: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Run the reviewed plan",
+            "sessionId": "session-1",
+            "role": "primary",
+            "mode": "execute",
+            "planAction": {
+                "type": "execute",
+                "sourceRunId": "run-plan-source",
+                "expectedRevision": 4,
+                "strategy": {
+                    "type": "goal",
+                    "maxIterations": 51
+                }
+            },
+            "maxTurns": 12,
+            "idempotencyKey": "01968a3e-0ab3-7f10-bb27-4eadbd550009"
+        }))
+        .expect("bounded type shape");
+        assert_eq!(
+            invalid
+                .into_sdk()
+                .expect_err("oversized Goal budget rejected")
                 .code,
             "invalid_argument"
         );
@@ -1478,6 +1703,52 @@ mod tests {
     }
 
     #[test]
+    fn run_terminal_dto_preserves_optional_plan_identity() {
+        let result = serde_json::to_value(RunResultDto::from(RunResult {
+            output: "Draft saved.".into(),
+            plan_id: Some("plan-1".into()),
+            plan_revision: Some(3),
+            plan_status: Some(PlanStatus::Draft),
+            goal_id: None,
+            profile: "primary".into(),
+            model_profile: "primary".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            elapsed_seconds: 0.5,
+        }))
+        .expect("result serializes");
+        assert_eq!(result["planId"], "plan-1");
+        assert_eq!(result["planRevision"], 3);
+        assert_eq!(result["planStatus"], "draft");
+
+        let cancellation = serde_json::to_value(RunCancellationDto::from(RunCancellation {
+            turn: 2,
+            message: "Cancelled after the draft was saved.".into(),
+            plan_id: Some("plan-2".into()),
+            plan_revision: Some(2),
+            plan_status: Some(PlanStatus::Draft),
+            goal_id: None,
+        }))
+        .expect("cancellation serializes");
+        assert_eq!(cancellation["planId"], "plan-2");
+
+        let execute_result = serde_json::to_value(RunResultDto::from(RunResult {
+            output: "Done.".into(),
+            plan_id: None,
+            plan_revision: None,
+            plan_status: None,
+            goal_id: None,
+            profile: "primary".into(),
+            model_profile: "primary".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            elapsed_seconds: 0.5,
+        }))
+        .expect("execute result serializes");
+        assert!(execute_result.get("planId").is_none());
+    }
+
+    #[test]
     fn approval_dto_exposes_only_the_public_sdk_projection() {
         let interaction = Interaction {
             interaction_id: "interaction-1".into(),
@@ -1516,6 +1787,45 @@ mod tests {
     }
 
     #[test]
+    fn terminal_plan_handoff_accepts_only_bounded_tui_selection() {
+        let request: ShowTerminalInput = serde_json::from_value(json!({
+            "kind": "colossus_tui",
+            "sessionId": "session-1",
+            "planId": "plan-1"
+        }))
+        .expect("plan handoff shape");
+        let (kind, context) = request.into_launch().expect("valid plan handoff");
+        assert_eq!(kind, TerminalKind::ColossusTui);
+        assert_eq!(
+            context,
+            Some(TerminalPlanContext {
+                session_id: "session-1".into(),
+                plan_id: "plan-1".into(),
+            })
+        );
+
+        for invalid in [
+            json!({
+                "kind": "shell",
+                "sessionId": "session-1",
+                "planId": "plan-1"
+            }),
+            json!({
+                "kind": "colossus_tui",
+                "sessionId": "session-1"
+            }),
+            json!({
+                "kind": "colossus_tui",
+                "sessionId": "session-1\n/plan approve",
+                "planId": "plan-1"
+            }),
+        ] {
+            let request: ShowTerminalInput = serde_json::from_value(invalid).expect("known fields");
+            assert!(request.into_launch().is_err());
+        }
+    }
+
+    #[test]
     fn terminal_inputs_cannot_choose_process_or_path_authority() {
         let result = serde_json::from_value::<OpenTerminalInput>(json!({
             "workspaceId": "workspace:managed",
@@ -1523,31 +1833,48 @@ mod tests {
             "kind": "shell",
             "rows": 24,
             "cols": 80
-        }));
+        }))
+        .expect("fixed shell kind");
+        assert_eq!(result.kind, TerminalKindDto::Shell);
+
+        for field in ["executable", "program", "arguments", "environment", "cwd"] {
+            let mut value = json!({
+                "workspaceId": "workspace:managed",
+                "contextGeneration": 7,
+                "kind": "shell",
+                "rows": 24,
+                "cols": 80
+            });
+            value[field] = json!("/bin/other");
+            assert!(
+                serde_json::from_value::<OpenTerminalInput>(value).is_err(),
+                "renderer field {field} must be rejected"
+            );
+        }
+
         assert!(
-            result.is_err(),
-            "the macOS MVP must reject general Shell PTYs"
+            serde_json::from_value::<OpenTerminalInput>(json!({
+                "workspaceId": "workspace:managed",
+                "contextGeneration": 7,
+                "kind": "colossus_tui",
+                "rows": 24,
+                "cols": 80,
+                "executable": "/bin/other"
+            }))
+            .is_err()
         );
 
-        let result = serde_json::from_value::<OpenTerminalInput>(json!({
-            "workspaceId": "workspace:managed",
-            "contextGeneration": 7,
-            "kind": "colossus_tui",
-            "rows": 24,
-            "cols": 80,
-            "executable": "/bin/other"
-        }));
-        assert!(result.is_err());
-
-        let result = serde_json::from_value::<OpenTerminalInput>(json!({
-            "workspaceId": "workspace:managed",
-            "contextGeneration": 7,
-            "kind": "colossus_tui",
-            "rows": 24,
-            "cols": 80,
-            "cwd": "/private/tmp"
-        }));
-        assert!(result.is_err());
+        assert!(
+            serde_json::from_value::<OpenTerminalInput>(json!({
+                "workspaceId": "workspace:managed",
+                "contextGeneration": 7,
+                "kind": "colossus_tui",
+                "rows": 24,
+                "cols": 80,
+                "cwd": "/private/tmp"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

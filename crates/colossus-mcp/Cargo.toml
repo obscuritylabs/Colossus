@@ -5,20 +5,38 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+live-splunk = []
+
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
+chacha20poly1305.workspace = true
 colossus-contracts.workspace = true
+colossus-network.workspace = true
 colossus-policy.workspace = true
+colossus-ports.workspace = true
 colossus-sandbox.workspace = true
+futures.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+http.workspace = true
 jsonschema.workspace = true
-rmcp.workspace = true
+keyring.workspace = true
+redb.workspace = true
+reqwest.workspace = true
+rmcp = { workspace = true, features = ["auth", "client", "transport-streamable-http-client"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sse-stream.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio.workspace = true
 
 [lints]

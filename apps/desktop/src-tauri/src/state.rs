@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphor
 
 use crate::{
     desktop_dto::{ManagedRuntimeStateDto, RuntimeFailureCodeDto},
-    terminal::{TerminalKind, TerminalManager, TerminalWorkspace},
+    terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
 
 pub(crate) const MANAGED_TARGET_ID: &str = "managed-local";
@@ -21,12 +21,13 @@ const MAX_CONCURRENT_EXTERNAL_PROBES: usize = 4;
 const MAX_RUN_TARGET_BINDINGS: usize = 4_096;
 const EXTERNAL_PROBE_COOLDOWN: Duration = Duration::from_secs(15);
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct TerminalLaunchRequest {
     pub(crate) generation: u64,
     delivered_generation: u64,
     pub(crate) window_epoch: u64,
     pub(crate) kind: TerminalKind,
+    pub(crate) plan_context: Option<TerminalPlanContext>,
     pub(crate) pending: bool,
 }
 
@@ -300,6 +301,7 @@ impl Default for AppState {
                 delivered_generation: 0,
                 window_epoch: 0,
                 kind: TerminalKind::ColossusTui,
+                plan_context: None,
                 pending: false,
             }),
         }
@@ -701,19 +703,19 @@ impl AppState {
 
     pub(crate) async fn configure_terminal_workspace(&self, workspace: TerminalWorkspace) {
         let _guard = self.terminal_context_guard.lock().await;
-        self.terminal_manager.close_owner("terminal");
+        self.terminal_manager
+            .close_kind("terminal", TerminalKind::ColossusTui);
         let mut current = self.terminal_workspace.write().await;
         current.replace(workspace);
-        self.advance_terminal_context();
     }
 
     pub(crate) async fn clear_terminal_workspace(&self) {
         let _guard = self.terminal_context_guard.lock().await;
         let mut current = self.terminal_workspace.write().await;
         current.take();
-        self.advance_terminal_context();
         drop(current);
-        self.terminal_manager.close_owner("terminal");
+        self.terminal_manager
+            .close_kind("terminal", TerminalKind::ColossusTui);
     }
 
     pub(crate) async fn workspace_for_terminal(
@@ -866,9 +868,19 @@ impl AppState {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn request_terminal_kind(
         &self,
         kind: TerminalKind,
+        window_epoch: u64,
+    ) -> Option<u64> {
+        self.request_terminal_launch(kind, None, window_epoch)
+    }
+
+    pub(crate) fn request_terminal_launch(
+        &self,
+        kind: TerminalKind,
+        plan_context: Option<TerminalPlanContext>,
         window_epoch: u64,
     ) -> Option<u64> {
         let _lifecycle = self
@@ -891,6 +903,7 @@ impl AppState {
         request.generation = request.generation.wrapping_add(1);
         request.window_epoch = window_epoch;
         request.kind = kind;
+        request.plan_context = plan_context;
         request.pending = true;
         Some(request.generation)
     }
@@ -918,7 +931,7 @@ impl AppState {
             .terminal_launch_request
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let pending = *request;
+        let pending = request.clone();
         let claim = self.terminal_window_active.load(Ordering::Acquire)
             && self.terminal_document_ready.load(Ordering::Acquire)
             && pending.pending
@@ -931,7 +944,7 @@ impl AppState {
             request.delivered_generation = request.generation;
             return TerminalLaunchRequest {
                 pending: true,
-                ..*request
+                ..request.clone()
             };
         }
         TerminalLaunchRequest {
@@ -1207,17 +1220,19 @@ mod tests {
                 worker_authentication: None,
             })
             .await;
-        assert!(
-            state
-                .workspace_for_terminal("workspace:managed", generation)
-                .await
-                .is_none(),
-            "a runtime restart must invalidate the previous terminal context"
+        let restarted = state
+            .workspace_for_terminal("workspace:managed", generation)
+            .await
+            .expect("current workspace with restarted TUI authority");
+        assert_eq!(
+            restarted.config,
+            Some("/private/tmp/config-2.yaml".into()),
+            "a new TUI must receive only the current runtime configuration"
         );
     }
 
     #[tokio::test]
-    async fn terminal_context_generation_changes_for_clear_and_consent() {
+    async fn terminal_context_generation_changes_for_selection_and_consent() {
         let state = AppState::default();
         let (initial, _, _) = state.terminal_workspace_context().await;
         state.set_terminal_enabled(true).await;
@@ -1236,7 +1251,10 @@ mod tests {
 
         state.clear_terminal_workspace().await;
         let (cleared, workspace, _) = state.terminal_workspace_context().await;
-        assert_ne!(cleared, external_selected);
+        assert_eq!(
+            cleared, external_selected,
+            "runtime-only TUI teardown must not revoke an unrelated shell context"
+        );
         assert!(workspace.is_none());
     }
 
@@ -1330,13 +1348,22 @@ mod tests {
         assert_eq!(consumed.generation, tui.generation);
         assert!(!consumed.pending);
 
+        let plan_context = TerminalPlanContext {
+            session_id: "session-1".into(),
+            plan_id: "plan-1".into(),
+        };
         state
-            .request_terminal_kind(TerminalKind::ColossusTui, first_window)
+            .request_terminal_launch(
+                TerminalKind::ColossusTui,
+                Some(plan_context.clone()),
+                first_window,
+            )
             .expect("second TUI launch request");
         let second_tui =
             state.take_terminal_launch_request_for_window(first_window, first_document);
         assert_ne!(second_tui.generation, tui.generation);
         assert_eq!(second_tui.kind, TerminalKind::ColossusTui);
+        assert_eq!(second_tui.plan_context, Some(plan_context));
         assert!(second_tui.pending);
 
         let pending = state

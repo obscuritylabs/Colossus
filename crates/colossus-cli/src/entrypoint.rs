@@ -1047,6 +1047,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 let arguments = parse_json_argument(&runtime, &arguments).await?;
                 print_json(&runtime.mcp_call(&server, &tool, arguments).await?)?;
             }
+            McpAction::Auth(command) => {
+                run_mcp_auth(&runtime, command.command).await?;
+            }
         },
         Command::Run {
             prompt,

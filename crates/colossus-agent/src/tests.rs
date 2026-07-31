@@ -812,8 +812,13 @@ async fn plan_mode_allows_one_missing_write_correction_then_fails_closed() {
         turn(vec![ProviderEvent::FinalOutput {
             text: "Forgot to save the plan.".into(),
         }]),
-        turn(vec![ProviderEvent::FinalOutput {
-            text: "Still did not save it.".into(),
+        turn(vec![ProviderEvent::ToolCallRequested {
+            call_id: "late-question".into(),
+            name: "user.ask".into(),
+            arguments: json!({
+                "question": "Which plan should I write?",
+                "allow_free_form": true,
+            }),
         }]),
     ]));
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -851,6 +856,15 @@ async fn plan_mode_allows_one_missing_write_correction_then_fails_closed() {
             .iter()
             .any(|message| message.role == ModelMessageRole::System
                 && message.content.contains("Call the required tool now"))
+    );
+    assert_eq!(
+        requests[1]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["plan.create"],
+        "the final correction must not expose inspection or interactive tools"
     );
     let errors = observer
         .events

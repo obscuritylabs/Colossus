@@ -227,6 +227,7 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
             role: "primary".into(),
             mode: RunMode::Plan,
             selected_skills: Vec::new(),
+            plan_action: None,
             max_turns: 1,
             idempotency_key,
         })
@@ -379,7 +380,7 @@ async fn start_inner(
             config: None,
             worker_authentication: Some(worker_authentication),
         },
-        settings.terminal_enabled,
+        settings.local_terminal_enabled(),
     )
     .await
 }

@@ -19,12 +19,19 @@ import {
 } from "./api";
 import {
   decodeTerminalOutput,
+  terminalContentDimensions,
   terminalContextChanged,
-  terminalDimensions,
   terminalInputChunks,
   terminalLaunchRequested,
+  terminalOpenDimensions,
+  terminalPlanSelectionInputs,
 } from "./terminal-model";
-import type { TerminalContext, TerminalEvent, TerminalKind } from "./types";
+import type {
+  TerminalContext,
+  TerminalEvent,
+  TerminalKind,
+  TerminalPlanContext,
+} from "./types";
 import "@xterm/xterm/css/xterm.css";
 
 const MAX_TERMINAL_TABS = 8;
@@ -32,11 +39,54 @@ const MAX_SINGLE_TERMINAL_INPUT_BYTES = 256 * 1024;
 const MAX_PENDING_TERMINAL_INPUT_BYTES = 512 * 1024;
 const TERMINAL_CONTEXT_REFRESH_MS = 1_000;
 
+function numericStyleValue(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function measuredTerminalDimensions(container: HTMLDivElement) {
+  const style =
+    container.ownerDocument.defaultView?.getComputedStyle(container);
+  if (style === undefined) {
+    return terminalContentDimensions(
+      container.clientWidth,
+      container.clientHeight,
+      { top: 0, right: 0, bottom: 0, left: 0 },
+    );
+  }
+  return terminalContentDimensions(
+    container.clientWidth,
+    container.clientHeight,
+    {
+      top: numericStyleValue(style.paddingTop),
+      right: numericStyleValue(style.paddingRight),
+      bottom: numericStyleValue(style.paddingBottom),
+      left: numericStyleValue(style.paddingLeft),
+    },
+  );
+}
+
 interface LocalTerminalTab {
   id: string;
   kind: TerminalKind;
   title: string;
+  planContext: TerminalPlanContext | null;
 }
+
+const TERMINAL_PRESENTATION: Record<
+  TerminalKind,
+  { title: string; banner: string }
+> = {
+  colossus_tui: {
+    title: "Colossus TUI",
+    banner: "Colossus TUI — authenticated; policy and audit enforced",
+  },
+  shell: {
+    title: "Shell",
+    banner:
+      "Local Shell — runs as your macOS user; outside Colossus policy and audit",
+  },
+};
 
 async function sendTerminalInput(sessionId: string, value: string) {
   for (const dataBase64 of terminalInputChunks(value)) {
@@ -105,17 +155,39 @@ function TerminalPane({
     terminal.open(container);
     terminalRef.current = terminal;
     terminal.writeln(
-      "\x1b[38;2;106;162;255mColossus TUI\x1b[0m — authenticated; policy and audit enforced",
+      `\x1b[38;2;106;162;255m${TERMINAL_PRESENTATION[tab.kind].banner}\x1b[0m`,
     );
-    const initial = terminalDimensions(
-      container.clientWidth,
-      container.clientHeight,
-    );
+    const initial =
+      container.clientWidth <= 0 || container.clientHeight <= 0
+        ? terminalOpenDimensions(0, 0)
+        : measuredTerminalDimensions(container);
     terminal.resize(initial.cols, initial.rows);
     let disposed = false;
+    let sessionReadyFrame: number | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let inputQueue = Promise.resolve();
     let pendingInputBytes = 0;
+
+    const synchronizeVisibleSize = (nativeSessionId: string | null) => {
+      if (
+        disposed ||
+        !activeRef.current ||
+        container.clientWidth <= 0 ||
+        container.clientHeight <= 0
+      ) {
+        return;
+      }
+      const next = measuredTerminalDimensions(container);
+      terminal.resize(next.cols, next.rows);
+      terminal.refresh(0, terminal.rows - 1);
+      if (nativeSessionId !== null) {
+        void resizeTerminal(nativeSessionId, next.rows, next.cols).catch(() => {
+          if (!disposed) {
+            setError("Terminal resize could not be delivered.");
+          }
+        });
+      }
+    };
 
     const handleEvent = (event: TerminalEvent) => {
       if (disposed) {
@@ -156,6 +228,19 @@ function TerminalPane({
         }
         sessionIdRef.current = sessionId;
         setSessionId(sessionId);
+        const planContext = tab.planContext;
+        if (tab.kind === "colossus_tui" && planContext !== null) {
+          for (const input of terminalPlanSelectionInputs(planContext)) {
+            inputQueue = inputQueue.then(() =>
+              sendTerminalInput(sessionId, input),
+            );
+          }
+          inputQueue = inputQueue.catch(() => {
+            if (!disposed) {
+              setError("The selected plan could not be opened in the TUI.");
+            }
+          });
+        }
         inputDisposable = terminal.onData((data) => {
           const inputBytes = new TextEncoder().encode(data).byteLength;
           if (
@@ -179,6 +264,16 @@ function TerminalPane({
               pendingInputBytes -= inputBytes;
             });
         });
+        // A newly requested tab can mount during the render in which it becomes
+        // active. If that first render was hidden, its native PTY opened with the
+        // fallback dimensions and ResizeObserver may have fired before the session
+        // id existed. Always synchronize again after native session creation.
+        sessionReadyFrame = requestAnimationFrame(() => {
+          synchronizeVisibleSize(sessionId);
+          if (!disposed && activeRef.current) {
+            terminal.focus();
+          }
+        });
       })
       .catch((reason: unknown) => {
         if (disposed) {
@@ -193,30 +288,16 @@ function TerminalPane({
       });
 
     const observer = new ResizeObserver(() => {
-      if (
-        !activeRef.current ||
-        container.clientWidth === 0 ||
-        container.clientHeight === 0
-      ) {
-        return;
-      }
-      const next = terminalDimensions(
-        container.clientWidth,
-        container.clientHeight,
-      );
-      terminal.resize(next.cols, next.rows);
-      const sessionId = sessionIdRef.current;
-      if (sessionId !== null) {
-        void resizeTerminal(sessionId, next.rows, next.cols).catch(() => {
-          setError("Terminal resize could not be delivered.");
-        });
-      }
+      synchronizeVisibleSize(sessionIdRef.current);
     });
     observer.observe(container);
 
     return () => {
       disposed = true;
       observer.disconnect();
+      if (sessionReadyFrame !== null) {
+        cancelAnimationFrame(sessionReadyFrame);
+      }
       const sessionId = sessionIdRef.current;
       sessionIdRef.current = null;
       setSessionId(null);
@@ -227,7 +308,7 @@ function TerminalPane({
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [contextGeneration, tab.id, tab.kind, workspaceId]);
+  }, [contextGeneration, tab.id, tab.kind, tab.planContext, workspaceId]);
 
   useEffect(() => {
     if (!active) {
@@ -239,11 +320,12 @@ function TerminalPane({
       if (container === null || terminal === null) {
         return;
       }
-      const next = terminalDimensions(
-        container.clientWidth,
-        container.clientHeight,
-      );
+      if (container.clientWidth <= 0 || container.clientHeight <= 0) {
+        return;
+      }
+      const next = measuredTerminalDimensions(container);
       terminal.resize(next.cols, next.rows);
+      terminal.refresh(0, terminal.rows - 1);
       terminal.focus();
       const sessionId = sessionIdRef.current;
       if (sessionId !== null) {
@@ -307,26 +389,32 @@ export default function TerminalWindow() {
     null,
   );
   const [workspaceName, setWorkspaceName] = useState("Local workspace");
+  const [shellEnabled, setShellEnabled] = useState(false);
+  const [tuiEnabled, setTuiEnabled] = useState(false);
   const [tabs, setTabs] = useState<LocalTerminalTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [contextWasRefreshed, setContextWasRefreshed] = useState(false);
 
-  const addTab = useCallback((kind: TerminalKind) => {
-    setTabs((current) => {
-      if (current.length >= MAX_TERMINAL_TABS) {
-        return current;
-      }
-      const ordinal = current.filter((tab) => tab.kind === kind).length + 1;
-      const tab = {
-        id: crypto.randomUUID(),
-        kind,
-        title: `Colossus TUI ${ordinal}`,
-      };
-      setActiveTabId(tab.id);
-      return [...current, tab];
-    });
-  }, []);
+  const addTab = useCallback(
+    (kind: TerminalKind, planContext: TerminalPlanContext | null = null) => {
+      setTabs((current) => {
+        if (current.length >= MAX_TERMINAL_TABS) {
+          return current;
+        }
+        const ordinal = current.filter((tab) => tab.kind === kind).length + 1;
+        const tab = {
+          id: crypto.randomUUID(),
+          kind,
+          title: `${TERMINAL_PRESENTATION[kind].title} ${ordinal}`,
+          planContext,
+        };
+        setActiveTabId(tab.id);
+        return [...current, tab];
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -348,7 +436,12 @@ export default function TerminalWindow() {
           currentContext,
           context,
         );
-        if (disposed || (!authorityChanged && !launchRequested)) {
+        if (disposed) {
+          return;
+        }
+        setShellEnabled(context.shellEnabled);
+        setTuiEnabled(context.tuiEnabled);
+        if (!authorityChanged && !launchRequested) {
           return;
         }
         const previousContext = currentContext;
@@ -376,9 +469,20 @@ export default function TerminalWindow() {
           launchRequested &&
           context.enabled &&
           context.workspaceId !== null &&
-          context.requestedKind !== null
+          context.requestedKind !== null &&
+          (context.requestedKind === "shell"
+            ? context.shellEnabled
+            : context.tuiEnabled)
         ) {
-          addTab(context.requestedKind);
+          const planContext =
+            context.requestedPlanSessionId !== null &&
+            context.requestedPlanId !== null
+              ? {
+                  sessionId: context.requestedPlanSessionId,
+                  planId: context.requestedPlanId,
+                }
+              : null;
+          addTab(context.requestedKind, planContext);
         }
       } catch (reason: unknown) {
         if (disposed) {
@@ -430,20 +534,39 @@ export default function TerminalWindow() {
             <IconTerminal2 size={21} stroke={1.7} />
           </span>
           <div>
-            <strong>Colossus TUI</strong>
-            <span>{workspaceName} · authenticated Managed Local session</span>
+            <strong>Colossus Terminal</strong>
+            <span>
+              {workspaceName} · local shell and authenticated TUI sessions
+            </span>
           </div>
         </div>
         <div className="terminal-window-actions">
-          <button
-            className="button primary compact"
-            type="button"
-            disabled={workspaceId === null || tabs.length >= MAX_TERMINAL_TABS}
-            onClick={() => addTab("colossus_tui")}
-          >
-            <IconPlus size={15} stroke={1.8} aria-hidden="true" />
-            Colossus TUI
-          </button>
+          {shellEnabled ? (
+            <button
+              className="button primary compact"
+              type="button"
+              disabled={
+                workspaceId === null || tabs.length >= MAX_TERMINAL_TABS
+              }
+              onClick={() => addTab("shell")}
+            >
+              <IconPlus size={15} stroke={1.8} aria-hidden="true" />
+              Shell
+            </button>
+          ) : null}
+          {tuiEnabled ? (
+            <button
+              className="button secondary compact"
+              type="button"
+              disabled={
+                workspaceId === null || tabs.length >= MAX_TERMINAL_TABS
+              }
+              onClick={() => addTab("colossus_tui")}
+            >
+              <IconPlus size={15} stroke={1.8} aria-hidden="true" />
+              Colossus TUI
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -473,7 +596,7 @@ export default function TerminalWindow() {
         <section className="terminal-window-error" role="alert">
           <IconAlertTriangle size={24} stroke={1.6} aria-hidden="true" />
           <div>
-            <strong>Colossus TUI unavailable</strong>
+            <strong>Colossus terminal unavailable</strong>
             <p>{error}</p>
           </div>
           <button
@@ -502,11 +625,11 @@ export default function TerminalWindow() {
         {workspaceId !== null && tabs.length === 0 ? (
           <section className="terminal-empty">
             <IconTerminal2 size={30} stroke={1.4} aria-hidden="true" />
-            <strong>No TUI sessions</strong>
+            <strong>No terminal sessions</strong>
             <p>
               {contextWasRefreshed
-                ? "The Managed Local context changed, so prior sessions were closed. Open a new TUI when ready."
-                : "Open the authenticated Colossus TUI from the control above."}
+                ? "The Managed Local context changed, so prior sessions were closed. Open a new terminal when ready."
+                : "Open a local shell or the authenticated Colossus TUI from the controls above."}
             </p>
           </section>
         ) : null}

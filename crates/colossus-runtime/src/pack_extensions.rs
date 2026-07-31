@@ -194,10 +194,15 @@ pub(super) fn compile_active_pack_extensions(
                 .insert(
                     server.name.clone(),
                     McpServerConfig {
+                        transport: colossus_mcp::McpTransportKind::Stdio,
                         command: command.clone(),
                         args: server.args.clone(),
                         working_directory: Some(root.clone()),
                         environment: server.env_refs.clone(),
+                        url: None,
+                        headers: BTreeMap::new(),
+                        credential_headers: BTreeMap::new(),
+                        oauth: None,
                         allowed_tools: server.allowed_tools.clone(),
                         research_tools: Vec::new(),
                         timeout_ms: None,

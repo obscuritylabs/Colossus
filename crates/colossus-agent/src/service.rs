@@ -293,6 +293,49 @@ impl AgentService {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        self.run_public_with_mode_and_skills_stream_controlled(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            run_id,
+            session_id,
+            create_session,
+            active_skills,
+            allowed_tools,
+            if plan_mode {
+                AgentRunMode::Plan(PlanDraftTarget::Create)
+            } else {
+                AgentRunMode::Execute
+            },
+            initiator,
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute a typed public application mode with server-assigned durable lineage.
+    ///
+    /// The Plan target is resolved by the trusted public runtime adapter. Public
+    /// callers never supply a Plan identifier directly to the agent engine.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_with_mode_and_skills_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        run_id: &str,
+        session_id: &str,
+        create_session: bool,
+        active_skills: &[String],
+        allowed_tools: &[String],
+        mode: AgentRunMode,
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
         match self
             .run_with_lineage(
                 role,
@@ -304,11 +347,7 @@ impl AgentService {
                     requested_run_id: Some(run_id),
                     active_skills,
                     allowed_tools: Some(allowed_tools),
-                    mode: if plan_mode {
-                        AgentRunMode::Plan(PlanDraftTarget::Create)
-                    } else {
-                        AgentRunMode::Execute
-                    },
+                    mode,
                     create_requested_session: create_session,
                     ..RunScope::default()
                 },

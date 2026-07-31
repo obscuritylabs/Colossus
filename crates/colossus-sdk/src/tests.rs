@@ -92,6 +92,32 @@ fn secret_debug_output_is_redacted() {
     assert!(!debug.contains("credential-value-never-log"));
 }
 
+#[tokio::test]
+async fn plan_continuation_requires_an_advertised_runtime_capability() {
+    let client = Colossus::from_backend(TestBackend::new(BackendKind::Daemon));
+    let error = client
+        .create_run(CreateRunRequest {
+            input: vec![InputContentPart::Text("Run the approved Plan".into())],
+            session_id: Some("session-1".into()),
+            role: "primary".into(),
+            mode: RunMode::Execute,
+            selected_skills: Vec::new(),
+            plan_action: Some(PlanRunAction::Execute {
+                source_run_id: "run-plan-source".into(),
+                expected_revision: 3,
+                strategy: PlanExecutionStrategy::Direct,
+            }),
+            max_turns: 10,
+            idempotency_key: IdempotencyKey::new("plan-continuation-capability")
+                .expect("idempotency key"),
+        })
+        .await
+        .expect_err("older runtimes must not receive unknown Plan actions");
+
+    assert_eq!(error.code, ApiErrorCode::FailedPrecondition);
+    assert_eq!(error.reason, ApiErrorReason::InvalidRunTransition);
+}
+
 #[test]
 fn empty_secret_is_rejected() {
     assert!(matches!(
@@ -476,6 +502,9 @@ async fn owned_run_update_stream_preserves_order() {
                 turn: 0,
                 message: "cancelled".into(),
                 plan_id: None,
+                plan_revision: None,
+                plan_status: None,
+                goal_id: None,
             }),
         }),
     ]));
@@ -547,6 +576,9 @@ impl AgentRunClient for CheckedSnapshotClient {
                         turn: 0,
                         message: "cancelled".into(),
                         plan_id: None,
+                        plan_revision: None,
+                        plan_status: None,
+                        goal_id: None,
                     })
                 }),
                 etag: "snapshot-etag".into(),
@@ -887,6 +919,9 @@ impl AgentRunClient for TerminalSnapshotWatchClient {
                     turn: 0,
                     message: "cancelled".into(),
                     plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: None,
                 })),
                 etag: "terminal-etag".into(),
                 selected_skills: Vec::new(),
@@ -994,6 +1029,9 @@ async fn resilient_run_updates_reconnect_from_cursor_and_deduplicate_replay() {
                 turn: 1,
                 message: "cancelled".into(),
                 plan_id: None,
+                plan_revision: None,
+                plan_status: None,
+                goal_id: None,
             }),
         )),
     ]));
@@ -1047,6 +1085,9 @@ async fn resilient_run_updates_retries_only_unavailable_open_failures() {
             turn: 0,
             message: "cancelled".into(),
             plan_id: None,
+            plan_revision: None,
+            plan_status: None,
+            goal_id: None,
         }),
     ))]));
     let client = Arc::new(ScriptedWatchClient {

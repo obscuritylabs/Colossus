@@ -10,8 +10,10 @@ function renderRail(
     delegation: false,
     skills: false,
     tui: true,
+    shellTerminal: true,
     files: true,
     artifacts: true,
+    planContinuation: true,
     updateAvailable: false,
     agentWorkflows: false,
     attachments: false,
@@ -27,12 +29,13 @@ function renderRail(
       capabilities,
       onSelect: vi.fn(),
       onOpenTerminal: vi.fn(),
+      onOpenShell: vi.fn(),
     }),
   );
 }
 
-function terminalButton(markup: string): string {
-  const labelIndex = markup.indexOf("TUI</span>");
+function buttonFor(markup: string, label: string): string {
+  const labelIndex = markup.indexOf(`${label}</span>`);
   const buttonIndex = markup.lastIndexOf("<button", labelIndex);
   return markup.slice(buttonIndex, markup.indexOf(">", buttonIndex) + 1);
 }
@@ -47,14 +50,32 @@ describe("ProductRail terminal availability", () => {
   it("does not expose the global terminal action for an external target", () => {
     const markup = renderRail(false);
 
-    expect(terminalButton(markup)).toContain("disabled");
+    expect(buttonFor(markup, "TUI")).toContain("disabled");
     expect(markup).toContain(
       "Terminal is available only for the selected Managed Local target",
     );
   });
 
   it("enables the global terminal action for an opted-in Managed Local target", () => {
-    expect(terminalButton(renderRail(true))).not.toContain("disabled");
+    expect(buttonFor(renderRail(true), "TUI")).not.toContain("disabled");
+  });
+
+  it("offers the embedded shell independently of TUI readiness", () => {
+    const markup = renderRail(false, {
+      delegation: false,
+      skills: false,
+      tui: false,
+      shellTerminal: true,
+      files: false,
+      artifacts: false,
+      planContinuation: false,
+      updateAvailable: false,
+      agentWorkflows: false,
+      attachments: false,
+    });
+
+    expect(markup).toContain(">Terminal</span>");
+    expect(buttonFor(markup, "Terminal")).not.toContain("disabled");
   });
 
   it("hides optional runtime areas until they are explicitly advertised", () => {
@@ -62,8 +83,10 @@ describe("ProductRail terminal availability", () => {
       delegation: false,
       skills: false,
       tui: false,
+      shellTerminal: false,
       files: false,
       artifacts: false,
+      planContinuation: false,
       updateAvailable: false,
       agentWorkflows: false,
       attachments: false,
@@ -72,6 +95,7 @@ describe("ProductRail terminal availability", () => {
     expect(markup).not.toContain(">Agents</span>");
     expect(markup).not.toContain(">Library</span>");
     expect(markup).not.toContain(">TUI</span>");
+    expect(markup).not.toContain(">Terminal</span>");
   });
 
   it("shows orchestration for an authenticated delegation capability", () => {
@@ -79,8 +103,10 @@ describe("ProductRail terminal availability", () => {
       delegation: true,
       skills: false,
       tui: false,
+      shellTerminal: false,
       files: false,
       artifacts: false,
+      planContinuation: false,
       updateAvailable: false,
       agentWorkflows: false,
       attachments: false,

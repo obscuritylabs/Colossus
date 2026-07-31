@@ -506,6 +506,23 @@ pub(super) async fn dispatch(
                 runtime.mcp_call(&server, &tool, arguments).await?,
             )?)
         }
+        WorkerOperation::McpAuthBegin { server } => Ok(serde_json::to_value(
+            runtime.mcp_oauth_login_begin(&server).await?,
+        )?),
+        WorkerOperation::McpAuthComplete {
+            server,
+            callback_url,
+        } => Ok(serde_json::to_value(
+            runtime
+                .mcp_oauth_login_complete(&server, &callback_url)
+                .await?,
+        )?),
+        WorkerOperation::McpAuthStatus { server } => Ok(serde_json::to_value(
+            runtime.mcp_oauth_status(&server).await?,
+        )?),
+        WorkerOperation::McpAuthLogout { server } => Ok(serde_json::to_value(
+            runtime.mcp_oauth_logout(&server).await?,
+        )?),
         WorkerOperation::SkillList => {
             let skills = runtime
                 .list_skills()?

@@ -242,6 +242,29 @@ pub(super) enum McpAction {
         /// Inline JSON object or @path to a JSON document.
         arguments: String,
     },
+    /// Manage OAuth credentials for one configured remote MCP server.
+    Auth(McpAuthCommand),
+}
+
+#[derive(Args)]
+pub(super) struct McpAuthCommand {
+    #[command(subcommand)]
+    pub(super) command: McpAuthAction,
+}
+
+#[derive(Subcommand)]
+pub(super) enum McpAuthAction {
+    /// Start OAuth authorization and persist the resulting tokens.
+    Login {
+        server: String,
+        /// Read the final redirected URL from stdin for headless/container use.
+        #[arg(long)]
+        manual: bool,
+    },
+    /// Inspect local OAuth credential status.
+    Status { server: String },
+    /// Clear local OAuth credentials without remote revocation.
+    Logout { server: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

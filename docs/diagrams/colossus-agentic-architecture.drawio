@@ -1,0 +1,315 @@
+<mxfile host="app.diagrams.net" modified="2026-07-28T00:00:00.000Z" agent="Codex" version="26.0.9" type="device" compressed="false">
+  <diagram id="agent-ecosystem" name="1 - Agent-Centered Architecture">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="p1_title" value="Colossus Agentic System — Target Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="35" y="10" width="760" height="34" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_subtitle" value="The agent coordinates intelligence and capabilities; Colossus retains policy, permit, quarantine, and audit authority." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="37" y="44" width="960" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_airgap" value="AIR-GAPPED ORGANIZATION BOUNDARY" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#334155;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;fontStyle=1;fontColor=#334155;fontSize=14;spacingTop=8;spacingLeft=12;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="25" y="80" width="1585" height="875" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_interfaces_boundary" value="INTERFACES" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;verticalAlign=top;align=left;fontStyle=1;fontColor=#475569;fontSize=13;spacingTop=8;spacingLeft=10;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="55" y="265" width="285" height="390" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_runtime_boundary" value="COLOSSUS ENDPOINT / RUNTIME (RUST)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#60A5FA;verticalAlign=top;align=left;fontStyle=1;fontColor=#1E3A8A;fontSize=13;spacingTop=8;spacingLeft=10;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="370" y="165" width="705" height="700" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_hosted_boundary" value="INTERNAL HOSTED SERVICES" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#A78BFA;verticalAlign=top;align=left;fontStyle=1;fontColor=#581C87;fontSize=13;spacingTop=8;spacingLeft=10;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="1105" y="115" width="470" height="785" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_user" value="Operators &amp; Users&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;goals · approvals · review&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#0F172A;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="85" y="355" width="220" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_apps" value="Applications &amp; Workflows&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;CLI · TUI · SDK · automation&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#0F172A;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="85" y="495" width="220" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_agent" value="COLOSSUS AGENT&lt;br&gt;&lt;font style=&quot;font-size:12px;font-weight:normal&quot;&gt;reason · plan · act · synthesize&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#172554;strokeColor=#60A5FA;strokeWidth=3;fontColor=#FFFFFF;fontSize=21;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="525" y="370" width="365" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_model_router" value="Model Router&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;role selection · fallback · budgets&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#3B82F6;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="530" y="225" width="260" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_retrieval" value="Context &amp; Retrieval Gateway&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;mount resolution · evidence · release&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="805" y="535" width="235" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_memory" value="Local Memory&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;session · episodic · cache&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="805" y="675" width="235" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_workflow" value="Workflow &amp; Delegation&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;durable runs · child agents&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#3B82F6;fontColor=#1E3A8A;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="405" y="560" width="235" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_safety" value="Safety Kernel&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;policy · approval · one-use permits&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="470" y="690" width="275" height="86" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_gateway" value="Effect Gateway&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;tool adapters · sandbox · quarantine&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="405" y="790" width="260" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_journal" value="Local Journal &amp; Audit&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;canonical events · decisions · provenance&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#F1F5F9;strokeColor=#64748B;fontColor=#0F172A;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="785" y="790" width="245" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_model_serving" value="Model Serving&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;local models · internal inference&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#3B82F6;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1215" y="165" width="250" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_knowledge" value="Knowledge Service&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;corp · team · project · agent corpora&lt;br&gt;versions · provenance · OKF import/export&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1185" y="285" width="310" height="108" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_search" value="Search Services&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;lexical · semantic · federated&lt;br&gt;approved internal mirrors&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1185" y="555" width="310" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_sources" value="Corporate Sources&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;documents · repositories · wikis · data&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#064E3B;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1185" y="425" width="310" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_integrations" value="Tools &amp; Integrated Systems&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;filesystem · processes · APIs · MCP&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1185" y="795" width="310" height="72" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_identity" value="Identity &amp; Policy&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;workload IDs · grants&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="685" width="180" height="72" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_remote_journal" value="Remote Journal &amp; Audit&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;replication · checkpoints · reporting&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#F8FAFC;strokeColor=#64748B;fontColor=#0F172A;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1345" y="680" width="185" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_legend" value="Blue: agent/application runtime   Purple: knowledge/retrieval   Orange: governed effects   Green: durable information" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#CBD5E1;fontColor=#475569;fontSize=11;align=left;spacingLeft=8;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="55" y="905" width="760" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_user_agent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_user" target="p1_agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_apps_agent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_apps" target="p1_agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_agent_model" value="provider turns" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3B82F6;endArrow=block;endFill=1;fontColor=#1E3A8A;fontSize=10;" edge="1" parent="1" source="p1_agent" target="p1_model_router">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_model_serving" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3B82F6;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_model_router" target="p1_model_serving">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_agent_retrieval" value="retrieve evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p1_agent" target="p1_retrieval">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_retrieval_knowledge" value="mounted corpora" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p1_retrieval" target="p1_knowledge">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1080" y="581"/>
+              <mxPoint x="1080" y="339"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_retrieval_search" value="approved search" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p1_retrieval" target="p1_search">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1080" y="581"/>
+              <mxPoint x="1080" y="601"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_memory_retrieval" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_memory" target="p1_retrieval">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_agent_workflow" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3B82F6;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_agent" target="p1_workflow">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_agent_safety" value="effect request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p1_agent" target="p1_safety">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_safety_identity" value="authorize" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p1_safety" target="p1_identity">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="775" y="665"/>
+              <mxPoint x="1090" y="665"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_safety_gateway" value="one-use permit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p1_safety" target="p1_gateway">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_gateway_integrations" value="permit-bound calls" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p1_gateway" target="p1_integrations">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="700" y="885"/>
+              <mxPoint x="1125" y="885"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_sources_knowledge" value="ingest / publish" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;fontColor=#064E3B;fontSize=10;" edge="1" parent="1" source="p1_sources" target="p1_knowledge">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_e_agent_journal" value="durable events" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;dashed=1;endArrow=block;endFill=1;fontColor=#334155;fontSize=10;" edge="1" parent="1" source="p1_agent" target="p1_journal">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="540"/>
+              <mxPoint x="770" y="770"/>
+              <mxPoint x="790" y="770"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_retrieval_journal" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_retrieval" target="p1_journal">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1060" y="581"/>
+              <mxPoint x="1060" y="770"/>
+              <mxPoint x="1030" y="770"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_safety_journal" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="p1_safety" target="p1_journal">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="760"/>
+              <mxPoint x="900" y="760"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1_e_journal_remote" value="signed replication + receipts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;dashed=1;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#334155;fontSize=10;" edge="1" parent="1" source="p1_journal" target="p1_remote_journal">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1085" y="821"/>
+              <mxPoint x="1085" y="775"/>
+              <mxPoint x="1340" y="775"/>
+              <mxPoint x="1340" y="721"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="knowledge-lifecycle" name="2 - Knowledge Mount Lifecycle">
+    <mxGraphModel dx="1800" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="p2_title" value="Knowledge Mounts — Authorization, Retrieval, and Publication" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="35" y="10" width="900" height="34" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_subtitle" value="A mount is a session-scoped capability over a versioned corpus—not an operating-system filesystem mount." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="37" y="44" width="950" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_control_boundary" value="CONTROL PLANE — resolve requested mounts into effective grants" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#FB923C;verticalAlign=top;align=left;fontStyle=1;fontColor=#7C2D12;fontSize=13;spacingTop=8;spacingLeft=10;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="35" y="85" width="1725" height="205" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_retrieval_boundary" value="RETRIEVAL DATA PLANE — search only authorized partitions and release bounded evidence" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#8B5CF6;verticalAlign=top;align=left;fontStyle=1;fontColor=#4C1D95;fontSize=13;spacingTop=8;spacingLeft=10;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="35" y="315" width="1725" height="285" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_publish_boundary" value="PUBLICATION PLANE — agents propose; governed review creates a new immutable corpus revision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;verticalAlign=top;align=left;fontStyle=1;fontColor=#064E3B;fontSize=13;spacingTop=8;spacingLeft=10;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="35" y="625" width="1725" height="285" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_identity" value="Agent + Delegating User&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;workload identity · workflow · endpoint&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="155" width="250" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_request" value="Requested Mounts&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;aliases · modes · revision rules&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="385" y="155" width="230" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_policy" value="Mount Resolver + Policy&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;tenant · groups · classification · operation&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="685" y="135" width="290" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_registry" value="Corpus Registry&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;owner · policy · current revision&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#FFFFFF;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="710" y="225" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_mount_map" value="Session Mount Map&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;opaque handles · rights · expiry · revision&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="135" width="350" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_agent_turn" value="COLOSSUS AGENT&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;question or task&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#172554;strokeColor=#60A5FA;strokeWidth=3;fontColor=#FFFFFF;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="75" y="410" width="220" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_search_tool" value="knowledge.search&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;query + mount aliases&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="415" width="220" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_gateway" value="Retrieval Gateway&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;validate handles · bound query&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="625" y="415" width="235" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_planner" value="AuthZ + Query Planner&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;filters · fan-out · limits&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="915" y="415" width="235" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_indexes" value="Authorized Corpus Indexes&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;corporate · team · project · agent-private&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#FFFFFF;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1205" y="405" width="280" height="102" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_release" value="Evidence Quarantine + Release&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;source · revision · trust · classification&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#8B5CF6;fontColor=#4C1D95;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1515" y="405" width="215" height="102" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_agent_proposal" value="Agent Proposal&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;new fact or correction&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="735" width="220" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_changeset" value="Draft Changeset&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;content · evidence · reason&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="355" y="735" width="220" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_validation" value="Validation&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;schema · provenance · secrets · access&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="630" y="735" width="230" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_review" value="Owner / Policy Review&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;approve · reject · revise&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="915" y="735" width="230" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_revision" value="Immutable Corpus Revision&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;content hash · OKF bundle&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#FFFFFF;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="725" width="255" height="98" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_reindex" value="Reindex + Distribute&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;online indexes · signed offline mount&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#10B981;fontColor=#064E3B;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="735" width="220" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_note" value="Rule: retrieved knowledge is evidence, never executable authority. Shared corpora require governed publication; agent-private corpora may use policy-controlled auto-publication." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#CBD5E1;fontColor=#475569;fontSize=11;align=left;spacingLeft=8;connectable=0;" vertex="1" parent="1">
+          <mxGeometry x="35" y="935" width="1170" height="34" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_identity_request" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p2_identity" target="p2_request">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_request_policy" value="requested mounts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p2_request" target="p2_policy">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_registry_policy" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;" edge="1" parent="1" source="p2_registry" target="p2_policy">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_policy_mountmap" value="effective grants" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p2_policy" target="p2_mount_map">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_agent_search" value="query + aliases" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p2_agent_turn" target="p2_search_tool">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_search_gateway" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;" edge="1" parent="1" source="p2_search_tool" target="p2_gateway">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_mountmap_gateway" value="session handles" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;dashed=1;endArrow=block;endFill=1;fontColor=#7C2D12;fontSize=10;" edge="1" parent="1" source="p2_mount_map" target="p2_gateway">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1225" y="350"/>
+              <mxPoint x="742" y="350"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p2_e_gateway_planner" value="validated request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p2_gateway" target="p2_planner">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_planner_indexes" value="authorized partitions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p2_planner" target="p2_indexes">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_indexes_release" value="ranked evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p2_indexes" target="p2_release">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_release_agent" value="released context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8B5CF6;endArrow=block;endFill=1;fontColor=#4C1D95;fontSize=10;" edge="1" parent="1" source="p2_release" target="p2_agent_turn">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1620" y="555"/>
+              <mxPoint x="185" y="555"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p2_e_proposal_changeset" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;" edge="1" parent="1" source="p2_agent_proposal" target="p2_changeset">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_changeset_validation" value="validate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;fontColor=#064E3B;fontSize=10;" edge="1" parent="1" source="p2_changeset" target="p2_validation">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_validation_review" value="review queue" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;fontColor=#064E3B;fontSize=10;" edge="1" parent="1" source="p2_validation" target="p2_review">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_review_revision" value="publish" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;fontColor=#064E3B;fontSize=10;" edge="1" parent="1" source="p2_review" target="p2_revision">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_e_revision_reindex" value="materialize" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#10B981;endArrow=block;endFill=1;fontColor=#064E3B;fontSize=10;" edge="1" parent="1" source="p2_revision" target="p2_reindex">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

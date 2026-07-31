@@ -117,7 +117,7 @@ process launch. YAML contains names and identities, never the values.
 | `search` | No | Named provider-neutral search profiles and routes |
 | `skills` | No | Skill roots, overrides, and disabled names |
 | `packs` | No | Pack installation root |
-| `mcp` | No | Exact stdio server declarations |
+| `mcp` | No | Exact stdio and stateful Streamable HTTP server declarations |
 | `audit` | No | External evidence exporter |
 
 ## Access
@@ -442,6 +442,7 @@ skills:
 packs:
   installRoot: .colossus/packs
 mcp:
+  oauthCredentialStore: auto
   servers:
     local-docs:
       command: /absolute/path/to/mcp-server
@@ -469,6 +470,19 @@ grant; child environment names need both an `env:VARIABLE` reference and a sandb
 environment grant. A server allows at most 1,024 unique tools and 64 research templates.
 Its optional timeout and output cap may only narrow the sandbox values, and output is at
 least 1,024 bytes.
+
+Remote servers use `transport: streamable_http` with one exact credential-free `url`.
+HTTPS is mandatory except for exact loopback development URLs. Literal non-secret
+`headers`, environment-backed `credentialHeaders`, and OAuth are mutually constrained so
+secrets are resolved only after authorization. OAuth supports `auto`, `platform`, and
+`encrypted_state` storage; `auto` chooses the platform credential store for platform-key
+deployments and the separately encrypted redb sidecar for environment-key deployments.
+
+`allowedTools` is either a non-empty list of unique explicit names or exactly `["*"]`.
+Wildcard mode is top-level-only and automatically trusts future valid tools published by
+that configured server, while retaining fresh discovery, schema validation, policy,
+approval, quarantine, output bounds, and audit. Discovery fails closed above 1,024 tools
+or 32 pages.
 
 ## Numeric constraints
 

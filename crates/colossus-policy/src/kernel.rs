@@ -317,7 +317,7 @@ impl SafetyKernel {
             )));
         }
         if obligations.sandbox_backend == "broker"
-            && is_process_action(&request.action)
+            && is_process_effect(request)
             && !obligations.allow_sandbox_downgrade
         {
             return Err(GatewayError::Safety(
@@ -326,7 +326,7 @@ impl SafetyKernel {
             ));
         }
         if obligations.sandbox_backend == "windows_job"
-            && is_process_action(&request.action)
+            && is_process_effect(request)
             && !cfg!(target_os = "windows")
         {
             return Err(GatewayError::Safety(
@@ -334,7 +334,7 @@ impl SafetyKernel {
             ));
         }
         if obligations.sandbox_backend == "windows_job"
-            && is_process_action(&request.action)
+            && is_process_effect(request)
             && obligations.timeout_ms < MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS
         {
             return Err(GatewayError::Safety(format!(
@@ -343,7 +343,7 @@ impl SafetyKernel {
         }
         if cfg!(target_os = "windows")
             && obligations.sandbox_backend == "oci"
-            && is_process_action(&request.action)
+            && is_process_effect(request)
         {
             return Err(GatewayError::Safety(
                 "OCI process execution is disabled on Windows until path mapping passes live acceptance"
@@ -351,7 +351,7 @@ impl SafetyKernel {
             ));
         }
         if obligations.sandbox_backend == "oci"
-            && is_process_action(&request.action)
+            && is_process_effect(request)
             && obligations.timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
         {
             return Err(GatewayError::Safety(format!(
@@ -359,7 +359,7 @@ impl SafetyKernel {
             )));
         }
         if obligations.sandbox_backend == "oci"
-            && is_process_action(&request.action)
+            && is_process_effect(request)
             && !obligations.network_destinations.is_empty()
             && obligations.timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
         {
@@ -430,7 +430,7 @@ impl SafetyKernel {
         }
         if decision.outcome == DecisionOutcome::Allow
             && request.phase == EffectPhase::PreEffect
-            && is_process_action(&request.action)
+            && is_process_effect(request)
         {
             validate_process_obligations(request, obligations)?;
         }
@@ -445,7 +445,7 @@ impl SafetyKernel {
                     | "provider.models"
                     | "registry.pull"
                     | "registry.push"
-            ))
+            ) || is_streamable_http_mcp(request))
         {
             let origin = canonical_network_origin(&request.resource)?;
             if network_destination_match(&obligations.network_destinations, &origin)?.is_none() {
@@ -479,6 +479,15 @@ pub(super) fn is_process_action(action: &str) -> bool {
                 | "mcp.tools"
                 | "mcp.call"
         )
+}
+
+fn is_process_effect(request: &EffectRequest) -> bool {
+    is_process_action(&request.action) && !is_streamable_http_mcp(request)
+}
+
+fn is_streamable_http_mcp(request: &EffectRequest) -> bool {
+    matches!(request.action.as_str(), "mcp.tools" | "mcp.call")
+        && request.content.get("transport").and_then(Value::as_str) == Some("streamable_http")
 }
 
 pub(super) fn is_filesystem_action(action: &str) -> bool {
@@ -541,7 +550,7 @@ pub fn network_destination_match(
                 | "instance-data"
                 | "instance-data.ec2.internal"
         )
-        || host.parse::<IpAddr>().is_ok_and(non_public_network_address)
+        || colossus_network::parse_host_ip(host).is_some_and(non_public_network_address)
     {
         return Ok(None);
     }
@@ -550,22 +559,7 @@ pub fn network_destination_match(
 
 /// Return whether an address is outside public Internet routing.
 pub fn non_public_network_address(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-        }
-    }
+    colossus_network::non_public_network_address(ip)
 }
 
 pub(super) fn validate_process_obligations(

@@ -3,10 +3,10 @@ use crate::{
     CancelRunResponse, CreateRunRequest, CreateRunResponse, GetRunResponse, InputContentPart,
     Interaction, InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus,
     ListRunsRequest, ListRunsResponse, MessageContentPart, MessageRole, OutcomeCertainty,
-    PageResponse, PromptAnswer, PromptChoice, RespondInteractionRequest,
-    RespondInteractionResponse, Run, RunCancellation, RunFailure, RunMode, RunResult, RunStatus,
-    RunTerminal, RunUpdate, RunUpdateKind, SessionMessage, TokenUsage, ToolActivity,
-    ToolActivityState,
+    PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice,
+    RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation, RunFailure,
+    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, SessionMessage,
+    TokenUsage, ToolActivity, ToolActivityState,
 };
 use colossus_api::{self as core, ApiError, ApiErrorReason, ApiResult, CallerContext};
 
@@ -29,6 +29,29 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
             RunMode::Plan => core::RunMode::Plan,
         },
         skill_ids: value.selected_skills,
+        plan_action: value.plan_action.map(|action| match action {
+            PlanRunAction::Revise {
+                source_run_id,
+                expected_revision,
+            } => core::PlanRunAction::Revise {
+                source_run_id,
+                expected_revision,
+            },
+            PlanRunAction::Execute {
+                source_run_id,
+                expected_revision,
+                strategy,
+            } => core::PlanRunAction::Execute {
+                source_run_id,
+                expected_revision,
+                strategy: match strategy {
+                    PlanExecutionStrategy::Direct => core::PlanExecutionStrategy::Direct,
+                    PlanExecutionStrategy::Goal { max_iterations } => {
+                        core::PlanExecutionStrategy::Goal { max_iterations }
+                    }
+                },
+            },
+        }),
         max_turns: value.max_turns,
         idempotency_key: value.idempotency_key,
     }
@@ -185,6 +208,9 @@ pub(super) fn run_update(
                 turn: cancellation.turn,
                 message: cancellation.message,
                 plan_id: cancellation.plan_id,
+                plan_revision: cancellation.plan_revision,
+                plan_status: cancellation.plan_status.map(plan_status),
+                goal_id: cancellation.goal_id,
             })
         }
     };
@@ -212,6 +238,9 @@ fn run(value: core::Run) -> ApiResult<Run> {
                 turn: cancellation.turn,
                 message: cancellation.message,
                 plan_id: cancellation.plan_id,
+                plan_revision: cancellation.plan_revision,
+                plan_status: cancellation.plan_status.map(plan_status),
+                goal_id: cancellation.goal_id,
             }))
         }
         _ if value.result.is_none() && value.failure.is_none() && value.cancellation.is_none() => {
@@ -245,11 +274,23 @@ fn run_result(value: core::RunResult) -> RunResult {
     RunResult {
         output: value.output,
         plan_id: value.plan_id,
+        plan_revision: value.plan_revision,
+        plan_status: value.plan_status.map(plan_status),
+        goal_id: value.goal_id,
         profile: value.profile,
         model_profile: value.model_profile,
         provider_profile: value.provider_profile,
         model: value.model,
         elapsed_seconds: value.elapsed_seconds,
+    }
+}
+
+fn plan_status(value: core::PlanStatus) -> PlanStatus {
+    match value {
+        core::PlanStatus::Draft => PlanStatus::Draft,
+        core::PlanStatus::Approved => PlanStatus::Approved,
+        core::PlanStatus::Executed => PlanStatus::Executed,
+        core::PlanStatus::Discarded => PlanStatus::Discarded,
     }
 }
 

@@ -1197,7 +1197,10 @@ fn public_network_wildcard_excludes_non_public_and_metadata_origins() {
     for denied in [
         "http://127.0.0.1:8888/search",
         "http://10.0.0.1/",
+        "http://100.64.0.1/",
         "http://169.254.169.254/latest/meta-data",
+        "http://[::ffff:127.0.0.1]/",
+        "http://[2001:db8::1]/",
         "http://metadata.google.internal/",
     ] {
         assert_eq!(
@@ -1212,6 +1215,59 @@ fn public_network_wildcard_excludes_non_public_and_metadata_origins() {
         )
         .expect("exact loopback"),
         Some(NetworkDestinationMatch::Exact)
+    );
+}
+
+#[tokio::test]
+async fn streamable_http_mcp_uses_network_not_process_obligations() {
+    let origin = "https://splunk.example.com";
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("mcp.tools", DecisionOutcome::Allow)
+        .with_action_restrictions("mcp.tools", Vec::new(), Vec::new(), vec![origin.into()]);
+    let request = effect_request(
+        system_actor("mcp-http-test"),
+        "mcp.tools",
+        format!("{origin}/services/mcp"),
+        serde_json::json!({
+            "transport": "streamable_http",
+            "operation": {"kind": "list_tools", "server": "splunk", "cursor": null}
+        }),
+    );
+    let decision = policy.decide(&request).await.expect("decision");
+    SafetyKernel::new(Vec::new())
+        .validate_decision(&request, &decision)
+        .expect("remote MCP is a network effect");
+
+    let denied = effect_request(
+        system_actor("mcp-http-test"),
+        "mcp.tools",
+        "https://other.example.com/services/mcp",
+        request.content.clone(),
+    );
+    let denied_decision = policy.decide(&denied).await.expect("decision");
+    assert!(
+        SafetyKernel::new(Vec::new())
+            .validate_decision(&denied, &denied_decision)
+            .is_err()
+    );
+
+    let stdio = effect_request(
+        system_actor("mcp-http-test"),
+        "mcp.tools",
+        "/usr/bin/false",
+        serde_json::json!({
+            "transport": "stdio",
+            "cwd": "/tmp",
+            "args": [],
+            "environment": {},
+        }),
+    );
+    let stdio_decision = policy.decide(&stdio).await.expect("decision");
+    assert!(
+        SafetyKernel::new(Vec::new())
+            .validate_decision(&stdio, &stdio_decision)
+            .is_err(),
+        "stdio MCP must retain process obligations"
     );
 }
 

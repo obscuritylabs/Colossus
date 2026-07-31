@@ -153,6 +153,7 @@ fn create_request(key: &str, text: &str) -> CreateRunRequest {
         role: Some("assistant".into()),
         mode: RunMode::Execute,
         skill_ids: Vec::new(),
+        plan_action: None,
         max_turns: 24,
         idempotency_key: IdempotencyKey::new(key).expect("idempotency key"),
     }
@@ -603,6 +604,39 @@ fn create_request_rejects_public_skill_activation() {
 }
 
 #[test]
+fn plan_continuation_requires_exact_session_mode_revision_and_goal_budget() {
+    let mut revise = create_request("revise-plan", "Change step two");
+    revise.session_id = Some("session-1".into());
+    revise.mode = RunMode::Plan;
+    revise.plan_action = Some(PlanRunAction::Revise {
+        source_run_id: "run-plan-source".into(),
+        expected_revision: 3,
+    });
+    revise.validate().expect("exact Plan revision");
+
+    revise.mode = RunMode::Execute;
+    let error = revise
+        .validate()
+        .expect_err("revision cannot widen into Execute Mode");
+    assert_eq!(error.violations[0].field, "mode");
+
+    let mut execute = create_request("execute-plan", "Run the approved Plan");
+    execute.session_id = Some("session-1".into());
+    execute.plan_action = Some(PlanRunAction::Execute {
+        source_run_id: "run-plan-source".into(),
+        expected_revision: 3,
+        strategy: PlanExecutionStrategy::Goal { max_iterations: 51 },
+    });
+    let error = execute
+        .validate()
+        .expect_err("Goal budget must remain bounded");
+    assert_eq!(
+        error.violations[0].field,
+        "plan_action.strategy.max_iterations"
+    );
+}
+
+#[test]
 fn create_replay_can_be_resolved_without_claiming_another_run() {
     let (journal, repository, caller) = fixture();
     let request = create_request("resolve-create", "Run once");
@@ -662,6 +696,9 @@ fn released_updates_replay_in_sequence_and_reconstruct_after_restart() {
                 result: RunResult {
                     output: "Done".into(),
                     plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: None,
                     profile: "default".into(),
                     model_profile: "default".into(),
                     provider_profile: "default-provider".into(),
@@ -1028,6 +1065,9 @@ fn terminal_cancellation_no_op_claims_its_idempotency_key() {
                 result: RunResult {
                     output: "done".into(),
                     plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: None,
                     profile: "default".into(),
                     model_profile: "default".into(),
                     provider_profile: "default-provider".into(),
@@ -1232,6 +1272,9 @@ fn maximum_valid_cancellation_lifecycle_remains_listable() {
                     turn: 0,
                     message: "cancelled".into(),
                     plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: None,
                 },
             },
         )

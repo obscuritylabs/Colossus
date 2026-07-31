@@ -239,20 +239,9 @@ pub(super) async fn resolve_destinations(
     port: u16,
     allow_non_public: bool,
 ) -> Result<Vec<SocketAddr>, ExecutionError> {
-    let mut addresses = lookup_host((host, port))
+    colossus_network::resolve_destinations(host, port, allow_non_public)
         .await
-        .map_err(adapter_failure)?
-        .filter(|address| allow_non_public || !non_public_network_address(address.ip()))
-        .collect::<Vec<_>>();
-    if addresses.is_empty() {
-        return Err(adapter_failure(
-            "network destination resolved to no permitted address",
-        ));
-    }
-    addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
-    addresses.dedup();
-    addresses.truncate(16);
-    Ok(addresses)
+        .map_err(adapter_failure)
 }
 
 pub(super) async fn connect_destination(

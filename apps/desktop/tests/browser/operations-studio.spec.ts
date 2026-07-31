@@ -44,6 +44,34 @@ test("minimum layout and capability-driven controls remain accessible", async ({
   expect(blockingViolations).toEqual([]);
 });
 
+test("required response card lines up with the prompt composer", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=interaction-question");
+
+  const interaction = page.locator(
+    ".pending-interaction-dock .interaction-card",
+  );
+  const composer = page.locator(".work-composer");
+  await expect(interaction).toBeVisible();
+  await expect(composer).toBeVisible();
+
+  const [interactionBox, composerBox] = await Promise.all([
+    interaction.boundingBox(),
+    composer.boundingBox(),
+  ]);
+  expect(interactionBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(Math.abs(interactionBox!.x - composerBox!.x)).toBeLessThan(1);
+  expect(
+    Math.abs(
+      interactionBox!.x +
+        interactionBox!.width -
+        (composerBox!.x + composerBox!.width),
+    ),
+  ).toBeLessThan(1);
+});
+
 test("right-side drawers trap focus, close with Escape, and restore focus", async ({
   page,
 }) => {

@@ -22,6 +22,7 @@ interface ProductRailProps {
   capabilities: DesktopCapabilities;
   onSelect: (surface: WorkspaceSurface) => void;
   onOpenTerminal: () => void;
+  onOpenShell: () => void;
 }
 
 const MAIN_ITEMS = [
@@ -40,6 +41,7 @@ export function ProductRail({
   capabilities,
   onSelect,
   onOpenTerminal,
+  onOpenShell,
 }: ProductRailProps) {
   return (
     <aside className="product-rail" aria-label="Colossus navigation">
@@ -97,6 +99,24 @@ export function ProductRail({
               <IconTerminal2 size={21} stroke={1.7} />
             </span>
             <span>TUI</span>
+          </button>
+        ) : null}
+        {capabilities.shellTerminal ? (
+          <button
+            className="product-nav-item"
+            type="button"
+            disabled={!terminalEnabled}
+            title={
+              terminalEnabled
+                ? "Open an embedded shell in this workspace"
+                : "Enable local terminal access in Settings"
+            }
+            onClick={onOpenShell}
+          >
+            <span className="product-nav-icon" aria-hidden="true">
+              <IconTerminal2 size={21} stroke={1.7} />
+            </span>
+            <span>Terminal</span>
           </button>
         ) : null}
       </nav>

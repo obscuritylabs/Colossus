@@ -622,12 +622,53 @@ impl Runtime {
             config.sandbox.timeout_ms,
             config.sandbox.max_output_bytes,
         )?;
-        let mcp_executor = Arc::new(McpExecutor::new(
+        let mcp_executor = McpExecutor::new(
             &active_pack_extensions.mcp,
             &workspace,
             &config.sandbox.backend,
             Arc::clone(&process_executor),
-        )?);
+        )?
+        .with_tls_roots(tls_roots.clone())
+        .with_oauth_policy(
+            config.sandbox.network_destinations.clone(),
+            config.sandbox.environment.clone(),
+            config.sandbox.timeout_ms,
+            config.sandbox.max_output_bytes,
+        );
+        let mcp_executor = if !active_pack_extensions
+            .mcp
+            .servers
+            .values()
+            .any(|server| server.oauth.is_some())
+        {
+            mcp_executor
+        } else {
+            match active_pack_extensions.mcp.oauth_credential_store {
+                McpOAuthCredentialStoreKind::Auto => match &config.storage.keys {
+                    KeyConfig::Platform { service, .. } => mcp_executor
+                        .with_platform_oauth_storage(service.clone(), repository_id.clone()),
+                    KeyConfig::Environment { .. } => mcp_executor.with_encrypted_oauth_storage(
+                        &storage_path.with_extension("mcp-oauth.redb"),
+                        Arc::clone(&keys),
+                        repository_id.clone(),
+                    )?,
+                },
+                McpOAuthCredentialStoreKind::Platform => {
+                    let service = match &config.storage.keys {
+                        KeyConfig::Platform { service, .. } => service.clone(),
+                        KeyConfig::Environment { .. } => "colossus-mcp-oauth".into(),
+                    };
+                    mcp_executor.with_platform_oauth_storage(service, repository_id.clone())
+                }
+                McpOAuthCredentialStoreKind::EncryptedState => mcp_executor
+                    .with_encrypted_oauth_storage(
+                        &storage_path.with_extension("mcp-oauth.redb"),
+                        Arc::clone(&keys),
+                        repository_id.clone(),
+                    )?,
+            }
+        };
+        let mcp_executor = Arc::new(mcp_executor);
         let mcp_effect_executor: Arc<dyn EffectExecutor> =
             Arc::new(WorkspaceBoundEffectExecutor::new(
                 workspace_identity.clone(),

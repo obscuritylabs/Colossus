@@ -174,6 +174,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
             role: "primary".into(),
             mode: RunMode::Plan,
             selected_skills: Vec::new(),
+            plan_action: None,
             max_turns: 1,
             idempotency_key: IdempotencyKey::new(Uuid::now_v7().to_string())
                 .expect("idempotency key"),

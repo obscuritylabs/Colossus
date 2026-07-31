@@ -24,6 +24,7 @@ interface WorkComposerProps {
   canCompose: boolean;
   submitting: boolean;
   continuation: boolean;
+  planRevision: { planId: string; revision: number } | null;
   activeWorkRunning: boolean;
   activeWorkNeedsInput: boolean;
   attachmentsAvailable: boolean;
@@ -34,6 +35,7 @@ interface WorkComposerProps {
   onRoleChange: (role: string) => void;
   onMaxTurnsChange: (maxTurns: number) => void;
   onModeChange: (mode: RunMode) => void;
+  onCancelPlanRevision: () => void;
   onChooseAttachment: () => void;
   onRemoveAttachment: (artifactId: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -54,6 +56,7 @@ export function WorkComposer({
   canCompose,
   submitting,
   continuation,
+  planRevision,
   activeWorkRunning,
   activeWorkNeedsInput,
   attachmentsAvailable,
@@ -64,6 +67,7 @@ export function WorkComposer({
   onRoleChange,
   onMaxTurnsChange,
   onModeChange,
+  onCancelPlanRevision,
   onChooseAttachment,
   onRemoveAttachment,
   onSubmit,
@@ -84,11 +88,29 @@ export function WorkComposer({
   return (
     <form
       ref={formRef}
-      className="work-composer"
+      className={`work-composer${mode === "plan" ? " is-plan-mode" : ""}`}
       id="work-composer"
       aria-label="Send a prompt"
       onSubmit={onSubmit}
     >
+      {planRevision === null ? null : (
+        <div className="composer-plan-revision" role="status">
+          <div>
+            <strong>Revising Plan revision {planRevision.revision}</strong>
+            <span>
+              Your next prompt will update this exact draft in the current
+              session.
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={onCancelPlanRevision}
+          >
+            Cancel revision
+          </button>
+        </div>
+      )}
       <div className="composer-target-row">
         <span className="composer-target">
           <IconAt size={15} stroke={1.8} aria-hidden="true" />
@@ -160,9 +182,13 @@ export function WorkComposer({
             ? "Respond to the request above before sending another prompt."
             : activeWorkRunning
               ? "This run is working. Cancel it or start new work to send another prompt."
-              : continuation
-                ? "Continue this thread…"
-                : "Ask Colossus to work on something…"
+              : planRevision !== null
+                ? "Describe what Colossus should change in this Plan…"
+                : continuation
+                  ? "Continue this thread…"
+                  : mode === "plan"
+                    ? "Describe the work you want Colossus to plan…"
+                    : "Ask Colossus to work on something…"
         }
         aria-label="Prompt"
         aria-invalid={promptOverLimit}
@@ -223,7 +249,7 @@ export function WorkComposer({
               name="mode"
               value="plan"
               checked={mode === "plan"}
-              disabled={submitting}
+              disabled={submitting || planRevision !== null}
               onChange={() => onModeChange("plan")}
             />
             <span>Plan</span>
@@ -234,7 +260,7 @@ export function WorkComposer({
               name="mode"
               value="execute"
               checked={mode === "execute"}
-              disabled={submitting}
+              disabled={submitting || planRevision !== null}
               onChange={() => onModeChange("execute")}
             />
             <span>Execute</span>
@@ -261,7 +287,9 @@ export function WorkComposer({
       <div className="composer-meta">
         <span>
           {mode === "plan"
-            ? "Plan mode blocks implementation and external changes."
+            ? planRevision === null
+              ? "Plan creates a new durable draft; implementation and external mutation are blocked."
+              : "This prompt revises the selected draft; implementation and external mutation remain blocked."
             : "Effects remain policy-bound and may require approval."}
         </span>
         <span className={promptOverLimit ? "counter-over-limit" : undefined}>

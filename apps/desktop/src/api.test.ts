@@ -142,6 +142,11 @@ describe("desktop API target routing", () => {
     await selectTarget("managed-local");
     await setTerminalEnabled(true);
     await showTerminalWindow("colossus_tui");
+    await showTerminalWindow("shell");
+    await showTerminalWindow("colossus_tui", {
+      sessionId: "session-1",
+      planId: "plan-1",
+    });
 
     expect(tauri.invoke.mock.calls).toEqual([
       ["configure_managed_runtime", { request }],
@@ -149,6 +154,17 @@ describe("desktop API target routing", () => {
       ["select_target", { targetId: "managed-local" }],
       ["set_terminal_enabled", { enabled: true }],
       ["show_terminal_window", { request: { kind: "colossus_tui" } }],
+      ["show_terminal_window", { request: { kind: "shell" } }],
+      [
+        "show_terminal_window",
+        {
+          request: {
+            kind: "colossus_tui",
+            sessionId: "session-1",
+            planId: "plan-1",
+          },
+        },
+      ],
     ]);
   });
 

@@ -164,8 +164,10 @@ export interface DesktopCapabilities {
   delegation: boolean;
   skills: boolean;
   tui: boolean;
+  shellTerminal: boolean;
   files: boolean;
   artifacts: boolean;
+  planContinuation: boolean;
   updateAvailable: boolean;
   agentWorkflows: boolean;
   attachments: boolean;
@@ -197,17 +199,26 @@ export interface ApplyManagedModelConfigurationRequest {
   accessProfile: "minimal" | "development";
 }
 
-export type TerminalKind = "colossus_tui";
+export type TerminalKind = "colossus_tui" | "shell";
+
+export interface TerminalPlanContext {
+  sessionId: string;
+  planId: string;
+}
 
 export type TerminalSignal = "interrupt" | "terminate";
 
 export interface TerminalContext {
   enabled: boolean;
+  shellEnabled: boolean;
+  tuiEnabled: boolean;
   contextGeneration: number;
   launchRequestId: number;
   workspaceId: string | null;
   workspaceName: string | null;
   requestedKind: TerminalKind | null;
+  requestedPlanSessionId: string | null;
+  requestedPlanId: string | null;
 }
 
 export type TerminalEvent =
@@ -261,8 +272,30 @@ export type RunStatus =
 
 export type OutcomeCertainty = "known" | "unknown";
 
+export type PlanStatus = "draft" | "approved" | "executed" | "discarded";
+
+export type PlanExecutionStrategy =
+  { type: "direct" } | { type: "goal"; maxIterations: number };
+
+export type PlanRunAction =
+  | {
+      type: "revise";
+      sourceRunId: string;
+      expectedRevision: number;
+    }
+  | {
+      type: "execute";
+      sourceRunId: string;
+      expectedRevision: number;
+      strategy: PlanExecutionStrategy;
+    };
+
 export interface RunResult {
   output: string;
+  planId?: string;
+  planRevision?: number;
+  planStatus?: PlanStatus;
+  goalId?: string;
   profile: string;
   modelProfile: string;
   providerProfile: string;
@@ -282,6 +315,10 @@ export interface RunFailure {
 export interface RunCancellation {
   turn: number;
   message: string;
+  planId?: string;
+  planRevision?: number;
+  planStatus?: PlanStatus;
+  goalId?: string;
 }
 
 export type RunTerminal =
@@ -437,6 +474,7 @@ export interface CreateRunRequest {
   sessionId?: string;
   role: string;
   mode: RunMode;
+  planAction?: PlanRunAction;
   maxTurns: number;
   idempotencyKey: string;
 }

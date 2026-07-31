@@ -46,7 +46,7 @@ pub use backend::{AgentRunClient, ArtifactClient, Backend, BackendKind};
 pub use client::Colossus;
 pub use colossus_api::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApiScope, FieldViolation, IdempotencyKey,
-    scopes,
+    PLAN_CONTINUATION_CAPABILITY, scopes,
 };
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 pub use colossus_darwin_process::{
@@ -96,11 +96,12 @@ pub use types::{
     CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, DownloadedArtifact,
     GetRunRequest, GetRunResponse, InputContentPart, Interaction, InteractionAnswer,
     InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse,
-    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse, PromptAnswer,
-    PromptChoice, RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation,
-    RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind,
-    RunUpdateStream, ServerCapabilities, SessionMessage, TokenUsage, ToolActivity,
-    ToolActivityState, UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
+    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse,
+    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice,
+    RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation, RunFailure,
+    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream,
+    ServerCapabilities, SessionMessage, TokenUsage, ToolActivity, ToolActivityState,
+    UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
 };
 
 #[cfg(test)]

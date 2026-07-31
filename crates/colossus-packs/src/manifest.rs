@@ -326,6 +326,12 @@ pub(super) fn validate_pack_references(
                 server.name
             )));
         }
+        if server.allowed_tools.iter().any(|tool| tool == "*") {
+            return Err(PackError::Invalid(format!(
+                "MCP server {} cannot use a wildcard tool allowlist",
+                server.name
+            )));
+        }
         unique_values("MCP allowed_tools", &server.allowed_tools)?;
     }
     for binary in &manifest.binaries {

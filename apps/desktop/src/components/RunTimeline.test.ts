@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { RunView, StreamState } from "../state";
 import type { Run, RunStatus, RunUpdate } from "../types";
@@ -11,6 +11,8 @@ function renderOutput(
   status: RunStatus,
   streamState: StreamState,
   updates: RunUpdate[] = [],
+  runOverrides: Partial<Run> = {},
+  planContinuationAvailable = true,
 ): string {
   const run: Run = {
     runId: "run-markdown-test",
@@ -28,6 +30,7 @@ function renderOutput(
     terminal: null,
     etag: "etag-markdown-test",
     selectedSkills: [],
+    ...runOverrides,
   };
   const view: RunView = {
     run,
@@ -42,10 +45,104 @@ function renderOutput(
     streamError: null,
   };
 
-  return renderToStaticMarkup(createElement(RunTimeline, { view }));
+  return renderToStaticMarkup(
+    createElement(RunTimeline, {
+      view,
+      planContinuationAvailable,
+      planWorkflowAvailable: true,
+      onOpenPlanWorkflow: vi.fn(),
+      onRevisePlan: vi.fn(),
+      onExecutePlan: vi.fn(async () => undefined),
+    }),
+  );
 }
 
 describe("RunTimeline assistant output", () => {
+  it("surfaces the canonical draft and its authenticated Plan workflow handoff", () => {
+    const markup = renderOutput("", "completed", "complete", [], {
+      mode: "plan",
+      terminal: {
+        type: "result",
+        result: {
+          output: "Draft saved.",
+          planId: "plan-1",
+          planRevision: 3,
+          planStatus: "draft",
+          profile: "primary",
+          modelProfile: "primary",
+          providerProfile: "provider",
+          model: "model",
+          elapsedSeconds: 0.5,
+        },
+      },
+    });
+
+    expect(markup).toContain("Plan ready for your decision");
+    expect(markup).toContain("Revision 3");
+    expect(markup).toContain("Revise in chat");
+    expect(markup).toContain("Run once");
+    expect(markup).toContain("Run as Goal");
+    expect(markup).toContain("<dd>plan-1</dd>");
+    expect(markup).toContain("Advanced workflow");
+  });
+
+  it("shows completed Goal lineage without offering stale draft actions", () => {
+    const markup = renderOutput("", "completed", "complete", [], {
+      terminal: {
+        type: "result",
+        result: {
+          output: "Goal started.",
+          planId: "plan-1",
+          planRevision: 5,
+          planStatus: "executed",
+          goalId: "goal-1",
+          profile: "goal",
+          modelProfile: "goal",
+          providerProfile: "goal",
+          model: "goal",
+          elapsedSeconds: 1,
+        },
+      },
+    });
+
+    expect(markup).toContain("Plan started as a Goal");
+    expect(markup).toContain("<dd>goal-1</dd>");
+    expect(markup).not.toContain("Revise in chat");
+    expect(markup).not.toContain("Run once");
+  });
+
+  it("keeps Plan actions unavailable when the runtime did not advertise continuation", () => {
+    const markup = renderOutput(
+      "",
+      "completed",
+      "complete",
+      [],
+      {
+        mode: "plan",
+        terminal: {
+          type: "result",
+          result: {
+            output: "Draft saved.",
+            planId: "plan-1",
+            planRevision: 3,
+            planStatus: "draft",
+            profile: "primary",
+            modelProfile: "primary",
+            providerProfile: "provider",
+            model: "model",
+            elapsedSeconds: 0.5,
+          },
+        },
+      },
+      false,
+    );
+
+    expect(markup).not.toContain("Revise in chat");
+    expect(markup).not.toContain("Run once");
+    expect(markup).not.toContain("Run as Goal");
+    expect(markup).toContain("Open the advanced Plan workflow");
+  });
+
   it("renders completed assistant responses as Markdown", () => {
     const markup = renderOutput(
       "# Ready\n\n- **security** checked",

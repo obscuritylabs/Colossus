@@ -25,6 +25,8 @@ npm run dev -- --host 127.0.0.1
 Open <http://127.0.0.1:1420/?fixture=operations-studio>. The showcase supports the
 primary navigation, new-work flow, artifact tabs, and approval responses. Vite removes
 the fixture from production builds; the normal route always uses the native bridge.
+Use <http://127.0.0.1:1420/?fixture=interaction-question> to review the compact
+`user.ask` question and response state.
 
 ## Managed Local quick start
 
@@ -50,6 +52,25 @@ Run these commands from the repository root.
 
 No daemon enrollment or separate terminal is required for this path. The launcher
 builds and stages the two native binaries before starting Tauri.
+
+### Plan Mode in Desktop
+
+The Work composer’s **Plan** mode sends the typed public `RunMode::Plan` request. Each
+completed turn must write exactly one new durable Draft and cannot implement the plan or
+perform external mutation. Desktop preserves the canonical Plan ID, revision, and
+status returned by the runtime and renders them with the owning session.
+
+An actionable Draft renders **Revise in chat**, **Run once**, and **Run as Goal**.
+Revision starts another public Plan Mode run bound to the source run and exact visible
+revision. Execution starts a public Execute run that approves and consumes that exact
+revision directly or into a bounded Goal. Every action remains durable, watchable,
+policy- and audit-bound. The runtime advertises `plans.continue`; the SDK refuses these
+typed actions when an older or lower-privilege target does not advertise it.
+
+For Managed Local, **Advanced workflow** still launches the authenticated embedded TUI,
+resumes the exact session, and selects the Plan using native-validated identifiers. It
+is the complete lifecycle surface for inspection, approval, discard, and Goal resume.
+The main WebView can request this bounded handoff but cannot write arbitrary PTY input.
 
 ## External daemon development
 
@@ -172,11 +193,20 @@ cargo audit --file src-tauri/Cargo.lock
   instance ID and TLS certificate fingerprint are compiled into the native app and
   checked before authenticated application calls.
 - The `main` window has only narrow Colossus and lifecycle commands. The dedicated
-  terminal WebView has a separate narrow PTY capability limited to the verified
-  bundled TUI for a native-selected workspace. The child must independently open and
-  attest that exact workspace before native worker authentication is released; the
-  native DTO rejects general Shell requests. Neither renderer receives arbitrary
-  process, filesystem, or HTTP authority.
+  terminal WebView has a separate narrow PTY capability with two fixed kinds. The
+  verified bundled TUI independently attests the native-selected workspace before
+  worker authentication is released. The macOS shell kind launches only the validated
+  system `/bin/zsh -l` with a native-selected workspace and cleared environment; it
+  receives no Colossus credential and sits outside policy and audit. A fixed native
+  warning is required before first enablement. The renderer cannot select a process,
+  arguments, environment, working directory, filesystem API, or HTTP authority.
+- A completed public Plan Mode run exposes canonical Plan identity, revision, and
+  status. Main-window Plan actions reference a caller-owned source run and exact
+  revision, not a renderer-supplied Plan ID; native and server validation bind them to
+  the source session before a normal public run begins. A Managed Local TUI handoff may
+  additionally prefill fixed `/session resume` and `/plan use` selections after both
+  identifiers pass native bounds and control-character checks. It cannot inject a
+  general command.
 - Managed Local persists a macOS device/inode/birthtime workspace identity. Legacy
   path-only or inode-only previews require explicit folder reselection and cannot reuse
   the prior managed state partition. Repository skill reads stay relative to the

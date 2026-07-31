@@ -79,6 +79,7 @@ export async function runPrompt(
           selectedSkills: [],
           maxTurns: options.maxTurns ?? 12,
           idempotencyKey: `sdk-example-create-${randomUUID()}`,
+          planAction: undefined,
         },
         callback,
       ),
