@@ -7,16 +7,30 @@ type: reference
 
 # Reference
 
-Use this section when you need an exact name, field, default, limit, or wire shape:
+Use this section when you need an exact name, field, default, limit, or wire shape.
+
+## Interfaces
 
 - [CLI](cli.md)
 - [TUI commands and keys](tui.md)
+
+## Configuration schema
+
 - [Configuration fields](configuration.md)
+
+## Runtime contracts
+
 - [Tools and action classes](tools-actions.md)
+- [Output, environment, and limits](output-environment-limits.md)
+
+## Extension schemas
+
 - [Workflow schema](workflow-schema.md)
 - [Extension manifests](extension-formats.md)
 - [Bundle format](bundle-format.md)
-- [Output, environment, and limits](output-environment-limits.md)
+
+## Shared terminology
+
 - [Glossary](glossary.md)
 
 Operator recipes live under [Administer and secure](../admin/index.md). Tutorials for

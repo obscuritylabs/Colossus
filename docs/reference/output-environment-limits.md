@@ -56,11 +56,13 @@ and never interpreted as terminal control input.
 | Recent messages preserved | `8` |
 | Memory retrieval | `6` |
 | Research sources | `20` |
-| Research workers | `4` |
+| Research query/lane jobs | `4` |
 
 These are baseline configuration values, not permission grants. Adapters may enforce
 additional hard protocol and input bounds. Exact effective values come from `config
-show`, `config effective`, and the relevant command help.
+show`, `config effective`, and the relevant command help. See
+[Runtime limits configuration](configuration/limits.md) for field interactions,
+validation ranges, and tuning examples.
 
 ## Important hard bounds
 

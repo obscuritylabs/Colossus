@@ -168,6 +168,6 @@ repository, web, or MCP evidence, stable source labels, claims, limitations, and
 report. Operators can change routes in
 [Providers and routing](../admin/providers-routing.md#configure-search-routing).
 Exhaustive fields and bounds remain in
-[Configuration fields](../reference/configuration.md#search).
+[Search configuration](../reference/configuration/search.md).
 Version-specific notes live in
 [Upgrade and compatibility](../get-started/upgrade-compatibility.md).

@@ -151,4 +151,5 @@ execution.
 ## Next step
 
 Review [Storage and worker](storage-worker.md) before enabling concurrent clients or
-scheduled work.
+scheduled work. Use [Sandbox configuration](../reference/configuration/sandbox.md) for
+the field-by-field reference and advanced YAML examples.
