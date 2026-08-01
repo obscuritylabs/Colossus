@@ -330,7 +330,7 @@ colossus --config .colossus/config.yaml config show
 Then exercise only the affected boundary:
 
 ```bash
-colossus --config .colossus/config.yaml models list
+colossus --config .colossus/config.yaml models profiles
 colossus --config .colossus/config.yaml models doctor MODEL_PROFILE
 colossus --config .colossus/config.yaml agents status
 colossus --config .colossus/config.yaml sandbox doctor
