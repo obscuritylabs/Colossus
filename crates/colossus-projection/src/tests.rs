@@ -1,6 +1,6 @@
 use super::{
-    JournalExternalWorkQueue, ProjectedSessionRepository, ProjectionHandler, ProjectionWorker,
-    default_handlers,
+    EffectRecoveryProjection, JournalExternalWorkQueue, ProjectedSessionRepository,
+    ProjectionHandler, ProjectionWorker, default_handlers, pending_effects,
 };
 use colossus_contracts::{
     Actor, ActorType, EventClassification, ExecutionContext, NewEvent, ProjectionMutation,
@@ -99,7 +99,7 @@ fn lag_catches_up_idempotently_and_rebuilds() {
             .iter()
             .all(|item| item.lag == 1)
     );
-    assert_eq!(worker.drain(8, 8).expect("drain").applied, 4);
+    assert_eq!(worker.drain(8, 8).expect("drain").applied, 5);
     assert_eq!(worker.run_once(8).expect("rerun").applied, 0);
     assert_eq!(
         store
@@ -117,6 +117,51 @@ fn lag_catches_up_idempotently_and_rebuilds() {
         })
         .expect("unrelated");
     assert!(worker.rebuild("sessions-v1").expect("rebuild").projections[0].ready);
+}
+
+#[test]
+fn effect_recovery_projection_tracks_nonterminal_tail_and_removes_terminal_effects() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let store = Arc::new(InMemoryProjectionStore::default());
+    for (version, event_type) in [
+        (0, "effect.requested.v1"),
+        (1, "effect.started.v1"),
+        (2, "effect.chunk_released.v1"),
+    ] {
+        journal
+            .append(event("effect:one", version, event_type, json!({})))
+            .expect("append effect event");
+    }
+    let journal_port: Arc<dyn EventJournal> = journal.clone();
+    let store_port: Arc<dyn ProjectionStore> = store.clone();
+    let worker = ProjectionWorker::new(
+        journal_port,
+        store_port,
+        vec![Arc::new(EffectRecoveryProjection)],
+    )
+    .expect("worker");
+
+    worker.drain(8, 8).expect("drain pending effect");
+    let pending = pending_effects(store.as_ref(), 8).expect("pending effects");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].stream_id, "effect:one");
+    assert_eq!(pending[0].started_stream_version, 2);
+    assert_eq!(pending[0].latest_stream_version, 3);
+
+    journal
+        .append(event(
+            "effect:one",
+            3,
+            "effect.outcome_unknown.v1",
+            json!({}),
+        ))
+        .expect("append terminal event");
+    worker.drain(8, 8).expect("drain terminal effect");
+    assert!(
+        pending_effects(store.as_ref(), 8)
+            .expect("pending effects")
+            .is_empty()
+    );
 }
 
 struct FailingProjection;

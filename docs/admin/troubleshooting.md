@@ -40,6 +40,7 @@ colossus --config .colossus/config.yaml tools list
 | Linux protected-path probe fails | `sandbox doctor` native details | Ubuntu AppArmor restricts capabilities in unprivileged user namespaces | Install the release archive's exact-path profile against a root-owned Colossus binary, or use OCI; never weaken the host-wide restriction |
 | Public request is denied | `sandbox doctor` destinations | `*` never matches loopback/private/link-local/metadata | Add the exact canonical private origin only when intended |
 | Worker is unavailable | `worker --status` | Writer lease, stale endpoint, key/permission mismatch, incompatible protocol | Preserve state; stop or repair the owning worker |
+| First start after upgrade is slow | `state doctor` after completion | Legacy or missing version-two anchor requires one complete bootstrap audit | Allow the bounded bootstrap to finish; later clean starts should report `incremental`; use `full` only when policy requires it |
 | Read-only recovery | `audit verify` and `audit anchor-status` | Chain, checkpoint, anchor, decryption, or projection-position failure | Preserve evidence and investigate; never rewrite canonical events |
 | Memory search degraded | `memories index status` | Disposable index unavailable or behind | `sync` or explicitly `rebuild`; canonical records remain |
 | Web search hidden | `search profiles` and `config effective` | Missing role route, tool selection, action, or exact origin | Repair the explicit route and obligations |

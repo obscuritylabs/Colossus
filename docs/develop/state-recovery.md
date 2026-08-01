@@ -21,8 +21,15 @@ the equivalent records in one transaction.
 
 Journal payloads use authenticated encryption. Signed checkpoints and a separately
 protected secure anchor detect record mutation and consistent tail truncation. Startup
-verifies the chain and repairs only narrowly defined interrupted checkpoint metadata
-when the anchored journal head proves it safe.
+defaults to incremental verification: a version-two anchor attests a previously
+verified prefix, startup authenticates the checkpoint boundary, and then verifies only
+the contiguous tail. A legacy, absent, quarantined, or incompatible anchor triggers one
+complete bootstrap replay before a new attestation is trusted. Full startup mode and
+`audit verify` replay every event. Anchored-prefix corruption is detected when that
+record is decrypted and by every explicit full audit; deterministic failures
+quarantine the anchor and make the runtime read-only. Startup repairs only narrowly
+defined interrupted checkpoint metadata when the complete journal still proves the
+advanced anchor safe.
 
 ## Derived state
 
@@ -31,6 +38,10 @@ when the anchored journal head proves it safe.
 - Tantivy and optional Chroma store memory candidate projections, not lifecycle truth.
 - Audit exporters consume a durable outbox and expose ciphertext-free evidence.
 - Each external-work consumer has an independent optimistic position and retry state.
+- `effects-recovery-v1` contains only effects with a durable start and no terminal
+  outcome. Startup recovers at most 1,024 records (plus one overflow sentinel),
+  authenticates each referenced start and stream tail against the journal, and never
+  scans the global journal to infer uncertain effects.
 
 Rebuild replays canonical events. It never imports an unrelated store or turns a
 projection into authority.

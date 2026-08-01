@@ -6,7 +6,7 @@ use super::{
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, EventClassification, EventEnvelope, ExecutionContext, NewEvent,
-    ProjectionWorkItem, SignedCheckpoint, WorkflowScheduleDispatchStatus,
+    ProjectionWorkItem, SecureAnchor, SignedCheckpoint, WorkflowScheduleDispatchStatus,
     WorkflowScheduleMisfirePolicy, WorkflowStatus, WorkflowSubscriptionDispatchStatus,
     WorkflowTriggerKind,
 };
@@ -1442,32 +1442,23 @@ impl KeyProvider for FileKeyProvider {
         }
     }
 
-    fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
+    fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
         fs::write(
             &self.anchor,
-            serde_json::to_vec(&json!({"sequence": sequence, "hash": hash}))
-                .map_err(|error| StoreError::Adapter(error.to_string()))?,
+            serde_json::to_vec(anchor).map_err(|error| StoreError::Adapter(error.to_string()))?,
         )
         .map_err(|error| StoreError::Adapter(error.to_string()))
     }
 
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
         if !self.anchor.exists() {
             return Ok(None);
         }
-        let value: serde_json::Value = serde_json::from_slice(
+        serde_json::from_slice(
             &fs::read(&self.anchor).map_err(|error| StoreError::Adapter(error.to_string()))?,
         )
-        .map_err(|error| StoreError::Adapter(error.to_string()))?;
-        let sequence = value
-            .get("sequence")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| StoreError::Verification("test anchor sequence is absent".into()))?;
-        let hash = value
-            .get("hash")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| StoreError::Verification("test anchor hash is absent".into()))?;
-        Ok(Some((sequence, hash.into())))
+        .map(Some)
+        .map_err(|error| StoreError::Adapter(error.to_string()))
     }
 }
 

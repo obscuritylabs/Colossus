@@ -8,7 +8,10 @@ use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
     aead::{Aead, Payload},
 };
-use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
+use colossus_contracts::{
+    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, SecureAnchor,
+    SecureAnchorStatus, StartupVerificationMode,
+};
 use colossus_memory::EventSourcedMemoryRepository;
 use colossus_ports::{EventJournal, ExternalWorkQueue, KeyProvider, ProjectionStore, StoreError};
 use colossus_projection::{JournalExternalWorkQueue, ProjectionWorker, default_handlers};
@@ -86,31 +89,49 @@ impl KeyProvider for FileAnchorKeyProvider {
         }
     }
 
-    fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
+    fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
         std::fs::write(
             &self.path,
-            serde_json::to_vec(&json!({"sequence": sequence, "hash": hash}))
-                .map_err(adapter_error)?,
+            serde_json::to_vec(anchor).map_err(adapter_error)?,
         )
         .map_err(adapter_error)
     }
 
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
         if !self.path.exists() {
             return Ok(None);
         }
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&self.path).map_err(adapter_error)?)
                 .map_err(adapter_error)?;
-        let sequence = value
-            .get("sequence")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| StoreError::Verification("test anchor sequence is absent".into()))?;
-        let hash = value
-            .get("hash")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| StoreError::Verification("test anchor hash is absent".into()))?;
-        Ok(Some((sequence, hash.into())))
+        Ok(Some(SecureAnchor {
+            format_version: value
+                .get("format_version")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(Ok(1_u16), |version| {
+                    u16::try_from(version).map_err(adapter_error)
+                })?,
+            sequence: value
+                .get("sequence")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| StoreError::Verification("test anchor sequence is absent".into()))?,
+            hash: value
+                .get("hash")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| StoreError::Verification("test anchor hash is absent".into()))?
+                .into(),
+            verification_profile: value
+                .get("verification_profile")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            status: value
+                .get("status")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(adapter_error)?
+                .unwrap_or_default(),
+        }))
     }
 }
 
@@ -197,6 +218,11 @@ fn crash_append_child() {
             expected_version.saturating_add(1),
         ))
         .expect("fault point must terminate before append returns");
+    if std::env::var("COLOSSUS_REDB_TEST_FORCE_CHECKPOINT").as_deref() == Ok("true") {
+        journal
+            .checkpoint()
+            .expect("fault point must terminate before checkpoint returns");
+    }
     panic!("configured journal crash point did not terminate the child process");
 }
 
@@ -291,10 +317,13 @@ fn startup_repairs_checkpoint_interrupted_after_interval_commit() {
     let report = journal.verify().expect("verify repaired checkpoint");
     let checkpoint = report.checkpoint.expect("startup checkpoint repair");
     assert_eq!(checkpoint.global_sequence, 100);
-    assert_eq!(
-        keys.load_anchor().expect("secure anchor"),
-        Some((100, checkpoint.record_hash))
-    );
+    let anchor = keys
+        .load_anchor()
+        .expect("secure anchor")
+        .expect("anchor record");
+    assert_eq!(anchor.sequence, 100);
+    assert_eq!(anchor.hash, checkpoint.record_hash);
+    assert_eq!(anchor.format_version, 2);
 }
 
 #[test]
@@ -322,6 +351,8 @@ fn startup_repairs_checkpoint_after_crash_between_anchor_and_metadata() {
             "COLOSSUS_REDB_TEST_CRASH_POINT",
             "after_anchor_before_checkpoint_commit",
         )
+        .env("COLOSSUS_REDB_TEST_CRASH_SEQUENCE", "100")
+        .env("COLOSSUS_REDB_TEST_FORCE_CHECKPOINT", "true")
         .status()
         .expect("spawn secure-anchor crash child");
     assert!(
@@ -333,12 +364,13 @@ fn startup_repairs_checkpoint_after_crash_between_anchor_and_metadata() {
     let report = journal.verify().expect("verify repaired checkpoint");
     let checkpoint = report.checkpoint.expect("startup checkpoint repair");
     assert_eq!(checkpoint.global_sequence, 100);
-    assert_eq!(
-        FileAnchorKeyProvider { path: anchor_path }
-            .load_anchor()
-            .expect("secure anchor"),
-        Some((100, checkpoint.record_hash))
-    );
+    let anchor = FileAnchorKeyProvider { path: anchor_path }
+        .load_anchor()
+        .expect("secure anchor")
+        .expect("anchor record");
+    assert_eq!(anchor.sequence, 100);
+    assert_eq!(anchor.hash, checkpoint.record_hash);
+    assert_eq!(anchor.format_version, 2);
 }
 
 #[test]
@@ -645,6 +677,98 @@ fn signed_checkpoint_and_secure_anchor_verify() {
 }
 
 #[test]
+fn incremental_startup_verifies_only_the_checkpoint_boundary_and_tail() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("state.redb");
+    let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+    {
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        journal
+            .append_batch(
+                (0_u64..100)
+                    .map(|version| event("stream-1", version, version))
+                    .collect(),
+            )
+            .expect("checkpointed history");
+        journal
+            .append(event("stream-1", 100, 100))
+            .expect("unchecked tail");
+    }
+
+    {
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        let report = journal
+            .startup_verification_report()
+            .expect("startup report");
+        assert_eq!(report.path, "incremental");
+        assert_eq!(report.verified_from_sequence, Some(100));
+        assert_eq!(report.verified_through_sequence, 101);
+        assert_eq!(report.verified_event_count, 2);
+    }
+
+    let journal = journal_with_keys(&path, Arc::clone(&keys));
+    let report = journal
+        .startup_verification_report()
+        .expect("second startup report");
+    assert_eq!(report.path, "incremental");
+    assert_eq!(report.verified_from_sequence, Some(101));
+    assert_eq!(report.verified_event_count, 1);
+    drop(journal);
+
+    let journal = RedbEventJournal::open_with_startup_verification(
+        &path,
+        keys,
+        Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
+        StartupVerificationMode::Full,
+    )
+    .expect("full startup");
+    let report = journal
+        .startup_verification_report()
+        .expect("full startup report");
+    assert_eq!(report.path, "full");
+    assert_eq!(report.verified_from_sequence, Some(1));
+    assert_eq!(report.verified_event_count, 101);
+}
+
+#[test]
+fn legacy_anchor_bootstraps_once_and_is_replaced_by_version_two() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("state.redb");
+    let anchor_path = directory.path().join("anchor.json");
+    let legacy_anchor;
+    {
+        let journal = journal_with_file_anchor(&path, &anchor_path);
+        journal.append(event("stream-1", 0, 1)).expect("append");
+        journal.checkpoint().expect("checkpoint");
+        let anchor = FileAnchorKeyProvider {
+            path: anchor_path.clone(),
+        }
+        .load_anchor()
+        .expect("anchor")
+        .expect("anchor record");
+        legacy_anchor = json!({"sequence": anchor.sequence, "hash": anchor.hash});
+    }
+    std::fs::write(
+        &anchor_path,
+        serde_json::to_vec(&legacy_anchor).expect("legacy anchor"),
+    )
+    .expect("write legacy anchor");
+
+    let journal = journal_with_file_anchor(&path, &anchor_path);
+    let report = journal
+        .startup_verification_report()
+        .expect("startup report");
+    assert_eq!(report.path, "bootstrap_full");
+    assert_eq!(report.verified_event_count, 1);
+    let anchor = FileAnchorKeyProvider { path: anchor_path }
+        .load_anchor()
+        .expect("anchor")
+        .expect("anchor record");
+    assert_eq!(anchor.format_version, 2);
+    assert_eq!(anchor.status, SecureAnchorStatus::Verified);
+}
+
+#[test]
 fn persisted_legacy_context_shape_remains_verifiable_and_decryptable() {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("state.redb");
@@ -723,8 +847,9 @@ fn persisted_legacy_context_shape_remains_verifiable_and_decryptable() {
 fn tampering_enters_recovery_mode_on_reopen() {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("state.redb");
+    let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
     {
-        let journal = journal(&path);
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
         journal.append(event("stream-1", 0, 1)).expect("append");
         journal.checkpoint().expect("checkpoint");
     }
@@ -748,12 +873,191 @@ fn tampering_enters_recovery_mode_on_reopen() {
     write.commit().expect("commit");
     drop(database);
 
-    let reopened = journal(&path);
+    let reopened = journal_with_keys(&path, Arc::clone(&keys));
     assert!(reopened.is_recovery_mode());
+    assert_eq!(
+        keys.load_anchor()
+            .expect("anchor")
+            .expect("anchor record")
+            .status,
+        SecureAnchorStatus::Quarantined
+    );
     assert!(matches!(
         reopened.append(event("stream-1", 1, 2)),
         Err(StoreError::RecoveryMode)
     ));
+}
+
+#[test]
+fn incremental_startup_defers_anchored_history_checks_until_access() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("state.redb");
+    let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+    {
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        journal
+            .append_batch(
+                (0_u64..3)
+                    .map(|version| event("stream-1", version, version))
+                    .collect(),
+            )
+            .expect("append history");
+        journal.checkpoint().expect("checkpoint");
+    }
+    let database = Database::create(&path).expect("database");
+    let read = database.begin_read().expect("read");
+    let table = read.open_table(EVENTS).expect("events");
+    let bytes = table.get(1).expect("get").expect("event").value().to_vec();
+    drop(table);
+    drop(read);
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    value["event_type"] = json!("tampered.v1");
+    let bytes = serde_json::to_vec(&value).expect("encode");
+    let write = database.begin_write().expect("write");
+    {
+        let mut table = write.open_table(EVENTS).expect("events");
+        table.insert(1, bytes.as_slice()).expect("tamper event");
+    }
+    write.commit().expect("commit tamper");
+    drop(database);
+
+    let reopened = journal_with_keys(&path, Arc::clone(&keys));
+    assert!(!reopened.is_recovery_mode());
+    assert_eq!(
+        reopened
+            .startup_verification_report()
+            .expect("startup report")
+            .verified_event_count,
+        1
+    );
+    let first = reopened
+        .read_stream("stream-1")
+        .expect("read anchored stream")
+        .remove(0);
+    assert!(matches!(
+        reopened.decrypt_payload(&first),
+        Err(StoreError::Verification(_))
+    ));
+    assert!(reopened.is_recovery_mode());
+    assert_eq!(
+        keys.load_anchor()
+            .expect("anchor")
+            .expect("anchor record")
+            .status,
+        SecureAnchorStatus::Quarantined
+    );
+}
+
+#[test]
+fn incremental_global_read_detects_an_anchored_prefix_gap() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("state.redb");
+    let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+    {
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        journal
+            .append_batch(vec![event("stream-1", 0, 1), event("stream-1", 1, 2)])
+            .expect("append history");
+        journal.checkpoint().expect("checkpoint");
+    }
+    let database = Database::create(&path).expect("database");
+    let write = database.begin_write().expect("write");
+    write
+        .open_table(EVENTS)
+        .expect("events")
+        .remove(1)
+        .expect("remove old event");
+    write.commit().expect("commit gap");
+    drop(database);
+
+    let reopened = journal_with_keys(&path, keys);
+    assert!(!reopened.is_recovery_mode());
+    assert!(matches!(
+        reopened.read_global(1, 8),
+        Err(StoreError::Verification(_))
+    ));
+    assert!(reopened.is_recovery_mode());
+}
+
+#[test]
+fn incremental_outbox_read_detects_an_anchored_prefix_gap() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("state.redb");
+    let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+    {
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        journal
+            .append_batch(vec![event("stream-1", 0, 1), event("stream-1", 1, 2)])
+            .expect("append history");
+        journal.checkpoint().expect("checkpoint");
+    }
+    let database = Database::create(&path).expect("database");
+    let write = database.begin_write().expect("write");
+    write
+        .open_table(OUTBOX)
+        .expect("outbox")
+        .remove(1)
+        .expect("remove old outbox record");
+    write.commit().expect("commit gap");
+    drop(database);
+
+    let reopened = journal_with_keys(&path, keys);
+    assert!(!reopened.is_recovery_mode());
+    assert!(matches!(
+        reopened.read_projection_work(1, 8),
+        Err(StoreError::Verification(_))
+    ));
+    assert!(reopened.is_recovery_mode());
+}
+
+#[test]
+fn full_startup_audit_detects_corruption_before_the_checkpoint() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("state.redb");
+    let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+    {
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        journal
+            .append_batch(
+                (0_u64..3)
+                    .map(|version| event("stream-1", version, version))
+                    .collect(),
+            )
+            .expect("append history");
+        journal.checkpoint().expect("checkpoint");
+    }
+    let database = Database::create(&path).expect("database");
+    let read = database.begin_read().expect("read");
+    let table = read.open_table(EVENTS).expect("events");
+    let bytes = table.get(1).expect("get").expect("event").value().to_vec();
+    drop(table);
+    drop(read);
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    value["event_type"] = json!("tampered.v1");
+    let bytes = serde_json::to_vec(&value).expect("encode");
+    let write = database.begin_write().expect("write");
+    {
+        let mut table = write.open_table(EVENTS).expect("events");
+        table.insert(1, bytes.as_slice()).expect("tamper event");
+    }
+    write.commit().expect("commit tamper");
+    drop(database);
+
+    let reopened = RedbEventJournal::open_with_startup_verification(
+        &path,
+        keys,
+        Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
+        StartupVerificationMode::Full,
+    )
+    .expect("open in recovery");
+    assert!(reopened.is_recovery_mode());
+    assert!(
+        reopened
+            .recovery_reason()
+            .expect("reason")
+            .expect("recovery reason")
+            .contains("record hash mismatch")
+    );
 }
 
 #[test]

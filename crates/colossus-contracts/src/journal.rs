@@ -298,6 +298,62 @@ pub struct SignedCheckpoint {
     pub created_at: String,
 }
 
+/// Journal verification performed before a runtime becomes writable.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupVerificationMode {
+    /// Trust a versioned full-verification attestation and verify only the later tail.
+    #[default]
+    Incremental,
+    /// Verify the complete journal before every writable open.
+    Full,
+}
+
+/// Trust state attached to a separately protected journal anchor.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecureAnchorStatus {
+    /// The anchor may be used for its declared verification profile.
+    #[default]
+    Verified,
+    /// A deterministic integrity failure requires a successful full verification.
+    Quarantined,
+}
+
+/// Separately protected journal-head attestation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecureAnchor {
+    /// Serialized anchor format. Legacy sequence/hash anchors are read as version one.
+    pub format_version: u16,
+    /// Highest independently protected global sequence.
+    pub sequence: u64,
+    /// Record hash at `sequence`.
+    pub hash: String,
+    /// Verification profile that established this attestation, when known.
+    pub verification_profile: Option<String>,
+    /// Whether the attestation remains trusted for writable startup.
+    pub status: SecureAnchorStatus,
+}
+
+/// Work performed by one journal adapter during startup verification.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupVerificationReport {
+    /// Configured startup verification policy.
+    pub configured_mode: StartupVerificationMode,
+    /// Actual path: `empty`, `bootstrap_full`, `incremental`, or `full`.
+    pub path: String,
+    /// First global sequence inspected during startup, if any.
+    pub verified_from_sequence: Option<u64>,
+    /// Journal head established by startup verification.
+    pub verified_through_sequence: u64,
+    /// Number of event envelopes cryptographically inspected during startup.
+    pub verified_event_count: u64,
+    /// Secure-anchor format loaded or written by startup.
+    pub anchor_format_version: Option<u16>,
+}
+
 /// One journal event queued for deterministic projection replay.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

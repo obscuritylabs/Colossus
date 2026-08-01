@@ -7,7 +7,8 @@ use chacha20poly1305::{
 };
 use colossus_contracts::{
     EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
-    ProjectionWorkItem, SignedCheckpoint,
+    ProjectionWorkItem, SecureAnchor, SecureAnchorStatus, SignedCheckpoint,
+    StartupVerificationMode, StartupVerificationReport,
 };
 use colossus_ports::{
     CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_READ_BATCH, ProjectionStore,

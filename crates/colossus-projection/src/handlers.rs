@@ -46,6 +46,10 @@ impl ProjectionHandler for SessionProjection {
         "sessions-v1"
     }
 
+    fn applies_to(&self, event: &EventEnvelope) -> bool {
+        event.stream_id.starts_with("session:")
+    }
+
     fn project(
         &self,
         store: &dyn ProjectionStore,
@@ -111,6 +115,12 @@ impl ProjectionHandler for WorkProjection {
         "work-v1"
     }
 
+    fn applies_to(&self, event: &EventEnvelope) -> bool {
+        ["task:", "decision:", "plan:", "goal:"]
+            .iter()
+            .any(|prefix| event.stream_id.starts_with(prefix))
+    }
+
     fn project(
         &self,
         store: &dyn ProjectionStore,
@@ -146,6 +156,10 @@ pub struct MemoryProjection;
 impl ProjectionHandler for MemoryProjection {
     fn name(&self) -> &'static str {
         "memory-v1"
+    }
+
+    fn applies_to(&self, event: &EventEnvelope) -> bool {
+        event.stream_id.starts_with("memory:")
     }
 
     fn project(
@@ -192,6 +206,11 @@ pub struct WorkflowProjection;
 impl ProjectionHandler for WorkflowProjection {
     fn name(&self) -> &'static str {
         "workflows-v1"
+    }
+
+    fn applies_to(&self, event: &EventEnvelope) -> bool {
+        event.stream_id.starts_with("workflow-definition:")
+            || event.stream_id.starts_with("workflow-run:")
     }
 
     fn project(
@@ -254,6 +273,102 @@ impl ProjectionHandler for WorkflowProjection {
     }
 }
 
+/// Stable projection name for effects that began without a terminal event.
+pub const EFFECT_RECOVERY_PROJECTION: &str = "effects-recovery-v1";
+
+/// Minimal envelope metadata needed to close an interrupted effect on startup.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingEffect {
+    /// Effect journal stream.
+    pub stream_id: String,
+    /// Version of the unmatched `effect.started.v1` event.
+    pub started_stream_version: u64,
+    /// Latest nonterminal stream version observed by the projection.
+    pub latest_stream_version: u64,
+    /// Identifier of the unmatched start event.
+    pub started_event_id: String,
+}
+
+/// Reducer tracking only effect streams whose latest lifecycle state is started.
+pub struct EffectRecoveryProjection;
+
+impl ProjectionHandler for EffectRecoveryProjection {
+    fn name(&self) -> &'static str {
+        EFFECT_RECOVERY_PROJECTION
+    }
+
+    fn applies_to(&self, event: &EventEnvelope) -> bool {
+        event.stream_id.starts_with("effect:")
+    }
+
+    fn project(
+        &self,
+        store: &dyn ProjectionStore,
+        event: &EventEnvelope,
+        _payload: &Value,
+    ) -> Result<Vec<ProjectionMutation>, StoreError> {
+        match event.event_type.as_str() {
+            "effect.started.v1" => Ok(upsert(
+                &event.stream_id,
+                serde_json::to_value(PendingEffect {
+                    stream_id: event.stream_id.clone(),
+                    started_stream_version: event.stream_version,
+                    latest_stream_version: event.stream_version,
+                    started_event_id: event.event_id.clone(),
+                })
+                .map_err(|error| StoreError::Adapter(error.to_string()))?,
+            )),
+            "effect.completed.v1" | "effect.failed.v1" | "effect.outcome_unknown.v1" => {
+                Ok(vec![ProjectionMutation::Delete {
+                    key: event.stream_id.clone(),
+                }])
+            }
+            _ => {
+                let Some(value) = store.get(self.name(), &event.stream_id)? else {
+                    return Ok(Vec::new());
+                };
+                let mut effect: PendingEffect = serde_json::from_value(value).map_err(|error| {
+                    StoreError::Verification(format!(
+                        "pending effect projection record {} is invalid: {error}",
+                        event.stream_id
+                    ))
+                })?;
+                effect.latest_stream_version = event.stream_version;
+                Ok(upsert(
+                    &event.stream_id,
+                    serde_json::to_value(effect)
+                        .map_err(|error| StoreError::Adapter(error.to_string()))?,
+                ))
+            }
+        }
+    }
+}
+
+/// Load a bounded, validated snapshot of effects needing startup recovery.
+pub fn pending_effects(
+    store: &dyn ProjectionStore,
+    limit: usize,
+) -> Result<Vec<PendingEffect>, StoreError> {
+    store
+        .list(EFFECT_RECOVERY_PROJECTION, "effect:", limit)?
+        .into_iter()
+        .map(|(key, value)| {
+            let effect: PendingEffect = serde_json::from_value(value).map_err(|error| {
+                StoreError::Verification(format!(
+                    "pending effect projection record {key} is invalid: {error}"
+                ))
+            })?;
+            if effect.stream_id != key {
+                return Err(StoreError::Verification(format!(
+                    "pending effect projection key {key} does not match its stream"
+                )));
+            }
+            Ok(effect)
+        })
+        .collect()
+}
+
 /// Built-in projections required for the P0/P1 runtime state.
 pub fn default_handlers() -> Vec<Arc<dyn ProjectionHandler>> {
     vec![
@@ -261,5 +376,6 @@ pub fn default_handlers() -> Vec<Arc<dyn ProjectionHandler>> {
         Arc::new(WorkProjection),
         Arc::new(MemoryProjection),
         Arc::new(WorkflowProjection),
+        Arc::new(EffectRecoveryProjection),
     ]
 }

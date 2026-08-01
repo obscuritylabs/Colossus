@@ -5,6 +5,16 @@ pub trait ProjectionHandler: Send + Sync {
     /// Stable name containing a schema version.
     fn name(&self) -> &'static str;
 
+    /// Return whether this event can change the projection.
+    fn applies_to(&self, _event: &EventEnvelope) -> bool {
+        true
+    }
+
+    /// Return whether projection logic needs the decrypted event payload.
+    fn requires_payload(&self) -> bool {
+        true
+    }
+
     /// Produce record mutations for one journal event.
     fn project(
         &self,
@@ -90,8 +100,16 @@ impl ProjectionWorker {
                         item.global_sequence
                     )));
                 }
-                let payload = self.journal.decrypt_payload(&event)?;
-                let mutations = handler.project(self.store.as_ref(), &event, &payload)?;
+                let mutations = if handler.applies_to(&event) {
+                    let payload = if handler.requires_payload() {
+                        self.journal.decrypt_payload(&event)?
+                    } else {
+                        Value::Null
+                    };
+                    handler.project(self.store.as_ref(), &event, &payload)?
+                } else {
+                    Vec::new()
+                };
                 self.store.apply(ProjectionBatch {
                     projection: handler.name().into(),
                     expected_position: position,

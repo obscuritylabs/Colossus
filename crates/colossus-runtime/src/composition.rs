@@ -193,18 +193,24 @@ impl Runtime {
         } = match config.storage.adapter {
             StorageAdapter::Redb => {
                 let lease = RedbWriterLease::acquire(&storage_path)?;
-                let redb = Arc::new(RedbEventJournal::open(
+                let redb = Arc::new(RedbEventJournal::open_with_startup_verification(
                     &storage_path,
                     Arc::clone(&keys),
                     signer.clone(),
+                    config.storage.startup_verification,
                 )?);
                 let recovery_reason = redb.recovery_reason()?;
+                let startup_verification = redb.startup_verification_report()?;
                 StorageComposition {
                     writer_lease: Some(lease),
                     journal: redb.clone(),
                     projections: redb,
                     recovery_reason,
-                    diagnostic: json!({"adapter": "redb", "path": storage_path}),
+                    diagnostic: json!({
+                        "adapter": "redb",
+                        "path": storage_path,
+                        "startup_verification": startup_verification,
+                    }),
                 }
             }
             StorageAdapter::Postgres => {
@@ -213,14 +219,18 @@ impl Runtime {
                         "storage.postgres is required when storage.adapter is postgres".into(),
                     )
                 })?;
-                let postgres = Arc::new(PostgresEventJournal::open_with_tls_roots(
-                    postgres_config,
-                    Arc::clone(&keys),
-                    signer,
-                    &tls_roots,
-                )?);
+                let postgres = Arc::new(
+                    PostgresEventJournal::open_with_tls_roots_and_startup_verification(
+                        postgres_config,
+                        Arc::clone(&keys),
+                        signer,
+                        &tls_roots,
+                        config.storage.startup_verification,
+                    )?,
+                );
                 let recovery_reason = postgres.recovery_reason()?;
-                let diagnostic = postgres.diagnostic();
+                let mut diagnostic = postgres.diagnostic();
+                diagnostic["startup_verification"] = json!(postgres.startup_verification_report()?);
                 StorageComposition {
                     writer_lease: None,
                     journal: postgres.clone(),
@@ -342,13 +352,20 @@ impl Runtime {
         let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
         if !journal.is_recovery_mode() {
             recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
+            let report = projections.drain(256, 16_384)?;
+            if report.projections.iter().any(|status| !status.ready) {
+                return Err(StoreError::Adapter(
+                    "startup projections did not catch up within the configured bound".into(),
+                )
+                .into());
+            }
         }
         let memory_repository: Arc<dyn MemoryRepository> =
             Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
         let research: Arc<dyn ResearchRepository> =
             Arc::new(EventSourcedResearchRepository::new(Arc::clone(&journal)));
         if !journal.is_recovery_mode() {
-            recover_unknown_effects(journal.as_ref())?;
+            recover_unknown_effects(journal.as_ref(), projection_store.as_ref())?;
         }
         let providers = Arc::new(provider_registry(
             &config.providers,

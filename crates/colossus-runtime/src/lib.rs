@@ -31,9 +31,10 @@ use colossus_contracts::{
     SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SessionMessage,
     SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
     SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
-    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
+    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
+    WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -81,6 +82,7 @@ const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
+    pending_effects,
 };
 pub use colossus_provider::{
     CredentialResolver, EnvironmentCredentialResolver, HostCredentialResolver,

@@ -87,6 +87,7 @@ On a headless host without Keychain, DPAPI, or Secret Service, replace the gener
 ```yaml
 storage:
   path: .colossus/state.redb
+  startupVerification: incremental
   keys:
     kind: environment
     journal_variable: COLOSSUS_JOURNAL_KEY

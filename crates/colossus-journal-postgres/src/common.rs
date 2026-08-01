@@ -4,6 +4,8 @@ pub(super) const ZERO_HASH: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const CHECKPOINT_INTERVAL: u64 = 100;
 pub(super) const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(60);
+pub(super) const SECURE_ANCHOR_FORMAT_VERSION: u16 = 2;
+pub(super) const INCREMENTAL_VERIFICATION_PROFILE: &str = "full-journal-v1";
 pub(super) const DEFAULT_STATEMENT_TIMEOUT_MS: u64 = 30_000;
 
 pub(super) const TABLES: &str = r#"
