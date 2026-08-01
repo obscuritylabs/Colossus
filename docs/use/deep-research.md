@@ -42,7 +42,7 @@ Choose one or more explicit lanes with `--source`:
 
 Explicit lanes make the run reproducible. Exact depth budgets, defaults, and bounds
 remain in the [CLI reference](../reference/cli.md#important-defaults-and-bounds) and
-[Configuration fields](../reference/configuration.md#context-memory-and-research-defaults).
+[Context, memory, and research configuration](../reference/configuration/context-memory-research.md).
 
 A capable model route improves planning, claim extraction, and synthesis. When a
 research model step is unavailable or returns invalid output, Colossus records the

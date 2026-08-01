@@ -1,6 +1,6 @@
 ---
 title: Configuration fields
-description: Strict YAML field groups, defaults, and constraints for Colossus configuration.
+description: Entry point for the strict Colossus YAML schema and its domain-specific field references.
 audience: operator
 type: reference
 ---
@@ -9,14 +9,18 @@ type: reference
 
 Colossus reads one strict YAML document selected by global `--config`. Global
 `-w, --workspace` defaults to the current directory, is canonicalized once, and is the
-base for relative config and workspace-owned paths. Unknown fields, invalid enum values,
-unsafe paths, incomplete profiles, and inconsistent grants fail before runtime
+base for relative configuration and workspace-owned paths. Unknown fields, invalid enum
+values, unsafe paths, incomplete profiles, and inconsistent grants fail before runtime
 construction. Field names are case-sensitive.
 
 The current schema is exactly `2`. Schema `1` configurations are rejected rather than
 silently migrated because provider connections and model profiles now have separate
-authority and metadata; generate a fresh configuration with `colossus --config PATH
+authority and metadata. Generate a fresh configuration with `colossus --config PATH
 config init` and reapply the intended settings explicitly.
+
+Use this page for the complete baseline and top-level map. Each linked domain page owns
+the exact fields, defaults, examples, and constraints for that part of the schema.
+Operational procedures remain in [Configuration recipes](../admin/configuration.md).
 
 ## Complete baseline
 
@@ -98,415 +102,41 @@ process launch. YAML contains names and identities, never the values.
 
 ## Top-level groups
 
-| Field | Required | Purpose |
-| --- | --- | --- |
-| `schemaVersion` | Yes | Strict configuration schema identity |
-| `access` | Yes | Tool selection and built-in action overrides |
-| `storage` | Yes | Journal adapter, key provider, and anchor |
-| `network` | No | Runtime-wide additional CA certificate bundle |
-| `policy` | Yes | Built-in or OPA action decisions |
-| `workflows` | Yes | Repository and user workflow roots |
-| `providers` | No | Named provider connections; defaults to `echo` |
-| `models` | No | Named model limits/capabilities and role routes; defaults to `echo` |
-| `agent` | No | Agent turn bound; defaults to `24` |
-| `subagents` | No | Child concurrency bound; defaults to `10` |
-| `sandbox` | No | Resource obligations and platform isolation defaults |
-| `context` | No | Long-session compaction controls |
-| `memory` | No | Lexical and optional semantic indexes |
-| `research` | No | Research bounds and compatibility search settings |
-| `search` | No | Named provider-neutral search profiles and routes |
-| `skills` | No | Skill roots, overrides, and disabled names |
-| `packs` | No | Pack installation root |
-| `mcp` | No | Exact stdio and stateful Streamable HTTP server declarations |
-| `audit` | No | External evidence exporter |
+| Field | Required | Purpose | Exact reference |
+| --- | --- | --- | --- |
+| `schemaVersion` | Yes | Strict configuration schema identity | This page |
+| `access` | Yes | Tool selection and built-in action overrides | [Access](configuration/access.md) |
+| `storage` | Yes | Journal adapter, key provider, and anchor | [Storage](configuration/storage.md) |
+| `network` | No | Runtime-wide additional CA certificate bundle | [Network trust](configuration/network.md) |
+| `policy` | Yes | Built-in or OPA action decisions | [Policy and audit](configuration/policy-audit.md) |
+| `workflows` | Yes | Repository and user workflow roots | [Skills, packs, and workflows](configuration/extensions.md) |
+| `providers` | No | Named provider connections; defaults to `echo` | [Providers and models](configuration/providers-models.md) |
+| `models` | No | Named model limits, capabilities, and role routes; defaults to `echo` | [Providers and models](configuration/providers-models.md) |
+| `agent` | No | Agent turn bound; defaults to `24` | [Runtime limits](configuration/limits.md) |
+| `subagents` | No | Child concurrency bound; defaults to `10` | [Runtime limits](configuration/limits.md) |
+| `sandbox` | No | Resource obligations and platform isolation defaults | [Sandbox](configuration/sandbox.md) |
+| `context` | No | Long-session compaction controls | [Context, memory, and research](configuration/context-memory-research.md) |
+| `memory` | No | Lexical and optional semantic indexes | [Context, memory, and research](configuration/context-memory-research.md) |
+| `research` | No | Research bounds and compatibility search settings | [Context, memory, and research](configuration/context-memory-research.md) |
+| `search` | No | Named provider-neutral search profiles and routes | [Search](configuration/search.md) |
+| `skills` | No | Skill roots, overrides, and disabled names | [Skills, packs, and workflows](configuration/extensions.md) |
+| `packs` | No | Pack installation root | [Skills, packs, and workflows](configuration/extensions.md) |
+| `mcp` | No | Exact stdio and stateful Streamable HTTP server declarations | [MCP servers](configuration/mcp.md) |
+| `audit` | No | External evidence exporter | [Policy and audit](configuration/policy-audit.md) |
 
-## Access
+## Shared rules
 
-| Field | Values / constraint |
-| --- | --- |
-| `access.profile` | `minimal`, `development`, `allow_all`, `pinned` |
-| `access.tools.include` | Exact tool names; `*` allowed only as the sole wildcard selector |
-| `access.tools.exclude` | Exact tool names; no wildcard |
-| `access.actions.allow` | Exact action names |
-| `access.actions.requireApproval` | Exact action names |
-| `access.actions.deny` | Exact action names |
-
-Include/exclude entries cannot overlap. The three action lists cannot overlap. With
-`policy.kind: opa`, all action override lists are empty.
-
-## Providers, models, and roles
-
-| Field | Values / constraint |
-| --- | --- |
-| `providers.profiles.NAME.kind` | `echo`, `open_ai_responses`, `open_ai_compatible` |
-| `.baseUrl` | URL including API path; remote endpoints use HTTPS |
-| `.credentialReference` | `env:VARIABLE`, injected `host:IDENTIFIER`, or `null` when supported |
-| `.timeoutMs` | Positive bounded duration |
-| `models.profiles.NAME.providerProfile` | Existing provider connection profile |
-| `.model` | Non-empty provider model identifier |
-| `.contextWindowTokens` | Total model context window; at least `1024` |
-| `.maxOutputTokens` | Positive output reservation smaller than the effective window |
-| `.capabilities.toolCalls` | Whether tool definitions/history may be sent |
-| `.capabilities.streaming` | Whether the adapter uses streaming transport |
-| `models.roles.primary` | Required model profile name |
-| Other role fields | Optional profile name; fall back to `primary` |
-
-Known specialized roles are `risk_evaluator`, `context_summarizer`,
-`subagent_default`, `research_planner`, `research_worker`, and
-`research_synthesizer`.
-
-The effective input budget is the context window minus the output reservation and a
-safety reserve of `max(10% of the context window, 512 tokens)`. Colossus uses a
-conservative byte-based estimator and compacts against this model-specific input
-budget. A request may only narrow `maxOutputTokens`; it cannot enlarge the configured
-limit.
-
-With the built-in policy, each provider connection's `timeoutMs` bounds its own catalog
-and generation transport independently of `sandbox.timeoutMs`. The adapter still
-enforces the exact selected connection's timeout. OPA deployments may return a stricter
-timeout obligation.
-
-For both network provider kinds, canonical Colossus tool names remain dotted in access
-configuration, policy, audit evidence, and tool dispatch. At the provider boundary,
-each `.` is projected to `_` so function names satisfy the portable 64-byte
-`[A-Za-z0-9_-]` contract used by OpenAI-compatible APIs. Provider-returned aliases are
-restored to their canonical names before runtime handling. A name that cannot be
-represented by that contract, or two canonical names that would produce the same
-alias, rejects the request locally rather than risking ambiguous tool authority.
-
-For both network provider kinds, every canonical tool schema must declare an object at
-its root. The provider adapter clones that schema and removes root-level `oneOf`,
-`anyOf`, `allOf`, `enum`, and `const` keywords to satisfy OpenAI function-tool request
-rules. Responses requests explicitly use non-strict function tools; Chat Completions
-requests omit `strict` and also remove `maxLength` annotations recursively for servers
-that compile tool definitions into bounded grammars. The canonical Colossus schema
-remains unchanged and is validated in full before policy or dispatch. Tool descriptions
-retain guidance for any projected cross-field rules, and execution handlers independently
-enforce their required argument relationships.
-
-`host:` references are resolved only by an application-managed runtime through its
-in-memory credential resolver. The standard CLI and daemon composition remain
-environment-backed; they never interpret a `host:` identifier as a secret value.
-
-## Network trust
-
-| Field | Values / constraint |
-| --- | --- |
-| `network.caBundlePath` | Optional path to a PEM CA certificate bundle; at most 4 MiB and 256 certificates |
-
-The configured certificates augment the built-in public roots for Colossus-owned
-outbound clients: model providers, search, brokered HTTP and WORM export, integrations,
-pack registries, semantic memory, and the default PostgreSQL WebPKI policy. Relative
-paths resolve from the selected workspace. The bundle is read, bounded, and validated
-once during runtime startup; an unreadable, empty, malformed, or oversized bundle stops
-startup.
-
-Remote OPA may use this runtime bundle as its pinned trust when `policy.ca_pem_path` is
-omitted. An adapter-specific OPA CA or PostgreSQL `custom_ca` remains exclusive and
-overrides the runtime bundle. The pinned local public API identity is deliberately
-separate. Programs launched as sandbox or MCP processes own their TLS stacks and do not
-automatically inherit this in-process trust configuration.
-
-## Storage
-
-| Field | Values / constraint |
-| --- | --- |
-| `storage.path` | Local state or instance path |
-| `storage.adapter` | Omitted/`redb`, or `postgres` |
-| `storage.keys.kind` | `platform` or `environment` |
-| Environment keys | Variable names, key identity, and separate anchor path |
-| Platform keys | Service plus journal/signing key identities |
-| `storage.postgres.connectionVariable` | Environment variable containing libpq URL or key/value string |
-| `storage.postgres.schema` | Deployment-owned schema |
-| `storage.postgres.tls.kind` | `webpki_roots`, `custom_ca`, or narrowly permitted `disabled` |
-| `storage.postgres.statementTimeoutMs` | Positive query bound |
-
-Disabled database TLS is accepted only for loopback or Unix-socket targets.
-
-## Policy and audit
-
-The built-in decision point accepts only:
-
-```yaml
-policy:
-  kind: built_in
-  require_post_effect: false
-```
-
-Remote OPA uses the complete field set below. Remote deployments require a client
-identity path and either this adapter-specific CA path or `network.caBundlePath`;
-acknowledgements are explicit because OPA receives bounded logical request content
-after hard-secret replacement.
-
-```yaml
-policy:
-  kind: opa
-  base_url: https://opa.internal.example
-  decision_path: /v1/data/colossus/effect
-  ca_pem_path: /etc/colossus/opa-ca.pem
-  identity_pem_path: /etc/colossus/opa-client.pem
-  full_content_disclosure_acknowledged: true
-  decision_log_masking_verified: true
-  timeout_ms: 5000
-```
-
-`audit.exporter.kind` is `disabled` by default. The other exact variants are:
-
-```yaml
-audit:
-  exporter:
-    kind: directory
-    path: /var/lib/colossus/audit-export
-```
-
-```yaml
-audit:
-  exporter:
-    kind: worm_http
-    endpoint: https://evidence.example/colossus/
-    credentialReference: env:COLOSSUS_AUDIT_TOKEN
-```
-
-A WORM endpoint is credential-free, HTTPS, and ends with `/`. Its origin must appear in
-`sandbox.networkDestinations`; a credential reference also requires the variable name
-in `sandbox.environment`.
-
-## Sandbox
-
-| Field | Values / constraint |
-| --- | --- |
-| `backend` | `native`, `oci`, `windows_job`, `broker` |
-| `profile` | `offline-default` or `workspace-development` |
-| `allowBrokerFallback` | Explicit downgrade acknowledgement |
-| `helperPath` | Exact helper path when configured |
-| `ociRuntime` | Exact Docker, Podman, or supported client executable |
-| `ociImage`, `ociProxyImage` | Preloaded immutable `@sha256:` references |
-| `filesystem` | Absolute roots with `read`, `write`, `metadata`, or `execute` mode |
-| `executables` | Absolute executable paths |
-| `environment` | Environment variable names |
-| `networkDestinations` | Canonical origins, or `*` for public HTTP(S) only |
-| `timeoutMs` | Effect timeout |
-| `maxOutputBytes` | Combined released-output bound |
-| `maxProcesses` | Process-tree bound |
-| `maxMemoryBytes` | Process-tree memory bound |
-| `maxConcurrency` | Concurrent sandbox work bound |
-
-`workspace-development` derives a write grant for the canonical selected workspace, a
-trusted platform shell, Git when available, read-only system command/runtime roots, an
-isolated `HOME` and temp directory, and a sanitized `PATH`. Explicit sandbox entries are
-additive. `.colossus` and canonical runtime control paths are protected from shell
-access; the control directory is created before sandbox obligations are derived,
-including on a fresh workspace. These derived grants apply only to terminal users and
-agents without workflow lineage and are rejected with OPA.
-
-`*` matches public `http` and `https` origins only. Loopback, private, link-local, and
-metadata destinations require exact canonical origins. It does not authorize raw
-sockets, non-HTTP protocols, credentials, actions, or sandbox bypass. All network paths
-retain proxy-only process egress, DNS pinning, TLS authority checks, no ambient proxies,
-no redirects, bounded connections, and private-address rejection.
-
-## Context, memory, and research defaults
-
-```yaml
-context:
-  autoCompaction: true
-  compactAtPercent: 70
-  targetPercent: 45
-  preserveRecentMessages: 8
-  modelAssisted: true
-memory:
-  indexEnabled: true
-  indexPath: null
-  retrievalLimit: 6
-  semantic:
-    kind: disabled
-research:
-  maxSources: 20
-  maxWorkers: 4
-  search:
-    kind: disabled
-```
-
-Tantivy is a disposable offline lexical index. `memory.semantic.kind: chroma` adds an
-optional candidate projection; canonical memory records remain in the journal.
-
-The Chroma variant is:
-
-```yaml
-memory:
-  indexEnabled: true
-  indexPath: null
-  retrievalLimit: 6
-  semantic:
-    kind: chroma
-    baseUrl: https://chroma.internal.example
-    tenant: colossus
-    database: production
-    collection: memories
-    credentialReference: env:CHROMA_TOKEN
-    timeoutMs: 30000
-    positionPath: .colossus/chroma-position.json
-    embedding:
-      kind: local
-      dimensions: 384
-```
-
-`embedding.kind` is `local` with `dimensions` in `64..=4096`, or
-`open_ai_compatible` with `profile`, `model`, `baseUrl`, optional
-`credentialReference`, `timeoutMs`, and optional `dimensions`. Every remote origin must
-also be a sandbox network destination.
-
-## Search
-
-```yaml
-search:
-  profiles:
-    local:
-      kind: searxng
-      endpoint: http://127.0.0.1:8888/search
-      credentialReference: null
-      timeoutMs: 30000
-  roles:
-    agent: local
-    research: local
-```
-
-Kinds are `searxng` and `serp_api`. SerpAPI requires
-`credentialReference: env:VARIABLE`; SearXNG may use one and defaults `authHeader` to
-`X-Searxng-Key`. Both profiles accept `userAgent` and `timeoutMs`, which default to
-`colossus/0.10` and `30000`. The only route names are `agent` and `research`. Every
-profile origin must be in `sandbox.networkDestinations`. Routes never silently fall
-back.
-
-## OpenRouter plus local SearXNG development example
-
-```yaml
-access:
-  profile: development
-  tools:
-    include: []
-    exclude: []
-  actions:
-    allow: []
-    requireApproval: []
-    deny: []
-providers:
-  profiles:
-    openrouter:
-      kind: open_ai_compatible
-      baseUrl: https://openrouter.ai/api/v1
-      credentialReference: env:OPENROUTER_API_KEY
-      timeoutMs: 120000
-models:
-  profiles:
-    openrouter-primary:
-      providerProfile: openrouter
-      model: openrouter/free
-      contextWindowTokens: 131072
-      maxOutputTokens: 16384
-      capabilities:
-        toolCalls: true
-        streaming: true
-  roles:
-    primary: openrouter-primary
-    risk_evaluator: openrouter-primary
-search:
-  profiles:
-    local:
-      kind: searxng
-      endpoint: http://127.0.0.1:8888/search
-      credentialReference: null
-      timeoutMs: 30000
-  roles:
-    agent: local
-    research: local
-sandbox:
-  backend: native
-  profile: workspace-development
-  networkDestinations:
-    - "*"
-    - http://127.0.0.1:8888
-```
-
-The wildcard covers public OpenRouter HTTPS. The local SearXNG loopback origin remains
-an exact entry. The provider credential stays outside YAML.
-
-## Skills, packs, workflows, and MCP
-
-```yaml
-workflows:
-  repository: .colossus/workflows
-  user: workflows
-skills:
-  enabled: true
-  allowUserOverrides: false
-  bundled: bundled-skills
-  repository: .colossus/skills
-  user: skills
-  disabled: []
-packs:
-  installRoot: .colossus/packs
-mcp:
-  oauthCredentialStore: auto
-  servers:
-    local-docs:
-      command: /absolute/path/to/mcp-server
-      args: [--stdio]
-      workingDirectory: /absolute/path/to/repository
-      environment:
-        API_TOKEN: env:MCP_API_TOKEN
-      allowedTools: [search_docs]
-      researchTools:
-        - tool: search_docs
-          title: Internal documentation
-          arguments:
-            query: "{query}"
-      timeoutMs: 30000
-      maxOutputBytes: 1048576
-```
-
-Skill roots are paths; `disabled` accepts unique 1–128 character directory names made
-from ASCII letters, digits, `.`, `_`, and `-`. Pack installation uses only
-`packs.installRoot`.
-
-MCP supports at most 64 configured servers. `command` is an exact absolute executable
-also granted by the sandbox; the working directory needs a containing read or write
-grant; child environment names need both an `env:VARIABLE` reference and a sandbox
-environment grant. A server allows at most 1,024 unique tools and 64 research templates.
-Its optional timeout and output cap may only narrow the sandbox values, and output is at
-least 1,024 bytes.
-
-Remote servers use `transport: streamable_http` with one exact credential-free `url`.
-HTTPS is mandatory except for exact loopback development URLs. Literal non-secret
-`headers`, environment-backed `credentialHeaders`, and OAuth are mutually constrained so
-secrets are resolved only after authorization. OAuth supports `auto`, `platform`, and
-`encrypted_state` storage; `auto` chooses the platform credential store for platform-key
-deployments and the separately encrypted redb sidecar for environment-key deployments.
-
-`allowedTools` is either a non-empty list of unique explicit names or exactly `["*"]`.
-Wildcard mode is top-level-only and automatically trusts future valid tools published by
-that configured server, while retaining fresh discovery, schema validation, policy,
-approval, quarantine, output bounds, and audit. Discovery fails closed above 1,024 tools
-or 32 pages.
-
-## Numeric constraints
-
-| Field | Constraint |
-| --- | --- |
-| `agent.maxTurns` | `1..=100`; default `24` |
-| `subagents.maxConcurrent` | At least `1`; default `10` |
-| `models.profiles.*.contextWindowTokens` | At least `1024` |
-| `models.profiles.*.maxOutputTokens` | Positive and leaves room for the safety reserve and input |
-| `context.targetPercent` | `1..99` and below `compactAtPercent` |
-| `context.compactAtPercent` | `1..99` |
-| `context.preserveRecentMessages` | At most `1024` |
-| `memory.retrievalLimit` | `1..=100`; default `6` |
-| `research.maxSources` | `1..=100`; default `20` |
-| `research.maxWorkers` | `1..=16`; default `4` |
-| `sandbox.timeoutMs` | Positive; backend-specific minimums may be higher |
-| `sandbox.maxOutputBytes` | At least `1024` |
-| `sandbox.maxProcesses`, `maxMemoryBytes`, `maxConcurrency` | Positive |
-| `storage.postgres.statementTimeoutMs` | `100..=300000`; default `30000` |
+- Relative configuration, state, workflow, skill, pack, and workspace-owned paths
+  resolve from the canonical selected workspace. Security-sensitive explicit sandbox
+  roots and executables use the constraints in [Sandbox](configuration/sandbox.md).
+- Credential fields store `env:VARIABLE`, injected `host:IDENTIFIER`, or `null` when the
+  adapter supports unauthenticated operation. They never store a literal secret.
+- Every remote origin must be authorized by the matching sandbox network destination.
+  Public HTTP(S) `*` and exact private origins have different semantics; see
+  [Network trust](configuration/network.md) and [Sandbox](configuration/sandbox.md).
+- Numeric fields are bounded and fail closed. The consolidated ranges are in
+  [Runtime limits](configuration/limits.md), with domain-specific constraints repeated
+  on their owning pages.
 
 ## Validation commands
 

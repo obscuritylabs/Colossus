@@ -152,4 +152,4 @@ The maintainer-only live Splunk smoke-test command is documented in
 ## Next step
 
 Package a distributable executable capability with [Packs](packs.md). Exact MCP
-configuration fields live in [Configuration fields](../reference/configuration.md).
+configuration fields live in [MCP server configuration](../reference/configuration/mcp.md).

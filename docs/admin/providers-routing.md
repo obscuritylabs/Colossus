@@ -188,4 +188,4 @@ deliberately local endpoint. Remote endpoints require HTTPS.
 
 Review the provider action and tool visibility in
 [Access and approvals](access-and-approvals.md). Exact profile fields are in
-[Configuration fields](../reference/configuration.md).
+[Provider and model configuration](../reference/configuration/providers-models.md).

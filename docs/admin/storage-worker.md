@@ -175,5 +175,7 @@ colossus --config .colossus/config.yaml projection status
 colossus --config .colossus/config.yaml state doctor
 ```
 
-See [State and recovery](../develop/state-recovery.md) for the implementation contract
-and [Audit, telemetry, and recovery](audit-telemetry-recovery.md) for incident handling.
+See [Storage configuration](../reference/configuration/storage.md) for the exact adapter,
+key-provider, secure-anchor, and PostgreSQL TLS fields. See
+[State and recovery](../develop/state-recovery.md) for the implementation contract and
+[Audit, telemetry, and recovery](audit-telemetry-recovery.md) for incident handling.

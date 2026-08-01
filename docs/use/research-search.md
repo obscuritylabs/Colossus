@@ -58,5 +58,5 @@ result page is also a separate authorized effect.
 Operators configure model and search routes in
 [Providers and routing](../admin/providers-routing.md#configure-search-routing).
 Exhaustive fields belong to
-[Configuration fields](../reference/configuration.md#search), while exact command
+[Search configuration](../reference/configuration/search.md), while exact command
 options and output contracts belong to the [CLI reference](../reference/cli.md).
