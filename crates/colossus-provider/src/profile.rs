@@ -8,6 +8,8 @@ pub enum ProviderKind {
     Echo,
     /// OpenAI Responses API.
     OpenAiResponses,
+    /// OpenAI Responses API authenticated with a Codex/ChatGPT subscription.
+    OpenAiCodex,
     /// OpenAI-compatible Chat Completions API.
     OpenAiCompatible,
 }
@@ -18,6 +20,7 @@ impl ProviderKind {
         match self {
             Self::Echo => "echo",
             Self::OpenAiResponses => "openai_responses",
+            Self::OpenAiCodex => "openai_codex",
             Self::OpenAiCompatible => "openai_compatible",
         }
     }
@@ -27,6 +30,7 @@ impl ProviderKind {
         match self {
             Self::Echo => "provider.echo",
             Self::OpenAiResponses => "provider.openai.responses",
+            Self::OpenAiCodex => "provider.openai.codex",
             Self::OpenAiCompatible => "provider.openai.chat",
         }
     }
@@ -66,7 +70,7 @@ impl ProviderProfile {
             && !valid_credential_reference(reference)
         {
             return Err(ProviderError::Configuration(
-                "provider credentials must use a valid env:VARIABLE or host:IDENTIFIER reference"
+                "provider credentials must use env:VARIABLE, host:IDENTIFIER, or codex:default"
                     .into(),
             ));
         }
@@ -85,6 +89,17 @@ impl ProviderProfile {
                 })?;
                 Some(normalize_base_url(&raw)?)
             }
+            ProviderKind::OpenAiCodex => {
+                if base_url.is_some()
+                    || credential_reference.as_deref() != Some(CODEX_CREDENTIAL_REFERENCE)
+                {
+                    return Err(ProviderError::Configuration(
+                        "open_ai_codex profiles require credentialReference codex:default and do not allow baseUrl"
+                            .into(),
+                    ));
+                }
+                Some(CODEX_API_BASE_URL.into())
+            }
         };
         Ok(Self {
             name,
@@ -99,7 +114,7 @@ impl ProviderProfile {
     pub fn generation_endpoint(&self) -> Result<String, ProviderError> {
         match self.kind {
             ProviderKind::Echo => Ok(format!("provider:{}", self.name)),
-            ProviderKind::OpenAiResponses => self.endpoint("responses"),
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => self.endpoint("responses"),
             ProviderKind::OpenAiCompatible => self.endpoint("chat/completions"),
         }
     }
@@ -108,6 +123,9 @@ impl ProviderProfile {
     pub fn models_endpoint(&self) -> Result<Option<String>, ProviderError> {
         match self.kind {
             ProviderKind::Echo => Ok(None),
+            ProviderKind::OpenAiCodex => self
+                .endpoint(&format!("models?client_version={CODEX_PROTOCOL_VERSION}"))
+                .map(Some),
             ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible => {
                 self.endpoint("models").map(Some)
             }
@@ -124,6 +142,16 @@ impl ProviderProfile {
                     .map_err(ProviderError::from)
             })
             .transpose()
+    }
+
+    /// Fixed secondary origins required for adapter-owned authentication.
+    pub fn authentication_origins(&self) -> &'static [&'static str] {
+        match self.kind {
+            ProviderKind::OpenAiCodex => &[CODEX_AUTH_ORIGIN],
+            ProviderKind::Echo | ProviderKind::OpenAiResponses | ProviderKind::OpenAiCompatible => {
+                &[]
+            }
+        }
     }
 
     fn endpoint(&self, suffix: &str) -> Result<String, ProviderError> {
@@ -147,6 +175,8 @@ pub struct ModelProfile {
     pub limits: ModelLimits,
     /// Explicit request-shaping capabilities.
     pub capabilities: ModelCapabilities,
+    /// Optional configured reasoning effort.
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ModelProfile {
@@ -158,6 +188,7 @@ impl ModelProfile {
         context_window_tokens: u64,
         max_output_tokens: u64,
         capabilities: ModelCapabilities,
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Self, ProviderError> {
         let name = name.into();
         let provider_profile = provider_profile.into();
@@ -194,6 +225,7 @@ impl ModelProfile {
                 input_budget_tokens,
             },
             capabilities,
+            reasoning_effort,
         })
     }
 }

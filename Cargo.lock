@@ -923,6 +923,7 @@ dependencies = [
  "clap",
  "colossus-access",
  "colossus-api",
+ "colossus-codex-auth",
  "colossus-contracts",
  "colossus-darwin-process",
  "colossus-grpc",
@@ -958,6 +959,22 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-codex-auth"
+version = "0.10.2-preview.8"
+dependencies = [
+ "base64",
+ "directories",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
  "zeroize",
 ]
 
@@ -1307,6 +1324,8 @@ name = "colossus-provider"
 version = "0.10.2-preview.8"
 dependencies = [
  "async-trait",
+ "base64",
+ "colossus-codex-auth",
  "colossus-contracts",
  "colossus-network",
  "colossus-policy",
@@ -1319,7 +1338,9 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-rustls",
  "url",

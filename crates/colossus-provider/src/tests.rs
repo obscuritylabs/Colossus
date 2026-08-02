@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use colossus_contracts::{DecisionOutcome, EffectPhase, PolicyDecision, ProviderEvent};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, ExecutionError, GatewayError,
@@ -13,7 +14,11 @@ use rustls::{
     ServerConfig,
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    fs,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
@@ -141,7 +146,7 @@ fn host_credentials_are_strict_bounded_and_debug_redacted() {
 }
 
 #[test]
-fn provider_profiles_accept_only_valid_environment_or_host_references() {
+fn provider_profiles_accept_only_valid_credential_references() {
     for reference in ["env:OPENAI_API_KEY", "host:provider-main"] {
         ProviderProfile::new(
             "remote",
@@ -152,6 +157,48 @@ fn provider_profiles_accept_only_valid_environment_or_host_references() {
         )
         .expect("valid credential reference");
     }
+    let codex = ProviderProfile::new(
+        "codex",
+        ProviderKind::OpenAiCodex,
+        None,
+        Some("codex:default".into()),
+        1_000,
+    )
+    .expect("valid Codex profile");
+    assert_eq!(codex.base_url.as_deref(), Some(CODEX_API_BASE_URL));
+    assert_eq!(
+        codex.generation_endpoint().expect("Codex endpoint"),
+        "https://chatgpt.com/backend-api/codex/responses"
+    );
+    assert_eq!(
+        codex
+            .models_endpoint()
+            .expect("Codex models endpoint")
+            .expect("Codex has models endpoint"),
+        format!(
+            "https://chatgpt.com/backend-api/codex/models?client_version={CODEX_PROTOCOL_VERSION}"
+        )
+    );
+    assert!(
+        ProviderProfile::new(
+            "codex",
+            ProviderKind::OpenAiCodex,
+            Some("https://example.com".into()),
+            Some("codex:default".into()),
+            1_000,
+        )
+        .is_err()
+    );
+    assert!(
+        ProviderProfile::new(
+            "codex",
+            ProviderKind::OpenAiCodex,
+            None,
+            Some("env:OPENAI_API_KEY".into()),
+            1_000,
+        )
+        .is_err()
+    );
     for reference in ["host:", "host:provider/main", "host:provider:main", "value"] {
         assert!(
             ProviderProfile::new(
@@ -167,6 +214,32 @@ fn provider_profiles_accept_only_valid_environment_or_host_references() {
     }
 }
 
+fn test_jwt(claims: Value) -> String {
+    format!(
+        "header.{}.signature",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("claims serialize"))
+    )
+}
+
+fn write_test_codex_auth(path: &Path, expires_at: i64) {
+    let auth = json!({
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "id_token": test_jwt(json!({"https://api.openai.com/auth": {
+                "chatgpt_account_id": "account-secret"
+            }})),
+            "access_token": test_jwt(json!({"exp": expires_at})),
+            "refresh_token": "refresh-secret"
+        }
+    });
+    fs::write(path, serde_json::to_vec(&auth).expect("auth serializes")).expect("auth writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("permissions update");
+    }
+}
+
 #[test]
 fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
     let profile = ModelProfile::new(
@@ -179,12 +252,14 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
             tool_calls: false,
             streaming: false,
         },
+        Some(ReasoningEffort::XHigh),
     )
     .expect("model profile");
     assert_eq!(profile.limits.safety_margin_tokens, 1_001);
     assert_eq!(profile.limits.input_budget_tokens, 7_000);
     assert!(!profile.capabilities.tool_calls);
     assert!(!profile.capabilities.streaming);
+    assert_eq!(profile.reasoning_effort, Some(ReasoningEffort::XHigh));
 
     assert!(
         ModelProfile::new(
@@ -197,6 +272,7 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
                 tool_calls: true,
                 streaming: true,
             },
+            None,
         )
         .is_err()
     );
@@ -291,6 +367,7 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
             model_profile: Some("unit-profile".into()),
             model: Some("unit-model".into()),
             max_output_tokens: Some(4_096),
+            reasoning_effort: None,
             request: Some(model_request()),
             include_response_diagnostics: false,
         })
@@ -516,6 +593,13 @@ async fn one_tls_response_server(
 }
 
 async fn one_sse_server(body: String) -> (String, tokio::task::JoinHandle<String>) {
+    one_sse_server_with_content_type(body, Some("text/event-stream")).await
+}
+
+async fn one_sse_server_with_content_type(
+    body: String,
+    content_type: Option<&'static str>,
+) -> (String, tokio::task::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
     let task = tokio::spawn(async move {
@@ -526,13 +610,28 @@ async fn one_sse_server(body: String) -> (String, tokio::task::JoinHandle<String
             let read = stream.read(&mut scratch).await.expect("read request");
             assert_ne!(read, 0, "client closed before completing request");
             request.extend_from_slice(&scratch[..read]);
-            if request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
                 break;
             }
         }
         let request_text = String::from_utf8_lossy(&request).into_owned();
+        let content_type_header = content_type
+            .map(|value| format!("content-type: {value}\r\n"))
+            .unwrap_or_default();
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\n{content_type_header}content-length: {}\r\nconnection: close\r\n\r\n",
             body.len()
         );
         stream
@@ -652,6 +751,29 @@ fn responses_output_normalizes_visible_text_and_strict_tool_calls() {
             .any(|event| matches!(event, ProviderEvent::FinalOutput { .. })),
         "a turn requesting a tool must not be marked final"
     );
+}
+
+#[test]
+fn model_catalog_normalizes_openai_and_codex_manifest_shapes() {
+    let openai = normalize_models(
+        &serde_json::to_vec(&json!({
+            "data": [{"id": "gpt-openai", "object": "model", "owned_by": "openai"}]
+        }))
+        .expect("OpenAI models serialize"),
+    )
+    .expect("OpenAI models normalize");
+    assert_eq!(openai[0].id, "gpt-openai");
+    assert_eq!(openai[0].object.as_deref(), Some("model"));
+
+    let codex = normalize_models(
+        &serde_json::to_vec(&json!({
+            "models": [{"slug": "gpt-codex", "display_name": "GPT Codex"}]
+        }))
+        .expect("Codex models serialize"),
+    )
+    .expect("Codex models normalize");
+    assert_eq!(codex[0].id, "gpt-codex");
+    assert_eq!(codex[0].object, None);
 }
 
 #[test]
@@ -830,8 +952,16 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         max_output_tokens: None,
     };
     let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
-    let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
-        .expect("Responses payload");
+    let responses = responses_payload(
+        &request,
+        ProviderKind::OpenAiResponses,
+        "unit-model",
+        4_096,
+        None,
+        false,
+        &tool_names,
+    )
+    .expect("Responses payload");
     assert_eq!(responses["model"], "unit-model");
     assert_eq!(responses["max_output_tokens"], 4_096);
     assert_eq!(responses["input"][0]["type"], "function_call");
@@ -840,8 +970,8 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
     assert_eq!(responses["input"][1]["type"], "function_call_output");
     assert_eq!(responses["input"][1]["call_id"], "call-1");
 
-    let chat =
-        chat_payload(&request, "unit-model", 4_096, false, &tool_names).expect("chat payload");
+    let chat = chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
+        .expect("chat payload");
     assert_eq!(chat["model"], "unit-model");
     assert_eq!(chat["max_tokens"], 4_096);
     assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
@@ -850,6 +980,65 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         "workspace_inspect"
     );
     assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
+}
+
+#[test]
+fn codex_responses_payload_omits_unsupported_output_token_parameter() {
+    let request = model_request_with_tools(&[]);
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+    let payload = responses_payload(
+        &request,
+        ProviderKind::OpenAiCodex,
+        "unit-model",
+        4_096,
+        None,
+        true,
+        &tool_names,
+    )
+    .expect("Codex Responses payload");
+
+    assert!(payload.get("max_output_tokens").is_none());
+    assert_eq!(payload["stream"], true);
+}
+
+#[test]
+fn reasoning_effort_uses_each_provider_protocol_shape_and_is_optional() {
+    let request = model_request_with_tools(&[]);
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+    let responses = responses_payload(
+        &request,
+        ProviderKind::OpenAiResponses,
+        "unit-model",
+        4_096,
+        Some(ReasoningEffort::XHigh),
+        false,
+        &tool_names,
+    )
+    .expect("Responses payload");
+    assert_eq!(responses["reasoning"]["effort"], "xhigh");
+
+    let chat = chat_payload(
+        &request,
+        "unit-model",
+        4_096,
+        Some(ReasoningEffort::Ultra),
+        false,
+        &tool_names,
+    )
+    .expect("Chat Completions payload");
+    assert_eq!(chat["reasoning_effort"], "ultra");
+
+    let provider_default = responses_payload(
+        &request,
+        ProviderKind::OpenAiCodex,
+        "unit-model",
+        4_096,
+        None,
+        false,
+        &tool_names,
+    )
+    .expect("Codex payload using provider default");
+    assert!(provider_default.get("reasoning").is_none());
 }
 
 #[test]
@@ -904,8 +1093,8 @@ fn openai_tool_projection_is_compatible_without_mutating_the_canonical_schema() 
     };
 
     let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
-    let chat =
-        chat_payload(&request, "unit-model", 4_096, false, &tool_names).expect("chat payload");
+    let chat = chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
+        .expect("chat payload");
     assert_eq!(chat["tools"][0]["function"]["name"], "workspace_inspect");
     let projected = &chat["tools"][0]["function"]["parameters"];
     for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
@@ -929,8 +1118,16 @@ fn openai_tool_projection_is_compatible_without_mutating_the_canonical_schema() 
     assert_eq!(projected["properties"]["mode"]["const"], "safe");
     assert!(chat["tools"][0]["function"].get("strict").is_none());
 
-    let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
-        .expect("Responses payload");
+    let responses = responses_payload(
+        &request,
+        ProviderKind::OpenAiResponses,
+        "unit-model",
+        4_096,
+        None,
+        false,
+        &tool_names,
+    )
+    .expect("Responses payload");
     assert_eq!(responses["tools"][0]["name"], "workspace_inspect");
     assert_eq!(responses["tools"][0]["strict"], false);
     let response_schema = &responses["tools"][0]["parameters"];
@@ -985,9 +1182,17 @@ fn representative_builtin_schemas_project_to_openai_compatible_roots() {
         };
         validate_model_request(&request, 4_096).expect("valid canonical tool root");
         let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
-        let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
-            .expect("Responses payload");
-        let chat = chat_payload(&request, "unit-model", 4_096, false, &tool_names)
+        let responses = responses_payload(
+            &request,
+            ProviderKind::OpenAiResponses,
+            "unit-model",
+            4_096,
+            None,
+            false,
+            &tool_names,
+        )
+        .expect("Responses payload");
+        let chat = chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
             .expect("Chat Completions payload");
 
         for projected in [
@@ -1139,6 +1344,137 @@ async fn allowed_provider_call_is_permit_bound_and_post_released() {
         .collect::<Vec<_>>();
     assert!(event_types.contains(&"effect.release_requested.v1".into()));
     assert!(event_types.contains(&"effect.completed.v1".into()));
+}
+
+#[tokio::test]
+async fn codex_provider_uses_chatgpt_account_headers_and_responses_shape() {
+    let body = [
+        r#"data: {"type":"response.created","response":{"id":"response-codex"}}
+
+"#,
+        r#"data: {"type":"response.output_text.delta","delta":"subscription response"}
+
+"#,
+        r#"data: {"type":"response.completed","response":{"id":"response-codex","status":"completed","output":[]}}
+
+"#,
+    ]
+    .concat();
+    let (base_url, server) = one_sse_server_with_content_type(body, None).await;
+    let mut profile = ProviderProfile::new(
+        "codex",
+        ProviderKind::OpenAiCodex,
+        None,
+        Some(CODEX_CREDENTIAL_REFERENCE.into()),
+        5_000,
+    )
+    .expect("Codex profile");
+    profile.base_url = Some(base_url);
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let auth_path = directory.path().join("auth.json");
+    let expires_at = 4_102_444_800;
+    write_test_codex_auth(&auth_path, expires_at);
+    let expected_access_token = test_jwt(json!({"exp": expires_at}));
+    let executor = ProviderExecutor::new(profile.clone())
+        .with_codex_auth_store(CodexAuthStore::at_path(auth_path));
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [18_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+    let mut effect = provider_request(&profile);
+    effect.content["reasoning_effort"] = json!("xhigh");
+    gateway
+        .execute_stream(effect, &executor, &mut released)
+        .await
+        .expect("Codex request succeeds");
+    assert!(released.0.iter().any(|item| matches!(
+        item,
+        ProviderStreamItem::Event {
+            event: ProviderEvent::FinalOutput { text }
+        } if text == "subscription response"
+    )));
+    let request = server.await.expect("server task");
+    let request_lower = request.to_ascii_lowercase();
+    assert!(request.contains("POST /v1/responses HTTP/1.1"));
+    assert!(request_lower.contains(&format!(
+        "authorization: bearer {}",
+        expected_access_token.to_ascii_lowercase()
+    )));
+    assert!(request_lower.contains("chatgpt-account-id: account-secret"));
+    assert!(request_lower.contains("originator: codex colossus"));
+    assert!(request_lower.contains(&format!("version: {CODEX_PROTOCOL_VERSION}")));
+    assert!(request_lower.contains("accept: text/event-stream"));
+    assert!(request_lower.contains(concat!("user-agent: colossus/", env!("CARGO_PKG_VERSION"))));
+    assert!(
+        !request.contains("\"max_output_tokens\""),
+        "Codex subscription requests must match the official Codex wire shape"
+    );
+    assert!(request.contains("\"reasoning\":{\"effort\":\"xhigh\"}"));
+}
+
+#[tokio::test]
+async fn codex_refresh_requires_the_openai_auth_origin_in_the_permit() {
+    let mut profile = ProviderProfile::new(
+        "codex",
+        ProviderKind::OpenAiCodex,
+        None,
+        Some(CODEX_CREDENTIAL_REFERENCE.into()),
+        5_000,
+    )
+    .expect("Codex profile");
+    profile.base_url = Some("http://127.0.0.1:9/v1".into());
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let auth_path = directory.path().join("auth.json");
+    write_test_codex_auth(&auth_path, 1);
+    let executor = ProviderExecutor::new(profile.clone())
+        .with_codex_auth_store(CodexAuthStore::at_path(auth_path));
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [19_u8; 32],
+    );
+    let error = gateway
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect_err("refresh must not use an unauthorized origin");
+    assert!(
+        format!("{error:?}").contains("provider origin is absent from permit obligations"),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn codex_request_secrets_redact_access_token_and_account_identifier() {
+    let mut secrets = RequestSecrets::default();
+    secrets.retain("access-secret");
+    secrets.retain("account-secret");
+    let mut bytes = b"access-secret account-secret safe".to_vec();
+    secrets.redact_bytes(&mut bytes);
+    assert_eq!(
+        String::from_utf8(bytes).expect("UTF-8"),
+        "[REDACTED] [REDACTED] safe"
+    );
 }
 
 #[tokio::test]
@@ -1447,6 +1783,59 @@ async fn streamed_bad_request_releases_explicit_request_and_response_diagnostics
             .expect("event evidence")
             .contains(response_body)
     );
+}
+
+#[tokio::test]
+async fn streamed_non_sse_success_releases_explicit_response_diagnostics() {
+    let response_body = json!({"detail": "stream negotiation failed"});
+    let expected_body = serde_json::to_string(&response_body).expect("response JSON");
+    let (base_url, server) = one_response_server(response_body).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [25_u8; 32],
+    );
+    let mut request = provider_request(&profile);
+    request.content["include_response_diagnostics"] = Value::Bool(true);
+    let mut released = ReleasedItems::default();
+    let terminal = gateway
+        .execute_stream(request, &executor, &mut released)
+        .await
+        .expect("explicit diagnostic must pass the release boundary");
+    let terminal: ProviderStreamItem =
+        serde_json::from_slice(&terminal.bytes).expect("provider diagnostic item");
+    let ProviderStreamItem::Diagnostic { diagnostic } = terminal else {
+        panic!("expected terminal provider diagnostic");
+    };
+    assert_eq!(diagnostic.status, 200);
+    assert_eq!(diagnostic.content_type.as_deref(), Some("application/json"));
+    assert_eq!(diagnostic.body, expected_body);
+    let raw_request = server.await.expect("server task");
+    assert!(
+        raw_request
+            .to_ascii_lowercase()
+            .contains("accept: text/event-stream")
+    );
+    assert!(raw_request.contains("\"stream\":true"));
 }
 
 #[tokio::test]

@@ -23,6 +23,7 @@ members = [
     "crates/colossus-access",
     "crates/colossus-network",
     "crates/colossus-policy",
+    "crates/colossus-codex-auth",
     "crates/colossus-provider",
     "crates/colossus-search",
     "crates/colossus-tools",
@@ -106,7 +107,7 @@ tar = "0.4.46"
 tantivy = "0.26.1"
 thiserror = "2.0.18"
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.49.0", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["io"] }
 tokio-postgres-rustls = { version = "0.14.0", default-features = false, features = ["ring"] }
@@ -153,6 +154,7 @@ colossus-integrations = { version = "=0.10.2-preview.8", path = "crates/colossus
 colossus-mcp = { version = "=0.10.2-preview.8", path = "crates/colossus-mcp" }
 colossus-packs = { version = "=0.10.2-preview.8", path = "crates/colossus-packs" }
 colossus-policy = { version = "=0.10.2-preview.8", path = "crates/colossus-policy" }
+colossus-codex-auth = { version = "=0.10.2-preview.8", path = "crates/colossus-codex-auth" }
 colossus-provider = { version = "=0.10.2-preview.8", path = "crates/colossus-provider" }
 colossus-search = { version = "=0.10.2-preview.8", path = "crates/colossus-search" }
 colossus-tools = { version = "=0.10.2-preview.8", path = "crates/colossus-tools" }

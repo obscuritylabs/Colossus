@@ -450,14 +450,15 @@ impl WorkerInteractiveHost {
             }
             "models" => {
                 let profile = doctor_profile(arguments, "models")?;
-                self.document(
-                    WorkerOperation::ModelDoctor {
+                let value = self
+                    .value(WorkerOperation::ModelDoctor {
                         profile: profile.map(str::to_owned),
                         include_provider_response: true,
-                    },
-                    Some("Model diagnostics"),
-                )
-                .await
+                    })
+                    .await?;
+                Ok(HostCommandResult::document(model_diagnostics_document(
+                    &value,
+                )?))
             }
             "provider" => {
                 let profile = doctor_profile(arguments, "provider")?;

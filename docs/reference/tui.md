@@ -31,6 +31,7 @@ only a sanitized failure category, action, resource, and manual-fallback explana
 | `Ctrl-C` | Any focused work | Clear draft, dismiss a modal, or cancel the active run |
 | `Ctrl-D` | Empty, idle composer | Exit |
 | `PageUp` / `PageDown` | Transcript | Scroll retained output |
+| Mouse wheel | Transcript | Scroll retained output by a few lines in full-screen mode |
 | `End` | Transcript | Return to live output |
 | `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
 | `Down` | Suggestions | Select the next item |

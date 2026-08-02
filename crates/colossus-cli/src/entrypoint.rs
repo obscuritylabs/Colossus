@@ -54,6 +54,27 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             *sandbox_profile,
         );
     }
+    if let Command::Codex(command) = &cli.command {
+        let action = match command.command {
+            CodexAction::Login { device_code: false } => CodexCliAction::Login,
+            CodexAction::Login { device_code: true } => CodexCliAction::LoginDeviceCode,
+            CodexAction::Status => CodexCliAction::Status,
+            CodexAction::Logout => CodexCliAction::Logout,
+        };
+        run_codex_cli(&command.codex_bin, action).await?;
+        let operation = match action {
+            CodexCliAction::Login => "login",
+            CodexCliAction::LoginDeviceCode => "login_device_code",
+            CodexCliAction::Status => "status",
+            CodexCliAction::Logout => "logout",
+        };
+        print_json(&json!({
+            "operation": operation,
+            "credential_store": "file",
+            "completed": true,
+        }))?;
+        return Ok(());
+    }
     let config = RuntimeConfig::from_path(&config_path)?;
     if matches!(
         cli.command,
@@ -321,6 +342,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 print_json(&runtime.provider_models(profile.as_deref()).await?)?;
             }
         },
+        Command::Codex(_) => unreachable!("handled before runtime construction"),
         Command::Search(command) => match command.command {
             SearchAction::Profiles => print_json(&runtime.search_profiles())?,
             SearchAction::Query { query, role, limit } => {

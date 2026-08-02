@@ -25,6 +25,69 @@ fn provider_doctor_commands_accept_at_most_one_optional_profile() {
 }
 
 #[test]
+fn model_diagnostics_use_a_readable_route_and_named_check_table() {
+    let document = model_diagnostics_document(&json!({
+        "ready": false,
+        "route": {
+            "role": "primary",
+            "profile": "codex",
+            "model_profile": "codex",
+            "provider_profile": "codex-provider",
+            "provider": "openai_codex",
+            "model": "gpt-5.6-sol",
+            "limits": {
+                "contextWindowTokens": 128000,
+                "maxOutputTokens": 16000,
+                "safetyMarginTokens": 12800,
+                "inputBudgetTokens": 99200
+            },
+            "capabilities": {
+                "toolCalls": true,
+                "streaming": true
+            },
+            "reasoning_effort": "xhigh"
+        },
+        "checks": [
+            {
+                "name": "metadata",
+                "status": "pass",
+                "detail": "Explicit limits and capabilities are valid."
+            },
+            {
+                "name": "generation",
+                "status": "fail",
+                "detail": "provider endpoint returned HTTP 400"
+            }
+        ]
+    }))
+    .expect("model diagnostics document");
+
+    let [PresentationBlock::Card { title, tone, body }] = document.blocks.as_slice() else {
+        panic!("expected one diagnostics card");
+    };
+    assert_eq!(title, "Model diagnostics");
+    assert_eq!(*tone, PresentationTone::Error);
+    let PresentationBlock::KeyValue(details) = &body[0] else {
+        panic!("expected route details");
+    };
+    assert!(details.contains(&("Status".into(), "Not ready".into())));
+    assert!(details.contains(&("Model".into(), "gpt-5.6-sol".into())));
+    assert!(details.contains(&("Reasoning".into(), "xhigh".into())));
+    assert!(details.contains(&(
+        "Tokens".into(),
+        "128,000 context · 99,200 input budget · 16,000 max output".into()
+    )));
+    let PresentationBlock::Table(checks) = &body[1] else {
+        panic!("expected check table");
+    };
+    assert_eq!(checks.headers, ["Check", "Status", "Detail"]);
+    assert_eq!(
+        checks.rows[1],
+        ["generation", "Fail", "provider endpoint returned HTTP 400"]
+    );
+}
+
+#[test]
 fn terminal_plan_selection_is_session_scoped_and_actionable() {
     let selected = selectable_plan(
         current_session_plan(

@@ -43,9 +43,15 @@ impl TerminalGuard {
             return Err(error);
         }
         if mode == ScreenMode::Alternate
-            && let Err(error) = execute!(stdout, EnterAlternateScreen)
+            && let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
         {
-            let _ = execute!(stdout, Show, DisableBracketedPaste);
+            let _ = execute!(
+                stdout,
+                DisableMouseCapture,
+                LeaveAlternateScreen,
+                Show,
+                DisableBracketedPaste
+            );
             let _ = disable_raw_mode();
             return Err(error);
         }
@@ -55,7 +61,7 @@ impl TerminalGuard {
     fn restore(&self) {
         let mut stdout = io::stdout();
         if self.mode == ScreenMode::Alternate {
-            let _ = execute!(stdout, LeaveAlternateScreen);
+            let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
         }
         let _ = execute!(stdout, Show, DisableBracketedPaste);
         let _ = stdout.flush();

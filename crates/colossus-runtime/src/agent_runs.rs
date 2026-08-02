@@ -1468,6 +1468,7 @@ mod plan_mode_instruction_tests {
                     tool_calls: true,
                     streaming: true,
                 },
+                reasoning_effort: None,
             })
         }
 

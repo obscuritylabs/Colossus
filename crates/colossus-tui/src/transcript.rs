@@ -137,7 +137,10 @@ pub(super) fn help_document() -> PresentationDocument {
                     "Send".into(),
                     "Enter; Ctrl/Alt+Enter in multiline mode".into(),
                 ),
-                ("Scroll".into(), "PageUp/PageDown; End returns live".into()),
+                (
+                    "Scroll".into(),
+                    "Mouse wheel (full-screen) or PageUp/PageDown; End returns live".into(),
+                ),
                 (
                     "Complete".into(),
                     "Type / or @ for suggestions; Up/Down select; Tab or Right accepts".into(),

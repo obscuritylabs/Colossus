@@ -122,6 +122,7 @@ fn model_route(role: &str) -> ProviderRoute {
             tool_calls: true,
             streaming: true,
         },
+        reasoning_effort: None,
     }
 }
 

@@ -25,6 +25,35 @@ fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
 }
 
 #[test]
+fn codex_login_supports_browser_and_device_code_flows() {
+    let browser = Cli::try_parse_from(["colossus", "codex", "login"]).expect("browser login");
+    assert!(matches!(
+        browser.command,
+        Command::Codex(CodexCommand {
+            command: CodexAction::Login { device_code: false },
+            ..
+        })
+    ));
+
+    let device = Cli::try_parse_from([
+        "colossus",
+        "codex",
+        "--codex-bin",
+        "/opt/codex",
+        "login",
+        "--device-code",
+    ])
+    .expect("device login");
+    assert!(matches!(
+        device.command,
+        Command::Codex(CodexCommand {
+            codex_bin,
+            command: CodexAction::Login { device_code: true },
+        }) if codex_bin == Path::new("/opt/codex")
+    ));
+}
+
+#[test]
 fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
     assert!(worker_probe_allows_embedded_fallback(
         &colossus_worker::WorkerError::Unavailable("worker-endpoint".into()),

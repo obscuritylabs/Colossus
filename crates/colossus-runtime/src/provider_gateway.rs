@@ -275,6 +275,7 @@ impl GatewayModelProvider {
                 model_profile: Some(route.model_profile),
                 model: Some(route.model),
                 max_output_tokens: Some(max_output_tokens),
+                reasoning_effort: route.reasoning_effort,
                 request: Some(request),
                 include_response_diagnostics: options.include_response_diagnostics,
             })
@@ -382,6 +383,7 @@ impl ModelProvider for GatewayModelProvider {
                 model_profile: Some(route.model_profile),
                 model: Some(route.model),
                 max_output_tokens: Some(max_output_tokens),
+                reasoning_effort: route.reasoning_effort,
                 request: Some(request),
                 include_response_diagnostics: options.include_response_diagnostics,
             })

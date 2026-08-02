@@ -133,10 +133,12 @@ pub(super) enum ProviderStreamState {
 impl ProviderStreamState {
     pub(super) fn new(kind: ProviderKind, tool_names: ProviderToolNames) -> Self {
         match kind {
-            ProviderKind::OpenAiResponses => Self::Responses(ResponsesStreamState {
-                tool_names,
-                ..ResponsesStreamState::default()
-            }),
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
+                Self::Responses(ResponsesStreamState {
+                    tool_names,
+                    ..ResponsesStreamState::default()
+                })
+            }
             ProviderKind::OpenAiCompatible => Self::Chat(ChatStreamState {
                 tool_names,
                 ..ChatStreamState::default()

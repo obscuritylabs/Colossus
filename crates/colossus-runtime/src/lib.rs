@@ -166,7 +166,7 @@ mod workspace;
 mod workspace_binding;
 mod workspace_lease;
 
-pub use colossus_contracts::ModelCapabilities;
+pub use colossus_contracts::{ModelCapabilities, ReasoningEffort};
 pub use composition::Runtime;
 pub use config::{
     AgentConfig, AuditConfig, AuditExporterConfig, KeyConfig, MemoryConfig, MemoryEmbeddingConfig,

@@ -202,6 +202,11 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
             .any(|window| window == b"\x1b[?25h"),
         "cursor visibility was not restored"
     );
+    assert!(
+        !raw.windows(b"\x1b[?1000h".len())
+            .any(|window| window == b"\x1b[?1000h"),
+        "inline mode must preserve native mouse scrollback"
+    );
 }
 
 #[test]
@@ -281,6 +286,17 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     assert!(status.success());
     drop(writer);
     reader_thread.join().expect("reader thread");
+    let raw = output.lock().expect("output");
+    assert!(
+        raw.windows(b"\x1b[?1000h".len())
+            .any(|window| window == b"\x1b[?1000h"),
+        "alternate-screen mouse capture was not enabled"
+    );
+    assert!(
+        raw.windows(b"\x1b[?1000l".len())
+            .any(|window| window == b"\x1b[?1000l"),
+        "alternate-screen mouse capture was not restored"
+    );
 }
 
 fn wait_for_raw(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8]) {

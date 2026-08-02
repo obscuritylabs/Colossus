@@ -221,6 +221,29 @@ pub struct ModelCapabilities {
     pub streaming: bool,
 }
 
+/// Provider-neutral reasoning effort requested for one model profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    /// Disable reasoning when the selected model supports it.
+    None,
+    /// Use the smallest nonzero reasoning budget.
+    Minimal,
+    /// Prefer lower latency and a lighter reasoning budget.
+    Low,
+    /// Balance latency and reasoning depth.
+    Medium,
+    /// Allocate more reasoning for complex work.
+    High,
+    /// Allocate extra-high reasoning for difficult work.
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// Allocate the model's maximum ordinary reasoning budget.
+    Max,
+    /// Use the Codex model's provider-defined ultra reasoning mode.
+    Ultra,
+}
+
 /// Declared and effective token limits for one configured model profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -357,6 +380,9 @@ pub struct ModelRoute {
     pub limits: ModelLimits,
     /// Explicit request-shaping capabilities.
     pub capabilities: ModelCapabilities,
+    /// Optional configured reasoning effort sent on every turn for this route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Compatibility name retained for callers compiled against the provider-centric route API.

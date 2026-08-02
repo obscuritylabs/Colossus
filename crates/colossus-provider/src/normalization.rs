@@ -25,9 +25,10 @@ pub(super) fn normalize_base_url(raw: &str) -> Result<String, ProviderError> {
 }
 
 pub(super) fn valid_credential_reference(reference: &str) -> bool {
-    reference
-        .strip_prefix("env:")
-        .is_some_and(valid_environment_credential_identifier)
+    reference == CODEX_CREDENTIAL_REFERENCE
+        || reference
+            .strip_prefix("env:")
+            .is_some_and(valid_environment_credential_identifier)
         || reference
             .strip_prefix("host:")
             .is_some_and(valid_host_credential_identifier)
@@ -133,11 +134,21 @@ fn compatible_openai_tool_schema(value: &Value) -> Result<Value, ProviderError> 
 
 pub(super) fn responses_payload(
     request: &ModelRequest,
+    provider_kind: ProviderKind,
     model: &str,
     max_output_tokens: u64,
+    reasoning_effort: Option<ReasoningEffort>,
     streaming: bool,
     tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
+    if !matches!(
+        provider_kind,
+        ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex
+    ) {
+        return Err(ProviderError::Configuration(
+            "Responses payload requires a Responses provider kind".into(),
+        ));
+    }
     let mut input = Vec::new();
     for message in &request.messages {
         input.extend(responses_messages(message, tool_names)?);
@@ -159,10 +170,15 @@ pub(super) fn responses_payload(
         "model": model,
         "instructions": request.instructions,
         "input": input,
-        "max_output_tokens": max_output_tokens,
         "store": false,
         "stream": streaming,
     });
+    if provider_kind == ProviderKind::OpenAiResponses {
+        payload["max_output_tokens"] = Value::from(max_output_tokens);
+    }
+    if let Some(effort) = reasoning_effort {
+        payload["reasoning"] = json!({"effort": effort});
+    }
     if !tools.is_empty() {
         payload["tools"] = Value::Array(tools);
     }
@@ -226,6 +242,7 @@ pub(super) fn chat_payload(
     request: &ModelRequest,
     model: &str,
     max_output_tokens: u64,
+    reasoning_effort: Option<ReasoningEffort>,
     streaming: bool,
     tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
@@ -253,6 +270,9 @@ pub(super) fn chat_payload(
     });
     if streaming {
         payload["stream_options"] = json!({"include_usage": true});
+    }
+    if let Some(effort) = reasoning_effort {
+        payload["reasoning_effort"] = json!(effort);
     }
     if !tools.is_empty() {
         payload["tools"] = Value::Array(tools);
@@ -592,16 +612,24 @@ pub(super) fn usage_detail(
 pub(super) fn normalize_models(bytes: &[u8]) -> Result<Vec<ProviderModelInfo>, ProviderError> {
     let data: Value = serde_json::from_slice(bytes)
         .map_err(|error| ProviderError::Malformed(error.to_string()))?;
-    let models = data
+    let (models, identifier_field) = data
         .get("data")
         .and_then(Value::as_array)
-        .ok_or_else(|| ProviderError::Malformed("models payload has no data array".into()))?;
+        .map(|models| (models, "id"))
+        .or_else(|| {
+            data.get("models")
+                .and_then(Value::as_array)
+                .map(|models| (models, "slug"))
+        })
+        .ok_or_else(|| {
+            ProviderError::Malformed("models payload has no data or models array".into())
+        })?;
     let mut output = models
         .iter()
         .filter_map(|model| {
             let model = model.as_object()?;
             Some(ProviderModelInfo {
-                id: model.get("id")?.as_str()?.to_owned(),
+                id: model.get(identifier_field)?.as_str()?.to_owned(),
                 object: model
                     .get("object")
                     .and_then(Value::as_str)

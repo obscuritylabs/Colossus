@@ -40,6 +40,11 @@ pub async fn run_tui(
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handle_key(&mut state, key, Arc::clone(&host), event_tx.clone());
                 }
+                Event::Mouse(mouse) => {
+                    if handle_mouse(&mut state, mouse) {
+                        request_older_page(&mut state, Arc::clone(&host), event_tx.clone());
+                    }
+                }
                 Event::Paste(text) => insert_active_text(&mut state, &text),
                 Event::Resize(_, _) => {}
                 _ => {}
@@ -47,6 +52,24 @@ pub async fn run_tui(
         }
     }
     Ok(())
+}
+
+/// Apply one captured mouse event and report whether an older transcript page is needed.
+pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
+    if state.overlay.is_some() {
+        return false;
+    }
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            state.scroll_up_lines(MOUSE_SCROLL_LINES);
+            state.at_transcript_top()
+        }
+        MouseEventKind::ScrollDown => {
+            state.scroll_down_lines(MOUSE_SCROLL_LINES);
+            false
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn handle_key(

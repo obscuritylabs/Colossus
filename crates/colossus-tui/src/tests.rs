@@ -1193,6 +1193,80 @@ fn scrolled_up_state_counts_new_items_without_losing_position() {
 }
 
 #[test]
+fn mouse_wheel_scrolls_transcript_by_lines_and_returns_to_live_output() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript_height = 4;
+    state.transcript_width = 80;
+    for index in 0..12 {
+        state.append_entry(user_entry(
+            &format!("transcript row {index}"),
+            TranscriptKind::User,
+        ));
+    }
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)));
+    assert_eq!(state.scroll_from_bottom, MOUSE_SCROLL_LINES);
+    state.new_items = 2;
+    assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollDown)));
+    assert_eq!(state.scroll_from_bottom, 0);
+    assert_eq!(state.new_items, 0);
+
+    let mut requested_older = false;
+    for _ in 0..100 {
+        if handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)) {
+            requested_older = true;
+            break;
+        }
+    }
+    assert!(requested_older);
+
+    let offset = state.scroll_from_bottom;
+    state.overlay = Some(Overlay::HistorySearch {
+        query: String::new(),
+    });
+    assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)));
+    assert_eq!(state.scroll_from_bottom, offset);
+}
+
+#[test]
+fn mouse_scrolling_keeps_the_composer_and_status_footer_sticky() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    for index in 0..20 {
+        state.append_entry(user_entry(
+            &format!("scrollable row {index}"),
+            TranscriptKind::User,
+        ));
+    }
+    state.composer.insert("sticky draft");
+    for _ in 0..4 {
+        handle_mouse(
+            &mut state,
+            MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    }
+    terminal
+        .draw(|frame| render(frame, &mut state))
+        .expect("draw scrolled TUI");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("sticky draft"), "{rendered}");
+    assert!(rendered.contains("primary:echo@echo"), "{rendered}");
+    assert!(state.scroll_from_bottom > 0);
+}
+
+#[test]
 fn queue_is_bounded_to_eight_future_turns() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.operation = Some(OperationKind::Run);

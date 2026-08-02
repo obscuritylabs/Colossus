@@ -281,19 +281,32 @@ impl TuiState {
 
     /// Scroll the durable transcript upward by one viewport.
     pub fn page_up(&mut self) {
-        self.scroll_from_bottom = self
-            .scroll_from_bottom
-            .saturating_add(self.transcript_height.max(1));
+        self.scroll_up_lines(self.transcript_height.max(1));
     }
 
     /// Scroll toward live output by one viewport.
     pub fn page_down(&mut self) {
-        self.scroll_from_bottom = self
-            .scroll_from_bottom
-            .saturating_sub(self.transcript_height.max(1));
+        self.scroll_down_lines(self.transcript_height.max(1));
+    }
+
+    /// Scroll the durable transcript upward by an exact positive line count.
+    pub(super) fn scroll_up_lines(&mut self, lines: usize) {
+        self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(lines.max(1));
+    }
+
+    /// Scroll toward live output by an exact positive line count.
+    pub(super) fn scroll_down_lines(&mut self, lines: usize) {
+        self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(lines.max(1));
         if self.scroll_from_bottom == 0 {
             self.new_items = 0;
         }
+    }
+
+    /// Whether the current scroll position has reached the oldest rendered transcript line.
+    pub(super) fn at_transcript_top(&self) -> bool {
+        let line_count = transcript_lines(self, self.transcript_width).len();
+        let maximum_offset = line_count.saturating_sub(self.transcript_height);
+        self.scroll_from_bottom >= maximum_offset
     }
 
     /// Return to live output and clear the new-item badge.

@@ -122,7 +122,7 @@ active trusted declarations.
 
 | Class | Exact action names |
 | --- | --- |
-| Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.chat`, `provider.models`, `provider.call` |
+| Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.codex`, `provider.openai.chat`, `provider.models`, `provider.call` |
 | Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `skill.inspect`, `skill.read`, `skill.validate`, `skill.resource.list`, `skill.resource.read`, `pack.verify`, `bundle.verify`, `bundle.key.inspect`, `collection.verify`, `mcp.tools` |
 | Local state | `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `skill.scaffold`, `skill.write`, `skill.install`, `audit.export.write` |
