@@ -12,7 +12,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 #[test]
 fn event_sourced_extension_repository_passes_shared_conformance() {
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::rejecting_global_reads());
     assert_extension_repository_conformance(|| {
         Box::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)))
     });

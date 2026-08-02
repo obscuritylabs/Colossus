@@ -1144,6 +1144,49 @@ impl EventJournal for PostgresEventJournal {
         self.quarantine_result(result)
     }
 
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        let result = (|| {
+            if prefix.contains('\0')
+                || after.is_some_and(|cursor| cursor.contains('\0') || !cursor.starts_with(prefix))
+            {
+                return Err(StoreError::Adapter(
+                    "stream prefix and cursor must contain no NUL and share one prefix".into(),
+                ));
+            }
+            let limit = limit.min(MAX_STREAM_LIST_BATCH);
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let mut client = self.connect()?;
+            let start = after.unwrap_or(prefix);
+            let query_limit = limit.saturating_add(usize::from(after.is_some()));
+            let rows = if let Some(end) = lexical_prefix_end(prefix) {
+                client.query(
+                    "SELECT stream_id FROM journal_stream_versions WHERE stream_id COLLATE \"C\" >= $1::TEXT COLLATE \"C\" AND stream_id COLLATE \"C\" < $2::TEXT COLLATE \"C\" ORDER BY stream_id COLLATE \"C\" LIMIT $3",
+                    &[&start, &end, &bounded_limit(query_limit)?],
+                )
+            } else {
+                client.query(
+                    "SELECT stream_id FROM journal_stream_versions WHERE stream_id COLLATE \"C\" >= $1::TEXT COLLATE \"C\" AND left(stream_id, char_length($2)) COLLATE \"C\" = $2::TEXT COLLATE \"C\" ORDER BY stream_id COLLATE \"C\" LIMIT $3",
+                    &[&start, &prefix, &bounded_limit(query_limit)?],
+                )
+            }
+            .map_err(database_error)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| row.get::<_, String>(0))
+                .filter(|stream_id| after != Some(stream_id.as_str()))
+                .take(limit)
+                .collect())
+        })();
+        self.quarantine_result(result)
+    }
+
     fn read_global(
         &self,
         from_sequence: u64,

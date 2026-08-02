@@ -139,7 +139,7 @@ fn webhook_signature(timestamp: &str, delivery_id: &str, body: &[u8], secret: &[
 
 #[test]
 fn event_sourced_workflow_repository_passes_shared_conformance() {
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::rejecting_global_reads());
     assert_workflow_repository_conformance(|| {
         Box::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)))
     });
@@ -1523,6 +1523,15 @@ impl EventJournal for CrashAfterEventJournal {
     ) -> Result<Vec<EventEnvelope>, StoreError> {
         self.inner
             .read_stream_backwards(stream_id, before_version, limit)
+    }
+
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        self.inner.list_stream_ids(prefix, after, limit)
     }
 
     fn read_global(

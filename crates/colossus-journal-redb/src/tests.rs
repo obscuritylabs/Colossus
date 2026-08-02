@@ -150,6 +150,39 @@ fn journal_with_file_anchor(
 }
 
 #[test]
+fn stream_discovery_uses_the_durable_prefix_index() {
+    let directory = tempdir().expect("tempdir");
+    let journal = journal(&directory.path().join("stream-discovery.redb"));
+    journal
+        .append_batch(vec![
+            event("indexed:b", 0, 1),
+            event("other:a", 0, 2),
+            event("indexed:a", 0, 3),
+            event("indexed:c", 0, 4),
+            event("indexed:a", 1, 5),
+        ])
+        .expect("append indexed streams");
+
+    assert_eq!(
+        journal
+            .list_stream_ids("indexed:", None, usize::MAX)
+            .expect("indexed streams"),
+        ["indexed:a", "indexed:b", "indexed:c"]
+    );
+    assert_eq!(
+        journal
+            .list_stream_ids("indexed:", Some("indexed:a"), 1)
+            .expect("exclusive indexed stream cursor"),
+        ["indexed:b"]
+    );
+    assert!(
+        journal
+            .list_stream_ids("indexed:", Some("other:a"), 1)
+            .is_err()
+    );
+}
+
+#[test]
 fn startup_builds_and_uses_the_verified_legacy_stream_index() {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("legacy-stream-index.redb");

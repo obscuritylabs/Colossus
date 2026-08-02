@@ -9,7 +9,9 @@ use colossus_contracts::{
     ResearchProgress, ResearchProgressStatus, ResearchRun, ResearchSource, ResearchSourceKind,
     ResearchStatus,
 };
-use colossus_ports::{EventJournal, ResearchRepository, SessionRepository, StoreError};
+use colossus_ports::{
+    EventJournal, ResearchRepository, SessionRepository, StoreError, collect_stream_ids,
+};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, collections::BTreeSet, sync::Arc};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};

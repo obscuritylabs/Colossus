@@ -1118,6 +1118,47 @@ impl EventJournal for RedbEventJournal {
         self.quarantine_result(result)
     }
 
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        let result = (|| {
+            if prefix.contains('\0')
+                || after.is_some_and(|cursor| cursor.contains('\0') || !cursor.starts_with(prefix))
+            {
+                return Err(StoreError::Adapter(
+                    "stream prefix and cursor must contain no NUL and share one prefix".into(),
+                ));
+            }
+            let limit = limit.min(MAX_STREAM_LIST_BATCH);
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let read = self.database.begin_read().map_err(adapter_error)?;
+            let streams = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
+            let start = after.unwrap_or(prefix);
+            let mut ids = Vec::with_capacity(limit);
+            for entry in streams.range(start..).map_err(adapter_error)? {
+                if ids.len() >= limit {
+                    break;
+                }
+                let (stream_id, _) = entry.map_err(adapter_error)?;
+                let stream_id = stream_id.value();
+                if after == Some(stream_id) {
+                    continue;
+                }
+                if !stream_id.starts_with(prefix) {
+                    break;
+                }
+                ids.push(stream_id.to_owned());
+            }
+            Ok(ids)
+        })();
+        self.quarantine_result(result)
+    }
+
     fn read_global(
         &self,
         from_sequence: u64,

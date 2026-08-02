@@ -7,6 +7,7 @@ use colossus_contracts::{
 };
 use colossus_ports::{
     EventJournal, ExternalWorkQueue, MemoryIndex, MemoryRepository, SessionRepository, StoreError,
+    collect_stream_ids,
 };
 use serde_json::{Value, json};
 use std::{

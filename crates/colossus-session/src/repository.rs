@@ -66,26 +66,19 @@ impl SessionRepository for EventSourcedSessionRepository {
 
     fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
         let limit = limit.clamp(1, LIST_LIMIT_MAX);
-        let mut ids = BTreeSet::new();
-        let mut from = 1_u64;
-        loop {
-            let events = self.journal.read_global(from, SCAN_BATCH)?;
-            if events.is_empty() {
-                break;
-            }
-            for event in &events {
-                if let Some(id) = event.stream_id.strip_prefix("session:") {
-                    ids.insert(id.to_owned());
-                }
-            }
-            from = events
-                .last()
-                .map_or(from, |event| event.global_sequence.saturating_add(1));
-            if events.len() < SCAN_BATCH {
-                break;
-            }
-        }
-        let mut sessions = ids
+        let mut sessions = collect_stream_ids(self.journal.as_ref(), "session:")?
+            .into_iter()
+            .map(|stream_id| {
+                stream_id
+                    .strip_prefix("session:")
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "indexed stream {stream_id} is not a session stream"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter_map(|id| self.get_session(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;

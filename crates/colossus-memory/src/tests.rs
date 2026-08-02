@@ -51,7 +51,7 @@ fn memory(id: &str, text: &str) -> MemoryRecord {
 
 #[test]
 fn event_sourced_memory_repository_passes_shared_conformance() {
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::rejecting_global_reads());
     assert_memory_repository_conformance(|| {
         Box::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)))
     });

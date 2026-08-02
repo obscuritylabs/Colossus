@@ -15,7 +15,9 @@ use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     network_destination_match, non_public_network_address,
 };
-use colossus_ports::{AggregateRepository, EventJournal, ExtensionRepository, StoreError};
+use colossus_ports::{
+    AggregateRepository, EventJournal, ExtensionRepository, StoreError, collect_stream_ids,
+};
 use futures::StreamExt as _;
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
