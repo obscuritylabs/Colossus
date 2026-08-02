@@ -58,19 +58,20 @@ flowchart LR
 | Tier | Trigger | Hosted coverage | Stable gate | Planning ceiling |
 |---|---|---|---|---:|
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
-| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
+| Pre-merge acceptance | Apply `ci:full` | macOS 15 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
 | Release | Push an annotated stable or approved prerelease tag | Six CLI targets, channel-specific Apple-silicon Desktop, and Windows x64 Developer Preview for prereleases | `Colossus release gate` | $4.50 per release |
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
-The four-core `ubuntu-latest-m` larger runner is reserved for the longest CPU-bound x64
-Linux lane in each tier: complete PR validation, live OCI/OPA acceptance, release
-readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
-dependency inspection, service-backed integration tests, and bounded single-process
-fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
-does not materially shorten the critical path. The repository's
-`.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
-linting recognizes it.
+Workflow jobs run on Blacksmith runners: `blacksmith-4vcpu-ubuntu-2404` for every x64
+Linux lane, `blacksmith-6vcpu-macos-15` for Apple-silicon lanes, and
+`blacksmith-8vcpu-windows-2025` for the Windows lanes. Blacksmith is roughly twice as
+fast per minute of wall clock at about half the hosted per-minute rate, so the four-core
+Linux tier now covers both the short control jobs and the longest CPU-bound lanes without
+raising the ceilings above. The x86_64 Linux release artifact still builds on the
+GitHub-hosted `ubuntu-latest-m` larger runner because the release matrix pins one runner
+per published target. The repository's `.github/actionlint.yaml` registers every custom
+runner label so local workflow linting recognizes them.
 
 ## Steps
 
@@ -178,7 +179,7 @@ changelog heading. Tag pushes run local
 release-readiness verification and exactly six native CLI targets. Each CLI target
 combines its security acceptance, locked release build, archive and checksum generation,
 clean installation, offline echo/audit, and signed-bundle smoke. A credential-free macOS
-14 ARM job builds the standalone Tauri graph into one shared Cargo target and uploads an
+15 ARM job builds the standalone Tauri graph into one shared Cargo target and uploads an
 exact ditto archive of the unsigned application. A separate fresh macOS runner downloads
 that archive before it imports Developer ID and notarization authority; this minimal job
 runs no Rust, Cargo, Vite, or Tauri build step. It installs locked Node dependencies with
@@ -187,7 +188,7 @@ bundled executables, writes their final manifest, binds that exact manifest dige
 the already-built main executable, signs the desktop application, submits it to Apple notarization,
 staples and assesses it, and uploads an Apple-silicon direct-download zip plus checksum.
 Approved prerelease tags additionally build an x64 per-user NSIS package on the
-organization's `windows-latest-l` larger runner, run silent
+`blacksmith-8vcpu-windows-2025` runner, run silent
 install/first-launch/uninstall and process-cleanup smoke
 checks, and publish its checksum, sealed manifest, and provenance. That package is
 explicitly labeled unsigned and preview-only. Stable release gating requires the Windows

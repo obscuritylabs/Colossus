@@ -21,7 +21,7 @@ fn workflows_are_split_and_the_catch_all_is_removed() {
 }
 
 #[test]
-fn actionlint_recognizes_the_provisioned_larger_runner() {
+fn actionlint_recognizes_every_provisioned_custom_runner() {
     let path = repository_root().join(".github/actionlint.yaml");
     let source = fs::read_to_string(&path).expect("read actionlint configuration");
     let config: serde_json::Value =
@@ -41,9 +41,15 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
     );
     assert_eq!(
         labels,
-        ["ubuntu-latest-m".to_owned(), "windows-latest-l".to_owned(),]
-            .into_iter()
-            .collect()
+        [
+            "blacksmith-4vcpu-ubuntu-2404".to_owned(),
+            "blacksmith-6vcpu-macos-15".to_owned(),
+            "blacksmith-8vcpu-windows-2025".to_owned(),
+            "ubuntu-latest-m".to_owned(),
+            "windows-latest-l".to_owned(),
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -83,7 +89,7 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
@@ -189,15 +195,15 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let jobs = jobs(&workflow);
     assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
-        Some("windows-latest-l")
+        Some("blacksmith-8vcpu-windows-2025")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
@@ -281,7 +287,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     assert_eq!(
         field(job(jobs, "live-security"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
@@ -309,13 +315,19 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
-    assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        field(desktop_build, "runs-on").as_str(),
+        Some("blacksmith-6vcpu-macos-15")
+    );
     assert_eq!(field(desktop_build, "needs").as_str(), Some("validate"));
-    assert_eq!(field(desktop, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        field(desktop, "runs-on").as_str(),
+        Some("blacksmith-6vcpu-macos-15")
+    );
     assert_eq!(
         strings(field(desktop, "needs"), "Desktop signing needs"),
         ["desktop_macos_build", "validate"]
@@ -381,7 +393,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
         "desktop_windows_preview=\"$WINDOWS_DESKTOP_RESULT\"",
-        "runs-on: windows-latest-l",
+        "runs-on: blacksmith-8vcpu-windows-2025",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_developer_preview\"",
         "smartScreenWarningExpected = $true",

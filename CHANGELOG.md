@@ -34,6 +34,10 @@ include breaking changes while the public API is still settling.
 - Made approved-plan consumption atomic. Cancel or failure before consumption preserves
   terminal Plan mode and selection; after consumption, Direct and Goal outcomes retain
   canonical plan plus completion, cancellation, or bounded-failure evidence.
+- Moved PR validation, pre-merge acceptance, release, and documentation workflows onto
+  Blacksmith runners (`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-15`, and
+  `blacksmith-8vcpu-windows-2025`), keeping the GitHub-hosted release matrix runners for
+  the published CLI targets.
 
 ### Security
 
