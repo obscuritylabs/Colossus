@@ -6,6 +6,47 @@ use super::*;
 /// `limit`, so untrusted cursors cannot induce unbounded allocation or reads.
 pub const MAX_STREAM_READ_BATCH: usize = 1_024;
 
+/// Maximum stream identifiers returned by one indexed discovery page.
+pub const MAX_STREAM_LIST_BATCH: usize = 1_024;
+
+/// Collect stream identifiers through bounded indexed pages.
+///
+/// Repository adapters use this for internal aggregate discovery. Individual
+/// journal calls remain bounded even when a repository must inspect every
+/// matching aggregate before applying its own status and result limits.
+pub fn collect_stream_ids(
+    journal: &dyn EventJournal,
+    prefix: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut streams = Vec::new();
+    let mut after = None::<String>;
+    loop {
+        let page = journal.list_stream_ids(prefix, after.as_deref(), MAX_STREAM_LIST_BATCH)?;
+        if page.len() > MAX_STREAM_LIST_BATCH {
+            return Err(StoreError::Verification(
+                "journal stream discovery exceeded its page bound".into(),
+            ));
+        }
+        if page.is_empty() {
+            break;
+        }
+        let mut previous = after.as_deref();
+        for stream_id in &page {
+            if !stream_id.starts_with(prefix)
+                || previous.is_some_and(|previous| stream_id.as_str() <= previous)
+            {
+                return Err(StoreError::Verification(
+                    "journal stream discovery returned an invalid ordered page".into(),
+                ));
+            }
+            previous = Some(stream_id);
+        }
+        after = page.last().cloned();
+        streams.extend(page);
+    }
+    Ok(streams)
+}
+
 /// Authoritative immutable event store.
 pub trait EventJournal: Send + Sync {
     /// Append one event atomically.
@@ -38,6 +79,18 @@ pub trait EventJournal: Send + Sync {
         before_version: Option<u64>,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError>;
+
+    /// List matching stream identifiers in ascending lexical order.
+    ///
+    /// `after` is an optional exclusive stream-id cursor and must share the
+    /// requested prefix. A zero limit returns no identifiers. Larger limits are
+    /// clamped to [`MAX_STREAM_LIST_BATCH`].
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError>;
 
     /// Read global events from a one-based sequence, bounded by `limit`.
     fn read_global(

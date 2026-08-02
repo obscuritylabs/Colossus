@@ -204,29 +204,20 @@ impl EventSourcedResearchRepository {
         u64::try_from(self.events(run_id)?.len()).map_err(adapter)
     }
 
-    fn run_ids(&self) -> Result<BTreeSet<String>, StoreError> {
-        let mut ids = BTreeSet::new();
-        let mut from = 1_u64;
-        loop {
-            let events = self.journal.read_global(from, 1_024)?;
-            if events.is_empty() {
-                break;
-            }
-            for event in &events {
-                if event.event_type == RUN_CREATED
-                    && let Some(id) = event.stream_id.strip_prefix("research:")
-                {
-                    ids.insert(id.into());
-                }
-            }
-            from = events
-                .last()
-                .map_or(from, |event| event.global_sequence.saturating_add(1));
-            if events.len() < 1_024 {
-                break;
-            }
-        }
-        Ok(ids)
+    fn run_ids(&self) -> Result<Vec<String>, StoreError> {
+        collect_stream_ids(self.journal.as_ref(), "research:")?
+            .into_iter()
+            .map(|stream_id| {
+                stream_id
+                    .strip_prefix("research:")
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "indexed stream {stream_id} is not a research stream"
+                        ))
+                    })
+            })
+            .collect()
     }
 
     fn record<T: serde::de::DeserializeOwned>(

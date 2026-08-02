@@ -95,6 +95,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in
   named modules.
 - Canonical writes append journal events. Read models and indexes are replaceable.
+- Event-sourced repositories discover aggregate streams through bounded pages of the
+  journal-maintained stream identifier index. Listing integrations, packs, sessions,
+  work, research, memory, or workflows must not rescan the global event history.
 - Public run creation atomically appends its per-application owner-index entry;
   `ListRuns` traverses that index newest-first instead of scanning the shared journal.
 - The complete effect path is centralized; an adapter cannot mint its own authority.

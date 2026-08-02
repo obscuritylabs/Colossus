@@ -4,7 +4,7 @@ use super::*;
 pub struct StaticKeyProvider {
     active_id: Mutex<String>,
     keys: Mutex<BTreeMap<String, [u8; 32]>>,
-    anchor: Mutex<Option<(u64, String)>>,
+    anchor: Mutex<Option<SecureAnchor>>,
 }
 
 impl StaticKeyProvider {
@@ -54,12 +54,12 @@ impl KeyProvider for StaticKeyProvider {
             .ok_or_else(|| StoreError::KeyUnavailable(key_id.to_owned()))
     }
 
-    fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
-        *self.anchor.lock().map_err(adapter_error)? = Some((sequence, hash.to_owned()));
+    fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
+        *self.anchor.lock().map_err(adapter_error)? = Some(anchor.clone());
         Ok(())
     }
 
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
         Ok(self.anchor.lock().map_err(adapter_error)?.clone())
     }
 }
@@ -117,33 +117,24 @@ impl KeyProvider for EnvironmentKeyProvider {
         self.read_key()
     }
 
-    fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
+    fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
         if let Some(parent) = self.anchor_path.parent() {
             fs::create_dir_all(parent).map_err(adapter_error)?;
         }
         let temporary = self.anchor_path.with_extension("tmp");
-        let body = serde_json::to_vec(&json!({"sequence": sequence, "hash": hash}))
-            .map_err(adapter_error)?;
+        let body = serde_json::to_vec(anchor).map_err(adapter_error)?;
         fs::write(&temporary, body).map_err(adapter_error)?;
         fs::rename(temporary, &self.anchor_path).map_err(adapter_error)
     }
 
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
         if !self.anchor_path.exists() {
             return Ok(None);
         }
         let value: Value =
             serde_json::from_slice(&fs::read(&self.anchor_path).map_err(adapter_error)?)
                 .map_err(adapter_error)?;
-        let sequence = value
-            .get("sequence")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| StoreError::Verification("secure anchor has no sequence".into()))?;
-        let hash = value
-            .get("hash")
-            .and_then(Value::as_str)
-            .ok_or_else(|| StoreError::Verification("secure anchor has no hash".into()))?;
-        Ok(Some((sequence, hash.to_owned())))
+        decode_anchor(&value).map(Some)
     }
 }
 
@@ -250,15 +241,14 @@ impl KeyProvider for PlatformKeyProvider {
         platform_existing_secret(&self.service, &self.key_account(key_id))
     }
 
-    fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
+    fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
         let entry =
             keyring::Entry::new(&self.service, &self.anchor_account()).map_err(adapter_error)?;
-        let body = serde_json::to_vec(&json!({"sequence": sequence, "hash": hash}))
-            .map_err(adapter_error)?;
+        let body = serde_json::to_vec(anchor).map_err(adapter_error)?;
         entry.set_secret(&body).map_err(adapter_error)
     }
 
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
         let entry =
             keyring::Entry::new(&self.service, &self.anchor_account()).map_err(adapter_error)?;
         let body = match entry.get_secret() {
@@ -267,14 +257,39 @@ impl KeyProvider for PlatformKeyProvider {
             Err(error) => return Err(adapter_error(error)),
         };
         let value: Value = serde_json::from_slice(&body).map_err(adapter_error)?;
-        let sequence = value
-            .get("sequence")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| StoreError::Verification("secure anchor has no sequence".into()))?;
-        let hash = value
-            .get("hash")
-            .and_then(Value::as_str)
-            .ok_or_else(|| StoreError::Verification("secure anchor has no hash".into()))?;
-        Ok(Some((sequence, hash.into())))
+        decode_anchor(&value).map(Some)
     }
+}
+
+fn decode_anchor(value: &Value) -> Result<SecureAnchor, StoreError> {
+    let sequence = value
+        .get("sequence")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| StoreError::Verification("secure anchor has no sequence".into()))?;
+    let hash = value
+        .get("hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Verification("secure anchor has no hash".into()))?;
+    let format_version = value
+        .get("format_version")
+        .and_then(Value::as_u64)
+        .map_or(Ok(1_u16), |version| {
+            u16::try_from(version).map_err(adapter_error)
+        })?;
+    let verification_profile = value
+        .get("verification_profile")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let status = value
+        .get("status")
+        .map(|status| serde_json::from_value(status.clone()).map_err(adapter_error))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(SecureAnchor {
+        format_version,
+        sequence,
+        hash: hash.to_owned(),
+        verification_profile,
+        status,
+    })
 }

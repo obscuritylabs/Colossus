@@ -10,7 +10,7 @@ use colossus_contracts::{
     WorkflowSubscriptionDispatchStatus, WorkflowTriggerKind, WorkflowWebhook,
     WorkflowWebhookDelivery, WorkflowWebhookDispatch,
 };
-use colossus_ports::{EventJournal, StoreError, WorkflowRepository};
+use colossus_ports::{EventJournal, StoreError, WorkflowRepository, collect_stream_ids};
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};

@@ -18,6 +18,29 @@ pub fn assert_journal_conformance(journal: &dyn EventJournal, first: NewEvent, s
             event_id: stored.event_id.clone(),
         }]
     );
+    assert_eq!(
+        journal
+            .list_stream_ids("", None, MAX_STREAM_LIST_BATCH + 1)
+            .expect("conformance stream discovery"),
+        vec![stored.stream_id.clone()]
+    );
+    assert!(
+        journal
+            .list_stream_ids(&stored.stream_id, Some(&stored.stream_id), 1)
+            .expect("conformance exclusive stream cursor")
+            .is_empty()
+    );
+    assert!(
+        journal
+            .list_stream_ids(&stored.stream_id, None, 0)
+            .expect("conformance zero stream-list limit")
+            .is_empty()
+    );
+    assert!(
+        journal
+            .list_stream_ids(&stored.stream_id, Some("different-prefix"), 1)
+            .is_err()
+    );
     assert!(matches!(
         journal.append(stale),
         Err(StoreError::Conflict { .. })

@@ -11,7 +11,7 @@ fn actor() -> Actor {
 
 #[test]
 fn event_sourced_session_repository_passes_shared_conformance() {
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::rejecting_global_reads());
     assert_session_repository_conformance(|| {
         Box::new(EventSourcedSessionRepository::new(Arc::clone(&journal)))
     });
