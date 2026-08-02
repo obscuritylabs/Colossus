@@ -68,8 +68,10 @@ Linux lane, `blacksmith-6vcpu-macos-15` for Apple-silicon lanes, and
 `blacksmith-8vcpu-windows-2025` for the Windows lanes. Blacksmith is roughly twice as
 fast per minute of wall clock at about half the hosted per-minute rate, so the four-core
 Linux tier now covers both the short control jobs and the longest CPU-bound lanes without
-raising the ceilings above. The x86_64 Linux release artifact still builds on the
-GitHub-hosted `ubuntu-latest-m` larger runner because the release matrix pins one runner
+raising the ceilings above. Three lanes stay on the GitHub-hosted `ubuntu-latest-m`
+larger runner: complete Rust PR validation and release readiness, because both install an
+exact-path AppArmor profile and the Blacksmith microVM kernel does not expose the AppArmor
+LSM, plus the x86_64 Linux release artifact, because the release matrix pins one runner
 per published target. The repository's `.github/actionlint.yaml` registers every custom
 runner label so local workflow linting recognizes them.
 

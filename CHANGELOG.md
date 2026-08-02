@@ -36,8 +36,9 @@ include breaking changes while the public API is still settling.
   canonical plan plus completion, cancellation, or bounded-failure evidence.
 - Moved PR validation, pre-merge acceptance, release, and documentation workflows onto
   Blacksmith runners (`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-15`, and
-  `blacksmith-8vcpu-windows-2025`), keeping the GitHub-hosted release matrix runners for
-  the published CLI targets.
+  `blacksmith-8vcpu-windows-2025`). Complete Rust PR validation, release readiness, and
+  the published CLI target matrix stay on GitHub-hosted runners because they require the
+  AppArmor LSM or a per-target runner image.
 
 ### Security
 
