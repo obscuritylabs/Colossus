@@ -17,7 +17,7 @@ jobs:
   invalidate-label:
     name: Invalidate stale full acceptance
     if: github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:full')
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -36,7 +36,7 @@ jobs:
   eligibility:
     name: Authorize full acceptance
     if: github.event.action == 'labeled' && github.event.label.name == 'ci:full'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify actor, PR state, and current PR gate
@@ -68,7 +68,7 @@ jobs:
     name: Representative macOS native sandbox
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -113,7 +113,7 @@ jobs:
     name: Representative macOS desktop bundle
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -181,7 +181,7 @@ jobs:
     name: Representative Windows runtime, sandbox, and Desktop
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: windows-latest-l
+    runs-on: blacksmith-8vcpu-windows-2025
     timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
@@ -296,7 +296,7 @@ jobs:
     name: Bounded security fuzzing
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -341,7 +341,7 @@ jobs:
     name: Complete supply-chain policy
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -362,7 +362,7 @@ jobs:
     name: Chroma ${{ matrix.chroma }} compatibility
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -410,7 +410,7 @@ jobs:
     name: PostgreSQL acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     services:
       postgres:
@@ -441,7 +441,7 @@ jobs:
     name: OCI and OPA security acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 40
     steps:
       - name: Check out repository
@@ -506,7 +506,7 @@ jobs:
     name: Colossus pre-merge gate
     if: always()
     needs: [eligibility, macos-native, macos-desktop, windows-runtime, fuzz, supply-chain, chroma, storage, live-security]
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
