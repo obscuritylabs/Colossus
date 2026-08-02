@@ -40,6 +40,7 @@ access:
     deny: []
 storage:
   path: .colossus/state.redb
+  startupVerification: incremental
   keys:
     kind: environment
     journal_variable: COLOSSUS_JOURNAL_KEY

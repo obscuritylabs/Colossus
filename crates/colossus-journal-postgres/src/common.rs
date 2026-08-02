@@ -4,6 +4,8 @@ pub(super) const ZERO_HASH: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const CHECKPOINT_INTERVAL: u64 = 100;
 pub(super) const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(60);
+pub(super) const SECURE_ANCHOR_FORMAT_VERSION: u16 = 2;
+pub(super) const INCREMENTAL_VERIFICATION_PROFILE: &str = "full-journal-v1";
 pub(super) const DEFAULT_STATEMENT_TIMEOUT_MS: u64 = 30_000;
 
 pub(super) const TABLES: &str = r#"
@@ -32,6 +34,8 @@ CREATE TABLE IF NOT EXISTS journal_stream_versions (
     stream_id TEXT PRIMARY KEY,
     stream_version BIGINT NOT NULL CHECK (stream_version > 0)
 );
+CREATE INDEX IF NOT EXISTS journal_stream_versions_prefix_idx
+ON journal_stream_versions (stream_id COLLATE "C");
 
 CREATE TABLE IF NOT EXISTS projection_outbox (
     global_sequence BIGINT PRIMARY KEY REFERENCES journal_events(global_sequence),
@@ -93,6 +97,22 @@ pub(super) fn bounded_limit(limit: usize) -> Result<i64, StoreError> {
     Ok(i64::try_from(limit).unwrap_or(i64::MAX))
 }
 
+pub(super) fn lexical_prefix_end(prefix: &str) -> Option<String> {
+    let mut end = prefix.to_owned();
+    loop {
+        let (offset, character) = end.char_indices().next_back()?;
+        end.truncate(offset);
+        let mut scalar = u32::from(character).saturating_add(1);
+        while scalar <= u32::from(char::MAX) {
+            if let Some(character) = char::from_u32(scalar) {
+                end.push(character);
+                return Some(end);
+            }
+            scalar = scalar.saturating_add(1);
+        }
+    }
+}
+
 pub(super) fn valid_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     chars
@@ -118,4 +138,18 @@ pub(super) fn validate_record_key(key: &str) -> Result<(), StoreError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lexical_prefix_end;
+
+    #[test]
+    fn lexical_prefix_end_bounds_every_matching_utf8_string() {
+        assert_eq!(lexical_prefix_end("research:"), Some("research;".into()));
+        assert_eq!(lexical_prefix_end("a\u{d7ff}"), Some("a\u{e000}".into()));
+        assert_eq!(lexical_prefix_end("ab\u{10ffff}"), Some("ac".into()));
+        assert_eq!(lexical_prefix_end("\u{10ffff}"), None);
+        assert_eq!(lexical_prefix_end(""), None);
+    }
 }

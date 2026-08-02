@@ -4,7 +4,7 @@ use colossus_testkit::{InMemoryEventJournal, assert_work_repository_conformance}
 
 #[test]
 fn event_sourced_work_repository_passes_shared_conformance() {
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::rejecting_global_reads());
     assert_work_repository_conformance(|| {
         Box::new(EventSourcedWorkRepository::new(Arc::clone(&journal)))
     });

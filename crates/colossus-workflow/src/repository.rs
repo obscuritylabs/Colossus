@@ -10,6 +10,22 @@ impl EventSourcedWorkflowRepository {
     pub fn new(journal: Arc<dyn EventJournal>) -> Self {
         Self { journal }
     }
+
+    fn stream_ids(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        collect_stream_ids(self.journal.as_ref(), prefix)?
+            .into_iter()
+            .map(|stream_id| {
+                stream_id
+                    .strip_prefix(prefix)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "indexed stream {stream_id} does not match prefix {prefix}"
+                        ))
+                    })
+            })
+            .collect()
+    }
 }
 
 impl WorkflowRepository for EventSourcedWorkflowRepository {
@@ -89,29 +105,32 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
     }
 
     fn runs(&self, limit: usize) -> Result<Vec<WorkflowRun>, StoreError> {
-        let events = self.journal.read_global(1, usize::MAX)?;
-        let mut run_ids = Vec::new();
-        let mut seen = BTreeSet::new();
-        for event in events {
-            if matches!(
-                event.event_type.as_str(),
-                "workflow.run.queued.v1" | "workflow.run.started.v1"
-            ) && let Some(run_id) = event.stream_id.strip_prefix("workflow-run:")
-                && seen.insert(run_id.to_owned())
-            {
-                run_ids.push(run_id.to_owned());
-            }
+        if limit == 0 {
+            return Ok(Vec::new());
         }
-        run_ids
+        let mut runs = self
+            .stream_ids("workflow-run:")?
             .into_iter()
-            .rev()
-            .take(limit)
             .map(|run_id| {
-                fold_run(self.journal.as_ref(), &run_id)?.ok_or_else(|| {
-                    StoreError::Verification(format!("run {run_id} start event is unreadable"))
-                })
+                let events = self
+                    .journal
+                    .read_stream(&format!("workflow-run:{run_id}"))?;
+                let first_sequence = events
+                    .first()
+                    .map(|event| event.global_sequence)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!("run {run_id} stream is empty"))
+                    })?;
+                let run =
+                    fold_run_events(self.journal.as_ref(), &run_id, &events)?.ok_or_else(|| {
+                        StoreError::Verification(format!("run {run_id} start event is unreadable"))
+                    })?;
+                Ok((first_sequence, run))
             })
-            .collect()
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        runs.sort_by_key(|run| std::cmp::Reverse(run.0));
+        runs.truncate(limit);
+        Ok(runs.into_iter().map(|(_, run)| run).collect())
     }
 
     fn create_schedule(
@@ -193,15 +212,7 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
     }
 
     fn schedules(&self, limit: usize) -> Result<Vec<WorkflowSchedule>, StoreError> {
-        let mut schedule_ids = BTreeSet::new();
-        for event in self.journal.read_global(1, usize::MAX)? {
-            if event.event_type == "workflow.schedule.registered.v1"
-                && let Some(schedule_id) = event.stream_id.strip_prefix("workflow-schedule:")
-            {
-                schedule_ids.insert(schedule_id.to_owned());
-            }
-        }
-        schedule_ids
+        self.stream_ids("workflow-schedule:")?
             .into_iter()
             .take(limit)
             .map(|schedule_id| {
@@ -293,15 +304,7 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
     }
 
     fn webhooks(&self, limit: usize) -> Result<Vec<WorkflowWebhook>, StoreError> {
-        let mut webhook_ids = BTreeSet::new();
-        for event in self.journal.read_global(1, usize::MAX)? {
-            if event.event_type == "workflow.webhook.registered.v1"
-                && let Some(webhook_id) = event.stream_id.strip_prefix("workflow-webhook:")
-            {
-                webhook_ids.insert(webhook_id.to_owned());
-            }
-        }
-        webhook_ids
+        self.stream_ids("workflow-webhook:")?
             .into_iter()
             .take(limit)
             .map(|webhook_id| {
@@ -404,16 +407,7 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
     }
 
     fn subscriptions(&self, limit: usize) -> Result<Vec<WorkflowSubscription>, StoreError> {
-        let mut subscription_ids = BTreeSet::new();
-        for event in self.journal.read_global(1, usize::MAX)? {
-            if event.event_type == "workflow.subscription.registered.v1"
-                && let Some(subscription_id) =
-                    event.stream_id.strip_prefix("workflow-subscription:")
-            {
-                subscription_ids.insert(subscription_id.to_owned());
-            }
-        }
-        subscription_ids
+        self.stream_ids("workflow-subscription:")?
             .into_iter()
             .take(limit)
             .map(|subscription_id| {
@@ -588,6 +582,14 @@ pub(super) fn fold_run(
     run_id: &str,
 ) -> Result<Option<WorkflowRun>, StoreError> {
     let events = journal.read_stream(&format!("workflow-run:{run_id}"))?;
+    fold_run_events(journal, run_id, &events)
+}
+
+fn fold_run_events(
+    journal: &dyn EventJournal,
+    run_id: &str,
+    events: &[EventEnvelope],
+) -> Result<Option<WorkflowRun>, StoreError> {
     let Some(first) = events.first() else {
         return Ok(None);
     };

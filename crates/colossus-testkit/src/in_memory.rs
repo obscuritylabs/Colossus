@@ -14,6 +14,17 @@ struct State {
 #[derive(Default)]
 pub struct InMemoryEventJournal {
     state: Mutex<State>,
+    reject_global_reads: AtomicBool,
+}
+
+impl InMemoryEventJournal {
+    /// Build a journal that fails if repository code falls back to a global event scan.
+    pub fn rejecting_global_reads() -> Self {
+        Self {
+            reject_global_reads: AtomicBool::new(true),
+            ..Self::default()
+        }
+    }
 }
 
 fn failure(error: impl std::fmt::Display) -> StoreError {
@@ -153,11 +164,51 @@ impl EventJournal for InMemoryEventJournal {
         Ok(events[..end].iter().rev().take(limit).cloned().collect())
     }
 
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        if prefix.contains('\0')
+            || after.is_some_and(|cursor| cursor.contains('\0') || !cursor.starts_with(prefix))
+        {
+            return Err(StoreError::Adapter(
+                "stream prefix and cursor must contain no NUL and share one prefix".into(),
+            ));
+        }
+        let limit = limit.min(MAX_STREAM_LIST_BATCH);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let state = self.state.lock().map_err(failure)?;
+        let start = after.unwrap_or(prefix).to_owned();
+        let mut ids = Vec::with_capacity(limit);
+        for (stream_id, _) in state.stream_versions.range(start..) {
+            if ids.len() >= limit {
+                break;
+            }
+            if after == Some(stream_id.as_str()) {
+                continue;
+            }
+            if !stream_id.starts_with(prefix) {
+                break;
+            }
+            ids.push(stream_id.clone());
+        }
+        Ok(ids)
+    }
+
     fn read_global(
         &self,
         from_sequence: u64,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError> {
+        if self.reject_global_reads.load(Ordering::Acquire) {
+            return Err(StoreError::Adapter(
+                "global event reads are disabled for this test journal".into(),
+            ));
+        }
         Ok(self
             .state
             .lock()

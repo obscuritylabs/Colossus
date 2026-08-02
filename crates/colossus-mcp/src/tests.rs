@@ -327,11 +327,11 @@ impl KeyProvider for RotatingTestKeys {
             .ok_or_else(|| StoreError::KeyUnavailable(key_id.into()))
     }
 
-    fn store_anchor(&self, _sequence: u64, _hash: &str) -> Result<(), StoreError> {
+    fn store_anchor(&self, _anchor: &colossus_contracts::SecureAnchor) -> Result<(), StoreError> {
         Ok(())
     }
 
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+    fn load_anchor(&self) -> Result<Option<colossus_contracts::SecureAnchor>, StoreError> {
         Ok(None)
     }
 }

@@ -1,4 +1,6 @@
 use super::*;
+use colossus_contracts::EventEnvelope;
+use colossus_ports::{MAX_STREAM_LIST_BATCH, MAX_STREAM_READ_BATCH};
 
 pub(super) fn workspace_absolute_path(workspace: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -8,38 +10,112 @@ pub(super) fn workspace_absolute_path(workspace: &Path, path: &Path) -> PathBuf 
     }
 }
 
+const MAX_PENDING_EFFECT_RECOVERIES: usize = 1_024;
+
+struct PendingEffectRecovery {
+    started: EventEnvelope,
+    latest_stream_version: u64,
+}
+
 pub(super) fn recover_unknown_effects(journal: &dyn EventJournal) -> Result<u64, StoreError> {
-    let mut last_by_stream = std::collections::BTreeMap::new();
-    for event in journal.read_global(1, usize::MAX)? {
-        if event.stream_id.starts_with("effect:") {
-            last_by_stream.insert(event.stream_id.clone(), event);
-        }
-    }
+    let pending = pending_effect_recoveries(journal)?;
     let mut recovered = 0_u64;
-    for event in last_by_stream.into_values() {
-        if event.event_type != "effect.started.v1" {
-            continue;
-        }
+    for effect in pending {
+        let started = effect.started;
         journal.append(NewEvent {
             event_version: 1,
-            stream_id: event.stream_id,
-            expected_stream_version: event.stream_version,
+            stream_id: started.stream_id,
+            expected_stream_version: effect.latest_stream_version,
             classification: EventClassification::Effect,
             event_type: "effect.outcome_unknown.v1".into(),
             actor: Actor {
                 actor_type: ActorType::System,
                 id: "startup-recovery".into(),
             },
-            context: event.context,
+            context: started.context,
             payload: json!({
                 "reason": "process stopped after effect.started without a terminal event",
-                "recovered_from_event_id": event.event_id,
+                "recovered_from_event_id": started.event_id,
                 "automatic_retry": false,
             }),
         })?;
         recovered = recovered.saturating_add(1);
     }
     Ok(recovered)
+}
+
+fn pending_effect_recoveries(
+    journal: &dyn EventJournal,
+) -> Result<Vec<PendingEffectRecovery>, StoreError> {
+    let mut pending = Vec::new();
+    let mut after = None::<String>;
+    loop {
+        let page = journal.list_stream_ids("effect:", after.as_deref(), MAX_STREAM_LIST_BATCH)?;
+        if page.len() > MAX_STREAM_LIST_BATCH {
+            return Err(StoreError::Verification(
+                "effect stream discovery exceeded its page bound".into(),
+            ));
+        }
+        if page.is_empty() {
+            break;
+        }
+        let mut previous = after.as_deref();
+        for stream_id in &page {
+            if !stream_id.starts_with("effect:")
+                || previous.is_some_and(|previous| stream_id.as_str() <= previous)
+            {
+                return Err(StoreError::Verification(
+                    "effect stream discovery returned an invalid ordered page".into(),
+                ));
+            }
+            previous = Some(stream_id);
+            if let Some(effect) = pending_effect_recovery(journal, stream_id)? {
+                pending.push(effect);
+                if pending.len() > MAX_PENDING_EFFECT_RECOVERIES {
+                    return Err(StoreError::Adapter(format!(
+                        "startup effect recovery exceeds the safe bound of {MAX_PENDING_EFFECT_RECOVERIES}"
+                    )));
+                }
+            }
+        }
+        after = page.last().cloned();
+    }
+    Ok(pending)
+}
+
+fn pending_effect_recovery(
+    journal: &dyn EventJournal,
+    stream_id: &str,
+) -> Result<Option<PendingEffectRecovery>, StoreError> {
+    let mut before_version = None;
+    let mut latest = None;
+    loop {
+        let page =
+            journal.read_stream_backwards(stream_id, before_version, MAX_STREAM_READ_BATCH)?;
+        if page.is_empty() {
+            return Ok(None);
+        }
+        let latest_event = latest.get_or_insert_with(|| page[0].clone());
+        for event in &page {
+            match event.event_type.as_str() {
+                "effect.started.v1" => {
+                    journal.decrypt_payload(event)?;
+                    if event.event_id != latest_event.event_id {
+                        journal.decrypt_payload(latest_event)?;
+                    }
+                    return Ok(Some(PendingEffectRecovery {
+                        started: event.clone(),
+                        latest_stream_version: latest_event.stream_version,
+                    }));
+                }
+                "effect.completed.v1" | "effect.failed.v1" | "effect.outcome_unknown.v1" => {
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+        before_version = page.last().map(|event| event.stream_version);
+    }
 }
 
 pub(super) fn recover_interrupted_subagents(

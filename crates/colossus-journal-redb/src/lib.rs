@@ -7,11 +7,12 @@ use chacha20poly1305::{
 };
 use colossus_contracts::{
     EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
-    ProjectionWorkItem, SignedCheckpoint,
+    ProjectionWorkItem, SecureAnchor, SecureAnchorStatus, SignedCheckpoint,
+    StartupVerificationMode, StartupVerificationReport,
 };
 use colossus_ports::{
-    CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_READ_BATCH, ProjectionStore,
-    StoreError, VerificationReport,
+    CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_LIST_BATCH, MAX_STREAM_READ_BATCH,
+    ProjectionStore, StoreError, VerificationReport,
 };
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use fs4::fs_std::FileExt as _;

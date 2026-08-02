@@ -9,6 +9,7 @@ pub struct RedbEventJournal {
     last_checkpoint: Mutex<Instant>,
     recovery_mode: AtomicBool,
     recovery_reason: Mutex<Option<String>>,
+    startup_report: Mutex<StartupVerificationReport>,
 }
 
 impl RedbEventJournal {
@@ -17,6 +18,21 @@ impl RedbEventJournal {
         path: impl AsRef<Path>,
         keys: Arc<dyn KeyProvider>,
         signer: Arc<dyn CheckpointSigner>,
+    ) -> Result<Self, StoreError> {
+        Self::open_with_startup_verification(
+            path,
+            keys,
+            signer,
+            StartupVerificationMode::Incremental,
+        )
+    }
+
+    /// Open with one explicit startup verification policy.
+    pub fn open_with_startup_verification(
+        path: impl AsRef<Path>,
+        keys: Arc<dyn KeyProvider>,
+        signer: Arc<dyn CheckpointSigner>,
+        mode: StartupVerificationMode,
     ) -> Result<Self, StoreError> {
         let database = Database::create(path).map_err(adapter_error)?;
         let write = database.begin_write().map_err(adapter_error)?;
@@ -40,21 +56,16 @@ impl RedbEventJournal {
             last_checkpoint: Mutex::new(Instant::now()),
             recovery_mode: AtomicBool::new(false),
             recovery_reason: Mutex::new(None),
+            startup_report: Mutex::new(StartupVerificationReport {
+                configured_mode: mode,
+                path: "empty".into(),
+                verified_from_sequence: None,
+                verified_through_sequence: 0,
+                verified_event_count: 0,
+                anchor_format_version: None,
+            }),
         };
-        let startup = journal
-            .verify_inner()
-            .and_then(|_| journal.ensure_stream_events_index())
-            .and_then(|_| journal.verify_inner())
-            .and_then(|report| {
-                let checkpoint_sequence = report
-                    .checkpoint
-                    .as_ref()
-                    .map_or(0, |checkpoint| checkpoint.global_sequence);
-                if report.last_sequence.saturating_sub(checkpoint_sequence) >= CHECKPOINT_INTERVAL {
-                    journal.checkpoint()?;
-                }
-                Ok(())
-            });
+        let startup = journal.quarantine_result(journal.verify_startup(mode));
         if let Err(error) = startup {
             journal.recovery_mode.store(true, Ordering::Release);
             *journal.recovery_reason.lock().map_err(adapter_error)? = Some(error.to_string());
@@ -67,7 +78,282 @@ impl RedbEventJournal {
         Ok(self.recovery_reason.lock().map_err(adapter_error)?.clone())
     }
 
-    fn ensure_stream_events_index(&self) -> Result<(), StoreError> {
+    /// Stable metadata describing the startup verification path.
+    pub fn startup_verification_report(&self) -> Result<StartupVerificationReport, StoreError> {
+        Ok(self.startup_report.lock().map_err(adapter_error)?.clone())
+    }
+
+    fn verify_startup(&self, mode: StartupVerificationMode) -> Result<(), StoreError> {
+        let anchor = self.keys.load_anchor()?;
+        let (head_sequence, _) = self.head()?;
+        if head_sequence == 0 {
+            if anchor.as_ref().is_some_and(|anchor| anchor.sequence != 0) {
+                return Err(StoreError::Verification(
+                    "secure anchor is ahead of an empty journal".into(),
+                ));
+            }
+            self.ensure_stream_events_index()?;
+            *self.startup_report.lock().map_err(adapter_error)? = StartupVerificationReport {
+                configured_mode: mode,
+                path: "empty".into(),
+                verified_from_sequence: None,
+                verified_through_sequence: 0,
+                verified_event_count: 0,
+                anchor_format_version: anchor.map(|anchor| anchor.format_version),
+            };
+            return Ok(());
+        }
+
+        let trusted_incremental = mode == StartupVerificationMode::Incremental
+            && anchor.as_ref().is_some_and(|anchor| {
+                anchor.format_version == SECURE_ANCHOR_FORMAT_VERSION
+                    && anchor.verification_profile.as_deref()
+                        == Some(INCREMENTAL_VERIFICATION_PROFILE)
+                    && anchor.status == SecureAnchorStatus::Verified
+            })
+            && self.stream_events_index_version()? == Some(STREAM_EVENTS_INDEX_VERSION);
+        if trusted_incremental {
+            match self.verify_incremental(anchor.as_ref().expect("checked anchor")) {
+                Ok(report) => {
+                    *self.startup_report.lock().map_err(adapter_error)? = report;
+                    return Ok(());
+                }
+                // An interrupted anchor-before-checkpoint commit is safe to repair only
+                // after the complete journal still verifies against that anchor.
+                Err(StoreError::Verification(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        let report = self.verify_inner()?;
+        self.ensure_stream_events_index()?;
+        if report.last_sequence > 0 {
+            self.checkpoint()?;
+        }
+        *self.startup_report.lock().map_err(adapter_error)? = StartupVerificationReport {
+            configured_mode: mode,
+            path: if mode == StartupVerificationMode::Full {
+                "full".into()
+            } else {
+                "bootstrap_full".into()
+            },
+            verified_from_sequence: Some(1),
+            verified_through_sequence: report.last_sequence,
+            verified_event_count: report.event_count,
+            anchor_format_version: (report.last_sequence > 0)
+                .then_some(SECURE_ANCHOR_FORMAT_VERSION),
+        };
+        Ok(())
+    }
+
+    fn verify_incremental(
+        &self,
+        anchor: &SecureAnchor,
+    ) -> Result<StartupVerificationReport, StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let events = read.open_table(EVENTS).map_err(adapter_error)?;
+        let stream_events = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
+        let stream_versions = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        let outbox = read.open_table(OUTBOX).map_err(adapter_error)?;
+        let projection_positions = read
+            .open_table(PROJECTION_POSITIONS)
+            .map_err(adapter_error)?;
+        let head_sequence = metadata
+            .get("last_sequence")
+            .map_err(adapter_error)?
+            .map_or(Ok(0_u64), |value| {
+                serde_json::from_slice(value.value()).map_err(adapter_error)
+            })?;
+        let head_hash = metadata
+            .get("last_hash")
+            .map_err(adapter_error)?
+            .map_or_else(
+                || Ok::<String, StoreError>(ZERO_HASH.into()),
+                |value| serde_json::from_slice(value.value()).map_err(adapter_error),
+            )?;
+        let checkpoint: SignedCheckpoint = metadata
+            .get("latest_checkpoint")
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()?
+            .ok_or_else(|| {
+                StoreError::Verification("incremental startup requires a signed checkpoint".into())
+            })?;
+        if checkpoint.global_sequence != anchor.sequence
+            || checkpoint.record_hash != anchor.hash
+            || checkpoint.global_sequence > head_sequence
+        {
+            return Err(StoreError::Verification(
+                "secure anchor and signed checkpoint do not identify one journal boundary".into(),
+            ));
+        }
+        self.verify_checkpoint_signature(&checkpoint)?;
+
+        let mut expected_sequence = checkpoint.global_sequence;
+        let mut previous_hash = checkpoint.record_hash.clone();
+        let mut inspected = 0_u64;
+        let mut touched_streams = BTreeMap::<String, u64>::new();
+        let boundary_start = checkpoint.global_sequence.max(1);
+        for entry in events.range(boundary_start..).map_err(adapter_error)? {
+            let (key, value) = entry.map_err(adapter_error)?;
+            let sequence = key.value();
+            if inspected == 0 && sequence == checkpoint.global_sequence {
+                let persisted: PersistedEventEnvelope =
+                    serde_json::from_slice(value.value()).map_err(adapter_error)?;
+                let envelope: EventEnvelope =
+                    serde_json::from_slice(value.value()).map_err(adapter_error)?;
+                if envelope.global_sequence != sequence {
+                    return Err(StoreError::Verification(
+                        "checkpoint event sequence does not match its journal key".into(),
+                    ));
+                }
+                self.verify_persisted_event(&envelope, &persisted)?;
+                if envelope.record_hash != checkpoint.record_hash {
+                    return Err(StoreError::Verification(
+                        "checkpoint record is absent or has changed".into(),
+                    ));
+                }
+                if stream_events
+                    .get(&(envelope.stream_id.as_str(), envelope.stream_version))
+                    .map_err(adapter_error)?
+                    .map(|indexed| indexed.value())
+                    != Some(sequence)
+                {
+                    return Err(StoreError::Verification(format!(
+                        "stream {} version {} checkpoint index mismatch",
+                        envelope.stream_id, envelope.stream_version
+                    )));
+                }
+                let queued = outbox
+                    .get(sequence)
+                    .map_err(adapter_error)?
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "projection outbox record {sequence} is absent"
+                        ))
+                    })?;
+                let queued: Value =
+                    serde_json::from_slice(queued.value()).map_err(adapter_error)?;
+                if queued.get("event_id").and_then(Value::as_str) != Some(&envelope.event_id) {
+                    return Err(StoreError::Verification(format!(
+                        "projection outbox record {sequence} targets a different event"
+                    )));
+                }
+                touched_streams.insert(envelope.stream_id, envelope.stream_version);
+                inspected = inspected.saturating_add(1);
+                continue;
+            }
+            expected_sequence = expected_sequence.saturating_add(1);
+            if sequence != expected_sequence {
+                return Err(StoreError::Verification(format!(
+                    "incremental journal sequence gap: expected {expected_sequence}, got {sequence}"
+                )));
+            }
+            let persisted: PersistedEventEnvelope =
+                serde_json::from_slice(value.value()).map_err(adapter_error)?;
+            let envelope: EventEnvelope =
+                serde_json::from_slice(value.value()).map_err(adapter_error)?;
+            if envelope.global_sequence != sequence || envelope.previous_hash != previous_hash {
+                return Err(StoreError::Verification(format!(
+                    "event {} sequence or previous hash mismatch",
+                    envelope.event_id
+                )));
+            }
+            self.verify_persisted_event(&envelope, &persisted)?;
+            if stream_events
+                .get(&(envelope.stream_id.as_str(), envelope.stream_version))
+                .map_err(adapter_error)?
+                .map(|indexed| indexed.value())
+                != Some(sequence)
+            {
+                return Err(StoreError::Verification(format!(
+                    "stream {} version {} index mismatch",
+                    envelope.stream_id, envelope.stream_version
+                )));
+            }
+            let queued = outbox
+                .get(sequence)
+                .map_err(adapter_error)?
+                .ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "projection outbox record {sequence} is absent"
+                    ))
+                })?;
+            let queued: Value = serde_json::from_slice(queued.value()).map_err(adapter_error)?;
+            if queued.get("event_id").and_then(Value::as_str) != Some(&envelope.event_id) {
+                return Err(StoreError::Verification(format!(
+                    "projection outbox record {sequence} targets a different event"
+                )));
+            }
+            previous_hash.clone_from(&envelope.record_hash);
+            touched_streams.insert(envelope.stream_id, envelope.stream_version);
+            inspected = inspected.saturating_add(1);
+        }
+        if inspected == 0 {
+            return Err(StoreError::Verification(
+                "checkpoint record is absent from the journal".into(),
+            ));
+        }
+        if expected_sequence != head_sequence || previous_hash != head_hash {
+            return Err(StoreError::Verification(
+                "incremental verification did not reach the journal head".into(),
+            ));
+        }
+        for (stream_id, version) in touched_streams {
+            if stream_versions
+                .get(stream_id.as_str())
+                .map_err(adapter_error)?
+                .map(|stored| stored.value())
+                != Some(version)
+            {
+                return Err(StoreError::Verification(format!(
+                    "durable stream version for {stream_id} does not match the verified tail"
+                )));
+            }
+        }
+        for entry in projection_positions.iter().map_err(adapter_error)? {
+            let (projection, position) = entry.map_err(adapter_error)?;
+            projection_prefix(projection.value())?;
+            if position.value() > head_sequence {
+                return Err(StoreError::Verification(format!(
+                    "projection {} position {} is ahead of journal head {head_sequence}",
+                    projection.value(),
+                    position.value()
+                )));
+            }
+        }
+        drop(projection_positions);
+        drop(outbox);
+        drop(metadata);
+        drop(stream_versions);
+        drop(stream_events);
+        drop(events);
+        drop(read);
+        if head_sequence > checkpoint.global_sequence {
+            self.checkpoint()?;
+        }
+        Ok(StartupVerificationReport {
+            configured_mode: StartupVerificationMode::Incremental,
+            path: "incremental".into(),
+            verified_from_sequence: Some(boundary_start),
+            verified_through_sequence: head_sequence,
+            verified_event_count: inspected,
+            anchor_format_version: Some(anchor.format_version),
+        })
+    }
+
+    fn stream_events_index_version(&self) -> Result<Option<u64>, StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        metadata
+            .get(STREAM_EVENTS_INDEX_KEY)
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()
+    }
+
+    fn ensure_stream_events_index(&self) -> Result<bool, StoreError> {
         let _guard = self.writer.lock().map_err(adapter_error)?;
         let write = self.database.begin_write().map_err(adapter_error)?;
         let index_version = {
@@ -79,7 +365,7 @@ impl RedbEventJournal {
                 .transpose()?
         };
         if index_version == Some(STREAM_EVENTS_INDEX_VERSION) {
-            return Ok(());
+            return Ok(false);
         }
         if index_version.is_some() {
             return Err(StoreError::Verification(
@@ -125,7 +411,8 @@ impl RedbEventJournal {
                 .insert(STREAM_EVENTS_INDEX_KEY, version.as_slice())
                 .map_err(adapter_error)?;
         }
-        write.commit().map_err(adapter_error)
+        write.commit().map_err(adapter_error)?;
+        Ok(true)
     }
 
     fn read_indexed_stream(
@@ -152,6 +439,7 @@ impl RedbEventJournal {
         }
         let stream_events = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
         let event_table = read.open_table(EVENTS).map_err(adapter_error)?;
+        let stream_versions = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
         let mut events = Vec::with_capacity(limit.unwrap_or(0).min(MAX_STREAM_READ_BATCH));
         for entry in stream_events
             .range((stream_id, start_version)..=(stream_id, u64::MAX))
@@ -183,6 +471,31 @@ impl RedbEventJournal {
             }
             events.push(event);
         }
+        let mut expected_version = start_version;
+        for event in &events {
+            if event.stream_version != expected_version {
+                return Err(StoreError::Verification(format!(
+                    "stream {stream_id} index has a version gap at {expected_version}"
+                )));
+            }
+            expected_version = expected_version.saturating_add(1);
+        }
+        let durable_version = stream_versions
+            .get(stream_id)
+            .map_err(adapter_error)?
+            .map_or(0, |version| version.value());
+        if limit.is_none_or(|limit| events.len() < limit)
+            && events
+                .last()
+                .map_or(after_version.min(durable_version), |event| {
+                    event.stream_version
+                })
+                != durable_version
+        {
+            return Err(StoreError::Verification(format!(
+                "stream {stream_id} index does not reach durable version {durable_version}"
+            )));
+        }
         Ok(events)
     }
 
@@ -211,6 +524,7 @@ impl RedbEventJournal {
         }
         let stream_events = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
         let event_table = read.open_table(EVENTS).map_err(adapter_error)?;
+        let stream_versions = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
         let mut events = Vec::with_capacity(limit);
         for entry in stream_events
             .range((stream_id, 1)..=(stream_id, last_version))
@@ -242,6 +556,27 @@ impl RedbEventJournal {
                 )));
             }
             events.push(event);
+        }
+        let durable_version = stream_versions
+            .get(stream_id)
+            .map_err(adapter_error)?
+            .map_or(0, |version| version.value());
+        let expected_first = before_version.map_or(durable_version, |version| {
+            version.saturating_sub(1).min(durable_version)
+        });
+        if events.first().map(|event| event.stream_version)
+            != (expected_first > 0).then_some(expected_first)
+        {
+            return Err(StoreError::Verification(format!(
+                "stream {stream_id} reverse index does not begin at version {expected_first}"
+            )));
+        }
+        for pair in events.windows(2) {
+            if pair[0].stream_version != pair[1].stream_version.saturating_add(1) {
+                return Err(StoreError::Verification(format!(
+                    "stream {stream_id} reverse index has a version gap"
+                )));
+            }
         }
         Ok(events)
     }
@@ -474,14 +809,18 @@ impl RedbEventJournal {
         checkpoint: &SignedCheckpoint,
         event_hashes: &BTreeMap<u64, String>,
     ) -> Result<(), StoreError> {
-        if checkpoint.algorithm != "Ed25519" || checkpoint.key_id != self.signer.key_id() {
-            return Err(StoreError::Verification(
-                "checkpoint signer identity or algorithm mismatch".into(),
-            ));
-        }
         if event_hashes.get(&checkpoint.global_sequence) != Some(&checkpoint.record_hash) {
             return Err(StoreError::Verification(
                 "checkpoint does not match journal record".into(),
+            ));
+        }
+        self.verify_checkpoint_signature(checkpoint)
+    }
+
+    fn verify_checkpoint_signature(&self, checkpoint: &SignedCheckpoint) -> Result<(), StoreError> {
+        if checkpoint.algorithm != "Ed25519" || checkpoint.key_id != self.signer.key_id() {
+            return Err(StoreError::Verification(
+                "checkpoint signer identity or algorithm mismatch".into(),
             ));
         }
         let signature = hex::decode(&checkpoint.signature).map_err(adapter_error)?;
@@ -489,6 +828,43 @@ impl RedbEventJournal {
             &checkpoint_message(checkpoint.global_sequence, &checkpoint.record_hash),
             &signature,
         )
+    }
+
+    fn verify_persisted_event(
+        &self,
+        envelope: &EventEnvelope,
+        persisted: &PersistedEventEnvelope,
+    ) -> Result<Vec<u8>, StoreError> {
+        let computed_hash = persisted_record_hash(persisted)?;
+        if computed_hash != persisted.record_hash || envelope.record_hash != persisted.record_hash {
+            return Err(StoreError::Verification(format!(
+                "event {} record hash mismatch",
+                envelope.event_id
+            )));
+        }
+        let plaintext = self.decrypt_persisted(envelope, persisted)?;
+        if sha256_hex(&plaintext) != envelope.payload.plaintext_hash {
+            return Err(StoreError::Verification(format!(
+                "event {} plaintext hash mismatch",
+                envelope.event_id
+            )));
+        }
+        serde_json::from_slice::<Value>(&plaintext).map_err(adapter_error)?;
+        Ok(plaintext)
+    }
+
+    fn quarantine_result<T>(&self, result: Result<T, StoreError>) -> Result<T, StoreError> {
+        if let Err(StoreError::Verification(reason)) = &result {
+            self.recovery_mode.store(true, Ordering::Release);
+            if let Ok(mut recovery_reason) = self.recovery_reason.lock() {
+                *recovery_reason = Some(reason.clone());
+            }
+            if let Ok(Some(mut anchor)) = self.keys.load_anchor() {
+                anchor.status = SecureAnchorStatus::Quarantined;
+                let _ = self.keys.store_anchor(&anchor);
+            }
+        }
+        result
     }
 
     fn verify_inner(&self) -> Result<VerificationReport, StoreError> {
@@ -569,23 +945,7 @@ impl RedbEventJournal {
                     envelope.stream_id, envelope.stream_version
                 )));
             }
-            let computed_hash = persisted_record_hash(&persisted)?;
-            if computed_hash != persisted.record_hash
-                || envelope.record_hash != persisted.record_hash
-            {
-                return Err(StoreError::Verification(format!(
-                    "event {} record hash mismatch",
-                    envelope.event_id
-                )));
-            }
-            let plaintext = self.decrypt_persisted(&envelope, &persisted)?;
-            if sha256_hex(&plaintext) != envelope.payload.plaintext_hash {
-                return Err(StoreError::Verification(format!(
-                    "event {} plaintext hash mismatch",
-                    envelope.event_id
-                )));
-            }
-            serde_json::from_slice::<Value>(&plaintext).map_err(adapter_error)?;
+            self.verify_persisted_event(&envelope, &persisted)?;
             previous_hash.clone_from(&envelope.record_hash);
             event_hashes.insert(sequence, envelope.record_hash);
             let queued = outbox
@@ -675,8 +1035,8 @@ impl RedbEventJournal {
         if let Some(checkpoint) = &checkpoint {
             self.verify_checkpoint(checkpoint, &event_hashes)?;
         }
-        if let Some((anchor_sequence, anchor_hash)) = self.keys.load_anchor()?
-            && event_hashes.get(&anchor_sequence) != Some(&anchor_hash)
+        if let Some(anchor) = self.keys.load_anchor()?
+            && event_hashes.get(&anchor.sequence) != Some(&anchor.hash)
         {
             return Err(StoreError::Verification(
                 "secure anchor is missing or differs from journal".into(),
@@ -731,7 +1091,7 @@ impl EventJournal for RedbEventJournal {
     }
 
     fn read_stream(&self, stream_id: &str) -> Result<Vec<EventEnvelope>, StoreError> {
-        self.read_indexed_stream(stream_id, 0, None)
+        self.quarantine_result(self.read_indexed_stream(stream_id, 0, None))
     }
 
     fn read_stream_from(
@@ -740,11 +1100,12 @@ impl EventJournal for RedbEventJournal {
         after_version: u64,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError> {
-        self.read_indexed_stream(
+        let result = self.read_indexed_stream(
             stream_id,
             after_version,
             Some(limit.min(MAX_STREAM_READ_BATCH)),
-        )
+        );
+        self.quarantine_result(result)
     }
 
     fn read_stream_backwards(
@@ -753,7 +1114,49 @@ impl EventJournal for RedbEventJournal {
         before_version: Option<u64>,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError> {
-        self.read_indexed_stream_backwards(stream_id, before_version, limit)
+        let result = self.read_indexed_stream_backwards(stream_id, before_version, limit);
+        self.quarantine_result(result)
+    }
+
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        let result = (|| {
+            if prefix.contains('\0')
+                || after.is_some_and(|cursor| cursor.contains('\0') || !cursor.starts_with(prefix))
+            {
+                return Err(StoreError::Adapter(
+                    "stream prefix and cursor must contain no NUL and share one prefix".into(),
+                ));
+            }
+            let limit = limit.min(MAX_STREAM_LIST_BATCH);
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let read = self.database.begin_read().map_err(adapter_error)?;
+            let streams = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
+            let start = after.unwrap_or(prefix);
+            let mut ids = Vec::with_capacity(limit);
+            for entry in streams.range(start..).map_err(adapter_error)? {
+                if ids.len() >= limit {
+                    break;
+                }
+                let (stream_id, _) = entry.map_err(adapter_error)?;
+                let stream_id = stream_id.value();
+                if after == Some(stream_id) {
+                    continue;
+                }
+                if !stream_id.starts_with(prefix) {
+                    break;
+                }
+                ids.push(stream_id.to_owned());
+            }
+            Ok(ids)
+        })();
+        self.quarantine_result(result)
     }
 
     fn read_global(
@@ -761,17 +1164,41 @@ impl EventJournal for RedbEventJournal {
         from_sequence: u64,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError> {
-        let read = self.database.begin_read().map_err(adapter_error)?;
-        let table = read.open_table(EVENTS).map_err(adapter_error)?;
-        let mut events = Vec::with_capacity(limit.min(1024));
-        for entry in table.range(from_sequence..).map_err(adapter_error)? {
-            if events.len() >= limit {
-                break;
+        let result = (|| {
+            let read = self.database.begin_read().map_err(adapter_error)?;
+            let table = read.open_table(EVENTS).map_err(adapter_error)?;
+            let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+            let head_sequence = metadata
+                .get("last_sequence")
+                .map_err(adapter_error)?
+                .map_or(Ok(0_u64), |value| {
+                    serde_json::from_slice(value.value()).map_err(adapter_error)
+                })?;
+            let mut events = Vec::with_capacity(limit.min(1024));
+            let mut expected_sequence = from_sequence.max(1);
+            for entry in table.range(expected_sequence..).map_err(adapter_error)? {
+                if events.len() >= limit {
+                    break;
+                }
+                let (key, value) = entry.map_err(adapter_error)?;
+                let event: EventEnvelope =
+                    serde_json::from_slice(value.value()).map_err(adapter_error)?;
+                if key.value() != expected_sequence || event.global_sequence != expected_sequence {
+                    return Err(StoreError::Verification(format!(
+                        "global journal read expected sequence {expected_sequence}"
+                    )));
+                }
+                expected_sequence = expected_sequence.saturating_add(1);
+                events.push(event);
             }
-            let (_, value) = entry.map_err(adapter_error)?;
-            events.push(serde_json::from_slice(value.value()).map_err(adapter_error)?);
-        }
-        Ok(events)
+            if limit > 0 && events.len() < limit && expected_sequence <= head_sequence {
+                return Err(StoreError::Verification(format!(
+                    "global journal read expected sequence {expected_sequence}"
+                )));
+            }
+            Ok(events)
+        })();
+        self.quarantine_result(result)
     }
 
     fn read_projection_work(
@@ -779,36 +1206,58 @@ impl EventJournal for RedbEventJournal {
         from_sequence: u64,
         limit: usize,
     ) -> Result<Vec<ProjectionWorkItem>, StoreError> {
-        let read = self.database.begin_read().map_err(adapter_error)?;
-        let table = read.open_table(OUTBOX).map_err(adapter_error)?;
-        let mut work = Vec::with_capacity(limit.min(1024));
-        for entry in table.range(from_sequence..).map_err(adapter_error)? {
-            if work.len() >= limit {
-                break;
-            }
-            let (sequence, value) = entry.map_err(adapter_error)?;
-            let record: Value = serde_json::from_slice(value.value()).map_err(adapter_error)?;
-            let event_id = record
-                .get("event_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    StoreError::Verification(format!(
-                        "projection outbox record {} has no event_id",
-                        sequence.value()
-                    ))
+        let result = (|| {
+            let read = self.database.begin_read().map_err(adapter_error)?;
+            let table = read.open_table(OUTBOX).map_err(adapter_error)?;
+            let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+            let head_sequence = metadata
+                .get("last_sequence")
+                .map_err(adapter_error)?
+                .map_or(Ok(0_u64), |value| {
+                    serde_json::from_slice(value.value()).map_err(adapter_error)
                 })?;
-            if record.get("global_sequence").and_then(Value::as_u64) != Some(sequence.value()) {
+            let mut work = Vec::with_capacity(limit.min(1024));
+            let mut expected_sequence = from_sequence.max(1);
+            for entry in table.range(expected_sequence..).map_err(adapter_error)? {
+                if work.len() >= limit {
+                    break;
+                }
+                let (sequence, value) = entry.map_err(adapter_error)?;
+                if sequence.value() != expected_sequence {
+                    return Err(StoreError::Verification(format!(
+                        "projection outbox expected sequence {expected_sequence}"
+                    )));
+                }
+                let record: Value = serde_json::from_slice(value.value()).map_err(adapter_error)?;
+                let event_id = record
+                    .get("event_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "projection outbox record {} has no event_id",
+                            sequence.value()
+                        ))
+                    })?;
+                if record.get("global_sequence").and_then(Value::as_u64) != Some(sequence.value()) {
+                    return Err(StoreError::Verification(format!(
+                        "projection outbox record {} has a mismatched sequence",
+                        sequence.value()
+                    )));
+                }
+                work.push(ProjectionWorkItem {
+                    global_sequence: sequence.value(),
+                    event_id: event_id.to_owned(),
+                });
+                expected_sequence = expected_sequence.saturating_add(1);
+            }
+            if limit > 0 && work.len() < limit && expected_sequence <= head_sequence {
                 return Err(StoreError::Verification(format!(
-                    "projection outbox record {} has a mismatched sequence",
-                    sequence.value()
+                    "projection outbox expected sequence {expected_sequence}"
                 )));
             }
-            work.push(ProjectionWorkItem {
-                global_sequence: sequence.value(),
-                event_id: event_id.to_owned(),
-            });
-        }
-        Ok(work)
+            Ok(work)
+        })();
+        self.quarantine_result(result)
     }
 
     fn head(&self) -> Result<(u64, String), StoreError> {
@@ -831,12 +1280,17 @@ impl EventJournal for RedbEventJournal {
     }
 
     fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError> {
-        let persisted = self.load_persisted(event)?;
-        serde_json::from_slice(&self.decrypt_persisted(event, &persisted)?).map_err(adapter_error)
+        let result = (|| {
+            let persisted = self.load_persisted(event)?;
+            let plaintext = self.verify_persisted_event(event, &persisted)?;
+            serde_json::from_slice(&plaintext).map_err(adapter_error)
+        })();
+        self.quarantine_result(result)
     }
 
     fn verify(&self) -> Result<VerificationReport, StoreError> {
-        self.verify_inner()
+        let result = self.verify_inner();
+        self.quarantine_result(result)
     }
 
     fn is_recovery_mode(&self) -> bool {
@@ -876,9 +1330,21 @@ impl EventJournal for RedbEventJournal {
             signature: hex::encode(signature),
             created_at: utc_now()?,
         };
-        self.keys.store_anchor(sequence, &hash)?;
+        self.keys.store_anchor(&SecureAnchor {
+            format_version: SECURE_ANCHOR_FORMAT_VERSION,
+            sequence,
+            hash: hash.clone(),
+            verification_profile: Some(INCREMENTAL_VERIFICATION_PROFILE.into()),
+            status: SecureAnchorStatus::Verified,
+        })?;
         #[cfg(test)]
-        crash_at_test_fault("after_anchor_before_checkpoint_commit");
+        if std::env::var("COLOSSUS_REDB_TEST_CRASH_SEQUENCE")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_none_or(|fault_sequence| fault_sequence == sequence)
+        {
+            crash_at_test_fault("after_anchor_before_checkpoint_commit");
+        }
         let bytes = serde_json::to_vec(&checkpoint).map_err(adapter_error)?;
         let write = self.database.begin_write().map_err(adapter_error)?;
         {
@@ -932,13 +1398,13 @@ impl ProjectionStore for RedbEventJournal {
         let read = self.database.begin_read().map_err(adapter_error)?;
         let table = read.open_table(PROJECTION_RECORDS).map_err(adapter_error)?;
         let mut records = Vec::with_capacity(limit.min(1024));
-        for entry in table.iter().map_err(adapter_error)? {
+        for entry in table.range(namespace.as_str()..).map_err(adapter_error)? {
             if records.len() >= limit {
                 break;
             }
             let (stored_key, value) = entry.map_err(adapter_error)?;
             let Some(key) = stored_key.value().strip_prefix(&namespace) else {
-                continue;
+                break;
             };
             if !key.starts_with(key_prefix) {
                 continue;

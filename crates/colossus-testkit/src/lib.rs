@@ -13,13 +13,20 @@ use colossus_contracts::{
     WorkflowScheduleMisfirePolicy, WorkflowStep, WorkflowSubscription, WorkflowWebhook,
 };
 use colossus_ports::{
-    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MAX_STREAM_READ_BATCH,
-    MemoryIndex, MemoryRepository, PresentationRepository, ProjectionStore, ResearchRepository,
-    SessionRepository, StoreError, VerificationReport, WorkRepository, WorkflowRepository,
+    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MAX_STREAM_LIST_BATCH,
+    MAX_STREAM_READ_BATCH, MemoryIndex, MemoryRepository, PresentationRepository, ProjectionStore,
+    ResearchRepository, SessionRepository, StoreError, VerificationReport, WorkRepository,
+    WorkflowRepository,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 

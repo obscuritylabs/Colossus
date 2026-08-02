@@ -102,6 +102,15 @@ impl EventJournal for PostCommitReconciliationGapJournal {
             .read_stream_backwards(stream_id, before_version, limit)
     }
 
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        self.inner.list_stream_ids(prefix, after, limit)
+    }
+
     fn read_global(
         &self,
         from_sequence: u64,
