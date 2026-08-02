@@ -63,17 +63,18 @@ flowchart LR
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
-Workflow jobs run on Blacksmith runners: `blacksmith-4vcpu-ubuntu-2404` for the short x64
-Linux control jobs, `blacksmith-8vcpu-ubuntu-2404` for complete Rust PR validation,
-`blacksmith-6vcpu-macos-15` for Apple-silicon lanes, and `blacksmith-8vcpu-windows-2025`
-for the Windows lanes. Blacksmith is roughly twice as fast per minute of wall clock at
-about half the hosted per-minute rate, so the longest CPU-bound lane fits on the
-eight-core tier without raising the ceilings above. Two lanes stay on the GitHub-hosted
-`ubuntu-latest-m` larger runner: release readiness, because it must prove the exact-path
-AppArmor profile the release archive ships and the Blacksmith microVM kernel exposes no
-AppArmor LSM, plus the x86_64 Linux release artifact, because the release matrix pins one
-runner per published target. The repository's `.github/actionlint.yaml` registers every
-custom runner label so local workflow linting recognizes them.
+Workflow jobs run on Blacksmith runners: `blacksmith-4vcpu-ubuntu-2404` for every x64
+Linux lane, `blacksmith-6vcpu-macos-15` for Apple-silicon lanes, and
+`blacksmith-8vcpu-windows-2025` for the Windows lanes. Blacksmith is roughly twice as
+fast per minute of wall clock at about half the hosted per-minute rate, so the four-core
+Linux tier now covers both the short control jobs and the longest CPU-bound lanes without
+raising the ceilings above. Three lanes stay on the GitHub-hosted `ubuntu-latest-m`
+larger runner: complete Rust PR validation and release readiness, because both install an
+exact-path AppArmor profile and the workspace suite enters the native kernel sandbox,
+while the Blacksmith microVM kernel exposes neither the AppArmor nor the Landlock LSM,
+plus the x86_64 Linux release artifact, because the release matrix pins one runner
+per published target. The repository's `.github/actionlint.yaml` registers every custom
+runner label so local workflow linting recognizes them.
 
 ## Steps
 
@@ -96,13 +97,8 @@ predates the SDK or desktop outputs, the workflow appends both selections as `tr
 old base cannot silently skip either component. This prevents a CI-changing PR from
 suppressing validation by weakening its own classifier or gate scripts.
 
-The Rust job combines Conventional Commit validation, protected-path host preparation,
-and the repository-owned `cargo xtask` component checks. Host preparation detects the
-runner's AppArmor posture: an AppArmor host installs the exact-path profile against a
-root-owned staged binary before the workspace suite runs, while a host without the
-AppArmor LSM imposes no user-namespace restriction and runs the suite against the
-workspace build. That branch fails closed if a host ever restricts unprivileged user
-namespaces without an AppArmor LSM to grant them back. The Rust component covers
+The Rust job combines Conventional Commit validation, exact AppArmor installation, and
+the repository-owned `cargo xtask` component checks. The Rust component covers
 formatting, crate-root structure, locked metadata, Clippy, the complete workspace suite,
 and fuzz-harness linting. When selected, the SDK component installs pinned Node.js,
 Python, and Go toolchains for reproducible generation and packaging, while the Desktop
