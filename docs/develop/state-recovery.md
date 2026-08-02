@@ -38,10 +38,11 @@ advanced anchor safe.
 - Tantivy and optional Chroma store memory candidate projections, not lifecycle truth.
 - Audit exporters consume a durable outbox and expose ciphertext-free evidence.
 - Each external-work consumer has an independent optimistic position and retry state.
-- `effects-recovery-v1` contains only effects with a durable start and no terminal
-  outcome. Startup recovers at most 1,024 records (plus one overflow sentinel),
-  authenticates each referenced start and stream tail against the journal, and never
-  scans the global journal to infer uncertain effects.
+- `effects-recovery-v1` is a disposable operational view of effects with a durable
+  start and no terminal outcome. Its cursor or record set is not recovery authority.
+  Startup instead enumerates the journal's indexed `effect:` streams, derives pending
+  lifecycles from their canonical tails, and recovers at most 1,024 effects. It never
+  scans unrelated global history to infer uncertain effects.
 
 Rebuild replays canonical events. It never imports an unrelated store or turns a
 projection into authority.

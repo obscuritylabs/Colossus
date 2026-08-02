@@ -273,10 +273,10 @@ impl ProjectionHandler for WorkflowProjection {
     }
 }
 
-/// Stable projection name for effects that began without a terminal event.
+/// Stable operational projection name for effects that began without a terminal event.
 pub const EFFECT_RECOVERY_PROJECTION: &str = "effects-recovery-v1";
 
-/// Minimal envelope metadata needed to close an interrupted effect on startup.
+/// Minimal envelope metadata exposed by the disposable pending-effects view.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PendingEffect {
@@ -345,7 +345,7 @@ impl ProjectionHandler for EffectRecoveryProjection {
     }
 }
 
-/// Load a bounded, validated snapshot of effects needing startup recovery.
+/// Load a bounded, validated operational snapshot of pending effects.
 pub fn pending_effects(
     store: &dyn ProjectionStore,
     limit: usize,

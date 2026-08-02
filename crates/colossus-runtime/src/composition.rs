@@ -365,7 +365,7 @@ impl Runtime {
         let research: Arc<dyn ResearchRepository> =
             Arc::new(EventSourcedResearchRepository::new(Arc::clone(&journal)));
         if !journal.is_recovery_mode() {
-            recover_unknown_effects(journal.as_ref(), projection_store.as_ref())?;
+            recover_unknown_effects(journal.as_ref())?;
         }
         let providers = Arc::new(provider_registry(
             &config.providers,

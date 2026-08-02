@@ -82,7 +82,6 @@ const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
-    pending_effects,
 };
 pub use colossus_provider::{
     CredentialResolver, EnvironmentCredentialResolver, HostCredentialResolver,

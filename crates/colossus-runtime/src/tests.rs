@@ -28,12 +28,10 @@ use colossus_policy::{
 use colossus_ports::{
     EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PolicyDecisionPoint,
     PresentationRepository, ProjectionStore, RiskEvaluationError, RiskEvaluator, SkillRepository,
-    StoreError, ToolExecutor,
+    ToolExecutor,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
-use colossus_projection::{
-    EFFECT_RECOVERY_PROJECTION, PendingEffect, ProjectionWorker, default_handlers,
-};
+use colossus_projection::EFFECT_RECOVERY_PROJECTION;
 use colossus_provider::ProviderKind;
 use colossus_skills::{
     FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
@@ -1499,7 +1497,6 @@ fn windows_job_config_reserves_confirmed_cleanup_time() {
 #[test]
 fn startup_marks_started_effects_unknown_without_retrying() {
     let journal = Arc::new(InMemoryEventJournal::default());
-    let projections = Arc::new(InMemoryProjectionStore::default());
     journal
         .append(NewEvent {
             event_version: 1,
@@ -1518,18 +1515,45 @@ fn startup_marks_started_effects_unknown_without_retrying() {
             payload: json!({}),
         })
         .expect("started event");
-    let journal_port: Arc<dyn EventJournal> = journal.clone();
-    let projection_port: Arc<dyn ProjectionStore> = projections.clone();
-    ProjectionWorker::new(journal_port, projection_port, default_handlers())
-        .expect("projection worker")
-        .drain(8, 8)
-        .expect("projection drain");
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "effect:request-1".into(),
+            expected_stream_version: 1,
+            classification: EventClassification::Effect,
+            event_type: "effect.release_denied.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            context: ExecutionContext {
+                correlation_id: "correlation".into(),
+                ..ExecutionContext::default()
+            },
+            payload: json!({}),
+        })
+        .expect("nonterminal event after start");
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "effect:denied-before-start".into(),
+            expected_stream_version: 0,
+            classification: EventClassification::Effect,
+            event_type: "effect.denied.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            context: ExecutionContext::default(),
+            payload: json!({}),
+        })
+        .expect("denied event");
     assert_eq!(
-        recover_unknown_effects(journal.as_ref(), projections.as_ref()).expect("recover"),
+        recover_unknown_effects(journal.as_ref()).expect("recover"),
         1
     );
     assert_eq!(
-        recover_unknown_effects(journal.as_ref(), projections.as_ref()).expect("idempotent"),
+        recover_unknown_effects(journal.as_ref()).expect("idempotent"),
         0
     );
     let events = journal
@@ -1539,10 +1563,17 @@ fn startup_marks_started_effects_unknown_without_retrying() {
         events.last().expect("terminal event").event_type,
         "effect.outcome_unknown.v1"
     );
+    assert_eq!(
+        journal
+            .read_stream("effect:denied-before-start")
+            .expect("denied effect stream")
+            .len(),
+        1
+    );
 }
 
 #[test]
-fn startup_effect_recovery_rejects_projection_metadata_that_is_not_canonical() {
+fn startup_effect_recovery_finds_a_started_effect_missing_from_the_current_projection() {
     let journal = InMemoryEventJournal::default();
     let projections = InMemoryProjectionStore::default();
     let started = journal
@@ -1568,66 +1599,72 @@ fn startup_effect_recovery_rejects_projection_metadata_that_is_not_canonical() {
             projection: EFFECT_RECOVERY_PROJECTION.into(),
             expected_position: 0,
             through_sequence: started.global_sequence,
-            mutations: vec![ProjectionMutation::Upsert {
+            mutations: vec![ProjectionMutation::Delete {
                 key: started.stream_id.clone(),
-                value: serde_json::to_value(PendingEffect {
-                    stream_id: started.stream_id,
-                    started_stream_version: started.stream_version,
-                    latest_stream_version: started.stream_version,
-                    started_event_id: "not-the-canonical-event".into(),
-                })
-                .expect("projection value"),
             }],
         })
-        .expect("projection record");
+        .expect("projection cursor without a record");
+    assert_eq!(
+        projections
+            .position(EFFECT_RECOVERY_PROJECTION)
+            .expect("projection position"),
+        journal.head().expect("journal head").0
+    );
+    assert!(
+        projections
+            .get(EFFECT_RECOVERY_PROJECTION, &started.stream_id)
+            .expect("projection lookup")
+            .is_none()
+    );
 
-    let error = recover_unknown_effects(&journal, &projections)
-        .expect_err("projection metadata must not authorize a recovery write");
-    assert!(matches!(error, StoreError::Adapter(_)));
+    assert_eq!(
+        recover_unknown_effects(&journal).expect("canonical recovery"),
+        1
+    );
     assert_eq!(
         journal
             .read_stream("effect:request-1")
             .expect("effect stream")
             .len(),
-        1
+        2
     );
 }
 
 #[test]
 fn startup_effect_recovery_rejects_more_than_the_safe_pending_bound() {
     let journal = InMemoryEventJournal::default();
-    let projections = InMemoryProjectionStore::default();
-    let mutations = (0..1_025)
-        .map(|index| {
-            let stream_id = format!("effect:{index:04}");
-            ProjectionMutation::Upsert {
-                key: stream_id.clone(),
-                value: serde_json::to_value(PendingEffect {
-                    stream_id,
-                    started_stream_version: 1,
-                    latest_stream_version: 1,
-                    started_event_id: format!("event-{index:04}"),
-                })
-                .expect("projection value"),
-            }
-        })
-        .collect();
-    projections
-        .apply(ProjectionBatch {
-            projection: EFFECT_RECOVERY_PROJECTION.into(),
-            expected_position: 0,
-            through_sequence: 1,
-            mutations,
-        })
-        .expect("projection records");
+    for index in 0..1_025 {
+        journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: format!("effect:{index:04}"),
+                expected_stream_version: 0,
+                classification: EventClassification::Effect,
+                event_type: "effect.started.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::System,
+                    id: "test".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({}),
+            })
+            .expect("started effect");
+    }
 
-    let error = recover_unknown_effects(&journal, &projections)
-        .expect_err("oversized startup recovery must fail closed");
+    let error =
+        recover_unknown_effects(&journal).expect_err("oversized startup recovery must fail closed");
     assert!(
         error
             .to_string()
             .contains("startup effect recovery exceeds the safe bound of 1024")
     );
+    for stream_id in ["effect:0000", "effect:1024"] {
+        assert_eq!(
+            journal.read_stream(stream_id).expect("effect stream").len(),
+            1,
+            "recovery wrote a partial result before enforcing its bound"
+        );
+    }
 }
 
 #[tokio::test]
