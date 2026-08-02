@@ -50,6 +50,7 @@ This is the recommended local configuration:
 storage:
   path: .colossus/state.redb
   adapter: redb
+  startupVerification: incremental
   keys:
     kind: platform
     service: dev.colossus.runtime
@@ -95,6 +96,24 @@ follow the operational recovery process.
 The canonical spelling is `postgres`. An unknown adapter, a `postgres` block under
 redb, or `adapter: postgres` without that block fails configuration validation.
 
+### `storage.startupVerification`
+
+| Value | Startup behavior |
+| --- | --- |
+| Omitted or `incremental` | Bootstrap the versioned secure anchor when necessary, then verify the signed checkpoint boundary and later journal tail |
+| `full` | Replay, decrypt, and cryptographically verify every journal event before every writable start |
+
+Incremental verification is the default. A legacy, absent, quarantined, or incompatible
+secure anchor causes one complete bootstrap audit and writes a version-two attestation.
+That first start can take tens of seconds for a large existing journal. Later clean
+starts inspect one checkpoint boundary plus any uncheckpointed tail instead of
+decrypting all history.
+
+Set `startupVerification: full` when policy requires complete replay before every
+writable start. The `audit verify` command always performs a complete audit regardless
+of this setting. `state doctor` reports the configured mode, actual verification path,
+verified sequence range, event count, and secure-anchor version.
+
 ## Key providers
 
 The journal encryption key and checkpoint signing key are independent 32-byte secrets.
@@ -137,6 +156,7 @@ secret injection:
 storage:
   path: .colossus/state.redb
   adapter: redb
+  startupVerification: incremental
   keys:
     kind: environment
     journal_variable: COLOSSUS_JOURNAL_KEY
@@ -177,8 +197,10 @@ rolled-back, or altered journal state.
 
 Treat the anchor as integrity-critical state. Keep the file-backed anchor separate from
 the redb database, preserve it through host replacement, and back it up consistently
-with the journal and key identities. A malformed, missing, or mismatched anchor on an
-established journal causes verification to fail.
+with the journal and key identities. Incremental startup replaces a legacy or absent
+anchor only after a successful complete bootstrap audit. A malformed or mismatched
+version-two anchor fails closed and quarantines incremental verification until a
+complete verification succeeds.
 
 The anchor is not a substitute for the journal encryption or signing key, and a copy of
 the journal alone is not a complete verified recovery set.
@@ -192,6 +214,7 @@ keys and the built-in WebPKI roots:
 storage:
   path: .colossus/instance.redb
   adapter: postgres
+  startupVerification: incremental
   postgres:
     connectionVariable: COLOSSUS_DATABASE_URL
     schema: colossus_production
@@ -244,6 +267,7 @@ An exclusive PostgreSQL CA uses this exact shape:
 storage:
   path: .colossus/instance.redb
   adapter: postgres
+  startupVerification: incremental
   postgres:
     connectionVariable: COLOSSUS_DATABASE_URL
     schema: colossus_production

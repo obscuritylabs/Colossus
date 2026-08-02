@@ -8,11 +8,11 @@ pub trait KeyProvider: Send + Sync {
     /// Resolve historical key material by identifier.
     fn key_by_id(&self, key_id: &str) -> Result<[u8; 32], StoreError>;
 
-    /// Persist an independently protected sequence/hash anchor.
-    fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError>;
+    /// Persist an independently protected, versioned journal anchor.
+    fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError>;
 
-    /// Load the last independently protected sequence/hash anchor.
-    fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError>;
+    /// Load the last independently protected, versioned journal anchor.
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError>;
 }
 
 /// Signs and verifies immutable chain checkpoints.

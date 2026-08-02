@@ -17,6 +17,8 @@ pub(super) const CHECKPOINT_INTERVAL: u64 = 100;
 pub(super) const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(60);
 pub(super) const STREAM_EVENTS_INDEX_KEY: &str = "stream_events_index_version";
 pub(super) const STREAM_EVENTS_INDEX_VERSION: u64 = 1;
+pub(super) const SECURE_ANCHOR_FORMAT_VERSION: u16 = 2;
+pub(super) const INCREMENTAL_VERIFICATION_PROFILE: &str = "full-journal-v1";
 
 pub(super) fn adapter_error(error: impl std::fmt::Display) -> StoreError {
     StoreError::Adapter(error.to_string())

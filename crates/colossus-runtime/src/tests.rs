@@ -16,9 +16,10 @@ use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
     ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
-    PlanStep, PolicyDecision, ProviderEvent, ProviderResponseDiagnostic, ProviderRoute,
-    ProviderTurn, QuarantinedEffectResult, RiskLevel, RiskRecommendation, SubagentStatus,
-    TaskStatus, TerminalPreferences, ToolCall,
+    PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
+    ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult, RiskLevel,
+    RiskRecommendation, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
+    ToolCall,
 };
 use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
 use colossus_policy::{
@@ -31,6 +32,7 @@ use colossus_ports::{
     ToolExecutor,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
+use colossus_projection::EFFECT_RECOVERY_PROJECTION;
 use colossus_provider::ProviderKind;
 use colossus_skills::{
     FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
@@ -887,6 +889,45 @@ fn storage_adapter_requires_exact_postgres_configuration_pairing() {
 }
 
 #[test]
+fn startup_verification_defaults_to_incremental_and_accepts_explicit_full() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    assert_eq!(
+        config.storage.startup_verification,
+        StartupVerificationMode::Incremental
+    );
+    config.storage.startup_verification = StartupVerificationMode::Full;
+    let yaml = config.to_yaml().expect("configuration YAML");
+    assert!(yaml.contains("startupVerification: full"));
+    assert_eq!(
+        RuntimeConfig::from_yaml(&yaml)
+            .expect("full verification configuration")
+            .storage
+            .startup_verification,
+        StartupVerificationMode::Full
+    );
+
+    let mut document: Value = serde_saphyr::from_str(&yaml).expect("YAML value");
+    document["storage"]
+        .as_object_mut()
+        .expect("storage object")
+        .remove("startupVerification");
+    let without_field = serde_saphyr::to_string(&document).expect("YAML");
+    assert_eq!(
+        RuntimeConfig::from_yaml(&without_field)
+            .expect("default verification configuration")
+            .storage
+            .startup_verification,
+        StartupVerificationMode::Incremental
+    );
+
+    document["storage"]["startupVerification"] = json!("sometimes");
+    assert!(
+        RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("invalid YAML"))
+            .is_err()
+    );
+}
+
+#[test]
 fn worm_audit_config_requires_https_origin_and_credential_grants() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.audit.exporter = AuditExporterConfig::WormHttp {
@@ -1526,7 +1567,7 @@ fn windows_job_config_reserves_confirmed_cleanup_time() {
 
 #[test]
 fn startup_marks_started_effects_unknown_without_retrying() {
-    let journal = InMemoryEventJournal::default();
+    let journal = Arc::new(InMemoryEventJournal::default());
     journal
         .append(NewEvent {
             event_version: 1,
@@ -1545,8 +1586,47 @@ fn startup_marks_started_effects_unknown_without_retrying() {
             payload: json!({}),
         })
         .expect("started event");
-    assert_eq!(recover_unknown_effects(&journal).expect("recover"), 1);
-    assert_eq!(recover_unknown_effects(&journal).expect("idempotent"), 0);
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "effect:request-1".into(),
+            expected_stream_version: 1,
+            classification: EventClassification::Effect,
+            event_type: "effect.release_denied.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            context: ExecutionContext {
+                correlation_id: "correlation".into(),
+                ..ExecutionContext::default()
+            },
+            payload: json!({}),
+        })
+        .expect("nonterminal event after start");
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "effect:denied-before-start".into(),
+            expected_stream_version: 0,
+            classification: EventClassification::Effect,
+            event_type: "effect.denied.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            context: ExecutionContext::default(),
+            payload: json!({}),
+        })
+        .expect("denied event");
+    assert_eq!(
+        recover_unknown_effects(journal.as_ref()).expect("recover"),
+        1
+    );
+    assert_eq!(
+        recover_unknown_effects(journal.as_ref()).expect("idempotent"),
+        0
+    );
     let events = journal
         .read_stream("effect:request-1")
         .expect("effect stream");
@@ -1554,6 +1634,108 @@ fn startup_marks_started_effects_unknown_without_retrying() {
         events.last().expect("terminal event").event_type,
         "effect.outcome_unknown.v1"
     );
+    assert_eq!(
+        journal
+            .read_stream("effect:denied-before-start")
+            .expect("denied effect stream")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn startup_effect_recovery_finds_a_started_effect_missing_from_the_current_projection() {
+    let journal = InMemoryEventJournal::default();
+    let projections = InMemoryProjectionStore::default();
+    let started = journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "effect:request-1".into(),
+            expected_stream_version: 0,
+            classification: EventClassification::Effect,
+            event_type: "effect.started.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::System,
+                id: "test".into(),
+            },
+            context: ExecutionContext {
+                correlation_id: "correlation".into(),
+                ..ExecutionContext::default()
+            },
+            payload: json!({}),
+        })
+        .expect("started event");
+    projections
+        .apply(ProjectionBatch {
+            projection: EFFECT_RECOVERY_PROJECTION.into(),
+            expected_position: 0,
+            through_sequence: started.global_sequence,
+            mutations: vec![ProjectionMutation::Delete {
+                key: started.stream_id.clone(),
+            }],
+        })
+        .expect("projection cursor without a record");
+    assert_eq!(
+        projections
+            .position(EFFECT_RECOVERY_PROJECTION)
+            .expect("projection position"),
+        journal.head().expect("journal head").0
+    );
+    assert!(
+        projections
+            .get(EFFECT_RECOVERY_PROJECTION, &started.stream_id)
+            .expect("projection lookup")
+            .is_none()
+    );
+
+    assert_eq!(
+        recover_unknown_effects(&journal).expect("canonical recovery"),
+        1
+    );
+    assert_eq!(
+        journal
+            .read_stream("effect:request-1")
+            .expect("effect stream")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn startup_effect_recovery_rejects_more_than_the_safe_pending_bound() {
+    let journal = InMemoryEventJournal::default();
+    for index in 0..1_025 {
+        journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: format!("effect:{index:04}"),
+                expected_stream_version: 0,
+                classification: EventClassification::Effect,
+                event_type: "effect.started.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::System,
+                    id: "test".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({}),
+            })
+            .expect("started effect");
+    }
+
+    let error =
+        recover_unknown_effects(&journal).expect_err("oversized startup recovery must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("startup effect recovery exceeds the safe bound of 1024")
+    );
+    for stream_id in ["effect:0000", "effect:1024"] {
+        assert_eq!(
+            journal.read_stream(stream_id).expect("effect stream").len(),
+            1,
+            "recovery wrote a partial result before enforcing its bound"
+        );
+    }
 }
 
 #[tokio::test]

@@ -209,28 +209,19 @@ impl MemoryRepository for EventSourcedMemoryRepository {
         status: Option<MemoryStatus>,
         limit: usize,
     ) -> Result<Vec<MemoryRecord>, StoreError> {
-        let mut ids = BTreeSet::new();
-        let mut from = 1_u64;
-        loop {
-            let events = self.journal.read_global(from, 1_024)?;
-            if events.is_empty() {
-                break;
-            }
-            for event in &events {
-                if event.event_type == "memory.created.v1"
-                    && let Some(id) = event.stream_id.strip_prefix("memory:")
-                {
-                    ids.insert(id.to_owned());
-                }
-            }
-            from = events
-                .last()
-                .map_or(from, |event| event.global_sequence.saturating_add(1));
-            if events.len() < 1_024 {
-                break;
-            }
-        }
-        let mut records = ids
+        let mut records = collect_stream_ids(self.journal.as_ref(), "memory:")?
+            .into_iter()
+            .map(|stream_id| {
+                stream_id
+                    .strip_prefix("memory:")
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "indexed stream {stream_id} is not a memory stream"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter_map(|id| self.get_memory(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;

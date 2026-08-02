@@ -31,9 +31,10 @@ use colossus_contracts::{
     SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SessionMessage,
     SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
     SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
-    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
+    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
+    WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,

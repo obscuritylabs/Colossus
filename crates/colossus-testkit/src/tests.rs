@@ -3,12 +3,18 @@ use super::{
     assert_projection_store_conformance,
 };
 use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
-use colossus_ports::{EventJournal, MAX_STREAM_READ_BATCH};
+use colossus_ports::{
+    EventJournal, MAX_STREAM_LIST_BATCH, MAX_STREAM_READ_BATCH, collect_stream_ids,
+};
 
 fn event(expected_stream_version: u64, value: u64) -> NewEvent {
+    stream_event("in-memory-conformance", expected_stream_version, value)
+}
+
+fn stream_event(stream_id: &str, expected_stream_version: u64, value: u64) -> NewEvent {
     NewEvent {
         event_version: 1,
-        stream_id: "in-memory-conformance".into(),
+        stream_id: stream_id.into(),
         expected_stream_version,
         classification: EventClassification::Domain,
         event_type: "conformance.recorded.v1".into(),
@@ -22,6 +28,40 @@ fn event(expected_stream_version: u64, value: u64) -> NewEvent {
         },
         payload: serde_json::json!({"value": value}),
     }
+}
+
+#[test]
+fn in_memory_stream_discovery_is_prefixed_exclusive_and_hard_bounded() {
+    let journal = InMemoryEventJournal::default();
+    let stream_count = MAX_STREAM_LIST_BATCH + 1;
+    let mut events = (0..stream_count)
+        .map(|index| stream_event(&format!("indexed:{index:04}"), 0, index as u64))
+        .collect::<Vec<_>>();
+    events.push(stream_event("other:0000", 0, 0));
+    journal.append_batch(events).expect("append stream fixture");
+
+    let first = journal
+        .list_stream_ids("indexed:", None, usize::MAX)
+        .expect("first indexed page");
+    assert_eq!(first.len(), MAX_STREAM_LIST_BATCH);
+    assert_eq!(first.first().map(String::as_str), Some("indexed:0000"));
+    assert_eq!(first.last().map(String::as_str), Some("indexed:1023"));
+
+    let tail = journal
+        .list_stream_ids("indexed:", first.last().map(String::as_str), usize::MAX)
+        .expect("exclusive indexed tail");
+    assert_eq!(tail, ["indexed:1024"]);
+    assert_eq!(
+        collect_stream_ids(&journal, "indexed:").expect("all indexed streams"),
+        (0..stream_count)
+            .map(|index| format!("indexed:{index:04}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        journal
+            .list_stream_ids("indexed:", Some("other:0000"), 1)
+            .is_err()
+    );
 }
 
 #[test]

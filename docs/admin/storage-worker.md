@@ -22,6 +22,7 @@ select PostgreSQL:
 storage:
   path: .colossus/instance.redb
   adapter: postgres
+  startupVerification: incremental
   postgres:
     connectionVariable: COLOSSUS_DATABASE_URL
     schema: colossus_production
@@ -43,6 +44,14 @@ a separate reviewed operation.
 Journal and signing keys are independent 32-byte values managed by the platform
 credential service or injected environment variables. There is no plaintext fallback.
 The secure anchor is protected separately from the journal.
+
+Startup verification defaults to `incremental`. A legacy or missing versioned anchor
+causes a one-time complete bootstrap audit and writes the version-two attestation; this
+can take tens of seconds for a large existing journal. Later clean starts verify one
+checkpoint boundary plus any uncheckpointed tail instead of decrypting all history.
+Set `startupVerification: full` when policy requires complete replay before every
+writable start. `state doctor` reports the configured mode, actual path, verified
+sequence range, event count, and anchor version.
 
 ## Worker ownership
 

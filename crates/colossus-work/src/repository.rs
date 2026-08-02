@@ -55,29 +55,20 @@ impl EventSourcedWorkRepository {
         }
     }
 
-    fn ids(&self, prefix: &str, created_event: &str) -> Result<BTreeSet<String>, StoreError> {
-        let mut ids = BTreeSet::new();
-        let mut from = 1_u64;
-        loop {
-            let events = self.journal.read_global(from, 1_024)?;
-            if events.is_empty() {
-                break;
-            }
-            for event in &events {
-                if event.event_type == created_event
-                    && let Some(id) = event.stream_id.strip_prefix(prefix)
-                {
-                    ids.insert(id.into());
-                }
-            }
-            from = events
-                .last()
-                .map_or(from, |event| event.global_sequence.saturating_add(1));
-            if events.len() < 1_024 {
-                break;
-            }
-        }
-        Ok(ids)
+    fn ids(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        collect_stream_ids(self.journal.as_ref(), prefix)?
+            .into_iter()
+            .map(|stream_id| {
+                stream_id
+                    .strip_prefix(prefix)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "indexed stream {stream_id} does not match prefix {prefix}"
+                        ))
+                    })
+            })
+            .collect()
     }
 
     fn record<T: serde::de::DeserializeOwned>(
@@ -168,7 +159,7 @@ impl WorkRepository for EventSourcedWorkRepository {
         limit: usize,
     ) -> Result<Vec<TaskRecord>, StoreError> {
         let mut records = self
-            .ids("task:", TASK_CREATED)?
+            .ids("task:")?
             .into_iter()
             .filter_map(|id| self.get_task(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;
@@ -252,7 +243,7 @@ impl WorkRepository for EventSourcedWorkRepository {
         limit: usize,
     ) -> Result<Vec<KeyDecision>, StoreError> {
         let mut records = self
-            .ids("decision:", DECISION_CREATED)?
+            .ids("decision:")?
             .into_iter()
             .filter_map(|id| self.get_decision(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;
@@ -436,7 +427,7 @@ impl WorkRepository for EventSourcedWorkRepository {
         limit: usize,
     ) -> Result<Vec<PlanRecord>, StoreError> {
         let mut records = self
-            .ids("plan:", PLAN_CREATED)?
+            .ids("plan:")?
             .into_iter()
             .filter_map(|id| self.get_plan(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;
@@ -632,7 +623,7 @@ impl WorkRepository for EventSourcedWorkRepository {
         limit: usize,
     ) -> Result<Vec<GoalRecord>, StoreError> {
         let mut records = self
-            .ids("goal:", GOAL_CREATED)?
+            .ids("goal:")?
             .into_iter()
             .filter_map(|id| self.get_goal(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;
@@ -725,7 +716,7 @@ impl WorkRepository for EventSourcedWorkRepository {
         limit: usize,
     ) -> Result<Vec<SubagentJob>, StoreError> {
         let mut records = self
-            .ids("subagent:", SUBAGENT_CREATED)?
+            .ids("subagent:")?
             .into_iter()
             .filter_map(|id| self.get_subagent(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;

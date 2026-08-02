@@ -47,45 +47,23 @@ impl EventSourcedExtensionRepository {
     }
 
     fn names(&self) -> Result<Vec<String>, StoreError> {
-        let (head, _) = self.journal.head()?;
-        let mut sequence = 1_u64;
-        let mut names = BTreeSet::new();
-        while sequence <= head {
-            let events = self.journal.read_global(sequence, 1_024)?;
-            if events.is_empty() {
-                break;
-            }
-            for event in &events {
-                if let Some(name) = event.stream_id.strip_prefix("integration:") {
-                    names.insert(name.to_owned());
-                }
-            }
-            sequence = events
-                .last()
-                .map_or(head.saturating_add(1), |event| event.global_sequence + 1);
-        }
-        Ok(names.into_iter().collect())
+        self.stream_names("integration:")
     }
 
     fn stream_names(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
-        let (head, _) = self.journal.head()?;
-        let mut sequence = 1_u64;
-        let mut names = BTreeSet::new();
-        while sequence <= head {
-            let events = self.journal.read_global(sequence, 1_024)?;
-            if events.is_empty() {
-                break;
-            }
-            for event in &events {
-                if let Some(name) = event.stream_id.strip_prefix(prefix) {
-                    names.insert(name.to_owned());
-                }
-            }
-            sequence = events
-                .last()
-                .map_or(head.saturating_add(1), |event| event.global_sequence + 1);
-        }
-        Ok(names.into_iter().collect())
+        collect_stream_ids(self.journal.as_ref(), prefix)?
+            .into_iter()
+            .map(|stream_id| {
+                stream_id
+                    .strip_prefix(prefix)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "indexed stream {stream_id} does not match prefix {prefix}"
+                        ))
+                    })
+            })
+            .collect()
     }
 
     fn reduce_pack(&self, name: &str) -> Result<Option<PackInstallation>, StoreError> {

@@ -60,6 +60,11 @@ Verification confirms the hash chain, signed checkpoint, and secure anchor. Tele
 reports counts and timing without prompts, hidden reasoning, or raw tool output. Export
 status identifies a durable position or a bounded actionable failure.
 
+`audit verify` is always a complete journal audit. Normal startup may report
+`incremental` after a version-two anchor has established the older prefix; inspect
+`storage.startup_verification` in `state doctor` for the configured mode, actual path,
+verified sequence range, inspected event count, and anchor format.
+
 ## Verification
 
 Retain the config hash, journal head, anchor status, relevant run/effect ID, decision

@@ -550,6 +550,9 @@ pub struct StorageConfig {
     /// Canonical journal and projection adapter.
     #[serde(default)]
     pub adapter: StorageAdapter,
+    /// Verification performed before the runtime becomes writable.
+    #[serde(default)]
+    pub startup_verification: StartupVerificationMode,
     /// PostgreSQL settings, required exactly when `adapter` is `postgres`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PostgresJournalConfig>,
@@ -930,6 +933,7 @@ impl RuntimeConfig {
             storage: StorageConfig {
                 path: state_path.into(),
                 adapter: StorageAdapter::Redb,
+                startup_verification: StartupVerificationMode::Incremental,
                 postgres: None,
                 keys: KeyConfig::Platform {
                     service: "dev.colossus.runtime".into(),
@@ -976,6 +980,7 @@ impl RuntimeConfig {
         self.storage = StorageConfig {
             path: state_path.into(),
             adapter: StorageAdapter::Redb,
+            startup_verification: StartupVerificationMode::Incremental,
             postgres: None,
             keys: KeyConfig::Environment {
                 journal_variable: "COLOSSUS_DEV_JOURNAL_KEY".into(),

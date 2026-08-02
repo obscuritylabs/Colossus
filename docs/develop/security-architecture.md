@@ -447,7 +447,9 @@ prompt for first setup or a provider-kind change.
 
 Every effect records requested, decision, approval, started, and terminal evidence. If a
 process stops after `effect.started` without a trustworthy terminal record, recovery
-records `effect.outcome_unknown`. No generic layer automatically retries it.
+derives the interruption from the canonical indexed effect stream and records
+`effect.outcome_unknown`. A replaceable projection cursor cannot prove that no
+interrupted effects exist. No generic layer automatically retries an uncertain effect.
 
 Security-boundary changes require focused negative tests, permit-claim/replay tests,
 adapter quarantine tests, journal evidence tests, and the relevant live platform

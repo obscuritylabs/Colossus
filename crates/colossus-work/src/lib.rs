@@ -7,7 +7,9 @@ use colossus_contracts::{
     GoalRecord, GoalStatus, KeyDecision, NewEvent, PlanRecord, PlanStatus, PlanStep, SubagentJob,
     SubagentStatus, TaskRecord, TaskStatus,
 };
-use colossus_ports::{EventJournal, SessionRepository, StoreError, WorkRepository};
+use colossus_ports::{
+    EventJournal, SessionRepository, StoreError, WorkRepository, collect_stream_ids,
+};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
