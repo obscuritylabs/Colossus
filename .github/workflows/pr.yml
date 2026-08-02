@@ -97,9 +97,10 @@ jobs:
     name: Rust PR validation
     if: needs.classify.outputs.rust_required == 'true'
     needs: classify
-    # Workspace tests load an exact-path AppArmor profile, which requires the
-    # AppArmor LSM the hosted larger runner exposes.
-    runs-on: ubuntu-latest-m
+    # The longest CPU-bound lane runs on the eight-core Blacksmith tier. Its
+    # protected-path tests detect the host's AppArmor posture instead of
+    # assuming the hosted larger runner's LSM.
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -162,17 +163,35 @@ jobs:
         if: needs.classify.outputs.desktop_required == 'true'
         run: cargo xtask check sidecar
 
-      - name: Prepare exact-path AppArmor profile for workspace tests
+      - name: Prepare protected-path host for workspace tests
         run: |
-          install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          staged_binary="$install_dir/colossus"
-          sudo install -d -o root -g root -m 0755 "$install_dir"
-          sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
-          sudo release/install-apparmor.sh "$staged_binary"
-          cargo build --locked -p colossus-cli --bin colossus
-          sudo install -o root -g root -m 0755 \
-            target/debug/colossus "$staged_binary"
-          printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
+          set -euo pipefail
+          if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true)" = Y ]; then
+            # securityfs carries the parser's interface and is not always mounted.
+            sudo mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
+            # An AppArmor host restricts unprivileged user namespaces, so the
+            # workspace tests must run the exact-path profile the release
+            # archive ships.
+            install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            staged_binary="$install_dir/colossus"
+            sudo install -d -o root -g root -m 0755 "$install_dir"
+            sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
+            sudo release/install-apparmor.sh "$staged_binary"
+            cargo build --locked -p colossus-cli --bin colossus
+            sudo install -o root -g root -m 0755 \
+              target/debug/colossus "$staged_binary"
+            printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # Without the AppArmor LSM there is no user-namespace restriction to
+          # grant, so the tests exercise protected paths against the workspace
+          # build. Fail closed if a restriction is nevertheless active.
+          restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ "$(cat "$restriction" 2>/dev/null || printf 0)" != 0 ]; then
+            printf 'the host restricts unprivileged user namespaces but exposes no AppArmor LSM to grant them\n' >&2
+            exit 1
+          fi
+          printf 'no AppArmor LSM: protected-path tests use unrestricted user namespaces\n'
 
       - name: Run complete Rust validation
         run: cargo xtask check rust

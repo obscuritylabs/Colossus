@@ -44,6 +44,7 @@ fn actionlint_recognizes_every_provisioned_custom_runner() {
         [
             "blacksmith-4vcpu-ubuntu-2404".to_owned(),
             "blacksmith-6vcpu-macos-15".to_owned(),
+            "blacksmith-8vcpu-ubuntu-2404".to_owned(),
             "blacksmith-8vcpu-windows-2025".to_owned(),
             "ubuntu-latest-m".to_owned(),
             "windows-latest-l".to_owned(),
@@ -89,8 +90,8 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest-m"),
-        "AppArmor-backed workspace tests require the hosted larger runner"
+        Some("blacksmith-8vcpu-ubuntu-2404"),
+        "the longest CPU-bound lane belongs on the eight-core Blacksmith tier"
     );
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
@@ -114,6 +115,8 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "cargo xtask check desktop",
         "cargo xtask check dependencies",
         "release/install-apparmor.sh",
+        "/sys/module/apparmor/parameters/enabled",
+        "apparmor_restrict_unprivileged_userns",
         "ACTIONLINT_VERSION: 1.7.12",
         "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
         "sha256sum --check --strict",

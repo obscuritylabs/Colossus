@@ -35,10 +35,15 @@ include breaking changes while the public API is still settling.
   terminal Plan mode and selection; after consumption, Direct and Goal outcomes retain
   canonical plan plus completion, cancellation, or bounded-failure evidence.
 - Moved PR validation, pre-merge acceptance, release, and documentation workflows onto
-  Blacksmith runners (`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-15`, and
-  `blacksmith-8vcpu-windows-2025`). Complete Rust PR validation, release readiness, and
+  Blacksmith runners (`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-8vcpu-ubuntu-2404`,
+  `blacksmith-6vcpu-macos-15`, and `blacksmith-8vcpu-windows-2025`). Release readiness and
   the published CLI target matrix stay on GitHub-hosted runners because they require the
   AppArmor LSM or a per-target runner image.
+- Made Rust PR validation detect the runner's AppArmor posture instead of assuming it.
+  An AppArmor host still installs the exact-path profile against a root-owned staged
+  binary; a host without the AppArmor LSM imposes no user-namespace restriction, so the
+  workspace suite proves protected paths directly and fails closed if a restriction is
+  active without an LSM to grant it back.
 
 ### Security
 
