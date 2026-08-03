@@ -5,10 +5,10 @@ use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
-    MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision, ProviderRoute,
-    ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope,
-    SessionMessagePage, SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse,
-    WorkStateSnapshot,
+    MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
+    ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
+    RiskReviewFallbackNotice, RunEventEnvelope, SessionMessagePage, SessionSummary,
+    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -16,8 +16,8 @@ use colossus_ports::{
     UserPromptProvider,
 };
 use colossus_presentation::{
-    PresentationBlock, PresentationDocument, PresentationTone, ThemeLibrary, ThemeName,
-    automatic_approval_document, context_status_document, document_from_json,
+    PresentationBlock, PresentationDocument, PresentationTable, PresentationTone, ThemeLibrary,
+    ThemeName, automatic_approval_document, context_status_document, document_from_json,
     risk_review_fallback_document, work_state_document,
 };
 use colossus_runtime::{Runtime, RuntimeError, format_provider_response_diagnostic};
@@ -31,7 +31,7 @@ use colossus_worker::{
     InteractiveWorkerRequest, WorkerClient, WorkerError, WorkerOperation, WorkerPrompt,
     WorkerPromptHandler, WorkerPromptKind,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     path::PathBuf,
@@ -67,6 +67,144 @@ fn selectable_plan(plan: PlanRecord) -> Result<PlanRecord, String> {
         ));
     }
     Ok(plan)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelDiagnostics {
+    ready: bool,
+    route: ProviderRoute,
+    checks: Vec<ProviderReadinessCheck>,
+}
+
+fn grouped_u64(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+const fn reasoning_effort_label(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::None => "none",
+        ReasoningEffort::Minimal => "minimal",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::XHigh => "xhigh",
+        ReasoningEffort::Max => "max",
+        ReasoningEffort::Ultra => "ultra",
+    }
+}
+
+fn check_status_label(status: &str) -> String {
+    match status {
+        "pass" => "Pass".into(),
+        "fail" => "Fail".into(),
+        "not_checked" => "Not checked".into(),
+        "not_applicable" => "Not applicable".into(),
+        value => value.replace('_', " "),
+    }
+}
+
+fn model_diagnostics_document(value: &Value) -> Result<PresentationDocument, String> {
+    let report: ModelDiagnostics =
+        serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    let route = &report.route;
+    let mut details = vec![
+        (
+            "Status".into(),
+            if report.ready { "Ready" } else { "Not ready" }.into(),
+        ),
+        ("Model".into(), route.model.clone()),
+        ("Profile".into(), route.model_profile.clone()),
+        (
+            "Provider".into(),
+            format!("{} · {}", route.provider, route.provider_profile),
+        ),
+    ];
+    if !route.role.is_empty() {
+        details.push(("Role".into(), route.role.clone()));
+    }
+    details.extend([
+        (
+            "Reasoning".into(),
+            route
+                .reasoning_effort
+                .map(reasoning_effort_label)
+                .unwrap_or("provider default")
+                .into(),
+        ),
+        (
+            "Tokens".into(),
+            format!(
+                "{} context · {} input budget · {} max output",
+                grouped_u64(route.limits.context_window_tokens),
+                grouped_u64(route.limits.input_budget_tokens),
+                grouped_u64(route.limits.max_output_tokens),
+            ),
+        ),
+        (
+            "Capabilities".into(),
+            format!(
+                "tools {} · streaming {}",
+                if route.capabilities.tool_calls {
+                    "on"
+                } else {
+                    "off"
+                },
+                if route.capabilities.streaming {
+                    "on"
+                } else {
+                    "off"
+                },
+            ),
+        ),
+    ]);
+
+    let mut checks = PresentationTable::new(
+        ["Check", "Status", "Detail"],
+        "No model checks were returned.",
+    );
+    for check in &report.checks {
+        checks.push_row([
+            check.name.clone(),
+            check_status_label(&check.status),
+            check.detail.clone(),
+        ]);
+    }
+
+    let mut body = vec![
+        PresentationBlock::KeyValue(details),
+        PresentationBlock::Table(checks),
+    ];
+    for check in report.checks {
+        if let Some(diagnostic) = check.provider_response {
+            body.push(PresentationBlock::Card {
+                title: format!("Provider response · {}", check.name),
+                tone: PresentationTone::Error,
+                body: vec![PresentationBlock::Code {
+                    language: Some("text".into()),
+                    content: format_provider_response_diagnostic(&diagnostic),
+                }],
+            });
+        }
+    }
+
+    Ok(PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Model diagnostics".into(),
+        tone: if report.ready {
+            PresentationTone::Success
+        } else {
+            PresentationTone::Error
+        },
+        body,
+    }))
 }
 
 fn approved_plan_at_revision(

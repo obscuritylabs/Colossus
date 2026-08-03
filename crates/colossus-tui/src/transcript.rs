@@ -137,7 +137,10 @@ pub(super) fn help_document() -> PresentationDocument {
                     "Send".into(),
                     "Enter; Ctrl/Alt+Enter in multiline mode".into(),
                 ),
-                ("Scroll".into(), "PageUp/PageDown; End returns live".into()),
+                (
+                    "Scroll".into(),
+                    "Mouse wheel uses native scrollback; --alt-screen uses captured wheel or PageUp/PageDown".into(),
+                ),
                 (
                     "Complete".into(),
                     "Type / or @ for suggestions; Up/Down select; Tab or Right accepts".into(),
@@ -148,7 +151,7 @@ pub(super) fn help_document() -> PresentationDocument {
                 ),
                 (
                     "Cancel".into(),
-                    "Ctrl-C clears draft, modal, or active run".into(),
+                    "Ctrl-C cancels an active run; press again to exit".into(),
                 ),
                 (
                     "Provider diagnostics".into(),
@@ -163,7 +166,10 @@ pub(super) fn help_document() -> PresentationDocument {
                     "/goal resume GOAL_ID continues the remaining iteration budget".into(),
                 ),
                 ("Preferences".into(), "/tui prefs|save|reset".into()),
-                ("Exit".into(), "Ctrl-D while idle or /exit".into()),
+                (
+                    "Exit".into(),
+                    "Ctrl-C while idle; Ctrl-D or /exit also work".into(),
+                ),
             ]),
         ],
     })

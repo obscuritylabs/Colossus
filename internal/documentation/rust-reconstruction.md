@@ -8,7 +8,7 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.10.2-preview.8 is the active repository-root Developer Preview release line. It
+Rust 0.10.2-preview.9 is the active repository-root Developer Preview release line. It
 uses Rust 1.96, edition 2024, strict schema-version-2 YAML configuration, and encrypted
 redb state. It never imports Python configuration or SQLite state. Python 0.5 remains
 frozen at `python-v0.5.0` and on the `python-legacy` branch.
@@ -88,7 +88,7 @@ platform, security, CLI, and channel-specific Desktop artifact matrix must pass 
 explicit release gates before a version is published.
 
 The latest published Developer Preview is
-[v0.10.2-preview.8](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.8).
+[v0.10.2-preview.9](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.9).
 Its release record carries the native runtime, sandbox, policy, dependency, fuzz,
 package, checksum, and explicitly unsigned or ad-hoc-signed Desktop evidence produced
 by the tag workflow.

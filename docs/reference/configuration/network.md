@@ -95,7 +95,7 @@ public roots:
 
 | Client family | Examples |
 | --- | --- |
-| Model providers | OpenAI Responses and OpenAI-compatible provider profiles |
+| Model providers | Codex subscription, OpenAI Responses, and OpenAI-compatible provider profiles |
 | Search | SearXNG and SerpAPI profiles |
 | Integrations | Native and imported HTTP integrations |
 | Brokered HTTP | `network.http` and WORM audit export |

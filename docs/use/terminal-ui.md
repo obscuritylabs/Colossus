@@ -34,9 +34,12 @@ recent session with:
 colossus --config .colossus/config.yaml tui --resume
 ```
 
-Use `--session SESSION_ID` for an exact session. The alternate screen is the default;
-global `--no-alt-screen` selects an inline viewport, and Zellij selects inline mode
-automatically.
+Use `--session SESSION_ID` for an exact session. The default inline viewport writes
+finalized output into native terminal scrollback immediately for ordinary selection,
+copy, search, and wheel navigation. It grows while output is streaming, then returns to
+the sticky composer and status when the output completes. Global `--alt-screen` selects
+the application-owned full-screen viewport; `--no-alt-screen` remains a compatibility
+alias for the default.
 
 For a development session with eligible low-risk shell and read-only network review:
 
@@ -118,7 +121,8 @@ values are never stored as presentation preferences.
 - Type `@` at a skill-token boundary for installed skill completion.
 - Use Down/Up or Shift-Tab to move through suggestions, Tab or Right Arrow to accept the
   visible suggestion, and Enter to submit.
-- Use PageUp/PageDown to read older transcript content and End to return to live output.
+- In the default inline mode, use the terminal's normal wheel and scrollback shortcuts.
+  With `--alt-screen`, use PageUp/PageDown and End to navigate the retained transcript.
 - Use Ctrl-R to search encrypted prompt history.
 - Toggle multiline composition with `/multiline toggle`.
 
@@ -135,15 +139,15 @@ terminal; `user.ask` is turn-scoped.
 
 ### 6. Leave cleanly
 
-Enter `/exit`, or press Ctrl-D only while idle with an empty draft. Ctrl-C clears a
-draft, cancels a modal, or requests cooperative run cancellation according to the
-current state.
+Press Ctrl-C to exit while idle, including when a draft or picker is open. During an
+active run, the first Ctrl-C requests cooperative cancellation and a second Ctrl-C
+exits. `/exit` and Ctrl-D on an empty idle composer remain available.
 
 ## Expected result
 
-The transcript remains scrollable above a pinned composer, live work is represented by
-semantic status, approvals are one-use, and session messages remain available after the
-terminal exits.
+Finalized transcript output is immediately available in native scrollback above the
+live composer and status viewport, live work is represented by semantic status,
+approvals are one-use, and session messages remain available after the terminal exits.
 
 ## Verification
 
@@ -154,7 +158,8 @@ and `/audit verify` to confirm the active session and journal.
 
 - **Layout is cramped:** enlarge the terminal; at the minimum size, pickers scroll and
   optional footer fields disappear.
-- **Native scrollback is unavailable:** restart with `--no-alt-screen`.
+- **Native selection or scrollback is unavailable:** omit `--alt-screen`; the default
+  inline mode restores terminal-native behavior.
 - **A queued turn pauses:** inspect the preceding failure or cancellation, then confirm
   whether the queue should continue.
 - **A modal disconnects or times out:** the answer fails closed; reopen the operation

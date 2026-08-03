@@ -17,19 +17,20 @@ use colossus_presentation::{
 use crossterm::{
     cursor::{Hide, Show},
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    backend::{Backend, ClearType, CrosstermBackend},
+    buffer::{Buffer, Cell},
+    layout::{Alignment, Constraint, Direction, Layout, Position, Rect, Size},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -53,6 +54,17 @@ pub const MINIMUM_TERMINAL_WIDTH: u16 = 40;
 pub const MINIMUM_TERMINAL_HEIGHT: u16 = 12;
 /// Most completion rows shown before the suggestion menu scrolls.
 const MAX_COMPLETION_MENU_ROWS: usize = 6;
+/// Number of transcript lines moved by one terminal mouse-wheel event.
+const MOUSE_SCROLL_LINES: usize = 3;
+/// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
+const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 4;
+/// Maximum older durable pages eagerly restored into native terminal scrollback.
+const MAX_NATIVE_HISTORY_PAGES: usize = 10;
+/// Maximum durable messages restored into native scrollback, including the bootstrap page.
+const MAX_NATIVE_HISTORY_MESSAGES: usize =
+    (MAX_NATIVE_HISTORY_PAGES + 1) * MAX_TRANSCRIPT_PAGE_MESSAGES;
+/// Maximum rendered rows inserted into terminal scrollback in one operation.
+const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
 mod app;
 mod contract;

@@ -408,7 +408,7 @@ pub struct ProviderProfileConfig {
     pub kind: ProviderKind,
     /// API version base URL for network providers.
     pub base_url: Option<String>,
-    /// Credential reference such as `env:OPENAI_API_KEY` or an injected `host:provider-main`.
+    /// Credential reference such as `env:OPENAI_API_KEY`, `codex:default`, or an injected `host:provider-main`.
     pub credential_reference: Option<String>,
     /// Provider transport timeout.
     #[serde(default = "default_provider_timeout_ms")]
@@ -439,6 +439,7 @@ impl Default for ModelsConfig {
                         tool_calls: true,
                         streaming: true,
                     },
+                    reasoning_effort: None,
                 },
             )]),
             roles: BTreeMap::from([("primary".into(), "echo".into())]),
@@ -460,6 +461,9 @@ pub struct ModelProfileConfig {
     pub max_output_tokens: u64,
     /// Explicit request-shaping capabilities.
     pub capabilities: ModelCapabilities,
+    /// Optional reasoning effort sent on every turn for this model profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 const fn default_provider_timeout_ms() -> u64 {
@@ -1423,6 +1427,7 @@ pub(super) fn provider_registry(
                 model.context_window_tokens,
                 model.max_output_tokens,
                 model.capabilities,
+                model.reasoning_effort,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1557,6 +1562,13 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
             return Err(RuntimeError::Config(format!(
                 "provider profile {name} origin {origin} is absent from sandbox.networkDestinations"
             )));
+        }
+        for origin in profile.authentication_origins() {
+            if !sandbox_allows_network(&config.sandbox, origin)? {
+                return Err(RuntimeError::Config(format!(
+                    "provider profile {name} authentication origin {origin} is absent from sandbox.networkDestinations"
+                )));
+            }
         }
     }
     Ok(())

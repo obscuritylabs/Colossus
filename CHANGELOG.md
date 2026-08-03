@@ -8,8 +8,21 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.9] - 2026-08-03
+
 ### Added
 
+- Added ChatGPT/Codex subscription authentication through the official Codex credential
+  store, including browser and device-code login, status and logout commands, bounded
+  token refresh, streamed Responses turns, tool calls, and model-specific reasoning
+  effort levels.
+- Added terminal-native transcript scrollback as the default TUI mode. Finalized user,
+  assistant, tool, and system entries move into ordinary terminal history for mouse
+  selection, copy, search, and wheel navigation while the composer and status remain
+  sticky.
+- Added CommonMark parsing and syntax-highlighted fenced code blocks to terminal
+  presentation, with tables, task lists, nested emphasis, blockquotes, links, image
+  fallbacks, bounded wrapping, and safe large-block fallbacks.
 - Added the complete interactive Plan workflow to full-screen TUI and scripted line
   mode, with process-local Execute/Plan state, same-session Draft selection and
   refinement, approval, discard, and Direct or bounded Goal execution in embedded and
@@ -25,6 +38,15 @@ include breaking changes while the public API is still settling.
 
 ### Changed
 
+- Made `--alt-screen` the explicit opt-in for the application-owned full-screen
+  transcript. `--no-alt-screen` remains a compatibility alias for the default inline
+  native-scrollback viewport.
+- Made Ctrl-C exit an idle TUI, request cooperative cancellation for an active run, and
+  exit on a second press during cancellation. `/exit` and Ctrl-D on an empty idle
+  composer remain available.
+- Preserved intermediate assistant output and tool boundaries as finalized transcript
+  entries so native scrollback and resumed session history retain the complete visible
+  run rather than only the final answer.
 - Added optimistic plan revisions: legacy records default to revision 0, new plans start
   at 1, and refinement or any lifecycle transition increments the revision and rejects
   stale requests.
@@ -37,6 +59,9 @@ include breaking changes while the public API is still settling.
 
 ### Security
 
+- Kept ChatGPT access, refresh, and account credentials out of configuration, model
+  input, diagnostics, and durable run history. Codex provider access remains bound to
+  the exact ChatGPT and OpenAI authentication origins through the normal effect gateway.
 - Bound `plan.update` to the server-selected Draft id and revision, kept
   `plan.discard` operator-only, and routed update, discard, approval, Direct execution,
   and Goal handoff through the normal effect gateway.
@@ -50,6 +75,8 @@ include breaking changes while the public API is still settling.
   the worker and client with the same Colossus version after upgrading. Interrupted
   interactive operations are not automatically retried; inspect `/plans` and linked run
   or Goal evidence first.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
 
 ## [0.10.2-preview.8] - 2026-07-30
 

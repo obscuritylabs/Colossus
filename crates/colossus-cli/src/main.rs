@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use colossus_access::AccessProfile;
+use colossus_codex_auth::{CodexCliAction, run_codex_cli};
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice,
     DecisionPriority, DecisionStatus, EffectRequest, GoalRunOutcome, GoalStatus, IntegrationAuth,

@@ -1,6 +1,6 @@
 ---
 title: Connect a model
-description: Route Colossus to an OpenAI Responses or OpenAI-compatible model without placing credentials in YAML.
+description: Route Colossus through a Codex subscription, OpenAI Responses API, or an OpenAI-compatible model without placing credentials in YAML.
 audience: user
 type: how-to
 ---
@@ -16,15 +16,33 @@ exact network origin.
 ## Prerequisites
 
 - A completed [five-minute quickstart](quickstart.md).
-- A provider account, model identifier, and API credential.
+- A provider account and model identifier. API-backed providers also need an API
+  credential; a Codex subscription uses a ChatGPT sign-in instead.
 - Permission to expose the provider's exact HTTPS origin from the Colossus sandbox.
 - For an endpoint issued by a private CA, a PEM CA certificate bundle.
 
 ## Steps
 
-### 1. Inject the credential without placing it in command history
+### 1. Authenticate without placing a credential in YAML
 
-Use one process-scoped variable for the examples below. The prompt does not echo the
+For a Codex subscription, install the official Codex CLI and let it own the ChatGPT
+OAuth flow. Colossus forces Codex's supported file-backed credential store so the
+provider adapter can reuse and refresh that sign-in:
+
+```bash
+colossus codex login
+colossus codex status
+```
+
+On a remote or headless machine, use `colossus codex login --device-code`. If Codex is
+not on `PATH`, place `--codex-bin /absolute/path/to/codex` before the `login`, `status`,
+or `logout` subcommand. These commands do not require a valid Colossus configuration.
+Codex stores the sign-in under `$CODEX_HOME/auth.json`, or `~/.codex/auth.json` when
+`CODEX_HOME` is unset. See OpenAI's
+[Codex authentication documentation](https://learn.chatgpt.com/docs/app-server#authentication-endpoints)
+for the underlying supported login modes and credential storage behavior.
+
+For an API-key provider, use one process-scoped variable for the examples below. The prompt does not echo the
 secret, and the command itself contains no credential value.
 
 === "macOS and Linux"
@@ -62,6 +80,43 @@ network:
 
 Publicly trusted endpoints can leave `caBundlePath` as `null` or omit the `network`
 block.
+
+=== "Codex/ChatGPT subscription"
+
+    ```yaml
+    providers:
+      profiles:
+        codex-provider:
+          kind: open_ai_codex
+          credentialReference: codex:default
+          timeoutMs: 120000
+    models:
+      profiles:
+        codex:
+          providerProfile: codex-provider
+          model: YOUR_CODEX_MODEL_ID
+          contextWindowTokens: 128000
+          maxOutputTokens: 16000
+          reasoningEffort: high
+          capabilities:
+            toolCalls: true
+            streaming: true
+      roles:
+        primary: codex
+
+    sandbox:
+      networkDestinations:
+        - https://chatgpt.com
+        - https://auth.openai.com
+    ```
+
+    `baseUrl` is intentionally omitted and cannot be overridden. The first origin is
+    the subscription-backed Responses service; the second is used only when the
+    Codex-managed access token enters its five-minute refresh window.
+
+    `reasoningEffort` is optional. Valid values are `none`, `minimal`, `low`, `medium`,
+    `high`, `xhigh`, `max`, and `ultra`; the selected Codex model may support only a
+    subset. Omit it to use that model's backend default.
 
 === "OpenAI Responses"
 
@@ -133,8 +188,8 @@ colossus --config .colossus/config.yaml models doctor openai
 
 The route command is network-free. `provider doctor` checks the provider connection and
 catalog. `models doctor` sends one bounded generation probe for the configured model;
-its response content is not printed. Use the matching OpenRouter profile names when
-following that example.
+its response content is not printed. Substitute `codex-provider` and `codex`, or the
+matching OpenRouter names, when following those examples.
 
 ### 4. Send one bounded model turn
 
@@ -162,8 +217,9 @@ The credential value must not appear in configuration, output, or audit evidence
 
 ## Failure path
 
-- **Credential unavailable:** confirm that the referenced variable is present in the
-  environment of the Colossus process.
+- **Credential unavailable:** for Codex, run `colossus codex status` and sign in again;
+  for an API provider, confirm that the referenced variable is present in the Colossus
+  process environment.
 - **Origin absent from the sandbox:** add the exact provider origin, not its URL path.
 - **Provider or model not found:** verify `kind`, `baseUrl`, and `model` with the
   provider.

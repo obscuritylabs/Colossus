@@ -510,6 +510,7 @@ fn test_route(role: &str, profile: &str) -> ProviderRoute {
             tool_calls: true,
             streaming: true,
         },
+        reasoning_effort: None,
     }
 }
 

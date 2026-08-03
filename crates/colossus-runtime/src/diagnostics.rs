@@ -444,6 +444,7 @@ impl Runtime {
                 model_profile: None,
                 model: None,
                 max_output_tokens: None,
+                reasoning_effort: None,
                 request: None,
                 include_response_diagnostics,
             })
@@ -577,6 +578,7 @@ impl Runtime {
                 model_profile: Some(route.model_profile.clone()),
                 model: Some(route.model.clone()),
                 max_output_tokens: Some(output_limit),
+                reasoning_effort: route.reasoning_effort,
                 request: Some(ModelRequest {
                     instructions: "This is a model readiness probe. Reply with exactly: ok".into(),
                     messages: vec![ModelMessage {

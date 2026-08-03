@@ -110,6 +110,9 @@ impl StyledDocumentRenderer {
         inherited_accent: Option<ThemeTextStyle>,
     ) -> Vec<StyledLine> {
         match block {
+            PresentationBlock::Markdown(markdown) => {
+                self.render_transcript_markdown(markdown, width)
+            }
             PresentationBlock::Card { title, tone, body } => {
                 let accent = if *tone == PresentationTone::Neutral {
                     palette.section_style()
@@ -193,6 +196,10 @@ impl StyledDocumentRenderer {
                     .collect()
             }
         }
+    }
+
+    fn render_transcript_markdown(&self, markdown: &str, width: usize) -> Vec<StyledLine> {
+        crate::markdown::render(markdown, width, &self.preferences)
     }
 
     fn render_transcript_key_values(
@@ -719,102 +726,27 @@ impl TerminalDocumentRenderer {
     }
 
     fn render_markdown(&self, markdown: &str, width: usize) -> Vec<String> {
-        let markdown = sanitize_terminal_text(markdown);
-        let source = markdown.lines().collect::<Vec<_>>();
-        let palette = TerminalPalette::for_preferences(&self.preferences);
-        let mut lines = Vec::new();
-        let mut index = 0;
-        while index < source.len() {
-            let line = source[index];
-            if line.trim_start().starts_with("```") {
-                let language = line.trim().trim_start_matches("```").trim();
-                let mut content = Vec::new();
-                index += 1;
-                while index < source.len() && !source[index].trim_start().starts_with("```") {
-                    content.push(source[index]);
-                    index += 1;
+        crate::markdown::render(markdown, width, &self.preferences)
+            .into_iter()
+            .map(|line| {
+                if !self.color {
+                    return line.plain_text();
                 }
-                lines.extend(self.render_code(
-                    (!language.is_empty()).then_some(language),
-                    &content.join("\n"),
-                    width,
-                ));
-            } else if is_markdown_table_header(&source, index) {
-                let headers = markdown_cells(source[index]);
-                let mut table = PresentationTable::new(headers, "No rows.");
-                index += 2;
-                while index < source.len()
-                    && source[index].contains('|')
-                    && !source[index].trim().is_empty()
-                {
-                    table.push_row(markdown_cells(source[index]));
-                    index += 1;
-                }
-                index = index.saturating_sub(1);
-                lines.extend(self.render_table(&table, width));
-            } else if let Some((level, heading)) = markdown_heading(line) {
-                if !lines.is_empty() && lines.last().is_some_and(|value: &String| !value.is_empty())
-                {
-                    lines.push(String::new());
-                }
-                let style = if level == 1 {
-                    palette.assistant.bold()
-                } else {
-                    palette.tool.bold()
-                };
-                lines.extend(
-                    wrap_text(heading, width)
-                        .into_iter()
-                        .map(|value| style.paint(&render_inline_plain(&value), self.color)),
-                );
-            } else if let Some(item) = markdown_list_item(line) {
-                let prefix = if item.0.is_empty() { "• " } else { item.0 };
-                let available = width.saturating_sub(display_width(prefix)).max(8);
-                let wrapped = wrap_text(item.1, available);
-                for (item_index, value) in wrapped.into_iter().enumerate() {
-                    let marker = if item_index == 0 {
-                        prefix
-                    } else {
-                        &" ".repeat(display_width(prefix))
-                    };
-                    lines.push(format!(
-                        "{}{}",
-                        palette.tool.paint(marker, self.color),
-                        render_inline(&value, palette, self.color)
-                    ));
-                }
-            } else if let Some(quote) = line.trim_start().strip_prefix('>') {
-                let wrapped = wrap_text(quote.trim_start(), width.saturating_sub(2));
-                lines.extend(wrapped.into_iter().map(|value| {
-                    format!(
-                        "{} {}",
-                        palette.meta.paint("│", self.color),
-                        palette.meta.paint(&render_inline_plain(&value), self.color)
-                    )
-                }));
-            } else if line.trim().is_empty() {
-                if lines.last().is_some_and(|value: &String| !value.is_empty()) {
-                    lines.push(String::new());
-                }
-            } else {
-                lines.extend(
-                    wrap_text(line, width)
-                        .into_iter()
-                        .map(|value| render_inline(&value, palette, self.color)),
-                );
-            }
-            index += 1;
-        }
-        while lines.last().is_some_and(String::is_empty) {
-            lines.pop();
-        }
-        lines
+                line.spans
+                    .into_iter()
+                    .map(|span| TextStyle::from(span.style).paint(&span.content, true))
+                    .collect()
+            })
+            .collect()
     }
 
     fn render_code(&self, language: Option<&str>, content: &str, width: usize) -> Vec<String> {
         let palette = TerminalPalette::for_preferences(&self.preferences);
         let inner = width.saturating_sub(4).max(12);
-        let label = language.map_or_else(|| "code".into(), sanitize_terminal_text);
+        let label = truncate_width(
+            &language.map_or_else(|| "code".into(), sanitize_terminal_text),
+            width.saturating_sub(3).max(1),
+        );
         let mut lines = vec![palette.meta.paint(&format!("┌─ {label}"), self.color)];
         let content = sanitize_terminal_text(content);
         let numbered = language.is_some_and(|language| language.contains(" · "));
@@ -917,7 +849,7 @@ fn bounded_line_indexes(count: usize, head: usize, tail: usize) -> Vec<Option<us
         .collect()
 }
 
-fn sanitize_terminal_text(value: &str) -> String {
+pub(super) fn sanitize_terminal_text(value: &str) -> String {
     value
         .chars()
         .filter(|character| {
@@ -1025,139 +957,4 @@ fn split_width_prefix(value: &str, width: usize) -> (&str, usize) {
         consumed = value.chars().next().map_or(0, char::len_utf8);
     }
     (&value[..consumed], consumed)
-}
-
-fn markdown_heading(line: &str) -> Option<(usize, &str)> {
-    let trimmed = line.trim_start();
-    let level = trimmed
-        .chars()
-        .take_while(|character| *character == '#')
-        .count();
-    (level > 0 && level <= 6 && trimmed.as_bytes().get(level) == Some(&b' '))
-        .then(|| (level, trimmed[level + 1..].trim()))
-}
-
-fn markdown_list_item(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim_start();
-    for marker in ["- ", "* ", "+ "] {
-        if let Some(value) = trimmed.strip_prefix(marker) {
-            return Some(("", value));
-        }
-    }
-    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
-    if digits > 0 && trimmed.get(digits..digits + 2) == Some(". ") {
-        return Some((&trimmed[..digits + 2], &trimmed[digits + 2..]));
-    }
-    None
-}
-
-fn is_markdown_table_header(lines: &[&str], index: usize) -> bool {
-    lines.get(index).is_some_and(|line| line.contains('|'))
-        && lines.get(index + 1).is_some_and(|line| {
-            let cells = markdown_cells(line);
-            !cells.is_empty()
-                && cells.iter().all(|cell| {
-                    let cell = cell.trim().trim_matches(':');
-                    cell.len() >= 3 && cell.chars().all(|character| character == '-')
-                })
-        })
-}
-
-fn markdown_cells(line: &str) -> Vec<String> {
-    line.trim()
-        .trim_matches('|')
-        .split('|')
-        .map(|cell| render_inline_plain(cell.trim()))
-        .collect()
-}
-
-fn render_inline_plain(value: &str) -> String {
-    let mut rendered = value.replace("**", "").replace("__", "").replace('`', "");
-    rendered = rendered.replace(['*', '_'], "");
-    while let Some(start) = rendered.find('[') {
-        let Some(label_end) = rendered[start + 1..]
-            .find("](")
-            .map(|value| start + 1 + value)
-        else {
-            break;
-        };
-        let url_start = label_end + 2;
-        let Some(url_end) = rendered[url_start..]
-            .find(')')
-            .map(|value| url_start + value)
-        else {
-            break;
-        };
-        let replacement = format!(
-            "{} ({})",
-            &rendered[start + 1..label_end],
-            &rendered[url_start..url_end]
-        );
-        rendered.replace_range(start..=url_end, &replacement);
-    }
-    rendered
-}
-
-fn render_inline(value: &str, palette: TerminalPalette, color: bool) -> String {
-    if !color {
-        return render_inline_plain(value);
-    }
-    let mut rendered = String::new();
-    let mut remaining = value;
-    while !remaining.is_empty() {
-        if let Some(content) = remaining.strip_prefix("**")
-            && let Some(end) = content.find("**")
-        {
-            rendered.push_str(&palette.assistant.bold().paint(&content[..end], true));
-            remaining = &content[end + 2..];
-            continue;
-        }
-        if let Some(content) = remaining.strip_prefix("__")
-            && let Some(end) = content.find("__")
-        {
-            rendered.push_str(&palette.assistant.bold().paint(&content[..end], true));
-            remaining = &content[end + 2..];
-            continue;
-        }
-        if let Some(content) = remaining.strip_prefix('`')
-            && let Some(end) = content.find('`')
-        {
-            rendered.push_str(&palette.tool.paint(&content[..end], true));
-            remaining = &content[end + 1..];
-            continue;
-        }
-        if let Some(content) = remaining.strip_prefix('*')
-            && let Some(end) = content.find('*')
-        {
-            rendered.push_str(&palette.assistant.italic().paint(&content[..end], true));
-            remaining = &content[end + 1..];
-            continue;
-        }
-        if let Some(content) = remaining.strip_prefix('_')
-            && let Some(end) = content.find('_')
-        {
-            rendered.push_str(&palette.assistant.italic().paint(&content[..end], true));
-            remaining = &content[end + 1..];
-            continue;
-        }
-        if let Some(label) = remaining.strip_prefix('[')
-            && let Some(label_end) = label.find("](")
-        {
-            let url = &label[label_end + 2..];
-            if let Some(url_end) = url.find(')') {
-                rendered.push_str(&palette.assistant.paint(&label[..label_end], true));
-                rendered.push_str(&palette.meta.paint(&format!(" ({})", &url[..url_end]), true));
-                remaining = &url[url_end + 1..];
-                continue;
-            }
-        }
-        let next = remaining
-            .char_indices()
-            .skip(1)
-            .find(|(_, character)| matches!(character, '*' | '`' | '[' | '_'))
-            .map_or(remaining.len(), |(index, _)| index);
-        rendered.push_str(&palette.assistant.paint(&remaining[..next], true));
-        remaining = &remaining[next..];
-    }
-    rendered
 }

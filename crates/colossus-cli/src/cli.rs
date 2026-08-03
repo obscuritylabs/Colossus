@@ -19,9 +19,12 @@ pub(super) struct Cli {
     /// Output format for structured commands. Auto is human on a terminal and JSON when piped.
     #[arg(long, value_enum, default_value_t = OutputMode::Auto)]
     pub(super) output: OutputMode,
-    /// Preserve terminal scrollback by using Ratatui's inline viewport.
-    #[arg(long, global = true)]
+    /// Compatibility alias for the default native-scrollback TUI.
+    #[arg(long, global = true, conflicts_with = "alt_screen")]
     pub(super) no_alt_screen: bool,
+    /// Use the application-owned full alternate-screen transcript viewport.
+    #[arg(long, global = true, conflicts_with = "no_alt_screen")]
+    pub(super) alt_screen: bool,
     /// Require the TUI to attach to an existing authenticated worker.
     #[arg(long, global = true, hide = true)]
     pub(super) worker_required: bool,

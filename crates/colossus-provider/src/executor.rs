@@ -15,9 +15,13 @@ pub struct ProviderEffectInput {
     pub model: Option<String>,
     /// Resolved output ceiling. Absent only for provider diagnostics.
     pub max_output_tokens: Option<u64>,
+    /// Optional configured reasoning effort for generation requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Full logical model request. Absent only for model-catalog diagnostics.
     pub request: Option<ModelRequest>,
-    /// Return a bounded non-success response as explicit quarantined diagnostic output.
+    /// Return a bounded failed or transport-incompatible response as explicit
+    /// quarantined diagnostic output.
     #[serde(default, skip_serializing_if = "is_false")]
     pub include_response_diagnostics: bool,
 }
@@ -50,6 +54,27 @@ pub enum ProviderError {
 enum ProviderJsonResponse {
     Success(Vec<u8>),
     HttpError(ProviderResponseDiagnostic),
+}
+
+#[derive(Default)]
+pub(super) struct RequestSecrets(Vec<zeroize::Zeroizing<String>>);
+
+impl RequestSecrets {
+    pub(super) fn retain(&mut self, secret: &str) {
+        self.0.push(zeroize::Zeroizing::new(secret.to_owned()));
+    }
+
+    pub(super) fn redact_bytes(&self, bytes: &mut Vec<u8>) {
+        for secret in &self.0 {
+            redact_exact_bytes(bytes, Some(secret.as_str()));
+        }
+    }
+
+    fn redact_value(&self, value: &mut Value) {
+        for secret in &self.0 {
+            redact_value_exact(value, Some(secret.as_str()));
+        }
+    }
 }
 
 struct ProviderStreamMetadata<'a> {
@@ -178,6 +203,8 @@ pub struct ProviderExecutor {
     pub(super) profile: ProviderProfile,
     pub(super) credentials: Arc<dyn CredentialResolver>,
     tls_roots: AdditionalRootCertificates,
+    codex_auth: Option<CodexAuthStore>,
+    codex_refresh: tokio::sync::Mutex<()>,
 }
 
 impl ProviderExecutor {
@@ -195,6 +222,8 @@ impl ProviderExecutor {
             profile,
             credentials,
             tls_roots: AdditionalRootCertificates::default(),
+            codex_auth: None,
+            codex_refresh: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -202,6 +231,13 @@ impl ProviderExecutor {
     #[must_use]
     pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
         self.tls_roots = tls_roots;
+        self
+    }
+
+    /// Override the Codex auth file location for an embedded host or test.
+    #[must_use]
+    pub fn with_codex_auth_store(mut self, store: CodexAuthStore) -> Self {
+        self.codex_auth = Some(store);
         self
     }
 
@@ -314,6 +350,7 @@ impl StreamingEffectExecutor for ProviderExecutor {
         let (model_profile, model, max_output_tokens) =
             generation_metadata(&input).map_err(provider_execution_error)?;
         let include_response_diagnostics = input.include_response_diagnostics;
+        let reasoning_effort = input.reasoning_effort;
         let model_request = input.request.ok_or_else(|| {
             provider_execution_error(ProviderError::Configuration(
                 "provider generation request is absent".into(),
@@ -375,12 +412,23 @@ impl StreamingEffectExecutor for ProviderExecutor {
         let tool_names =
             ProviderToolNames::from_request(&model_request).map_err(provider_execution_error)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses => {
-                responses_payload(&model_request, &model, max_output_tokens, true, &tool_names)
-            }
-            ProviderKind::OpenAiCompatible => {
-                chat_payload(&model_request, &model, max_output_tokens, true, &tool_names)
-            }
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => responses_payload(
+                &model_request,
+                self.profile.kind,
+                &model,
+                max_output_tokens,
+                reasoning_effort,
+                true,
+                &tool_names,
+            ),
+            ProviderKind::OpenAiCompatible => chat_payload(
+                &model_request,
+                &model,
+                max_output_tokens,
+                reasoning_effort,
+                true,
+                &tool_names,
+            ),
             ProviderKind::Echo => unreachable!("handled above"),
         }
         .map_err(provider_execution_error)?;
@@ -441,6 +489,7 @@ impl ProviderExecutor {
                 || input.model_profile.is_some()
                 || input.model.is_some()
                 || input.max_output_tokens.is_some()
+                || input.reasoning_effort.is_some()
                 || self.profile.kind == ProviderKind::Echo
             {
                 return Err(ProviderError::Configuration(
@@ -470,6 +519,7 @@ impl ProviderExecutor {
             ));
         }
         let (model_profile, model, max_output_tokens) = generation_metadata(&input)?;
+        let reasoning_effort = input.reasoning_effort;
         let model_request = input.request.ok_or_else(|| {
             ProviderError::Configuration("provider generation request is absent".into())
         })?;
@@ -505,10 +555,12 @@ impl ProviderExecutor {
         self.validate_resource(effect, &endpoint, permit)?;
         let tool_names = ProviderToolNames::from_request(&model_request)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses => responses_payload(
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => responses_payload(
                 &model_request,
+                self.profile.kind,
                 &model,
                 max_output_tokens,
+                reasoning_effort,
                 false,
                 &tool_names,
             ),
@@ -516,6 +568,7 @@ impl ProviderExecutor {
                 &model_request,
                 &model,
                 max_output_tokens,
+                reasoning_effort,
                 false,
                 &tool_names,
             ),
@@ -536,7 +589,7 @@ impl ProviderExecutor {
             }
         };
         let turn = match self.profile.kind {
-            ProviderKind::OpenAiResponses => {
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
                 normalize_responses(&self.profile, &model_profile, &model, &bytes, &tool_names)
             }
             ProviderKind::OpenAiCompatible => {
@@ -605,7 +658,7 @@ impl ProviderExecutor {
             }
             bytes.extend_from_slice(&chunk);
         }
-        redact_exact_bytes(&mut bytes, secret.as_ref().map(|secret| secret.as_str()));
+        secret.redact_bytes(&mut bytes);
         Ok(ProviderJsonResponse::Success(bytes))
     }
 
@@ -614,39 +667,37 @@ impl ProviderExecutor {
         endpoint: &str,
         payload: Option<&Value>,
         permit: &ExecutionPermit,
-    ) -> Result<(reqwest::Response, Option<zeroize::Zeroizing<String>>), ProviderError> {
+    ) -> Result<(reqwest::Response, RequestSecrets), ProviderError> {
         let url = Url::parse(endpoint)?;
-        let host = url
-            .host_str()
-            .ok_or_else(|| ProviderError::Configuration("provider URL has no host".into()))?;
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| ProviderError::Configuration("provider URL has no port".into()))?;
-        let matched =
-            network_destination_match(&permit.obligations().network_destinations, endpoint)
-                .map_err(|error| ProviderError::Configuration(error.to_string()))?
-                .ok_or_else(|| {
-                    ProviderError::Configuration(
-                        "provider origin is absent from permit obligations".into(),
-                    )
-                })?;
-        let allow_non_public = matched == NetworkDestinationMatch::Exact
-            && (host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
-        let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
-        let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
-        let client = self
-            .tls_roots
-            .configure_reqwest(Client::builder())
-            .no_proxy()
-            .redirect(RedirectPolicy::none())
-            .resolve_to_addrs(host, &addresses)
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()?;
+        let client = self.client_for_url(&url, permit).await?;
         let mut builder = payload
             .as_ref()
             .map_or_else(|| client.get(url.clone()), |_| client.post(url.clone()));
-        let secret = if let Some(reference) = self.profile.credential_reference.as_deref() {
+        if payload
+            .and_then(|value| value.get("stream"))
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            builder = builder.header(reqwest::header::ACCEPT, "text/event-stream");
+        }
+        let mut secrets = RequestSecrets::default();
+        if self.profile.kind == ProviderKind::OpenAiCodex {
+            let authorization = self.codex_authorization(permit).await?;
+            builder = builder
+                .bearer_auth(authorization.access_token())
+                .header("ChatGPT-Account-ID", authorization.account_id())
+                .header("originator", "Codex Colossus")
+                .header("version", CODEX_PROTOCOL_VERSION)
+                .header(
+                    reqwest::header::USER_AGENT,
+                    concat!("colossus/", env!("CARGO_PKG_VERSION")),
+                );
+            if authorization.is_fedramp() {
+                builder = builder.header("X-OpenAI-Fedramp", "true");
+            }
+            secrets.retain(authorization.access_token());
+            secrets.retain(authorization.account_id());
+        } else if let Some(reference) = self.profile.credential_reference.as_deref() {
             let secret = zeroize::Zeroizing::new(self.credentials.resolve(reference)?);
             if secret.is_empty() {
                 return Err(ProviderError::Credential(
@@ -654,10 +705,8 @@ impl ProviderExecutor {
                 ));
             }
             builder = builder.bearer_auth(secret.as_str());
-            Some(secret)
-        } else {
-            None
-        };
+            secrets.0.push(secret);
+        }
         if let Some(payload) = payload {
             let body = serde_json::to_vec(payload)
                 .map_err(|error| ProviderError::Malformed(error.to_string()))?;
@@ -671,7 +720,89 @@ impl ProviderExecutor {
                 .body(body);
         }
         let response = builder.send().await?;
-        Ok((response, secret))
+        Ok((response, secrets))
+    }
+
+    async fn client_for_url(
+        &self,
+        url: &Url,
+        permit: &ExecutionPermit,
+    ) -> Result<Client, ProviderError> {
+        let host = url
+            .host_str()
+            .ok_or_else(|| ProviderError::Configuration("provider URL has no host".into()))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| ProviderError::Configuration("provider URL has no port".into()))?;
+        let matched =
+            network_destination_match(&permit.obligations().network_destinations, url.as_str())
+                .map_err(|error| ProviderError::Configuration(error.to_string()))?
+                .ok_or_else(|| {
+                    ProviderError::Configuration(
+                        "provider origin is absent from permit obligations".into(),
+                    )
+                })?;
+        let allow_non_public = matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
+        let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
+        self.tls_roots
+            .configure_reqwest(Client::builder())
+            .no_proxy()
+            .redirect(RedirectPolicy::none())
+            .resolve_to_addrs(host, &addresses)
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .map_err(ProviderError::from)
+    }
+
+    async fn codex_authorization(
+        &self,
+        permit: &ExecutionPermit,
+    ) -> Result<CodexAuthorization, ProviderError> {
+        let store = self
+            .codex_auth
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(CodexAuthStore::from_environment)
+            .map_err(codex_credential_error)?;
+        let authorization = store.load().map_err(codex_credential_error)?;
+        if !authorization.requires_refresh(OffsetDateTime::now_utc()) {
+            return Ok(authorization);
+        }
+        let _refresh_guard = self.codex_refresh.lock().await;
+        let authorization = store.load().map_err(codex_credential_error)?;
+        if !authorization.requires_refresh(OffsetDateTime::now_utc()) {
+            return Ok(authorization);
+        }
+        let url = Url::parse(CODEX_TOKEN_ENDPOINT)?;
+        let client = self.client_for_url(&url, permit).await?;
+        let response = client
+            .post(url)
+            .json(&CodexRefreshRequest::new(&authorization))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ProviderError::Credential(format!(
+                "Codex token refresh returned HTTP {}; run `colossus codex login`",
+                response.status().as_u16()
+            )));
+        }
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_CODEX_REFRESH_RESPONSE_BYTES {
+                return Err(ProviderError::Credential(
+                    "Codex token refresh response exceeded the safety bound".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        store
+            .apply_refresh(&authorization, &bytes)
+            .map_err(codex_credential_error)
     }
 
     async fn capture_http_error(
@@ -679,7 +810,7 @@ impl ProviderExecutor {
         endpoint: &str,
         request_body: Option<Value>,
         response: reqwest::Response,
-        secret: Option<zeroize::Zeroizing<String>>,
+        secret: RequestSecrets,
     ) -> Result<ProviderResponseDiagnostic, ProviderError> {
         let status = response.status().as_u16();
         let content_type = response
@@ -700,7 +831,7 @@ impl ProviderExecutor {
             }
             body.extend_from_slice(&chunk);
         }
-        redact_exact_bytes(&mut body, secret.as_ref().map(|secret| secret.as_str()));
+        secret.redact_bytes(&mut body);
         if body.len() > MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES {
             body.truncate(MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES);
             body_truncated = true;
@@ -754,16 +885,26 @@ impl ProviderExecutor {
             }
             return Err(provider_execution_error(provider_status_error(&response)));
         }
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
+        let content_type_header = response.headers().get(reqwest::header::CONTENT_TYPE);
+        let is_event_stream = content_type_header
             .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if !content_type
-            .split(';')
-            .next()
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
-        {
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
+        let is_untyped_codex_stream =
+            self.profile.kind == ProviderKind::OpenAiCodex && content_type_header.is_none();
+        if !is_event_stream && !is_untyped_codex_stream {
+            if metadata.include_response_diagnostics {
+                let diagnostic = self
+                    .capture_http_error(endpoint, Some(payload), response, secret)
+                    .await
+                    .map_err(provider_execution_error)?;
+                return emit_stream_item(
+                    ProviderStreamItem::Diagnostic { diagnostic },
+                    permit,
+                    observer,
+                )
+                .await;
+            }
             return Err(provider_execution_error(ProviderError::Malformed(
                 "streaming provider response is not text/event-stream".into(),
             )));
@@ -786,7 +927,7 @@ impl ProviderExecutor {
             }
             for data in decoder.feed(&chunk).map_err(provider_execution_error)? {
                 let mut data = data;
-                redact_exact_bytes(&mut data, secret.as_ref().map(|secret| secret.as_str()));
+                secret.redact_bytes(&mut data);
                 if data == b"[DONE]" {
                     state.mark_done();
                     continue;
@@ -796,7 +937,7 @@ impl ProviderExecutor {
                         "provider SSE data is not valid JSON: {error}"
                     )))
                 })?;
-                redact_value_exact(&mut value, secret.as_ref().map(|secret| secret.as_str()));
+                secret.redact_value(&mut value);
                 for event in state.ingest(value).map_err(provider_execution_error)? {
                     emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
                 }
@@ -821,6 +962,10 @@ impl ProviderExecutor {
         )
         .await
     }
+}
+
+fn codex_credential_error(error: CodexAuthError) -> ProviderError {
+    ProviderError::Credential(error.to_string())
 }
 
 fn provider_status_error(response: &reqwest::Response) -> ProviderError {

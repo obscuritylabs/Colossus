@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct WorkerDispatchOptions {
     pub(super) approval_mode: Option<ApprovalMode>,
     pub(super) no_alt_screen: bool,
+    pub(super) alt_screen: bool,
     pub(super) worker_required: bool,
     pub(super) inherited_worker: Option<WorkerClient>,
 }
@@ -17,6 +18,7 @@ pub(super) async fn dispatch_to_worker_if_active(
     let WorkerDispatchOptions {
         approval_mode,
         no_alt_screen,
+        alt_screen,
         worker_required,
         inherited_worker,
     } = options;
@@ -1304,10 +1306,11 @@ pub(super) async fn dispatch_to_worker_if_active(
                             session_id: session.clone(),
                             resume_latest: *resume,
                         },
-                        screen_mode: if no_alt_screen {
-                            ScreenMode::Inline
-                        } else {
+                        screen_mode: if alt_screen {
                             ScreenMode::Alternate
+                        } else {
+                            let _ = no_alt_screen;
+                            ScreenMode::Inline
                         },
                     },
                 )
@@ -1336,7 +1339,9 @@ pub(super) async fn dispatch_to_worker_if_active(
             print_json(&client.call(WorkerOperation::AccessEffective).await?)?;
             Ok(true)
         }
-        Command::Worker(_) | Command::Config(_) | Command::SandboxHelper => Ok(false),
+        Command::Worker(_) | Command::Config(_) | Command::Codex(_) | Command::SandboxHelper => {
+            Ok(false)
+        }
     }
 }
 

@@ -83,6 +83,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &[
             "provider.echo",
             "provider.openai.responses",
+            "provider.openai.codex",
             "provider.openai.chat",
             "provider.models",
             "provider.call",

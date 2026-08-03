@@ -14,7 +14,7 @@ different providers without duplicating connection settings.
 | Layer | Answers | Examples |
 | --- | --- | --- |
 | Provider profile | Where and how does Colossus connect? | Adapter kind, base URL, credential reference, timeout |
-| Model profile | Which model is used and what may Colossus send? | Model ID, token limits, tool calls, streaming |
+| Model profile | Which model is used and what may Colossus send? | Model ID, token limits, reasoning effort, tool calls, streaming |
 | Model role | Which model profile handles this job? | Primary agent, summarizer, subagent, research worker |
 
 Use this page to construct the YAML. For credential setup and live diagnostics, see
@@ -25,6 +25,7 @@ Use this page to construct the YAML. For credential setup and live diagnostics, 
 | Scenario | Provider kind | Credential | Sandbox destination |
 | --- | --- | --- | --- |
 | Offline smoke testing | `echo` | None | None |
+| Codex/ChatGPT subscription | `open_ai_codex` | `codex:default` | `https://chatgpt.com` and `https://auth.openai.com` |
 | OpenAI Responses endpoint | `open_ai_responses` | Usually `env:VARIABLE` | Exact HTTPS origin |
 | OpenAI-compatible Chat Completions endpoint | `open_ai_compatible` | `env:VARIABLE` or `null` | Exact HTTPS origin or exact loopback origin |
 | Desktop-managed local model | `open_ai_compatible` | Injected `host:IDENTIFIER` | Exact loopback origin |
@@ -77,6 +78,7 @@ nonempty and are referenced by model profiles.
 | Value | Transport | Configuration rules |
 | --- | --- | --- |
 | `echo` | Deterministic, local, network-free response | `baseUrl` and `credentialReference` must both be `null` or omitted |
+| `open_ai_codex` | Subscription-backed OpenAI Responses API | Forbids `baseUrl`; requires `credentialReference: codex:default`; uses the fixed ChatGPT Codex backend |
 | `open_ai_responses` | OpenAI Responses API | Requires `baseUrl`; Colossus appends `/responses` and `/models` |
 | `open_ai_compatible` | OpenAI-compatible Chat Completions API | Requires `baseUrl`; Colossus appends `/chat/completions` and `/models` |
 
@@ -105,6 +107,10 @@ The URL must:
 - Include any required API prefix, such as `/v1`.
 - Omit `/responses`, `/chat/completions`, and `/models`; Colossus adds those paths.
 
+`open_ai_codex` is the exception: omit `baseUrl`. Colossus pins that adapter to
+`https://chatgpt.com/backend-api/codex` so a ChatGPT bearer and account identifier cannot
+be redirected to an operator-configured host.
+
 A trailing slash is normalized away. Add only the canonical origin—scheme, host, and
 effective port—to `sandbox.networkDestinations`:
 
@@ -123,6 +129,7 @@ Credentials are references, never literal values:
 
 | Form | Use |
 | --- | --- |
+| `codex:default` | File-backed ChatGPT sign-in created by `colossus codex login`; accepted only by `open_ai_codex` |
 | `env:VARIABLE` | Standard CLI, daemon, worker, and unattended deployments |
 | `host:IDENTIFIER` | Application-managed runtimes that inject an in-memory credential resolver |
 | `null` | Credential-free endpoints, normally local development services |
@@ -135,6 +142,23 @@ The standard CLI and daemon do not interpret `host:` identifiers as secret value
 form is for an embedding application, such as the desktop-managed local runtime. A
 credential is resolved only after policy authorizes the provider effect, and its value
 is removed from released results and diagnostics.
+
+`codex:default` reads `$CODEX_HOME/auth.json`, or `~/.codex/auth.json` when that variable
+is unset. The file must be a regular non-symlink file and, on Unix, inaccessible to group
+and other users. Tokens remain late-bound and zeroize when dropped. Colossus refreshes an
+expiring access token only through the fixed `https://auth.openai.com/oauth/token`
+endpoint and atomically returns the rotated values to the same file. Grant both
+`https://chatgpt.com` and `https://auth.openai.com` in
+`sandbox.networkDestinations`; the refresh fails closed if the second origin is absent.
+The adapter advertises its separately audited Codex wire-contract version in the
+backend's `version` header and model-catalog query; its `User-Agent` continues to identify
+the actual Colossus build. A Colossus release must review the matching official Codex
+request contract before advancing that compatibility version.
+Streaming requests also set `Accept: text/event-stream`; the JSON `stream` flag alone
+does not negotiate the subscription backend's SSE response transport.
+The fixed Codex backend may omit the response `Content-Type`; only this adapter accepts
+an absent header and still requires the body to pass strict SSE and Responses-event
+validation. A conflicting response media type remains an error.
 
 Provider credentials are resolved by the in-process provider adapter. They do not need
 an entry in `sandbox.environment` unless a separate sandboxed process also needs that
@@ -156,14 +180,13 @@ retry an ambiguous failed generation request.
 Each entry under `models.profiles` selects an exact provider connection and declares the
 model metadata Colossus needs to shape requests safely:
 
-| Field | Values / constraint |
-| --- | --- |
 | Field | Meaning |
 | --- | --- |
 | `providerProfile` | Name of an existing entry under `providers.profiles` |
 | `model` | Exact nonempty model identifier sent to the provider |
 | `contextWindowTokens` | Total model context window; at least `1024` |
 | `maxOutputTokens` | Positive output reservation that leaves room for input and safety margin |
+| `reasoningEffort` | Optional exact effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra` |
 | `capabilities.toolCalls` | Whether Colossus may send tool definitions and structured tool history |
 | `capabilities.streaming` | Whether Colossus requests the provider's streaming transport |
 
@@ -202,8 +225,41 @@ Colossus compacts against that input budget using a conservative byte-based esti
 An individual request may lower `maxOutputTokens`, but it cannot exceed the configured
 maximum.
 
+For `open_ai_codex`, this value remains a Colossus context and output reservation; the
+subscription-backed Codex request contract does not accept the public Responses API
+`max_output_tokens` field, so Colossus omits that field on the wire. Other runtime,
+stream, and sandbox output bounds still apply.
+
 Avoid copying a context-window number from a different model variant. Configuration is
 rejected if the output and safety reservations consume the whole window.
+
+### Reasoning effort
+
+Set `reasoningEffort` on a model profile when every turn through that profile should use
+an explicit reasoning level:
+
+```yaml
+models:
+  profiles:
+    codex:
+      providerProfile: codex-provider
+      model: YOUR_CODEX_MODEL_ID
+      contextWindowTokens: 128000
+      maxOutputTokens: 16000
+      reasoningEffort: high
+      capabilities:
+        toolCalls: true
+        streaming: true
+```
+
+Omit the field to use the provider/model default. Colossus does not infer model support,
+downgrade an unsupported level, or retry with another level. The provider will reject an
+unsupported combination.
+
+The Responses adapters send `reasoning: { effort: ... }`. The OpenAI-compatible Chat
+Completions adapter sends `reasoning_effort`. The accepted configuration vocabulary is
+the union needed by those adapters; `ultra` is available in current Codex model catalogs
+but is not a portable level across providers.
 
 ### Capabilities
 
@@ -408,6 +464,7 @@ tool authority.
 | A remote URL is rejected | Use HTTPS and remove URL credentials, query parameters, and fragments |
 | The provider origin is denied | Add only the canonical origin to `sandbox.networkDestinations` |
 | A credential is unavailable | Use `env:VARIABLE` and inject its value into the Colossus process; do not put the value in YAML |
+| A Codex sign-in is unavailable | Run `colossus codex status`, then `colossus codex login`; ensure the file-backed auth file is owner-only |
 | A `host:` credential is unavailable | Run through an application that supplies the matching in-memory resolver |
 | The context profile is rejected | Correct the model window or reduce `maxOutputTokens` so the input budget remains positive |
 | A compatible server returns HTTP 400 | Verify model ID, tool support, streaming support, and the server's OpenAI compatibility |

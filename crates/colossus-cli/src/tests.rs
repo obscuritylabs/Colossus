@@ -25,6 +25,35 @@ fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
 }
 
 #[test]
+fn codex_login_supports_browser_and_device_code_flows() {
+    let browser = Cli::try_parse_from(["colossus", "codex", "login"]).expect("browser login");
+    assert!(matches!(
+        browser.command,
+        Command::Codex(CodexCommand {
+            command: CodexAction::Login { device_code: false },
+            ..
+        })
+    ));
+
+    let device = Cli::try_parse_from([
+        "colossus",
+        "codex",
+        "--codex-bin",
+        "/opt/codex",
+        "login",
+        "--device-code",
+    ])
+    .expect("device login");
+    assert!(matches!(
+        device.command,
+        Command::Codex(CodexCommand {
+            codex_bin,
+            command: CodexAction::Login { device_code: true },
+        }) if codex_bin == Path::new("/opt/codex")
+    ));
+}
+
+#[test]
 fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
     assert!(worker_probe_allows_embedded_fallback(
         &colossus_worker::WorkerError::Unavailable("worker-endpoint".into()),
@@ -618,9 +647,24 @@ fn workflow_webhook_http_parser_is_bounded_and_strips_auth_headers() {
 
 #[test]
 fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
+    let default = Cli::try_parse_from(["colossus", "tui"]).expect("default TUI");
+    assert!(!default.no_alt_screen);
+    assert!(!default.alt_screen);
+
     let tui = Cli::try_parse_from(["colossus", "tui", "--no-alt-screen"]).expect("explicit TUI");
     assert!(tui.no_alt_screen);
+    assert!(!tui.alt_screen);
     assert!(matches!(tui.command, Command::Tui { .. }));
+
+    let alternate =
+        Cli::try_parse_from(["colossus", "tui", "--alt-screen"]).expect("alternate TUI");
+    assert!(alternate.alt_screen);
+    assert!(!alternate.no_alt_screen);
+
+    let conflict = Cli::try_parse_from(["colossus", "tui", "--alt-screen", "--no-alt-screen"])
+        .err()
+        .expect("screen modes conflict");
+    assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
 
     let error = Cli::try_parse_from(["colossus", "--no-alt-screen", "repl", "--resume"])
         .err()

@@ -5,11 +5,12 @@ use super::{
     InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor, MemoryEmbeddingConfig,
     MemoryOperation, ModelCapabilities, ModelProfileConfig, PackProcessDeclaration,
     PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
-    ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SearchConfig, SearchProfileConfig,
-    SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
-    TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, goal_objective_from_plan,
-    recover_interrupted_subagents, recover_unknown_effects, reject_reserved_shell_environment,
-    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
+    ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
+    SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
+    SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
+    configure_shell_environment, goal_objective_from_plan, recover_interrupted_subagents,
+    recover_unknown_effects, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -69,6 +70,7 @@ fn configure_primary_model(
                 tool_calls: true,
                 streaming: true,
             },
+            reasoning_effort: None,
         },
     );
     config.models.roles.insert("primary".into(), profile.into());
@@ -724,6 +726,40 @@ fn runtime_wide_ca_bundle_path_round_trips_and_rejects_an_empty_path() {
             .to_string()
             .contains("network.caBundlePath")
     );
+}
+
+#[test]
+fn model_reasoning_effort_round_trips_strictly() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    for effort in [
+        ReasoningEffort::None,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
+    ] {
+        config
+            .models
+            .profiles
+            .get_mut("echo")
+            .expect("default model profile")
+            .reasoning_effort = Some(effort);
+        let yaml = config.to_yaml().expect("configuration YAML");
+        let parsed = RuntimeConfig::from_yaml(&yaml).expect("configuration");
+        assert_eq!(
+            parsed.models.profiles["echo"].reasoning_effort,
+            Some(effort)
+        );
+    }
+
+    let yaml = config
+        .to_yaml()
+        .expect("configuration YAML")
+        .replace("reasoningEffort: ultra", "reasoningEffort: extreme");
+    assert!(RuntimeConfig::from_yaml(&yaml).is_err());
 }
 
 #[test]
@@ -1393,6 +1429,41 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
         RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
         "OpenAI Responses profile without a credential reference was rejected"
     );
+
+    config.providers.profiles.insert(
+        "remote".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCodex,
+            base_url: None,
+            credential_reference: Some("codex:default".into()),
+            timeout_ms: 5_000,
+        },
+    );
+    config.sandbox.network_destinations = vec![
+        "https://chatgpt.com".into(),
+        "https://auth.openai.com".into(),
+    ];
+    configure_primary_model(&mut config, "remote", "remote", "gpt-test");
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+        "Codex/ChatGPT provider profile was rejected"
+    );
+    config.sandbox.network_destinations = vec!["https://chatgpt.com".into()];
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+        "Codex profile without its token refresh origin was accepted"
+    );
+
+    config.providers.profiles.insert(
+        "remote".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiResponses,
+            base_url: Some("https://api.openai.com/v1".into()),
+            credential_reference: None,
+            timeout_ms: 5_000,
+        },
+    );
+    config.sandbox.network_destinations = vec!["https://api.openai.com".into()];
 
     config
         .providers
@@ -3081,6 +3152,7 @@ impl ModelProvider for WorkScriptedProvider {
                 tool_calls: true,
                 streaming: true,
             },
+            reasoning_effort: None,
         })
     }
 

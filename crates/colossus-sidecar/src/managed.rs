@@ -430,6 +430,7 @@ fn managed_runtime_config(
                             tool_calls: model.capabilities.tool_calls,
                             streaming: model.capabilities.streaming,
                         },
+                        reasoning_effort: None,
                     },
                 )
             })

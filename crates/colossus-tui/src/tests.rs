@@ -479,7 +479,7 @@ fn plan_mode_and_selection_are_visible_in_composer_and_footer() {
     state.mode = InteractiveMode::Plan;
     state.selected_plan = Some(plan_record(PlanStatus::Draft, 7));
     terminal
-        .draw(|frame| render(frame, &mut state))
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
         .expect("draw plan mode");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Plan plan-019"), "{rendered}");
@@ -589,7 +589,7 @@ fn visible_completion_menu_is_adaptive_at_minimum_size() {
         let mut state = TuiState::from_snapshot(snapshot());
         state.composer.insert("/");
         terminal
-            .draw(|frame| render(frame, &mut state))
+            .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
             .expect("draw completion menu");
         let rendered = terminal.backend().to_string();
         assert!(
@@ -894,6 +894,7 @@ fn page_boundary_tool_results_remain_bounded_before_their_call_is_loaded() {
 #[test]
 fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
     let mut state = TuiState::from_snapshot(snapshot());
+    let original_epoch = state.transcript_epoch;
     state.page_up();
     state.new_items = 3;
     assert!(apply_command_result(
@@ -932,10 +933,233 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
     assert_eq!(state.transcript.len(), 1);
     assert_eq!(state.scroll_from_bottom, 0);
     assert_eq!(state.new_items, 0);
+    assert_eq!(state.transcript_epoch, original_epoch.wrapping_add(1));
     assert!(
         transcript_lines(&state, 80)
             .iter()
             .any(|line| line.to_string().contains("other transcript"))
+    );
+}
+
+#[test]
+fn native_history_commits_every_finalized_entry_and_keeps_only_streaming_output_live() {
+    assert_eq!(ScreenMode::default(), ScreenMode::Inline);
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript.clear();
+    state.transcript_sources.clear();
+    state.append_entry(user_entry("older question", TranscriptKind::User));
+    state.append_entry(user_entry("older answer", TranscriptKind::Assistant));
+    state.append_entry(user_entry("newest question", TranscriptKind::User));
+    state.append_entry(TranscriptEntry {
+        sequence: None,
+        kind: TranscriptKind::Assistant,
+        document: PresentationDocument::from_block(PresentationBlock::Text(
+            "streaming answer".into(),
+        )),
+        temporary: true,
+    });
+
+    let committed = committable_transcript_end(&state.transcript, 0);
+    assert_eq!(committed, 3);
+    assert_eq!(
+        committable_transcript_end(&state.transcript, committed),
+        committed
+    );
+
+    let live = transcript_lines_range(&state, 80, committed, state.transcript.len(), false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(live.contains("streaming answer"), "{live}");
+    assert!(!live.contains("newest question"), "{live}");
+    assert!(!live.contains("older question"), "{live}");
+    assert!(!live.contains("older answer"), "{live}");
+
+    state.transcript[3].temporary = false;
+    assert_eq!(
+        committable_transcript_end(&state.transcript, committed),
+        4,
+        "completed output enters native history immediately"
+    );
+
+    state.append_entry(user_entry("next question", TranscriptKind::User));
+    assert_eq!(
+        committable_transcript_end(&state.transcript, 4),
+        5,
+        "the submitted user message is finalized output too"
+    );
+}
+
+#[test]
+fn tool_boundary_releases_intermediate_commentary_and_tool_result_to_native_history() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript.clear();
+    state.transcript_sources.clear();
+    let envelope = |event| RunEventEnvelope {
+        schema_version: 1,
+        run_id: "run-tool-history".into(),
+        session_id: "019f-test".into(),
+        event,
+    };
+    let call = ToolCall {
+        call_id: "call-history".into(),
+        name: "filesystem.search".into(),
+        arguments: serde_json::json!({"query": "Runtime"}),
+    };
+
+    handle_run_event(
+        &mut state,
+        envelope(RunEvent::Provider {
+            event: ProviderEvent::ModelDelta {
+                text: "I will inspect the runtime first.".into(),
+            },
+        }),
+    );
+    assert_eq!(committable_transcript_end(&state.transcript, 0), 0);
+
+    handle_run_event(
+        &mut state,
+        envelope(RunEvent::ToolStarted {
+            turn: 1,
+            call: call.clone(),
+            elapsed_seconds: 0.1,
+        }),
+    );
+    assert_eq!(
+        committable_transcript_end(&state.transcript, 0),
+        1,
+        "commentary preceding a tool call must no longer block native history"
+    );
+    assert!(!state.transcript[0].temporary);
+    assert!(matches!(
+        state.transcript[0].document.blocks.first(),
+        Some(PresentationBlock::Markdown(_))
+    ));
+
+    handle_run_event(
+        &mut state,
+        envelope(RunEvent::ToolCompleted {
+            turn: 1,
+            result: ToolResult {
+                call_id: call.call_id,
+                name: call.name,
+                output: serde_json::json!({"matches": ["runtime.rs"]}).to_string(),
+                exit_code: 0,
+            },
+            duration_seconds: 0.2,
+            elapsed_seconds: 0.3,
+        }),
+    );
+    assert_eq!(committable_transcript_end(&state.transcript, 1), 2);
+    let completed_tool = transcript_lines_range(&state, 80, 1, 2, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        completed_tool.contains("Completed filesystem.search"),
+        "{completed_tool}"
+    );
+
+    handle_run_event(
+        &mut state,
+        envelope(RunEvent::Provider {
+            event: ProviderEvent::ModelDelta {
+                text: "The runtime is composed from focused services.".into(),
+            },
+        }),
+    );
+    assert_eq!(committable_transcript_end(&state.transcript, 2), 2);
+    handle_run_event(
+        &mut state,
+        envelope(RunEvent::Provider {
+            event: ProviderEvent::FinalOutput {
+                text: "The runtime is composed from focused services.".into(),
+            },
+        }),
+    );
+    assert_eq!(committable_transcript_end(&state.transcript, 2), 3);
+}
+
+#[test]
+fn inline_viewport_collapses_after_streaming_output_is_finalized() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript.clear();
+    state.transcript_sources.clear();
+    state.append_entry(TranscriptEntry {
+        sequence: None,
+        kind: TranscriptKind::Assistant,
+        document: PresentationDocument::from_block(PresentationBlock::Text(
+            "first live row\nsecond live row".into(),
+        )),
+        temporary: true,
+    });
+
+    let live_height = desired_inline_viewport_height(&state, 80, 24, 0);
+    assert!(live_height > MINIMUM_INLINE_VIEWPORT_HEIGHT);
+    state.transcript[0].temporary = false;
+    let committed = committable_transcript_end(&state.transcript, 0);
+    assert_eq!(committed, 1);
+    assert_eq!(
+        desired_inline_viewport_height(&state, 80, 24, committed),
+        MINIMUM_INLINE_VIEWPORT_HEIGHT
+    );
+}
+
+#[test]
+fn inline_viewport_stays_bottom_anchored_as_live_content_grows_and_shrinks() {
+    let screen = Size::new(80, 24);
+    let current = Rect::new(0, 19, 80, 5);
+    let (grown, scroll_up) = next_inline_area(current, screen, screen, 11);
+    assert_eq!(grown, Rect::new(0, 13, 80, 11));
+    assert_eq!(scroll_up, 6);
+
+    let (shrunk, scroll_up) = next_inline_area(grown, screen, screen, 5);
+    assert_eq!(shrunk, current);
+    assert_eq!(scroll_up, 0);
+}
+
+#[test]
+fn finalized_multiline_output_has_no_trailing_rendered_separator() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let start = state.transcript.len();
+    let output = (1..=30)
+        .map(|row| format!("stream-final-row-{row:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    update_streaming_assistant(&mut state, &output);
+    finalize_assistant(&mut state, &output);
+    let rendered = transcript_lines_range(&state, 80, start, state.transcript.len(), true);
+    assert!(
+        rendered
+            .last()
+            .is_some_and(|line| !line.to_string().trim().is_empty()),
+        "rendered rows: {:?}",
+        rendered.iter().map(ToString::to_string).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn native_history_insertion_fills_the_row_above_a_bottom_anchored_viewport() {
+    let mut backend = TestBackend::new(20, 8);
+    let lines = (1..=12)
+        .map(|row| Line::from(format!("history-{row:02}")))
+        .collect::<Vec<_>>();
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 12));
+    Paragraph::new(lines).render(buffer.area, &mut buffer);
+    let mut viewport = Rect::new(0, 4, 20, 4);
+    insert_history_buffer(&mut backend, &buffer, &mut viewport, Size::new(20, 8))
+        .expect("insert native history");
+
+    assert_eq!(viewport, Rect::new(0, 4, 20, 4));
+    let row = (0..20)
+        .filter_map(|x| backend.buffer().cell((x, 3)))
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(
+        row.contains("history-12"),
+        "last history row should fill the line above the viewport: {row:?}"
     );
 }
 
@@ -1143,7 +1367,7 @@ fn resume_picker_is_responsive_and_keeps_the_selected_preview_visible() {
             }),
         );
         terminal
-            .draw(|frame| render(frame, &mut state))
+            .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
             .expect("draw resume picker");
         let rendered = terminal.backend().to_string();
         assert!(
@@ -1193,6 +1417,80 @@ fn scrolled_up_state_counts_new_items_without_losing_position() {
 }
 
 #[test]
+fn mouse_wheel_scrolls_transcript_by_lines_and_returns_to_live_output() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript_height = 4;
+    state.transcript_width = 80;
+    for index in 0..12 {
+        state.append_entry(user_entry(
+            &format!("transcript row {index}"),
+            TranscriptKind::User,
+        ));
+    }
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)));
+    assert_eq!(state.scroll_from_bottom, MOUSE_SCROLL_LINES);
+    state.new_items = 2;
+    assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollDown)));
+    assert_eq!(state.scroll_from_bottom, 0);
+    assert_eq!(state.new_items, 0);
+
+    let mut requested_older = false;
+    for _ in 0..100 {
+        if handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)) {
+            requested_older = true;
+            break;
+        }
+    }
+    assert!(requested_older);
+
+    let offset = state.scroll_from_bottom;
+    state.overlay = Some(Overlay::HistorySearch {
+        query: String::new(),
+    });
+    assert!(!handle_mouse(&mut state, mouse(MouseEventKind::ScrollUp)));
+    assert_eq!(state.scroll_from_bottom, offset);
+}
+
+#[test]
+fn mouse_scrolling_keeps_the_composer_and_status_footer_sticky() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    for index in 0..20 {
+        state.append_entry(user_entry(
+            &format!("scrollable row {index}"),
+            TranscriptKind::User,
+        ));
+    }
+    state.composer.insert("sticky draft");
+    for _ in 0..4 {
+        handle_mouse(
+            &mut state,
+            MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    }
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw scrolled TUI");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("sticky draft"), "{rendered}");
+    assert!(rendered.contains("primary:echo@echo"), "{rendered}");
+    assert!(state.scroll_from_bottom > 0);
+}
+
+#[test]
 fn queue_is_bounded_to_eight_future_turns() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.operation = Some(OperationKind::Run);
@@ -1222,6 +1520,29 @@ fn failed_or_cancelled_runs_pause_the_queue_and_cancellation_is_cooperative() {
 }
 
 #[test]
+fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
+    let mut idle = TuiState::from_snapshot(snapshot());
+    idle.composer.insert("discarded draft");
+    idle.interrupt_or_exit();
+    assert!(idle.should_exit);
+
+    let mut active = TuiState::from_snapshot(snapshot());
+    let control = RunControl::default();
+    active.operation = Some(OperationKind::Run);
+    active.control = Some(control.clone());
+    active.interrupt_or_exit();
+    assert!(control.is_cancelled());
+    assert!(!active.should_exit);
+    assert_eq!(
+        active.activity.as_deref(),
+        Some("cancelling after the current effect settles")
+    );
+
+    active.interrupt_or_exit();
+    assert!(active.should_exit);
+}
+
+#[test]
 fn hostile_controls_are_removed_and_minimum_size_preserves_state() {
     assert_eq!(
         sanitize_input("safe\u{1b}]8;;evil\u{7}text\r\n"),
@@ -1232,7 +1553,7 @@ fn hostile_controls_are_removed_and_minimum_size_preserves_state() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.composer.insert("preserved draft");
     terminal
-        .draw(|frame| render(frame, &mut state))
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
         .expect("draw");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Resize terminal"));
@@ -1266,7 +1587,7 @@ fn every_theme_keeps_transcript_and_composer_at_all_required_sizes() {
                 let mut state = TuiState::from_snapshot(source);
                 state.composer.insert("draft marker");
                 terminal
-                    .draw(|frame| render(frame, &mut state))
+                    .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
                     .expect("draw");
                 let rendered = terminal.backend().to_string();
                 assert!(rendered.contains("durable row marker"), "{width}x{height}");
@@ -1313,7 +1634,7 @@ fn transcript_is_borderless_and_uses_distinct_speaker_and_semantic_cues() {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     terminal
-        .draw(|frame| render(frame, &mut state))
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
         .expect("draw");
     let screen = terminal.backend().to_string();
     assert!(!screen.contains("┌─Transcript"), "{screen}");

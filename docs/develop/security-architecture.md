@@ -72,8 +72,8 @@ A denial cannot leak private bytes through output, errors, audit payloads, or ob
 
 Provider and model diagnostics have an explicit local-operator release. The CLI
 `--include-provider-response` option and the local TUI `/models doctor` and `/provider
-doctor` commands can return the credential-free request plus at most 16 KiB of a
-non-success response body after exact configured-credential redaction. The TUI
+doctor` commands can return the credential-free request plus at most 16 KiB of a failed
+or transport-incompatible response body after exact configured-credential redaction. The TUI
 `/provider diagnostics on` command applies the same release to failed provider turns in
 the current TUI process, including post-tool continuations, until the operator runs
 `/provider diagnostics off` or exits. These captures are represented as quarantined
@@ -143,6 +143,26 @@ namespace or a domain-separated XChaCha20-Poly1305 redb sidecar, and client secr
 behind their configured references. Each discovery page and tool call uses a fresh
 initialized stateful session, disables request and expired-session retries, and treats
 an uncertain tool call as `OutcomeUnknown`.
+
+Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
+OAuth ceremony to the official Codex CLI and forces its supported file credential store;
+Colossus never handles the authorization code. The `open_ai_codex` adapter accepts only
+`codex:default`, fixes the service and refresh endpoints, rejects symlinked or non-private
+Unix auth files, resolves tokens only after a provider permit, and redacts both bearer and
+ChatGPT account identifiers from quarantined responses. Only `open_ai_codex` may reference
+`codex:default`, so a non-Codex profile cannot pass startup validation and then fail every
+call in the standard credential resolver. Proactive refresh requires the OpenAI auth origin
+in the same permit's network obligations and atomically updates the Codex-managed file
+without changing accounts: the read-compare-write cycle holds a cross-process advisory lock
+on a sibling `auth.json.lock` file and re-reads the stored tokens immediately before
+persisting, so an external writer such as the official Codex CLI is never overwritten with a
+stale snapshot. Backend requests distinguish the audited
+Codex wire-contract version from the Colossus product version: `version` is compatibility
+metadata pinned in the adapter, while `User-Agent` names the actual Colossus build.
+Codex streaming requests explicitly accept SSE. The fixed backend can omit the response
+media type, so only the Codex adapter permits an absent `Content-Type` before applying
+the same bounded strict SSE and Responses-event validation; an explicit conflicting
+media type still fails closed.
 
 One explicit bounded PEM CA bundle may augment built-in roots across Colossus-owned
 outbound clients. It is loaded once at runtime startup and never sourced from ambient

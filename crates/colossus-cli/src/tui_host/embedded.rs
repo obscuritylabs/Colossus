@@ -296,14 +296,14 @@ impl EmbeddedInteractiveHost {
             ),
             "models" => {
                 let profile = doctor_profile(arguments, "models")?;
-                self.result(
-                    &self
-                        .runtime
-                        .model_doctor_with_diagnostics(profile, true)
-                        .await
-                        .map_err(|error| error.to_string())?,
-                    Some("Model diagnostics"),
-                )
+                let value = self
+                    .runtime
+                    .model_doctor_with_diagnostics(profile, true)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(HostCommandResult::document(model_diagnostics_document(
+                    &value,
+                )?))
             }
             "provider" => {
                 let profile = doctor_profile(arguments, "provider")?;
