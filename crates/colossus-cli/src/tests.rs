@@ -647,9 +647,24 @@ fn workflow_webhook_http_parser_is_bounded_and_strips_auth_headers() {
 
 #[test]
 fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
+    let default = Cli::try_parse_from(["colossus", "tui"]).expect("default TUI");
+    assert!(!default.no_alt_screen);
+    assert!(!default.alt_screen);
+
     let tui = Cli::try_parse_from(["colossus", "tui", "--no-alt-screen"]).expect("explicit TUI");
     assert!(tui.no_alt_screen);
+    assert!(!tui.alt_screen);
     assert!(matches!(tui.command, Command::Tui { .. }));
+
+    let alternate =
+        Cli::try_parse_from(["colossus", "tui", "--alt-screen"]).expect("alternate TUI");
+    assert!(alternate.alt_screen);
+    assert!(!alternate.no_alt_screen);
+
+    let conflict = Cli::try_parse_from(["colossus", "tui", "--alt-screen", "--no-alt-screen"])
+        .err()
+        .expect("screen modes conflict");
+    assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
 
     let error = Cli::try_parse_from(["colossus", "--no-alt-screen", "repl", "--resume"])
         .err()

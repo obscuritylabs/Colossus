@@ -28,14 +28,14 @@ For the unsigned Windows 10/11 x64 package, use the
 
 ### 1. Download and verify Desktop
 
-From the `v0.10.2-preview.8` Developer Preview, download
-`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.8-aarch64-apple-darwin.zip`
+From the `v0.10.2-preview.9` Developer Preview, download
+`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.9-aarch64-apple-darwin.zip`
 and its adjacent `.sha256` file. Keep both files together and verify the archive before
 opening it:
 
 ```bash
 shasum -a 256 -c \
-  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.8-aarch64-apple-darwin.zip.sha256
+  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.9-aarch64-apple-darwin.zip.sha256
 ```
 
 The check must report success. Expand the zip and move **Colossus Desktop** to

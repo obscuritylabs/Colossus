@@ -209,6 +209,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         WorkerDispatchOptions {
             approval_mode: cli.approval_mode,
             no_alt_screen: cli.no_alt_screen,
+            alt_screen: cli.alt_screen,
             worker_required: cli.worker_required,
             inherited_worker,
         },
@@ -1223,10 +1224,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                         session_id: session,
                         resume_latest: resume,
                     },
-                    screen_mode: if cli.no_alt_screen {
-                        ScreenMode::Inline
-                    } else {
+                    screen_mode: if cli.alt_screen {
                         ScreenMode::Alternate
+                    } else {
+                        ScreenMode::Inline
                     },
                 },
             )

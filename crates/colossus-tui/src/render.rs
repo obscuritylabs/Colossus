@@ -1,9 +1,18 @@
 use super::*;
 use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
-pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
+pub(super) fn render(
+    frame: &mut Frame<'_>,
+    state: &mut TuiState,
+    transcript_start: usize,
+    screen_mode: ScreenMode,
+) {
     let area = frame.area();
-    if area.width < MINIMUM_TERMINAL_WIDTH || area.height < MINIMUM_TERMINAL_HEIGHT {
+    let minimum_height = match screen_mode {
+        ScreenMode::Alternate => MINIMUM_TERMINAL_HEIGHT,
+        ScreenMode::Inline => MINIMUM_INLINE_VIEWPORT_HEIGHT,
+    };
+    if area.width < MINIMUM_TERMINAL_WIDTH || area.height < minimum_height {
         let notice = Paragraph::new(format!(
             "Colossus needs at least {MINIMUM_TERMINAL_WIDTH}x{MINIMUM_TERMINAL_HEIGHT}. Current: {}x{}.\nYour draft and transcript are preserved.",
             area.width, area.height
@@ -22,7 +31,11 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),
+            Constraint::Min(if screen_mode == ScreenMode::Inline {
+                0
+            } else {
+                3
+            }),
             Constraint::Length(activity_height),
             Constraint::Length(completion_height),
             Constraint::Length(composer_height),
@@ -35,7 +48,7 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
             .saturating_sub(u16::from(state.new_items > 0)),
     );
     state.transcript_width = usize::from(rows[0].width).max(20);
-    render_transcript(frame, state, rows[0]);
+    render_transcript(frame, state, rows[0], transcript_start);
     if activity_height > 0 {
         render_activity(frame, state, rows[1]);
     }
@@ -49,7 +62,12 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     }
 }
 
-pub(super) fn render_transcript(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
+pub(super) fn render_transcript(
+    frame: &mut Frame<'_>,
+    state: &TuiState,
+    area: Rect,
+    transcript_start: usize,
+) {
     let (badge_area, transcript_area) = if state.new_items > 0 {
         let rows = Layout::default()
             .direction(Direction::Vertical)
@@ -71,7 +89,13 @@ pub(super) fn render_transcript(frame: &mut Frame<'_>, state: &TuiState, area: R
         );
     }
     let width = usize::from(transcript_area.width).max(20);
-    let lines = transcript_lines(state, width);
+    let lines = transcript_lines_range(
+        state,
+        width,
+        transcript_start.min(state.transcript.len()),
+        state.transcript.len(),
+        false,
+    );
     let visible = usize::from(transcript_area.height);
     let live_top = lines.len().saturating_sub(visible);
     let top = live_top.saturating_sub(state.scroll_from_bottom);
@@ -81,15 +105,68 @@ pub(super) fn render_transcript(frame: &mut Frame<'_>, state: &TuiState, area: R
     frame.render_widget(paragraph, transcript_area);
 }
 
+pub(super) fn desired_inline_viewport_height(
+    state: &TuiState,
+    width: u16,
+    screen_height: u16,
+    transcript_start: usize,
+) -> u16 {
+    if screen_height == 0 {
+        return 0;
+    }
+    if width < MINIMUM_TERMINAL_WIDTH {
+        return MINIMUM_TERMINAL_HEIGHT.min(screen_height);
+    }
+    if state.overlay.is_some() {
+        return screen_height;
+    }
+
+    let composer_height = composer_height(state, width);
+    let activity_height = u16::from(state.operation.is_some());
+    let completion_height =
+        completion_menu_height(state, screen_height, composer_height, activity_height);
+    let chrome_height = activity_height
+        .saturating_add(completion_height)
+        .saturating_add(composer_height)
+        .saturating_add(1);
+    let transcript_height = u16::try_from(
+        transcript_lines_range(
+            state,
+            usize::from(width).max(20),
+            transcript_start.min(state.transcript.len()),
+            state.transcript.len(),
+            false,
+        )
+        .len(),
+    )
+    .unwrap_or(u16::MAX);
+
+    chrome_height
+        .saturating_add(transcript_height)
+        .min(screen_height)
+}
+
 pub(super) fn transcript_lines<'a>(state: &'a TuiState, width: usize) -> Vec<Line<'a>> {
+    transcript_lines_range(state, width, 0, state.transcript.len(), false)
+}
+
+pub(super) fn transcript_lines_range<'a>(
+    state: &'a TuiState,
+    width: usize,
+    start: usize,
+    end: usize,
+    leading_separator: bool,
+) -> Vec<Line<'a>> {
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let mut lines = Vec::new();
     let mut visible_entries = 0_usize;
-    for entry in &state.transcript {
+    for entry in
+        &state.transcript[start.min(state.transcript.len())..end.min(state.transcript.len())]
+    {
         if entry.document.is_empty() {
             continue;
         }
-        if visible_entries > 0
+        if (visible_entries > 0 || leading_separator)
             && state.preferences.transcript_density
                 == colossus_contracts::TranscriptDensity::Comfortable
         {

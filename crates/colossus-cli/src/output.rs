@@ -292,7 +292,11 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
             "/theme · /stream · /events · /reasoning · /transcript · /multiline",
             "Tune the terminal experience",
         ],
-        ["Exit", "/exit · Ctrl-D", "Leave the terminal safely"],
+        [
+            "Exit",
+            "/exit · Ctrl-C · Ctrl-D",
+            "Leave the terminal safely",
+        ],
     ] {
         table.push_row(row);
     }

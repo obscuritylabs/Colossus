@@ -38,6 +38,7 @@ const MAX_CUSTOM_THEMES: usize = 64;
 const MAX_THEME_FILE_BYTES: u64 = 64 * 1024;
 
 mod document;
+mod markdown;
 mod palette;
 mod repository;
 mod semantic;

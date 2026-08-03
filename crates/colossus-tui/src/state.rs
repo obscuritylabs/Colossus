@@ -145,6 +145,9 @@ pub struct TuiState {
     pub(super) transcript_height: usize,
     pub(super) transcript_width: usize,
     pub(super) loading_older: bool,
+    pub(super) older_page_failed: bool,
+    pub(super) native_history_pages_loaded: usize,
+    pub(super) transcript_epoch: u64,
     pub(super) should_exit: bool,
 }
 
@@ -182,6 +185,9 @@ impl TuiState {
             transcript_height: 1,
             transcript_width: 80,
             loading_older: false,
+            older_page_failed: false,
+            native_history_pages_loaded: 0,
+            transcript_epoch: 0,
             should_exit: false,
         }
     }
@@ -538,10 +544,7 @@ impl TuiState {
     }
 
     pub(super) fn cancel_focus(&mut self) -> bool {
-        if let Some(overlay) = self.overlay.take() {
-            if let Overlay::Prompt { request, .. } = overlay {
-                let _ = request.response.send(PromptResponse::Cancelled);
-            }
+        if self.cancel_overlay() {
             return true;
         }
         if !self.composer.draft.is_empty() {
@@ -554,6 +557,34 @@ impl TuiState {
             return true;
         }
         false
+    }
+
+    pub(super) fn interrupt_or_exit(&mut self) {
+        if self.is_busy()
+            && self
+                .control
+                .as_ref()
+                .is_some_and(|control| !control.is_cancelled())
+        {
+            self.cancel_overlay();
+            if let Some(control) = &self.control {
+                control.cancel();
+            }
+            self.activity = Some("cancelling after the current effect settles".into());
+            return;
+        }
+        self.cancel_overlay();
+        self.should_exit = true;
+    }
+
+    fn cancel_overlay(&mut self) -> bool {
+        let Some(overlay) = self.overlay.take() else {
+            return false;
+        };
+        if let Overlay::Prompt { request, .. } = overlay {
+            let _ = request.response.send(PromptResponse::Cancelled);
+        }
+        true
     }
 }
 

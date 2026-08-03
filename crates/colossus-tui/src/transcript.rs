@@ -139,7 +139,7 @@ pub(super) fn help_document() -> PresentationDocument {
                 ),
                 (
                     "Scroll".into(),
-                    "Mouse wheel (full-screen) or PageUp/PageDown; End returns live".into(),
+                    "Mouse wheel uses native scrollback; --alt-screen uses captured wheel or PageUp/PageDown".into(),
                 ),
                 (
                     "Complete".into(),
@@ -151,7 +151,7 @@ pub(super) fn help_document() -> PresentationDocument {
                 ),
                 (
                     "Cancel".into(),
-                    "Ctrl-C clears draft, modal, or active run".into(),
+                    "Ctrl-C cancels an active run; press again to exit".into(),
                 ),
                 (
                     "Provider diagnostics".into(),
@@ -166,7 +166,10 @@ pub(super) fn help_document() -> PresentationDocument {
                     "/goal resume GOAL_ID continues the remaining iteration budget".into(),
                 ),
                 ("Preferences".into(), "/tui prefs|save|reset".into()),
-                ("Exit".into(), "Ctrl-D while idle or /exit".into()),
+                (
+                    "Exit".into(),
+                    "Ctrl-C while idle; Ctrl-D or /exit also work".into(),
+                ),
             ]),
         ],
     })

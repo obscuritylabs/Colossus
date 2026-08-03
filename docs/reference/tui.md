@@ -7,9 +7,12 @@ type: reference
 
 # TUI commands and keys
 
-Start with `colossus` or `colossus tui`. Alternate-screen mode is the default;
-`--no-alt-screen` preserves terminal scrollback. Zellij selects inline mode
-automatically.
+Start with `colossus` or `colossus tui`. The default inline viewport commits every
+finalized transcript entry to native terminal scrollback immediately, so ordinary mouse
+selection, copy, search, and wheel scrolling keep working. The viewport expands while
+output is streaming, then collapses back to the sticky composer and status as soon as
+that output completes. Use `--alt-screen` for the application-owned full-screen
+transcript viewport; `--no-alt-screen` remains a compatibility alias for the default.
 
 With `--approval-mode risk-auto`, successful low-risk reviews appear as non-blocking
 **Automatic approval review** transcript cards. They do not take focus from the composer
@@ -28,11 +31,13 @@ only a sanitized failure category, action, resource, and manual-fallback explana
 | `Ctrl-Enter` / `Alt-Enter` | Multiline composer | Submit the current turn |
 | `Up` / `Down` | Composer | Navigate input history |
 | `Ctrl-R` | Composer | Search submitted-input history |
-| `Ctrl-C` | Any focused work | Clear draft, dismiss a modal, or cancel the active run |
+| `Ctrl-C` | Idle TUI | Exit, including when a draft or non-running overlay is open |
+| `Ctrl-C` | Active run | Request cooperative cancellation; press again to exit |
 | `Ctrl-D` | Empty, idle composer | Exit |
-| `PageUp` / `PageDown` | Transcript | Scroll retained output |
-| Mouse wheel | Transcript | Scroll retained output by a few lines in full-screen mode |
-| `End` | Transcript | Return to live output |
+| Terminal scroll shortcuts | Native scrollback | Inspect finalized output using the terminal's normal bindings |
+| `PageUp` / `PageDown` | Alternate-screen transcript | Scroll retained output |
+| Mouse wheel | Transcript | Use native scrollback by default; scroll a few retained lines in alternate-screen mode |
+| `End` | Alternate-screen transcript | Return to live output |
 | `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
 | `Down` | Suggestions | Select the next item |
 | `Shift-Tab` / `Up` | Suggestions | Select the previous item |

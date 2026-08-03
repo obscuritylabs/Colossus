@@ -82,6 +82,192 @@ fn terminal_documents_render_markdown_tables_cards_and_diff_within_width() {
 }
 
 #[test]
+fn terminal_markdown_supports_common_blocks_without_corrupting_literal_punctuation() {
+    let markdown = r#"Release_notes and a*b remain literal.
+
+Overview
+========
+
+- [x] finished
+- [ ] a pending item whose description wraps onto an aligned continuation line
+  - nested item
+
+> A quoted **detail**
+>> with a nested quote
+
+***
+
+~~~rust
+fn main() { println!("ready"); }
+~~~"#;
+    let document = PresentationDocument::from_block(PresentationBlock::Markdown(markdown.into()));
+    let rendered =
+        TerminalDocumentRenderer::new(TerminalPreferences::default(), 42).render(&document);
+
+    assert!(rendered.contains("Release_notes and a*b remain literal."));
+    assert!(rendered.contains("Overview"));
+    assert!(rendered.contains("☑ finished"));
+    assert!(rendered.contains("☐ a pending item"));
+    assert!(rendered.contains("  • nested item"));
+    assert!(rendered.contains("│ A quoted detail"));
+    assert!(rendered.contains("│ │ with a nested quote"));
+    assert!(rendered.contains(&"─".repeat(42)));
+    assert!(rendered.contains("fn main() { println!(\"ready\"); }"));
+    assert!(!rendered.contains("~~~"));
+    assert!(rendered.lines().all(|line| display_width(line) <= 42));
+
+    let pending = rendered
+        .lines()
+        .position(|line| line.contains("☐ a pending item"))
+        .expect("pending task line");
+    let continuation = rendered
+        .lines()
+        .nth(pending + 1)
+        .expect("wrapped continuation");
+    assert!(continuation.starts_with("  "));
+    assert!(!continuation.starts_with('☐'));
+}
+
+#[test]
+fn transcript_markdown_preserves_inline_styles_and_semantic_markers() {
+    let document = PresentationDocument::from_block(PresentationBlock::Markdown(
+        "# Result\n\nA **bold** value, *emphasis*, `code`, and [docs](https://example.test).\n\n- [x] shipped\n\n> quoted"
+            .into(),
+    ));
+    let lines = StyledDocumentRenderer::for_transcript(TerminalPreferences::default(), 80)
+        .render(&document);
+    let rendered = lines
+        .iter()
+        .map(super::StyledLine::plain_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Result"), "{rendered}");
+    assert!(rendered.contains("☑ shipped"), "{rendered}");
+    assert!(rendered.contains("│ quoted"), "{rendered}");
+    assert!(!rendered.contains("**"), "{rendered}");
+    assert!(!rendered.contains('`'), "{rendered}");
+
+    let heading = lines
+        .iter()
+        .find(|line| line.plain_text() == "Result")
+        .expect("heading");
+    assert!(heading.spans.iter().all(|span| span.style.bold));
+    let prose = lines
+        .iter()
+        .find(|line| line.plain_text().contains("A bold value"))
+        .expect("styled prose");
+    assert!(
+        prose
+            .spans
+            .iter()
+            .any(|span| span.content.trim() == "bold" && span.style.bold)
+    );
+    assert!(
+        prose
+            .spans
+            .iter()
+            .any(|span| span.content.trim() == "emphasis" && span.style.italic)
+    );
+    let code = prose
+        .spans
+        .iter()
+        .find(|span| span.content.trim() == "code")
+        .expect("inline code span");
+    let normal = prose
+        .spans
+        .iter()
+        .find(|span| span.content == "A")
+        .expect("normal prose span");
+    assert_ne!(code.style, normal.style);
+    assert!(
+        prose
+            .spans
+            .iter()
+            .any(|span| span.content.trim() == "https://example.test")
+    );
+}
+
+#[test]
+fn transcript_markdown_renders_commonmark_tables_images_and_nested_emphasis() {
+    let markdown = r#"## Details
+
+**bold and *nested emphasis*** plus ![diagram](https://example.test/diagram.png).
+
+| Name | Value |
+| :--- | ---: |
+| `alpha` | one \| two |"#;
+    let document = PresentationDocument::from_block(PresentationBlock::Markdown(markdown.into()));
+    let lines = StyledDocumentRenderer::for_transcript(TerminalPreferences::default(), 64)
+        .render(&document);
+    let rendered = lines
+        .iter()
+        .map(super::StyledLine::plain_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Details"), "{rendered}");
+    assert!(rendered.contains("image: diagram"), "{rendered}");
+    assert!(
+        rendered.contains("https://example.test/diagram.png"),
+        "{rendered}"
+    );
+    assert!(rendered.contains('┌'), "{rendered}");
+    assert!(rendered.contains("alpha"), "{rendered}");
+    assert!(rendered.contains("one | two"), "{rendered}");
+    assert!(lines.iter().flat_map(|line| &line.spans).any(|span| {
+        span.content.contains("nested emphasis") && span.style.bold && span.style.italic
+    }));
+    assert!(
+        lines
+            .iter()
+            .all(|line| display_width(&line.plain_text()) <= 64)
+    );
+}
+
+#[test]
+fn transcript_markdown_syntax_highlights_bounded_fenced_code() {
+    let markdown =
+        "```rust\nfn main() {\n    let answer: usize = 42;\n    println!(\"{answer}\");\n}\n```";
+    let document = PresentationDocument::from_block(PresentationBlock::Markdown(markdown.into()));
+    let lines = StyledDocumentRenderer::for_transcript(TerminalPreferences::default(), 52)
+        .render(&document);
+    let code_line = lines
+        .iter()
+        .find(|line| line.plain_text().contains("fn main"))
+        .expect("highlighted Rust line");
+    let mut colors = code_line
+        .spans
+        .iter()
+        .filter(|span| !span.content.starts_with('│'))
+        .filter_map(|span| span.style.foreground)
+        .collect::<Vec<_>>();
+    colors.dedup();
+
+    assert!(
+        colors.len() >= 2,
+        "expected multiple syntax colors: {code_line:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| display_width(&line.plain_text()) <= 52)
+    );
+
+    let mono = TerminalPreferences {
+        theme: ThemeName::Mono,
+        ..TerminalPreferences::default()
+    };
+    let mono_lines = StyledDocumentRenderer::for_transcript(mono, 52).render(&document);
+    assert!(
+        mono_lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|span| span.style.foreground.is_none())
+    );
+}
+
+#[test]
 fn transcript_documents_flatten_card_and_detail_chrome_into_colored_hierarchy() {
     let document = PresentationDocument::from_block(PresentationBlock::Card {
         title: "Colossus terminal".into(),

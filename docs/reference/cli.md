@@ -19,7 +19,8 @@ colossus [OPTIONS] <COMMAND>
 | `--config PATH` | YAML path | `.colossus/config.yaml` | Select configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
-| `--no-alt-screen` | Flag | Off | Run the TUI in an inline viewport |
+| `--alt-screen` | Flag | Off | Use the full-screen application-owned transcript viewport |
+| `--no-alt-screen` | Flag | Off | Compatibility alias for the default inline native-scrollback viewport |
 | `-h`, `--help` | Flag | — | Show command help |
 | `-V`, `--version` | Flag | — | Show binary version |
 
