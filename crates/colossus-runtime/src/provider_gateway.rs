@@ -237,25 +237,7 @@ fn redact_risk_secret_fields(value: &mut Value) {
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                let normalized = key.to_ascii_lowercase().replace('-', "_");
-                if matches!(
-                    normalized.as_str(),
-                    "authorization"
-                        | "proxy_authorization"
-                        | "api_key"
-                        | "apikey"
-                        | "token"
-                        | "access_token"
-                        | "refresh_token"
-                        | "private_key"
-                        | "secret"
-                        | "client_secret"
-                        | "credential"
-                        | "passwd"
-                        | "password"
-                        | "key_material"
-                        | "hidden_reasoning"
-                ) {
+                if is_sensitive_risk_field(key) {
                     *value = Value::String("[REDACTED]".into());
                 } else {
                     redact_risk_secret_fields(value);
@@ -265,6 +247,28 @@ fn redact_risk_secret_fields(value: &mut Value) {
         Value::Array(values) => values.iter_mut().for_each(redact_risk_secret_fields),
         _ => {}
     }
+}
+
+fn is_sensitive_risk_field(key: &str) -> bool {
+    let compact = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_lowercase())
+        .collect::<String>();
+    [
+        "authorization",
+        "password",
+        "passwd",
+        "token",
+        "secret",
+        "credential",
+        "apikey",
+        "privatekey",
+        "keymaterial",
+        "hiddenreasoning",
+    ]
+    .iter()
+    .any(|marker| compact.contains(marker))
 }
 
 #[async_trait]

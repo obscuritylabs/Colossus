@@ -3333,7 +3333,18 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
                         "message": "MCP tool test",
                         "password": "resolved-argument-secret",
                         "token": "resolved-token-secret",
-                        "nested": {"access_token": "nested-resolved-secret"},
+                        "github_token": "compound-snake-token-secret",
+                        "dbPassword": "compound-camel-password-secret",
+                        "clientSecret": "compound-camel-client-secret",
+                        "service-api-key": "compound-separated-api-key-secret",
+                        "nested": {
+                            "access_token": "nested-resolved-secret",
+                            "refreshTokenValue": "nested-camel-token-secret",
+                            "credentialBundle": {
+                                "value": "nested-compound-credential-secret"
+                            },
+                        },
+                        "monkey": "ordinary-non-secret-value",
                     },
                     "input_schema": {
                         "type": "object",
@@ -3385,6 +3396,13 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
     assert!(!disclosed.contains("resolved-argument-secret"));
     assert!(!disclosed.contains("resolved-token-secret"));
     assert!(!disclosed.contains("nested-resolved-secret"));
+    assert!(!disclosed.contains("compound-snake-token-secret"));
+    assert!(!disclosed.contains("compound-camel-password-secret"));
+    assert!(!disclosed.contains("compound-camel-client-secret"));
+    assert!(!disclosed.contains("compound-separated-api-key-secret"));
+    assert!(!disclosed.contains("nested-camel-token-secret"));
+    assert!(!disclosed.contains("nested-compound-credential-secret"));
+    assert!(disclosed.contains("ordinary-non-secret-value"));
     assert!(!disclosed.contains("schema-only-marker"));
     assert!(!disclosed.contains("HOST_MCP_TOKEN"));
     assert!(!disclosed.contains("HOST_MCP_CLIENT_SECRET"));
