@@ -129,7 +129,7 @@ Credentials are references, never literal values:
 
 | Form | Use |
 | --- | --- |
-| `codex:default` | File-backed ChatGPT sign-in created by `colossus codex login` |
+| `codex:default` | File-backed ChatGPT sign-in created by `colossus codex login`; accepted only by `open_ai_codex` |
 | `env:VARIABLE` | Standard CLI, daemon, worker, and unattended deployments |
 | `host:IDENTIFIER` | Application-managed runtimes that inject an in-memory credential resolver |
 | `null` | Credential-free endpoints, normally local development services |

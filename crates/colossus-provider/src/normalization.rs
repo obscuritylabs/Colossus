@@ -24,8 +24,8 @@ pub(super) fn normalize_base_url(raw: &str) -> Result<String, ProviderError> {
     Ok(raw.trim_end_matches('/').to_owned())
 }
 
-pub(super) fn valid_credential_reference(reference: &str) -> bool {
-    reference == CODEX_CREDENTIAL_REFERENCE
+pub(super) fn valid_credential_reference(kind: ProviderKind, reference: &str) -> bool {
+    (matches!(kind, ProviderKind::OpenAiCodex) && reference == CODEX_CREDENTIAL_REFERENCE)
         || reference
             .strip_prefix("env:")
             .is_some_and(valid_environment_credential_identifier)

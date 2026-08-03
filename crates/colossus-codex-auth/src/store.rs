@@ -134,7 +134,10 @@ impl CodexAuthStore {
     /// Atomically merge a successful bounded refresh response into Codex storage.
     ///
     /// The update is refused if another process rotated the refresh token or if the
-    /// response switches ChatGPT accounts.
+    /// response switches ChatGPT accounts. Concurrent Colossus processes serialize on a
+    /// cross-process advisory lock, and the stored credentials are re-read immediately
+    /// before persistence so an external writer such as the official Codex CLI cannot be
+    /// overwritten with a stale snapshot.
     pub fn apply_refresh(
         &self,
         expected: &CodexAuthorization,
@@ -144,12 +147,12 @@ impl CodexAuthStore {
             .update_lock
             .lock()
             .map_err(|_| CodexAuthError::Storage("credential update lock was poisoned".into()))?;
+        let _file_guard = AuthUpdateLock::acquire(&self.path)?;
         let mut stored = read_stored_auth(&self.path)?;
+        let witness = AuthWitness::capture(&stored)?;
         let tokens = stored.tokens.as_mut().ok_or_else(missing_tokens)?;
         if tokens.refresh_token != expected.refresh_token() {
-            return Err(CodexAuthError::Storage(
-                "Codex credentials changed while a token refresh was in flight".into(),
-            ));
+            return Err(credentials_changed());
         }
         let refresh: RefreshResponse = serde_json::from_slice(response).map_err(|_| {
             CodexAuthError::Unavailable(
@@ -189,9 +192,98 @@ impl CodexAuthStore {
                 .format(&Rfc3339)
                 .map_err(|error| CodexAuthError::Storage(error.to_string()))?,
         );
+        if !witness.matches(&read_stored_auth(&self.path)?) {
+            return Err(credentials_changed());
+        }
         write_stored_auth(&self.path, &stored)?;
         authorization_from_file(&stored)
     }
+}
+
+/// Credential fields that must stay untouched between the refresh check and the write.
+struct AuthWitness {
+    access_token: Zeroizing<String>,
+    refresh_token: Zeroizing<String>,
+    id_token: Zeroizing<String>,
+    last_refresh: Option<String>,
+}
+
+impl AuthWitness {
+    fn capture(stored: &StoredAuth) -> Result<Self, CodexAuthError> {
+        let tokens = stored.tokens.as_ref().ok_or_else(missing_tokens)?;
+        Ok(Self {
+            access_token: Zeroizing::new(tokens.access_token.clone()),
+            refresh_token: Zeroizing::new(tokens.refresh_token.clone()),
+            id_token: Zeroizing::new(tokens.id_token.clone()),
+            last_refresh: stored.last_refresh.clone(),
+        })
+    }
+
+    fn matches(&self, stored: &StoredAuth) -> bool {
+        stored.last_refresh == self.last_refresh
+            && stored.tokens.as_ref().is_some_and(|tokens| {
+                tokens.access_token == *self.access_token
+                    && tokens.refresh_token == *self.refresh_token
+                    && tokens.id_token == *self.id_token
+            })
+    }
+}
+
+/// Cross-process advisory lock over one Codex credential file.
+///
+/// The lock lives on a sibling `<name>.lock` file so the credential file itself is only
+/// ever replaced atomically, and it is released when the guard closes its descriptor.
+struct AuthUpdateLock {
+    #[cfg(unix)]
+    _file: File,
+}
+
+impl AuthUpdateLock {
+    #[cfg(unix)]
+    fn acquire(path: &Path) -> Result<Self, CodexAuthError> {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| CodexAuthError::Storage("Codex auth path has no file name".into()))?;
+        let parent = path.parent().ok_or_else(|| {
+            CodexAuthError::Storage("Codex auth path has no parent directory".into())
+        })?;
+        let lock_path = parent.join(format!("{file_name}.lock"));
+        let file = rustix::fs::open(
+            &lock_path,
+            rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .map(File::from)
+        .map_err(|error| {
+            CodexAuthError::Storage(format!("{} is not lockable ({error})", lock_path.display()))
+        })?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| CodexAuthError::Storage(error.to_string()))?;
+        if !metadata.file_type().is_file() {
+            return Err(CodexAuthError::Storage(
+                "Codex credential lock path must be a regular non-symlink file".into(),
+            ));
+        }
+        validate_private_permissions(&metadata)?;
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).map_err(|error| {
+            CodexAuthError::Storage(format!("Codex credential lock is unavailable ({error})"))
+        })?;
+        Ok(Self { _file: file })
+    }
+
+    #[cfg(not(unix))]
+    fn acquire(_path: &Path) -> Result<Self, CodexAuthError> {
+        Ok(Self {})
+    }
+}
+
+fn credentials_changed() -> CodexAuthError {
+    CodexAuthError::Storage("Codex credentials changed while a token refresh was in flight".into())
 }
 
 #[derive(Deserialize, Serialize)]
@@ -540,6 +632,56 @@ mod tests {
         assert_eq!(after.refresh_token(), "refresh-2");
         assert_eq!(after.account_id(), "account-1");
         assert!(!after.requires_refresh(OffsetDateTime::now_utc()));
+    }
+
+    #[test]
+    fn concurrent_refreshes_serialize_to_one_winner() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("auth.json");
+        let id_token = jwt(json!({"https://api.openai.com/auth": {
+            "chatgpt_account_id": "account-1"
+        }}));
+        write_auth(
+            &path,
+            &json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "id_token": id_token,
+                    "access_token": jwt(json!({"exp": 1})),
+                    "refresh_token": "refresh-1"
+                }
+            }),
+        );
+        // Independent stores share no process-local mutex, so only the cross-process
+        // lock plus the pre-write comparison can keep one stale snapshot from winning.
+        let first = CodexAuthStore::at_path(&path);
+        let second = CodexAuthStore::at_path(&path);
+        let first_snapshot = first.load().expect("first snapshot loads");
+        let second_snapshot = second.load().expect("second snapshot loads");
+        let response = serde_json::to_vec(&json!({
+            "access_token": jwt(json!({"exp": OffsetDateTime::now_utc().unix_timestamp() + 3600})),
+            "refresh_token": "refresh-2",
+            "id_token": id_token
+        }))
+        .expect("refresh serializes");
+        let applied = std::thread::scope(|scope| {
+            let left = scope.spawn(|| first.apply_refresh(&first_snapshot, &response).is_ok());
+            let right = scope.spawn(|| second.apply_refresh(&second_snapshot, &response).is_ok());
+            [
+                left.join().expect("left thread joins"),
+                right.join().expect("right thread joins"),
+            ]
+        });
+        assert_eq!(applied.into_iter().filter(|applied| *applied).count(), 1);
+        assert_eq!(
+            CodexAuthStore::at_path(&path)
+                .load()
+                .expect("rotated auth loads")
+                .refresh_token(),
+            "refresh-2"
+        );
+        #[cfg(unix)]
+        assert!(path.with_file_name("auth.json.lock").is_file());
     }
 
     #[test]

@@ -199,18 +199,30 @@ fn provider_profiles_accept_only_valid_credential_references() {
         )
         .is_err()
     );
-    for reference in ["host:", "host:provider/main", "host:provider:main", "value"] {
-        assert!(
-            ProviderProfile::new(
-                "remote",
-                ProviderKind::OpenAiResponses,
-                Some("https://api.example.com/v1".into()),
-                Some(reference.into()),
-                1_000,
-            )
-            .is_err(),
-            "invalid reference was accepted: {reference}"
-        );
+    for reference in [
+        "host:",
+        "host:provider/main",
+        "host:provider:main",
+        "value",
+        CODEX_CREDENTIAL_REFERENCE,
+    ] {
+        for kind in [
+            ProviderKind::OpenAiResponses,
+            ProviderKind::OpenAiCompatible,
+        ] {
+            assert!(
+                ProviderProfile::new(
+                    "remote",
+                    kind,
+                    Some("https://api.example.com/v1".into()),
+                    Some(reference.into()),
+                    1_000,
+                )
+                .is_err(),
+                "invalid reference was accepted: {reference} ({})",
+                kind.as_str()
+            );
+        }
     }
 }
 

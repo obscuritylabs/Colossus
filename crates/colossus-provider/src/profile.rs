@@ -67,10 +67,10 @@ impl ProviderProfile {
             ));
         }
         if let Some(reference) = credential_reference.as_deref()
-            && !valid_credential_reference(reference)
+            && !valid_credential_reference(kind, reference)
         {
             return Err(ProviderError::Configuration(
-                "provider credentials must use env:VARIABLE, host:IDENTIFIER, or codex:default"
+                "provider credentials must use env:VARIABLE or host:IDENTIFIER, and codex:default only for open_ai_codex"
                     .into(),
             ));
         }

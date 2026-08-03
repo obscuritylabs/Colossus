@@ -149,9 +149,14 @@ OAuth ceremony to the official Codex CLI and forces its supported file credentia
 Colossus never handles the authorization code. The `open_ai_codex` adapter accepts only
 `codex:default`, fixes the service and refresh endpoints, rejects symlinked or non-private
 Unix auth files, resolves tokens only after a provider permit, and redacts both bearer and
-ChatGPT account identifiers from quarantined responses. Proactive refresh requires the
-OpenAI auth origin in the same permit's network obligations and atomically updates the
-Codex-managed file without changing accounts. Backend requests distinguish the audited
+ChatGPT account identifiers from quarantined responses. Only `open_ai_codex` may reference
+`codex:default`, so a non-Codex profile cannot pass startup validation and then fail every
+call in the standard credential resolver. Proactive refresh requires the OpenAI auth origin
+in the same permit's network obligations and atomically updates the Codex-managed file
+without changing accounts: the read-compare-write cycle holds a cross-process advisory lock
+on a sibling `auth.json.lock` file and re-reads the stored tokens immediately before
+persisting, so an external writer such as the official Codex CLI is never overwritten with a
+stale snapshot. Backend requests distinguish the audited
 Codex wire-contract version from the Colossus product version: `version` is compatibility
 metadata pinned in the adapter, while `User-Agent` names the actual Colossus build.
 Codex streaming requests explicitly accept SSE. The fixed backend can omit the response
