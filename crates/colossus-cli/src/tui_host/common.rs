@@ -131,15 +131,20 @@ impl ApprovalProvider for TuiApprovalProvider {
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         let content = serde_json::to_string_pretty(&request.content)
             .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+        let mut details = vec![
+            ("Action".into(), request.action.clone()),
+            ("Resource".into(), request.resource.clone()),
+            ("Reason".into(), decision.reason.clone()),
+        ];
+        if let Some(reason) = request.risk.reason.as_deref() {
+            let level = request.risk.level.as_deref().unwrap_or("unavailable");
+            details.push(("Risk review".into(), format!("{level}: {reason}")));
+        }
         let document = PresentationDocument::from_block(PresentationBlock::Card {
             title: "Approval required".into(),
             tone: PresentationTone::Warning,
             body: vec![
-                PresentationBlock::KeyValue(vec![
-                    ("Action".into(), request.action.clone()),
-                    ("Resource".into(), request.resource.clone()),
-                    ("Reason".into(), decision.reason.clone()),
-                ]),
+                PresentationBlock::KeyValue(details),
                 PresentationBlock::Code {
                     language: Some("proposed content".into()),
                     content: content.chars().take(8_192).collect(),

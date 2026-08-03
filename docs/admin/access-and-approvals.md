@@ -71,7 +71,7 @@ satisfied:
 | --- | --- |
 | `deny` | Fail closed without prompting |
 | `ask` | Prompt on an interactive terminal |
-| `risk-auto` | Automatically approve eligible low-risk shell and read-only network effects after review |
+| `risk-auto` | Automatically approve eligible low-risk shell, read-only network, and exact top-level MCP effects after review |
 | `full-access` | Satisfy approval obligations automatically |
 
 Approval modes do not convert policy denials into allows and do not add authority.
@@ -90,12 +90,15 @@ colossus -w /absolute/path/to/repository \
 
 Use `--approval-mode risk-auto` only when the configured risk evaluator is trusted for
 this role. Automatic proof minting is restricted to model or child-agent `shell.run`,
-`web.search`, and bodyless `network.http` GET effects outside workflow lineage, and only
-a valid low-risk `allow` assessment qualifies. Other network methods, integrations, MCP
-calls, workspace mutations, and medium, high, malformed, or unavailable assessments
-fall back to explicit approval or denial. Effect output remains quarantined and
-post-effect authorized. The evaluator receives the requested URL or search query as
-redacted effect metadata; credentials remain opaque references.
+`web.search`, bodyless `network.http` GET, and configured top-level `mcp.call` effects
+outside workflow lineage, and only a valid low-risk `allow` assessment qualifies. MCP
+review is bound to the exact endpoint identity, server, tool, fresh schema hash, and
+validated arguments. Descriptions and annotations are evaluator inputs only and remain
+untrusted advisory hints. Other network methods, integrations, pack-provided MCP
+actions, workspace mutations, unsupported metadata, and medium, high, malformed, or
+unavailable assessments fall back to explicit approval or denial. Effect output remains
+quarantined and post-effect authorized. Evaluator metadata omits resolved credentials
+and authentication configuration.
 
 When an eligible review is approved automatically, attached terminal and TUI clients
 show an **Automatic approval review** notice with the action, resource, low-risk result,

@@ -407,6 +407,61 @@ async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
 }
 
 #[tokio::test]
+async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+    let mut request = colossus_policy::effect_request(
+        colossus_policy::system_actor("tui-test"),
+        "mcp.call",
+        "http://127.0.0.1:3001/mcp",
+        json!({"operation": {"kind": "call_tool"}}),
+    );
+    request.risk.reason =
+        Some("Risk-auto review requires supported, request-bound MCP discovery metadata.".into());
+    let decision = PolicyDecision {
+        decision_id: "decision-test".into(),
+        policy_revision: "test-v1".into(),
+        outcome: colossus_contracts::DecisionOutcome::RequireApproval,
+        reason: "explicit operator approval required".into(),
+        obligations: colossus_contracts::PolicyObligations::default(),
+    };
+    let approval = tokio::spawn(async move {
+        provider
+            .request_approval(&request, "request-hash", &decision)
+            .await
+    });
+
+    let HostEvent::Prompt(prompt) = events.recv().await.expect("prompt") else {
+        panic!("expected an approval prompt");
+    };
+    let [PresentationBlock::Card { body, .. }] = prompt.document.blocks.as_slice() else {
+        panic!("expected one approval card");
+    };
+    let Some(PresentationBlock::KeyValue(details)) = body.first() else {
+        panic!("expected approval details");
+    };
+    assert!(details.iter().any(|(label, value)| {
+        label == "Risk review" && value.contains("request-bound MCP discovery metadata")
+    }));
+    prompt
+        .response
+        .send(PromptResponse::Answer("Deny".into()))
+        .expect("deny response");
+    assert!(
+        approval
+            .await
+            .expect("approval task")
+            .expect("result")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn worker_tui_drops_approval_review_notice_when_event_queue_is_full() {
     let (sender, mut events) = mpsc::channel(1);
     sender

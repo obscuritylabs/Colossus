@@ -33,19 +33,102 @@ enum StreamSinkFailure {
     Denied(String),
 }
 
-fn risk_auto_eligible(request: &EffectRequest) -> bool {
+fn risk_auto_ineligibility(request: &EffectRequest) -> Option<&'static str> {
+    if !matches!(
+        request.actor.actor_type,
+        ActorType::Model | ActorType::Subagent
+    ) {
+        return Some("Risk-auto review is limited to model and child-agent effects.");
+    }
+    if request.context.workflow_id.is_some() || request.context.workflow_hash.is_some() {
+        return Some("Risk-auto review is disabled for effects with workflow lineage.");
+    }
     match request.action.as_str() {
-        "shell.run" | "web.search" => true,
-        "network.http" => {
-            request
+        "shell.run" | "web.search" => None,
+        "network.http"
+            if request
                 .content
                 .get("method")
                 .and_then(Value::as_str)
                 .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
-                && request.content.get("body_base64").is_none()
+                && request.content.get("body_base64").is_none() =>
+        {
+            None
+        }
+        "network.http" => {
+            Some("Risk-auto review requires network.http to be a bodyless GET request.")
+        }
+        "mcp.call" if supported_mcp_review_metadata(request) => None,
+        "mcp.call" => Some(
+            "Risk-auto review requires a configured top-level MCP call with supported, request-bound discovery metadata.",
+        ),
+        _ => Some("This effect action is not eligible for risk-auto review."),
+    }
+}
+
+fn supported_mcp_review_metadata(request: &EffectRequest) -> bool {
+    let Some(content) = request.content.as_object() else {
+        return false;
+    };
+    let Some(operation) = content.get("operation").and_then(Value::as_object) else {
+        return false;
+    };
+    let supported_transport = match content.get("transport").and_then(Value::as_str) {
+        Some("stdio") => content.get("url").is_none_or(Value::is_null),
+        Some("streamable_http") => content
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| url == request.resource),
+        _ => false,
+    };
+    let supported_identity = operation.get("kind").and_then(Value::as_str) == Some("call_tool")
+        && operation
+            .get("server")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.len() <= 256)
+        && operation
+            .get("tool")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.len() <= 256);
+    let supported_description = operation.get("description").is_none_or(|value| {
+        value.is_null() || value.as_str().is_some_and(|text| text.len() <= 32 * 1024)
+    });
+    let supported_annotations = operation
+        .get("annotations")
+        .is_none_or(supported_mcp_annotations);
+    let Some(input_schema) = operation
+        .get("input_schema")
+        .filter(|value| value.is_object())
+    else {
+        return false;
+    };
+    let schema_hash_matches = canonical_bytes(input_schema).is_ok_and(|bytes| {
+        let expected = sha256_hex(&bytes);
+        bytes.len() <= 256 * 1024
+            && operation.get("schema_sha256").and_then(Value::as_str) == Some(expected.as_str())
+    });
+    supported_transport
+        && supported_identity
+        && supported_description
+        && supported_annotations
+        && operation.get("arguments").is_some_and(Value::is_object)
+        && schema_hash_matches
+}
+
+fn supported_mcp_annotations(value: &Value) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    let Some(annotations) = value.as_object() else {
+        return false;
+    };
+    annotations.iter().all(|(key, value)| match key.as_str() {
+        "title" => value.is_null() || value.as_str().is_some_and(|text| text.len() <= 8 * 1024),
+        "readOnlyHint" | "destructiveHint" | "idempotentHint" | "openWorldHint" => {
+            value.is_null() || value.is_boolean()
         }
         _ => false,
-    }
+    })
 }
 
 impl StreamSinkFailure {
@@ -202,15 +285,22 @@ impl EffectGateway {
         request: &mut EffectRequest,
         decision: &PolicyDecision,
     ) -> Result<bool, GatewayError> {
-        if !risk_auto_eligible(request)
-            || !self.approvals.risk_auto_enabled()
-            || !matches!(
-                request.actor.actor_type,
-                ActorType::Model | ActorType::Subagent
-            )
-            || request.context.workflow_id.is_some()
-            || request.context.workflow_hash.is_some()
-        {
+        if !self.approvals.risk_auto_enabled() {
+            return Ok(false);
+        }
+        if let Some(reason) = risk_auto_ineligibility(request) {
+            request.risk.status = RiskStatus::Unavailable;
+            request.risk.level = None;
+            request.risk.reason = Some(reason.into());
+            self.event(
+                request,
+                "risk.review.ineligible.v1",
+                EventClassification::Policy,
+                json!({
+                    "decision_id": decision.decision_id,
+                    "reason": reason,
+                }),
+            )?;
             return Ok(false);
         }
         self.event(

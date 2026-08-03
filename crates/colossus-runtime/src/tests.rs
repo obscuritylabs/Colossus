@@ -9,8 +9,8 @@ use super::{
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
     configure_shell_environment, goal_objective_from_plan, recover_interrupted_subagents,
-    recover_unknown_effects, reject_reserved_shell_environment, reject_shell_startup_profiles,
-    shell_command_arguments, terminal_actor,
+    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
+    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -3307,6 +3307,103 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
         evaluator.evaluate(&request, &decision).await,
         Err(RiskEvaluationError::InvalidAssessment(_))
     ));
+}
+
+#[tokio::test]
+async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
+    let request = {
+        let mut request = effect_request(
+            terminal_actor(),
+            "mcp.call",
+            "http://127.0.0.1:3001/mcp",
+            json!({
+                "operation": {
+                    "kind": "call_tool",
+                    "server": "everything",
+                    "tool": "echo",
+                    "description": "Echo one bounded message",
+                    "annotations": {
+                        "title": "Echo",
+                        "readOnlyHint": true,
+                        "destructiveHint": false,
+                        "idempotentHint": true,
+                        "openWorldHint": false,
+                    },
+                    "arguments": {
+                        "message": "MCP tool test",
+                        "password": "resolved-argument-secret",
+                        "token": "resolved-token-secret",
+                        "nested": {"access_token": "nested-resolved-secret"},
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "description": "schema-only-marker",
+                    },
+                    "schema_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                },
+                "transport": "streamable_http",
+                "cwd": null,
+                "args": [],
+                "environment": {"CHILD_TOKEN": "env:HOST_MCP_TOKEN"},
+                "url": "http://127.0.0.1:3001/mcp",
+                "headers": {"X-Client": "colossus"},
+                "credential_headers": {
+                    "Authorization": {"scheme": "Bearer", "reference": "env:HOST_MCP_TOKEN"}
+                },
+                "oauth": {
+                    "clientId": "sensitive-client-context",
+                    "clientSecretReference": "env:HOST_MCP_CLIENT_SECRET",
+                    "callbackPort": 8787,
+                    "scopes": ["openid"],
+                },
+                "timeout_ms": 30_000,
+                "max_output_bytes": 1_048_576,
+                "provenance": null,
+            }),
+        );
+        request.credential_references = vec![CredentialReference {
+            reference: "env:HOST_MCP_TOKEN".into(),
+            value_hash: None,
+        }];
+        request
+    };
+    let decision = BuiltInPolicy::offline_default()
+        .with_action("mcp.call", DecisionOutcome::RequireApproval)
+        .decide(&request)
+        .await
+        .expect("decision");
+
+    let metadata = redacted_risk_metadata(&request, &decision);
+    let disclosed = serde_json::to_string(&metadata).expect("metadata");
+    assert!(disclosed.contains("http://127.0.0.1:3001/mcp"));
+    assert!(disclosed.contains("everything"));
+    assert!(disclosed.contains("Echo one bounded message"));
+    assert!(disclosed.contains("readOnlyHint"));
+    assert!(disclosed.contains("MCP tool test"));
+    assert!(disclosed.contains(&"a".repeat(64)));
+    assert!(disclosed.contains("[REDACTED]"));
+    assert!(!disclosed.contains("resolved-argument-secret"));
+    assert!(!disclosed.contains("resolved-token-secret"));
+    assert!(!disclosed.contains("nested-resolved-secret"));
+    assert!(!disclosed.contains("schema-only-marker"));
+    assert!(!disclosed.contains("HOST_MCP_TOKEN"));
+    assert!(!disclosed.contains("HOST_MCP_CLIENT_SECRET"));
+    assert!(!disclosed.contains("sensitive-client-context"));
+    assert!(!disclosed.contains("Authorization"));
+
+    let mut stdio_request = request.clone();
+    stdio_request.resource = "/usr/local/bin/everything-mcp".into();
+    stdio_request.content["transport"] = json!("stdio");
+    stdio_request.content["url"] = Value::Null;
+    stdio_request.content["cwd"] = json!("/workspace");
+    stdio_request.content["args"] = json!(["--token", "resolved-stdio-secret"]);
+    let stdio_disclosed = serde_json::to_string(&redacted_risk_metadata(&stdio_request, &decision))
+        .expect("stdio metadata");
+    assert!(stdio_disclosed.contains("/usr/local/bin/everything-mcp"));
+    assert!(stdio_disclosed.contains("CHILD_TOKEN"));
+    assert!(stdio_disclosed.contains("[REDACTED]"));
+    assert!(!stdio_disclosed.contains("resolved-stdio-secret"));
+    assert!(!stdio_disclosed.contains("HOST_MCP_TOKEN"));
 }
 
 #[tokio::test]

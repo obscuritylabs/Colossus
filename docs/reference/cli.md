@@ -42,9 +42,12 @@ executed in-process default to `deny`; when an active worker handles a command, 
 worker's configured approval mode applies. Approval mode satisfies an existing approval
 obligation—it never changes an access or policy decision.
 
-`risk-auto` is eligible only for model and child-agent `shell.run`, `web.search`, and
-bodyless `network.http` GET effects outside workflows. A low-risk `allow`
-recommendation produces a request-bound proof; other network methods and every
+`risk-auto` is eligible only for model and child-agent `shell.run`, `web.search`,
+bodyless `network.http` GET, and configured top-level `mcp.call` effects outside
+workflows. MCP review requires supported metadata from fresh discovery and evaluates
+the exact endpoint, server, tool, schema hash, and validated arguments; server-provided
+descriptions and annotations are advisory. A low-risk `allow` recommendation produces a
+request-bound proof. Other network methods, unsupported MCP metadata, and every
 non-low-risk assessment fall back to explicit approval or denial.
 Each automatic grant emits a human-readable **Automatic approval review** notice on the
 attached terminal or TUI without opening an approval prompt.

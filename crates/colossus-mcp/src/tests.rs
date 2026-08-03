@@ -1,20 +1,29 @@
 use super::*;
 use colossus_ports::{KeyProvider, StoreError};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+fn test_schema_sha256(schema: &Value) -> String {
+    let bytes = serde_json::to_vec(schema).expect("schema bytes");
+    format!("{:x}", Sha256::digest(bytes))
+}
 
 #[test]
 fn request_uses_official_protocol_models_and_no_secret_values() {
     let operation = McpOperation::CallTool {
         server: "local".into(),
         tool: "echo".into(),
+        description: Some("Echo one message".into()),
+        annotations: None,
         arguments: json!({"text": "hello"}),
-        input_schema: json!({
+        input_schema: Box::new(json!({
             "type": "object",
             "properties": {"text": {"type": "string"}},
             "required": ["text"],
             "additionalProperties": false
-        }),
+        })),
+        schema_sha256: "unused-by-protocol-projection".into(),
     };
     let bytes = protocol_input(&operation).expect("protocol");
     let lines = std::str::from_utf8(&bytes)
@@ -34,8 +43,11 @@ fn remote_call_timeout_certainty_follows_dispatch_stage() {
     let call = McpOperation::CallTool {
         server: "fixture".into(),
         tool: "echo".into(),
+        description: None,
+        annotations: None,
         arguments: json!({}),
-        input_schema: json!({"type": "object"}),
+        input_schema: Box::new(json!({"type": "object"})),
+        schema_sha256: "unused-by-timeout-classification".into(),
     };
     assert!(matches!(
         remote_timeout_error(&call, false),
@@ -59,18 +71,20 @@ fn remote_call_timeout_certainty_follows_dispatch_stage() {
 
 #[test]
 fn discovered_schema_is_enforced_before_call() {
+    let input_schema = json!({
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"],
+        "additionalProperties": false
+    });
     let tool = McpToolSummary {
         server: "local".into(),
         name: "echo".into(),
         title: None,
         description: None,
-        input_schema: json!({
-            "type": "object",
-            "properties": {"count": {"type": "integer"}},
-            "required": ["count"],
-            "additionalProperties": false
-        }),
-        schema_sha256: "unused".into(),
+        annotations: None,
+        schema_sha256: test_schema_sha256(&input_schema),
+        input_schema,
     };
     assert!(validate_tool_arguments(&tool, &json!({"count": 2})).is_ok());
     assert!(validate_tool_arguments(&tool, &json!({"count": "two"})).is_err());
@@ -93,6 +107,7 @@ fn discovery_pages_containing_configured_credentials_fail_before_release() {
             name: "search".into(),
             title: None,
             description: Some("accidentally echoed hard-secret".into()),
+            annotations: None,
             input_schema: json!({"type": "object"}),
             schema_sha256: "hash".into(),
         }],
@@ -309,6 +324,79 @@ fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
     assert!(parse_tools_result(oversized_description, &server).is_err());
 }
 
+#[test]
+fn wildcard_and_explicit_discovery_preserve_bounded_risk_review_metadata() {
+    let base = ConfiguredServer {
+        name: "everything".into(),
+        transport: McpTransportKind::StreamableHttp,
+        command: PathBuf::new(),
+        args: Vec::new(),
+        cwd: None,
+        environment: BTreeMap::new(),
+        url: Some("http://127.0.0.1:3001/mcp".into()),
+        headers: BTreeMap::new(),
+        credential_headers: BTreeMap::new(),
+        oauth: None,
+        allowed_tools: ToolAllowlist::All,
+        research_tools: Vec::new(),
+        timeout_ms: Some(30_000),
+        max_output_bytes: Some(1024 * 1024),
+        effect_action_prefix: None,
+        provenance: None,
+    };
+    for allowlist in [
+        ToolAllowlist::All,
+        ToolAllowlist::Explicit(BTreeSet::from(["echo".into()])),
+    ] {
+        let mut server = base.clone();
+        server.allowed_tools = allowlist;
+        let result: ListToolsResult = serde_json::from_value(json!({
+            "tools": [{
+                "name": "echo",
+                "description": "Echo one bounded message",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                    "additionalProperties": false
+                },
+                "annotations": {
+                    "title": "Echo",
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
+            }]
+        }))
+        .expect("tools");
+        let page = parse_tools_result(result, &server).expect("discovery page");
+        let tool = page.tools.first().expect("echo tool");
+        assert_eq!(
+            tool.description.as_deref(),
+            Some("Echo one bounded message")
+        );
+        assert_eq!(
+            tool.annotations,
+            Some(McpToolAnnotations {
+                title: Some("Echo".into()),
+                read_only_hint: Some(true),
+                destructive_hint: Some(false),
+                idempotent_hint: Some(true),
+                open_world_hint: Some(false),
+            })
+        );
+        assert_eq!(tool.schema_sha256, test_schema_sha256(&tool.input_schema));
+        validate_tool_arguments(tool, &json!({"message": "MCP tool test"}))
+            .expect("bound arguments");
+        let mut mismatched = tool.clone();
+        mismatched.schema_sha256 = "0".repeat(64);
+        assert!(
+            validate_tool_arguments(&mismatched, &json!({"message": "MCP tool test"})).is_err()
+        );
+    }
+}
+
 struct RotatingTestKeys {
     active: Mutex<String>,
     keys: BTreeMap<String, [u8; 32]>,
@@ -521,8 +609,11 @@ async fn streamable_http_call_initialization_failure_has_a_known_outcome() {
         &McpOperation::CallTool {
             server: "fixture".into(),
             tool: "echo".into(),
+            description: None,
+            annotations: None,
             arguments: json!({}),
-            input_schema: json!({"type": "object"}),
+            input_schema: Box::new(json!({"type": "object"})),
+            schema_sha256: "unused-before-dispatch".into(),
         },
         HashMap::new(),
         &dispatched,
@@ -603,8 +694,11 @@ async fn streamable_http_call_failure_after_dispatch_has_an_unknown_outcome() {
         &McpOperation::CallTool {
             server: "fixture".into(),
             tool: "echo".into(),
+            description: None,
+            annotations: None,
             arguments: json!({}),
-            input_schema: json!({"type": "object"}),
+            input_schema: Box::new(json!({"type": "object"})),
+            schema_sha256: "unused-after-dispatch".into(),
         },
         HashMap::new(),
         &dispatched,
