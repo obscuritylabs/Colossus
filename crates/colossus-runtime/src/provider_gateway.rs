@@ -249,26 +249,76 @@ fn redact_risk_secret_fields(value: &mut Value) {
     }
 }
 
+/// Names whose presence as one word of a field name marks the value as a secret.
+const SENSITIVE_RISK_FIELD_WORDS: &[&str] = &[
+    "authorization",
+    "credential",
+    "credentials",
+    "passphrase",
+    "passwd",
+    "password",
+    "secret",
+    "token",
+];
+
+/// Compact names that only appear as multi-word secrets, such as `apiKey` or `key_material`.
+const SENSITIVE_RISK_FIELD_FRAGMENTS: &[&str] = &[
+    "accesskey",
+    "apikey",
+    "hiddenreasoning",
+    "keymaterial",
+    "privatekey",
+    "secretkey",
+    "signingkey",
+];
+
+/// Classify a field name as sensitive from its words, so schema-specific compound
+/// names such as `github_token`, `dbPassword`, or `clientSecret` never reach the
+/// evaluator prompt.
 fn is_sensitive_risk_field(key: &str) -> bool {
-    let compact = key
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .map(|character| character.to_ascii_lowercase())
-        .collect::<String>();
-    [
-        "authorization",
-        "password",
-        "passwd",
-        "token",
-        "secret",
-        "credential",
-        "apikey",
-        "privatekey",
-        "keymaterial",
-        "hiddenreasoning",
-    ]
-    .iter()
-    .any(|marker| compact.contains(marker))
+    let normalized = normalized_risk_field_name(key);
+    let words = normalized
+        .split('_')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words
+        .iter()
+        .any(|word| SENSITIVE_RISK_FIELD_WORDS.contains(word))
+    {
+        return true;
+    }
+    // Compare only consecutive whole words so `apiKey` and `key_material` match while
+    // unrelated names such as `monkeyMaterial` stay disclosed.
+    (0..words.len()).any(|start| {
+        let mut joined = String::new();
+        words[start..].iter().any(|word| {
+            joined.push_str(word);
+            SENSITIVE_RISK_FIELD_FRAGMENTS.contains(&joined.as_str())
+        })
+    })
+}
+
+/// Lowercase a field name into underscore-separated words, splitting camelCase
+/// boundaries so `clientSecret` and `client-secret` normalize identically.
+fn normalized_risk_field_name(key: &str) -> String {
+    let mut normalized = String::with_capacity(key.len() + 4);
+    let mut previous_was_word_character = false;
+    for character in key.chars() {
+        if character.is_ascii_uppercase() {
+            if previous_was_word_character {
+                normalized.push('_');
+            }
+            normalized.push(character.to_ascii_lowercase());
+            previous_was_word_character = false;
+        } else if character.is_ascii_alphanumeric() {
+            normalized.push(character);
+            previous_was_word_character = true;
+        } else {
+            normalized.push('_');
+            previous_was_word_character = false;
+        }
+    }
+    normalized
 }
 
 #[async_trait]

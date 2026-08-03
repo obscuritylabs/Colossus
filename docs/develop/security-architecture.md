@@ -178,7 +178,10 @@ network review includes the requested URL or search query, while MCP review incl
 the exact endpoint identity, transport, configured server/tool, bounded advisory
 description and annotations, fresh schema hash, and validated arguments. Resolved
 credentials and authentication configuration are absent, environment values become
-names, and sensitive argument fields are redacted.
+names, and sensitive argument fields are redacted. Field-name redaction is word based
+after camelCase and separator normalization, so compound schema-specific names such as
+`github_token`, `dbPassword`, `clientSecret`, or `apiKey` are redacted alongside the
+plain names.
 
 MCP descriptions and annotations are untrusted evaluator hints, not authority or hard
 preconditions. Explicit and wildcard tool selection share the same review rule because
