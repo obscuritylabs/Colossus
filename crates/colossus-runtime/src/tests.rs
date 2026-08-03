@@ -8,9 +8,10 @@ use super::{
     ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, goal_objective_from_plan, recover_interrupted_subagents,
-    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
-    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
+    configure_shell_environment, goal_objective_from_plan, model_workspace_path,
+    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
+    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
+    terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -1027,6 +1028,47 @@ fn shell_helpers_enforce_noninteractive_isolated_execution() {
         assert_eq!(environment["TMPDIR"], isolated.path().display().to_string());
         assert_eq!(environment["PATH"], "/bin:/usr/bin");
     }
+}
+
+#[test]
+fn model_workspace_path_normalizes_absolute_paths_inside_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = workspace.join("pcap/capture.pcap");
+
+    assert_eq!(
+        model_workspace_path(&workspace, &requested.to_string_lossy())
+            .expect("inside absolute path"),
+        requested
+    );
+}
+
+#[test]
+fn model_workspace_path_preserves_colossus_exclusion_for_absolute_paths() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = workspace.join(".colossus/state.redb");
+
+    assert!(matches!(
+        model_workspace_path(&workspace, &requested.to_string_lossy()),
+        Err(colossus_ports::ToolError::Denied(message))
+            if message.contains("outside .colossus")
+    ));
+}
+
+#[test]
+fn model_workspace_path_rejects_absolute_paths_outside_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let outside = tempdir().expect("outside");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = fs::canonicalize(outside.path())
+        .expect("canonical outside")
+        .join("capture.pcap");
+
+    assert!(matches!(
+        model_workspace_path(&workspace, &requested.to_string_lossy()),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
 }
 
 #[test]

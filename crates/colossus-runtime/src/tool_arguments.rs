@@ -358,12 +358,18 @@ pub(super) fn configure_shell_environment(
 
 pub(super) fn model_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf, ToolError> {
     let requested = Path::new(input);
-    if requested.is_absolute()
-        || requested.components().any(|component| {
-            matches!(component, std::path::Component::ParentDir)
-                || component.as_os_str() == ".colossus"
-        })
-    {
+    let requested = if requested.is_absolute() {
+        requested.strip_prefix(workspace).map_err(|_| {
+            ToolError::Denied(
+                "model filesystem paths must be workspace-relative and outside .colossus".into(),
+            )
+        })?
+    } else {
+        requested
+    };
+    if requested.components().any(|component| {
+        matches!(component, std::path::Component::ParentDir) || component.as_os_str() == ".colossus"
+    }) {
         return Err(ToolError::Denied(
             "model filesystem paths must be workspace-relative and outside .colossus".into(),
         ));
