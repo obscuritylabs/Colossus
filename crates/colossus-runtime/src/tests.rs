@@ -3333,6 +3333,11 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
                         "message": "MCP tool test",
                         "password": "resolved-argument-secret",
                         "token": "resolved-token-secret",
+                        "github_token": "resolved-compound-secret",
+                        "dbPassword": "resolved-camel-secret",
+                        "clientSecret": "resolved-client-secret",
+                        "apiKey": "resolved-api-key-secret",
+                        "max_output_tokens": 512,
                         "nested": {"access_token": "nested-resolved-secret"},
                     },
                     "input_schema": {
@@ -3384,7 +3389,15 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
     assert!(disclosed.contains("[REDACTED]"));
     assert!(!disclosed.contains("resolved-argument-secret"));
     assert!(!disclosed.contains("resolved-token-secret"));
+    assert!(!disclosed.contains("resolved-compound-secret"));
+    assert!(!disclosed.contains("resolved-camel-secret"));
+    assert!(!disclosed.contains("resolved-client-secret"));
+    assert!(!disclosed.contains("resolved-api-key-secret"));
     assert!(!disclosed.contains("nested-resolved-secret"));
+    assert!(
+        disclosed.contains("\"max_output_tokens\":512"),
+        "word-based redaction must keep non-secret names such as token counts"
+    );
     assert!(!disclosed.contains("schema-only-marker"));
     assert!(!disclosed.contains("HOST_MCP_TOKEN"));
     assert!(!disclosed.contains("HOST_MCP_CLIENT_SECRET"));
