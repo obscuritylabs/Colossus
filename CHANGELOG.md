@@ -8,6 +8,13 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.10] - 2026-08-03
+
+### Changed
+
+- Kept YAML fenced blocks on the safe plain-text fallback so the syntax-highlighting
+  dependency graph remains compatible with the supported static musl release targets.
+
 ## [0.10.2-preview.9] - 2026-08-03
 
 ### Added

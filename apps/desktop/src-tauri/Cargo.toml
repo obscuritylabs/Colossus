@@ -27,9 +27,9 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.22.1"
-colossus-network = { version = "=0.10.2-preview.9", path = "../../../crates/colossus-network" }
-colossus-sdk = { version = "=0.10.2-preview.9", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
-colossus-sidecar-protocol = { version = "=0.10.2-preview.9", path = "../../../crates/colossus-sidecar-protocol" }
+colossus-network = { version = "=0.10.2-preview.10", path = "../../../crates/colossus-network" }
+colossus-sdk = { version = "=0.10.2-preview.10", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
+colossus-sidecar-protocol = { version = "=0.10.2-preview.10", path = "../../../crates/colossus-sidecar-protocol" }
 directories = "6.0.0"
 futures-util = "0.3.33"
 getrandom = "0.4.3"
@@ -53,7 +53,7 @@ nix = { version = "0.31.3", features = ["process", "signal"] }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [target.'cfg(windows)'.dependencies]
-colossus-windows-native = { version = "=0.10.2-preview.9", path = "../../../crates/colossus-windows-native" }
+colossus-windows-native = { version = "=0.10.2-preview.10", path = "../../../crates/colossus-windows-native" }
 
 [dev-dependencies]
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }

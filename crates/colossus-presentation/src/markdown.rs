@@ -1143,6 +1143,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn yaml_code_blocks_use_the_plaintext_fallback() {
+        let yaml = highlight_code("key: value\n", Some("yaml")).expect("yaml fallback");
+        let plaintext =
+            highlight_code("key: value\n", Some("plaintext")).expect("plaintext highlighting");
+
+        assert_eq!(yaml, plaintext);
+    }
+
+    #[test]
     fn pathological_code_blocks_fall_back_without_highlighting() {
         let oversized = "x".repeat(MAX_HIGHLIGHT_BYTES + 1);
         assert!(highlight_code(&oversized, Some("rust")).is_none());
