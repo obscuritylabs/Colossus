@@ -41,6 +41,18 @@ impl RepositoryOperation {
             | Self::FileSummary { path, .. } => path,
         }
     }
+
+    /// Replaces the operation path with its validated workspace-relative spelling so the
+    /// executor observes the same confined path the gateway authorized.
+    pub(super) fn with_resource(mut self, resource: String) -> Self {
+        match &mut self {
+            Self::Map { path, .. }
+            | Self::SymbolSearch { path, .. }
+            | Self::References { path, .. }
+            | Self::FileSummary { path, .. } => *path = resource,
+        }
+        self
+    }
 }
 
 pub(super) struct RepositoryEffectExecutor {

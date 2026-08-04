@@ -8,9 +8,10 @@ use super::{
     ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, goal_objective_from_plan, recover_interrupted_subagents,
-    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
-    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
+    configure_shell_environment, goal_objective_from_plan, model_workspace_path,
+    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
+    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
+    terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -1027,6 +1028,72 @@ fn shell_helpers_enforce_noninteractive_isolated_execution() {
         assert_eq!(environment["TMPDIR"], isolated.path().display().to_string());
         assert_eq!(environment["PATH"], "/bin:/usr/bin");
     }
+}
+
+#[test]
+fn model_workspace_path_normalizes_absolute_paths_inside_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = workspace.join("pcap/capture.pcap");
+
+    assert_eq!(
+        model_workspace_path(&workspace, &requested.to_string_lossy())
+            .expect("inside absolute path"),
+        requested
+    );
+}
+
+#[test]
+fn model_workspace_path_preserves_colossus_exclusion_for_absolute_paths() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = workspace.join(".colossus/state.redb");
+
+    assert!(matches!(
+        model_workspace_path(&workspace, &requested.to_string_lossy()),
+        Err(colossus_ports::ToolError::Denied(message))
+            if message.contains("outside .colossus")
+    ));
+}
+
+#[test]
+fn model_workspace_path_rejects_absolute_paths_outside_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let outside = tempdir().expect("outside");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = fs::canonicalize(outside.path())
+        .expect("canonical outside")
+        .join("capture.pcap");
+
+    assert!(matches!(
+        model_workspace_path(&workspace, &requested.to_string_lossy()),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn model_workspace_path_accepts_conventional_windows_absolute_spellings() {
+    // Canonicalized workspaces use the extended-length spelling while models emit the
+    // conventional drive-letter form.
+    let workspace = std::path::Path::new(r"\\?\C:\repo");
+
+    assert_eq!(
+        model_workspace_path(workspace, r"C:\repo\src\lib.rs").expect("conventional spelling"),
+        workspace.join(r"src\lib.rs")
+    );
+    assert_eq!(
+        model_workspace_path(workspace, r"c:\REPO\src\lib.rs").expect("case-insensitive spelling"),
+        workspace.join(r"src\lib.rs")
+    );
+    assert!(matches!(
+        model_workspace_path(workspace, r"C:\other\src\lib.rs"),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
+    assert!(matches!(
+        model_workspace_path(workspace, r"C:\repo\.colossus\state.redb"),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
 }
 
 #[test]
@@ -4455,6 +4522,45 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         summary["symbols"]
             .as_array()
             .is_some_and(|items| items.len() == 3)
+    );
+
+    let absolute_summary = executor
+        .execute(
+            invoke(
+                "repo.file_summary",
+                json!({
+                    "path": executor.workspace.join("src/lib.rs").to_string_lossy(),
+                    "max_lines": 2,
+                }),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("absolute in-workspace file summary");
+    let absolute_summary: Value =
+        serde_json::from_str(&absolute_summary.output).expect("absolute summary JSON");
+    assert_eq!(absolute_summary["path"], "src/lib.rs");
+    assert_eq!(absolute_summary["line_count"], 3);
+
+    let absolute_map = executor
+        .execute(
+            invoke(
+                "repo.map",
+                json!({"path": executor.workspace.to_string_lossy(), "max_files": 10}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("absolute in-workspace map");
+    let absolute_map: Value =
+        serde_json::from_str(&absolute_map.output).expect("absolute map JSON");
+    assert!(
+        absolute_map["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(|file| file["path"].as_str())
+            .any(|path| path == "src/lib.rs")
     );
 
     assert!(
