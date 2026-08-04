@@ -1,8 +1,13 @@
 {
   "name": "@obscuritylabs/colossus-sdk",
-  "version": "0.1.0-alpha.1",
+  "version": "0.10.2",
   "description": "Security-focused Node.js SDK for the Colossus public gRPC API",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/obscuritylabs/Colossus.git",
+    "directory": "sdk/typescript"
+  },
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -42,7 +47,6 @@
     "typescript": "5.9.3"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   }
 }

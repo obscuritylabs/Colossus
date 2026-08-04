@@ -47,8 +47,12 @@ flowchart LR
     MG --> M["Merge to main"]
     M --> T["Annotated stable or approved prerelease tag"]
     T --> V["Release readiness + six native targets"]
-    V --> RG["Colossus release gate"]
+    V -->|"stable"| SDKR["Immutable SDK candidate"]
+    V -->|"preview"| DPR["Unsigned Desktop previews"]
+    SDKR --> RG["Colossus release gate"]
+    DPR --> RG
     RG --> DR["Draft GitHub Release for human approval"]
+    DR -->|"publish stable"| RP["Protected npm, PyPI, and Go publication"]
 ```
 
 </div>
@@ -59,7 +63,7 @@ flowchart LR
 |---|---|---|---|---:|
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
 | Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets, channel-specific Apple-silicon Desktop, and Windows x64 Developer Preview for prereleases | `Colossus release gate` | $4.50 per release |
+| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; stable SDK candidate or macOS/Windows Developer Preview packages | `Colossus release gate` | $4.50 per release |
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
@@ -174,32 +178,26 @@ replaces that sentinel result; a skipped gate can never satisfy the ruleset.
 
 A release tag must be annotated, match either `vX.Y.Z` or `vX.Y.Z-preview.N` with
 `N > 0`, point to a commit contained in `main`, and match both the workspace version and
-changelog heading. Tag pushes run local
-release-readiness verification and exactly six native CLI targets. Each CLI target
-combines its security acceptance, locked release build, archive and checksum generation,
-clean installation, offline echo/audit, and signed-bundle smoke. A credential-free macOS
-14 ARM job builds the standalone Tauri graph into one shared Cargo target and uploads an
-exact ditto archive of the unsigned application. A separate fresh macOS runner downloads
-that archive before it imports Developer ID and notarization authority; this minimal job
-runs no Rust, Cargo, Vite, or Tauri build step. It installs locked Node dependencies with
-lifecycle scripts disabled only for updater signing and verification. It signs both
-bundled executables, writes their final manifest, binds that exact manifest digest into
-the already-built main executable, signs the desktop application, submits it to Apple notarization,
-staples and assesses it, and uploads an Apple-silicon direct-download zip plus checksum.
-Approved prerelease tags additionally build an x64 per-user NSIS package on the
-organization's `windows-latest-l` larger runner, run silent
-install/first-launch/uninstall and process-cleanup smoke
-checks, and publish its checksum, sealed manifest, and provenance. That package is
-explicitly labeled unsigned and preview-only. Stable release gating requires the Windows
-preview job to be skipped; it cannot accidentally promote an unsigned Windows package.
-The stable Windows job remains absent until Authenticode signing authority is configured
-for the nested CLI and sidecar, the app, and the installer.
-The validated workspace release version and public Apple Team ID are injected during the
-unsigned build, then the signing runner checks the imported identity against that Team ID,
-so application metadata, code identity, and asset tag cannot drift.
-For a stable tag, the build receives the Team ID from the non-secret `MACOS_TEAM_ID`
-repository variable; the signing runner requires a matching protected `MACOS_TEAM_ID`
-secret alongside the Developer ID and notary credentials.
+changelog heading. Tag pushes run local release-readiness verification and exactly six
+native CLI targets. Each CLI target combines its security acceptance, locked release
+build, archive and checksum generation, clean installation, offline echo/audit, and
+signed-bundle smoke.
+
+A stable `vX.Y.Z` target additionally regenerates and tests the TypeScript, Python, and
+Go SDKs, builds the exact npm tarball and Python wheel/source distribution, inspects
+their intrinsic metadata, and binds them to the release commit with a manifest and
+checksum set. Its aggregate gate requires every Desktop job to be skipped. It does not
+read or require Apple, Tauri updater, or Authenticode credentials.
+
+The stable SDK job compares the public API against the most recent stable tag reachable
+from the release commit, falling back to that commit's parent for a first release. The
+base is therefore fixed relative to the release commit, so rerunning an old tag after
+`main` advances cannot report newer `main` APIs as removals.
+
+An approved `vX.Y.Z-preview.N` target takes the mutually exclusive path: the stable SDK
+candidate job is skipped, while credential-free macOS ARM and Windows x64 jobs package
+the visibly unsigned Developer Preview described below. No unsigned Desktop package can
+enter a stable core draft.
 
 ```bash
 git tag -a vX.Y.Z -m "Colossus vX.Y.Z"
@@ -221,22 +219,18 @@ ad-hoc signature does not establish publisher identity. The workflow names it
 `Colossus-Desktop-DEVELOPER-PREVIEW-vX.Y.Z-preview.N-aarch64-apple-darwin.zip`, includes
 an adjacent SHA-256 sidecar, sets GitHub prerelease metadata, and labels the draft
 **Colossus vX.Y.Z-preview.N - Developer Preview (Unnotarized)**. The native compile-time
-channel also drives a persistent in-app warning. Stable tags continue to require the
-canonical Team ID, Developer ID signature, notarization, stapling, and Gatekeeper
-assessment.
+channel also drives a persistent in-app warning. Production Desktop signing,
+notarization, and update authority remain a separate release track from the stable core.
 
-Within `release.yml`, only the final publication job receives `contents: write`. After
-all six CLI targets and the Desktop artifact pass, automation creates or updates a draft
-GitHub Release. A human reviews the draft and publishes it; the approved Developer
-Preview draft is already marked as a GitHub prerelease. The stable-only
-post-publication channel workflow has narrow `contents: write` authority only to replace
-the fixed signed update metadata asset. Manual dispatch is artifact-only and cannot
-create a release; it uses
-the separate `validation_only` channel with an ad-hoc signature and `ADHOC` sentinel,
-never reads production signing secrets, and does not produce a runnable Desktop
-application. Its Actions artifact and archive are explicitly named
-`validation-only-adhoc` / `VALIDATION-ONLY-ADHOC` so they cannot be mistaken for a
-Developer Preview or stable signed release:
+Within `release.yml`, only the draft job receives `contents: write`. After the selected
+stable or preview contract passes, automation creates or updates a draft GitHub Release.
+A human reviews and publishes it; the approved Developer Preview draft is already marked
+as a GitHub prerelease. Publishing a stable draft triggers `publish-sdk.yml`, whose one
+`sdk-production` job receives short-lived OIDC and tag authority only after protected
+environment approval. It republishes the already-built candidate bytes rather than
+rebuilding them. Manual dispatch is artifact-only and cannot create a release or mutate
+a registry. A stable manual target validates the SDK path and skips Desktop; a preview
+manual target uses the non-runnable `validation_only` Desktop channel:
 
 ```bash
 gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
@@ -244,7 +238,7 @@ gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
 
 ### Desktop update signing and channels
 
-Only stable builds advertise automatic updates. They require the repository variable
+Only separately authorized stable Desktop builds advertise automatic updates. They require the repository variable
 `DESKTOP_UPDATE_PUBLIC_KEY`, containing the one-line base64 Tauri updater public key,
 plus the protected `DESKTOP_UPDATE_PRIVATE_KEY` secret and, when applicable,
 `DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD`. Unsigned Developer Preview and validation-only
@@ -256,12 +250,12 @@ notarization, stapling, and final bundle verification. The stable versioned draf
 includes channel-scoped metadata whose platform entry carries that signature and an
 immutable version-release URL.
 
-When a human publishes a stable versioned release,
+When a human publishes a release that contains an independently produced `stable.json`,
 `desktop-update-channels.yml` revalidates the tag, release kind, platform key, HTTPS URL,
-and immutable release path before replacing `stable.json` on the fixed
-`desktop-update-channels` release. The native update client also uses the shared
-additional-CA configuration and rejects HTTPS-to-HTTP redirects. Published Developer
-Previews skip this workflow because they deliberately contain no update authority.
+and immutable release path before replacing that asset on the fixed
+`desktop-update-channels` release. Stable core releases and Developer Previews contain no
+such asset and skip this workflow. The native update client also uses the shared
+additional-CA configuration and rejects HTTPS-to-HTTP redirects.
 
 The application update signature is separate from platform publisher identity.
 Authenticode remains mandatory before a Windows package can enter the stable channel;
@@ -272,9 +266,9 @@ the unsigned Windows job to be skipped for stable tags.
 
 Routine PR updates allocate only selected Linux/documentation jobs, one deliberate final
 run provides representative pre-merge evidence, and release tags alone allocate all six
-CLI architecture jobs plus channel-specific Apple-silicon Desktop packaging. Stable
-Desktop releases are notarized; the one explicit Developer Preview remains visibly
-unnotarized. Each tier has one stable fail-closed aggregate check.
+CLI architecture jobs plus exactly one channel-specific extension: stable SDK candidates
+or unsigned Desktop Developer Previews. Registry publication and production Desktop
+authority remain independently protected. Each tier has one fail-closed aggregate check.
 
 ## Bootstrap repository enforcement
 

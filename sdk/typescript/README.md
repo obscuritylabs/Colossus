@@ -4,6 +4,12 @@ This package connects Node.js applications to the authenticated loopback Colossu
 gRPC API. It is not a browser SDK: a browser or WebView must call a trusted native
 backend so bearer credentials never enter renderer memory.
 
+Install the SDK version that matches the Colossus core release:
+
+```console
+npm install @obscuritylabs/colossus-sdk@0.10.2
+```
+
 ```ts
 import {
   StaticBearerCredential,

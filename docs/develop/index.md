@@ -15,6 +15,8 @@ operation stay in [Get started](../get-started/index.md) and
 - [Source setup and test tiers](setup-testing.md) provides a reproducible development
   loop.
 - [Tiered CI/CD](ci-cd.md) explains the cost-bounded PR, pre-merge, and release gates.
+- [Core release operations](releasing.md) covers registry bootstrap, stable CLI/SDK
+  publication, and partial-release recovery.
 - [Architecture overview](architecture.md) defines dependency direction.
 - [Rust crate structure](crate-structure.md) keeps crate roots readable and behavior in
   responsibility-focused modules.

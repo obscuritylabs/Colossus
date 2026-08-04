@@ -8,6 +8,33 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-08-03
+
+### Added
+
+- Added a coordinated stable core release channel that publishes the six native CLI
+  archives plus version-aligned npm, PyPI, and Go SDK releases from one source commit.
+- Added immutable SDK candidate manifests and checksums, protected OIDC registry
+  publishing, exact-byte recovery checks, and an independently tagged Go submodule.
+
+### Changed
+
+- Decoupled stable CLI and SDK releases from Apple signing, notarization, updater keys,
+  and Desktop packaging. Developer Preview tags retain their explicitly unsigned
+  Desktop artifacts; production Desktop distribution remains a separate release track.
+- Marked every internal Rust package as non-publishable so the coordinated release does
+  not accidentally expose workspace crates on crates.io.
+
+### Release Notes
+
+- The first stable core release requires registry trusted-publisher setup and a
+  protected `sdk-production` GitHub environment before the approved draft is published.
+- The Python distribution is `obscuritylabs-colossus-sdk` because the normalized
+  `colossus-sdk` PyPI name belongs to an unrelated project. The import remains
+  `colossus_sdk`.
+- npm provenance is disabled while this repository is private because npm does not
+  support provenance statements for public packages built from private repositories.
+
 ## [0.10.2-preview.10] - 2026-08-03
 
 ### Changed
