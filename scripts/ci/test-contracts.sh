@@ -132,3 +132,5 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     printf 'skipped eligibility unexpectedly satisfied the pre-merge gate\n' >&2
     exit 1
 fi
+
+node --test "$script_dir/sdk-release.test.mjs"

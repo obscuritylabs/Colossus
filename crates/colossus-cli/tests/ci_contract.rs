@@ -413,6 +413,10 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
             "core/preview release split is missing {required}"
         );
     }
+    assert!(
+        !source.contains("check sdk --base origin/main"),
+        "release API compatibility must not be checked against the moving origin/main"
+    );
 
     let build_start = source.find("  desktop_macos_build:").expect("build job");
     let sign_start = source[build_start..]
@@ -461,6 +465,19 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
 fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
     let workflow = workflow("publish-sdk.yml");
     let publication_jobs = jobs(&workflow);
+    let validate = job(publication_jobs, "validate");
+    let validate_permissions = mapping(
+        field(validate, "permissions"),
+        "SDK candidate validation permissions",
+    );
+    assert_eq!(
+        field(validate_permissions, "actions").as_str(),
+        Some("read")
+    );
+    assert_eq!(
+        field(validate_permissions, "contents").as_str(),
+        Some("read")
+    );
     let publish = job(publication_jobs, "publish");
     assert_eq!(
         field(publish, "environment").as_str(),
@@ -485,6 +502,9 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         "--output dist/sdk-rebuilt",
         "dist/sdk-release \"$RELEASE_VERSION\" \"$SOURCE_COMMIT\" dist/sdk-rebuilt",
         "node scripts/ci/verify-sdk-release.mjs",
+        "dist/sdk-release \"$RELEASE_VERSION\" \"$SOURCE_COMMIT\" dist/sdk-trusted",
+        "repos/$GH_REPO/actions/workflows/release.yml/runs?event=push&status=success&head_sha=$SOURCE_COMMIT",
+        "--name colossus-sdk-release --dir dist/sdk-trusted",
         "node scripts/ci/check-sdk-registry-state.mjs npm",
         "node scripts/ci/check-sdk-registry-state.mjs pypi",
         "--access public --provenance=false",

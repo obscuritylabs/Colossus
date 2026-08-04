@@ -93,21 +93,37 @@ export function validateManifest(manifest, version, commit, files, digests) {
   }
 }
 
+function digestCandidate(candidate) {
+  return Object.fromEntries(
+    candidate.entries.map((file) => [file, sha256(resolve(candidate.directory, file))]),
+  );
+}
+
+export function validateTrustedBytes(files, candidateDigests, trustedDigests) {
+  for (const file of Object.values(files)) {
+    const trusted = trustedDigests[file];
+    if (!trusted) fail(`the trusted release build does not contain ${file}`);
+    if (candidateDigests[file] !== trusted) {
+      fail(`${file} is not the byte-exact artifact built from the release commit`);
+    }
+  }
+}
+
 export function compareSdkReleaseDirectories(
   candidateDirectoryArgument,
-  rebuiltDirectoryArgument,
+  trustedDirectoryArgument,
   version,
 ) {
   const candidate = exactDirectory(candidateDirectoryArgument, version);
-  const rebuilt = exactDirectory(rebuiltDirectoryArgument, version);
-  for (const file of candidate.entries) {
-    if (
-      sha256(resolve(candidate.directory, file)) !==
-      sha256(resolve(rebuilt.directory, file))
-    ) {
-      fail(`SDK release file does not match the exact tag rebuild: ${file}`);
-    }
+  const trusted = exactDirectory(trustedDirectoryArgument, version);
+  if (candidate.directory === trusted.directory) {
+    fail("the trusted SDK candidate must be an independent copy");
   }
+  validateTrustedBytes(
+    candidate.files,
+    digestCandidate(candidate),
+    digestCandidate(trusted),
+  );
 }
 
 function verify(directoryArgument, version, commit) {
@@ -117,12 +133,9 @@ function verify(directoryArgument, version, commit) {
   if (!stableVersionPattern.test(version)) fail("SDK release version must be stable X.Y.Z");
   if (!commitPattern.test(commit)) fail("source commit must be a lowercase 40-character SHA");
 
-  const { directory, files } = exactDirectory(directoryArgument, version);
-
-  const packageNames = [files.npm, files.wheel, files.sdist];
-  const digests = Object.fromEntries(
-    packageNames.map((file) => [file, sha256(resolve(directory, file))]),
-  );
+  const candidate = exactDirectory(directoryArgument, version);
+  const { directory, files } = candidate;
+  const digests = digestCandidate(candidate);
   const manifestPath = resolve(directory, files.manifest);
   validateManifest(
     JSON.parse(readFileSync(manifestPath, "utf8")),
@@ -132,9 +145,9 @@ function verify(directoryArgument, version, commit) {
     digests,
   );
 
-  const checksumNames = [...packageNames, files.manifest].sort();
+  const checksumNames = [files.npm, files.wheel, files.sdist, files.manifest].sort();
   const expectedChecksums = `${checksumNames
-    .map((file) => `${sha256(resolve(directory, file))}  ${file}`)
+    .map((file) => `${digests[file]}  ${file}`)
     .join("\n")}\n`;
   if (readFileSync(resolve(directory, files.checksums), "ascii") !== expectedChecksums) {
     fail("SDK checksum set is incomplete, unordered, or does not match the candidate bytes");
@@ -176,7 +189,7 @@ function verify(directoryArgument, version, commit) {
 }
 
 function main() {
-  const [directoryArgument, version, commit, rebuiltDirectoryArgument] = process.argv.slice(2);
+  const [directoryArgument, version, commit, trustedDirectoryArgument] = process.argv.slice(2);
   if (
     !directoryArgument ||
     !version ||
@@ -184,13 +197,13 @@ function main() {
     ![5, 6].includes(process.argv.length)
   ) {
     fail(
-      "usage: verify-sdk-release.mjs DIRECTORY X.Y.Z SOURCE_COMMIT [EXACT_TAG_REBUILD_DIRECTORY]",
+      "usage: verify-sdk-release.mjs DIRECTORY X.Y.Z SOURCE_COMMIT [TRUSTED_DIRECTORY]",
     );
   }
   verify(directoryArgument, version, commit);
-  if (rebuiltDirectoryArgument) {
-    verify(rebuiltDirectoryArgument, version, commit);
-    compareSdkReleaseDirectories(directoryArgument, rebuiltDirectoryArgument, version);
+  if (trustedDirectoryArgument) {
+    verify(trustedDirectoryArgument, version, commit);
+    compareSdkReleaseDirectories(directoryArgument, trustedDirectoryArgument, version);
   }
 }
 

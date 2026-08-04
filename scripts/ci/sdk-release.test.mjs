@@ -20,6 +20,7 @@ import {
   compareSdkReleaseDirectories,
   expectedSdkFiles,
   validateManifest,
+  validateTrustedBytes,
 } from "./verify-sdk-release.mjs";
 
 const versions = {
@@ -100,7 +101,7 @@ test("publication requires every candidate byte to match an exact tag rebuild", 
     writeFileSync(join(candidate, npm), "replacement bytes\n");
     assert.throws(
       () => compareSdkReleaseDirectories(candidate, rebuilt, "1.2.3"),
-      /does not match the exact tag rebuild/u,
+      /is not the byte-exact artifact built from the release commit/u,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -129,6 +130,29 @@ test("Python source distributions normalize to reproducible bytes", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("candidate bytes must match the trusted release build for every asset", () => {
+  const files = expectedSdkFiles("1.2.3");
+  const trusted = Object.fromEntries(
+    Object.values(files).map((file, index) => [file, String(index + 1).repeat(64)]),
+  );
+  assert.doesNotThrow(() => validateTrustedBytes(files, { ...trusted }, trusted));
+  assert.throws(
+    () => validateTrustedBytes(files, { ...trusted, [files.wheel]: "f".repeat(64) }, trusted),
+    /is not the byte-exact artifact built from the release commit/u,
+  );
+  assert.throws(
+    () =>
+      validateTrustedBytes(
+        files,
+        { ...trusted },
+        Object.fromEntries(
+          Object.entries(trusted).filter(([file]) => file !== files.manifest),
+        ),
+    ),
+    /trusted release build does not contain/u,
+  );
 });
 
 test("PyPI recovery publishes only missing files and rejects conflicts", () => {

@@ -113,10 +113,14 @@ candidate pass. Before publishing the draft, verify that it contains exactly:
 - `colossus-sdk-vX.Y.Z-SHA256SUMS`.
 
 Publishing the stable draft triggers `publish-sdk.yml`. Approve its one
-`sdk-production` deployment. The job reverifies the exact release assets, reconciles
-npm and PyPI, independently rebuilds the SDK packages from the exact stable tag and
-requires every release asset byte to match, publishes only missing bytes, and finally
-creates the annotated `sdk/go/vX.Y.Z` tag on the core tag's commit.
+`sdk-production` deployment. The job reverifies the exact release assets against the
+`colossus-sdk-release` artifact of the successful `release.yml` run for the tag, so
+release-asset write access alone cannot substitute bytes that the tag never produced;
+a recomputed manifest and checksum file do not satisfy this comparison. Inside the
+protected environment it independently rebuilds the SDK packages from the exact stable
+tag and requires every release asset byte to match. It then reconciles npm and PyPI,
+publishes only missing bytes, and finally creates the annotated `sdk/go/vX.Y.Z` tag on
+the core tag's commit.
 
 ## Expected result
 
@@ -155,6 +159,14 @@ accepts an existing version only when the registry bytes match the release manif
 publishes missing PyPI files with `skip-existing`, and accepts an existing Go tag only
 when it resolves to the recorded source commit. Any conflicting immutable version or
 tag fails closed; investigate it instead of changing or overwriting the release.
+
+Recovery also requires the trusted `colossus-sdk-release` artifact for the tag. That
+artifact is retained for fourteen days, so after it expires rerun the tag's `release.yml`
+run before dispatching the publisher:
+
+```bash
+gh run rerun RUN_ID
+```
 
 ## Next step
 
