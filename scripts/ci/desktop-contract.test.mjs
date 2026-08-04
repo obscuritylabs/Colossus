@@ -568,7 +568,7 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   );
 });
 
-test("release compilation and signing authority use separate runners", () => {
+test("Developer Preview compilation and ad-hoc signing use separate runners", () => {
   const workflow = read(".github/workflows/release.yml");
   const buildStart = workflow.indexOf("  desktop_macos_build:");
   const signStart = workflow.indexOf("  desktop_macos:", buildStart);
@@ -600,23 +600,14 @@ test("release compilation and signing authority use separate runners", () => {
   assert.doesNotMatch(buildJob, /MACOS_NOTARY/u);
   assert.doesNotMatch(buildJob, /security import/u);
   assert.doesNotMatch(buildJob, /\$\{\{ secrets\./u);
-  assert.match(buildJob, /MACOS_TEAM_ID: \$\{\{ vars\.MACOS_TEAM_ID \}\}/u);
+  assert.doesNotMatch(buildJob, /\$\{\{ vars\./u);
   assert.match(
     buildJob,
-    /if: needs\.validate\.outputs\.release_channel == 'stable'/u,
+    /if: needs\.validate\.outputs\.target_channel != 'stable'/u,
   );
-  assert.match(
-    buildJob,
-    /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
-  );
-  assert.match(
-    buildJob,
-    /if ! \[\[ "\$MACOS_TEAM_ID" =~ \^\[A-Z0-9\]\{10\}\$ \]\]; then/u,
-  );
-  assert.match(
-    buildJob,
-    /MACOS_TEAM_ID repository variable must be a 10-character Apple Team ID' >&2\r?\n\s+exit 1\r?\n\s+fi/u,
-  );
+  assert.match(buildJob, /COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""/u);
+  assert.match(buildJob, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""/u);
+  assert.match(buildJob, /COLOSSUS_DESKTOP_TEAM_ID=ADHOC/u);
 
   assert.match(signJob, /actions\/download-artifact@[0-9a-f]{40}/u);
   assert.match(signJob, /\/usr\/bin\/ditto -x -k/u);
@@ -632,7 +623,6 @@ test("release compilation and signing authority use separate runners", () => {
     "patch-desktop-manifest-binding.mjs",
     "verify-desktop-bundle.mjs",
     "verify-desktop-unsigned-archive.mjs",
-    "verify-tauri-updater-signature.mjs",
   ]) {
     assert.match(
       signJob,
@@ -646,31 +636,21 @@ test("release compilation and signing authority use separate runners", () => {
   );
   assert.match(
     signJob,
-    /if: needs\.validate\.outputs\.release_channel == 'stable'/u,
+    /if: needs\.validate\.outputs\.target_channel != 'stable'/u,
   );
-  assert.match(
-    signJob,
-    /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
-  );
-  assert.match(signJob, /security import/u);
-  assert.match(signJob, /grep -F "\(\$MACOS_TEAM_ID\)"/u);
-  assert.match(
-    signJob,
-    /if ! \[\[ "\$MACOS_TEAM_ID" =~ \^\[A-Z0-9\]\{10\}\$ \]\]; then/u,
-  );
-  assert.match(
-    signJob,
-    /MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2\r?\n\s+exit 1\r?\n\s+fi/u,
-  );
+  assert.doesNotMatch(signJob, /security import/u);
+  assert.doesNotMatch(signJob, /\$\{\{ secrets\./u);
+  assert.doesNotMatch(signJob, /\$\{\{ vars\./u);
+  assert.doesNotMatch(signJob, /DESKTOP_UPDATE_PRIVATE_KEY/u);
+  assert.match(signJob, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""/u);
   assert.match(signJob, /actions\/setup-node@[0-9a-f]{40}/u);
-  assert.match(signJob, /npm ci --ignore-scripts/u);
   assert.doesNotMatch(signJob, /rust-toolchain@/u);
   assert.doesNotMatch(signJob, /\bcargo\s/u);
   assert.doesNotMatch(signJob, /\btauri\s/u);
 
   assert.match(
     windowsJob,
-    /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
+    /if: needs\.validate\.outputs\.target_channel != 'stable'/u,
   );
   assert.match(windowsJob, /runs-on: blacksmith-8vcpu-windows-2025/u);
   assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
@@ -692,9 +672,7 @@ test("release compilation and signing authority use separate runners", () => {
     extraction,
   );
   const extractedCheck = signJob.indexOf("--extracted-root", extraction);
-  const credentialImport = signJob.indexOf(
-    "Import Developer ID and notarization credentials",
-  );
+  const adHocSign = signJob.indexOf("package-desktop-macos sign");
   assert.ok(
     hashCapture >= 0 &&
       hashCapture < archiveCheck &&
@@ -702,17 +680,20 @@ test("release compilation and signing authority use separate runners", () => {
       extraction < hashComparison &&
       hashComparison < extractedCheck &&
       extraction < extractedCheck &&
-      extractedCheck < credentialImport,
+      extractedCheck < adHocSign,
   );
 
   assert.match(
     workflow,
-    /desktop_macos_build=\$\{\{ needs\.desktop_macos_build\.result \}\}/u,
+    /MACOS_DESKTOP_BUILD_RESULT: \$\{\{ needs\.desktop_macos_build\.result \}\}/u,
   );
-  assert.match(workflow, /desktop_windows_preview="\$WINDOWS_DESKTOP_RESULT"/u);
   assert.match(
     workflow,
-    /if \[ "\$RELEASE_CHANNEL" = stable \]; then\s+test "\$WINDOWS_DESKTOP_RESULT" = skipped/u,
+    /SDK_RELEASE_RESULT: \$\{\{ needs\.sdk_release\.result \}\}/u,
+  );
+  assert.match(
+    workflow,
+    /if \[ "\$TARGET_CHANNEL" = stable \]; then[\s\S]*test "\$MACOS_DESKTOP_RESULT" = skipped[\s\S]*test "\$WINDOWS_DESKTOP_RESULT" = skipped/u,
   );
 });
 
@@ -730,7 +711,7 @@ test("standalone Desktop release builds stay bounded before sealed packaging", (
   assert.match(patcher, /MAX_EXECUTABLE_BYTES = 1024 \* 1024 \* 1024/u);
 });
 
-test("stable desktop updates are signature-bound and unsigned previews have no update authority", () => {
+test("stable Desktop updates stay independent and unsigned previews have no update authority", () => {
   const manifest = read("apps/desktop/src-tauri/Cargo.toml");
   const build = read("apps/desktop/src-tauri/build.rs");
   const updater = read("apps/desktop/src-tauri/src/updates.rs");
@@ -761,16 +742,17 @@ test("stable desktop updates are signature-bound and unsigned previews have no u
     windows,
     /unsigned Windows packaging unexpectedly created an updater signature/u,
   );
-  assert.match(release, /DESKTOP_UPDATE_PUBLIC_KEY/u);
-  assert.match(release, /DESKTOP_UPDATE_PRIVATE_KEY/u);
-  assert.match(
-    release,
-    /release_channel == 'stable' && secrets\.DESKTOP_UPDATE_PRIVATE_KEY/u,
-  );
-  assert.match(release, /write-desktop-update-manifest\.mjs/u);
-  assert.match(release, /verify-tauri-updater-signature\.mjs/u);
+  assert.match(release, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""/u);
+  assert.match(release, /COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""/u);
+  assert.doesNotMatch(release, /DESKTOP_UPDATE_PRIVATE_KEY/u);
+  assert.doesNotMatch(release, /write-desktop-update-manifest\.mjs/u);
+  assert.doesNotMatch(release, /verify-tauri-updater-signature\.mjs/u);
   assert.match(channels, /types: \[published\]/u);
   assert.match(channels, /github\.event\.release\.prerelease == false/u);
+  assert.match(
+    channels,
+    /contains\(github\.event\.release\.assets\.\*\.name, 'stable\.json'\)/u,
+  );
   assert.doesNotMatch(channels, /developer_preview/u);
   assert.match(channels, /desktop-update-channels/u);
   assert.match(channels, /gh release upload "\$channel_tag"/u);
@@ -805,7 +787,7 @@ test("desktop browser acceptance covers the supported minimum layout", () => {
   assert.match(premerge, /npm run test:browser/u);
 });
 
-test("draft release binds GitHub CLI without checking out tagged sources", () => {
+test("draft release checks out the exact verifier and binds GitHub CLI", () => {
   const workflow = read(".github/workflows/release.yml");
   const draftStart = workflow.indexOf("  draft-release:");
   assert.ok(draftStart >= 0);
@@ -814,7 +796,9 @@ test("draft release binds GitHub CLI without checking out tagged sources", () =>
   assert.match(draftJob, /GH_REPO: \$\{\{ github\.repository \}\}/u);
   assert.match(draftJob, /gh release upload "\$RELEASE_TAG" dist\/\*/u);
   assert.match(draftJob, /gh release create "\$RELEASE_TAG" dist\/\*/u);
-  assert.doesNotMatch(draftJob, /actions\/checkout@/u);
+  assert.match(draftJob, /actions\/checkout@/u);
+  assert.match(draftJob, /ref: \$\{\{ needs\.validate\.outputs\.tag \}\}/u);
+  assert.match(draftJob, /persist-credentials: false/u);
 });
 
 test("release manifest writer emits exact final binary digests", () => {

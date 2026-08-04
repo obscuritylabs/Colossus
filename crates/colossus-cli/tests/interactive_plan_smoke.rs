@@ -582,6 +582,7 @@ fn run_full_screen_lifecycle(
         process.arg("--approval-mode");
         process.arg("full-access");
     }
+    process.arg("--alt-screen");
     process.arg("tui");
     process.arg("--session");
     process.arg(session_id);

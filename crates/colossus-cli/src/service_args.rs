@@ -1,6 +1,29 @@
 use super::*;
 
 #[derive(Args)]
+pub(super) struct CodexCommand {
+    /// Official Codex CLI executable used for the account flow.
+    #[arg(long, default_value = "codex")]
+    pub(super) codex_bin: PathBuf,
+    #[command(subcommand)]
+    pub(super) command: CodexAction,
+}
+
+#[derive(Subcommand)]
+pub(super) enum CodexAction {
+    /// Sign in with ChatGPT and save file-backed credentials for Colossus.
+    Login {
+        /// Use the device-code flow instead of opening a browser.
+        #[arg(long)]
+        device_code: bool,
+    },
+    /// Show the current Codex CLI sign-in status.
+    Status,
+    /// Sign out and remove the current Codex CLI credentials.
+    Logout,
+}
+
+#[derive(Args)]
 pub(super) struct ProviderCommand {
     #[command(subcommand)]
     pub(super) command: ProviderAction,

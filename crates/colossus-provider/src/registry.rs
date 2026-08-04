@@ -169,5 +169,6 @@ fn model_route(role: &str, model: &ModelProfile, provider: &ProviderProfile) -> 
         model: model.model.clone(),
         limits: model.limits,
         capabilities: model.capabilities,
+        reasoning_effort: model.reasoning_effort,
     }
 }

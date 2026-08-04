@@ -237,7 +237,10 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || is_process_action(&request.action)
             || matches!(
                 request.action.as_str(),
-                "provider.openai.responses" | "provider.openai.chat" | "provider.models"
+                "provider.openai.responses"
+                    | "provider.openai.codex"
+                    | "provider.openai.chat"
+                    | "provider.models"
             )
             || request.action.starts_with("task.")
             || request.action.starts_with("decision.")

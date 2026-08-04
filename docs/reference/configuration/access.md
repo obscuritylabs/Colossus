@@ -338,7 +338,7 @@ how an existing obligation can be satisfied:
 | --- | --- |
 | `deny` | Fail closed without prompting |
 | `ask` | Prompt through a trusted interactive interface |
-| `risk-auto` | Auto-approve only eligible, valid low-risk shell and read-only network assessments; otherwise ask or deny |
+| `risk-auto` | Auto-approve only eligible, valid low-risk shell, read-only network, and exact top-level MCP assessments; otherwise ask or deny |
 | `full-access` | Satisfy the approval obligation without a prompt |
 
 Approval mode never converts `deny` to `allow` and never creates a missing resource

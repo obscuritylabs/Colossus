@@ -450,12 +450,13 @@ audit labels, and retention obligations.
 
 - `deny`: block every operation that requires approval.
 - `ask`: prompt the user before approval-required operations.
-- `risk-auto`: run model-assisted review only for model or child-agent `shell.run`
-  outside workflow lineage and auto-approve only low-risk calls whose recommendation is
-  allow. Medium, high, malformed, unavailable, and deny recommendations fall back to an
-  explicit user prompt or denial.
+- `risk-auto`: run model-assisted review only for eligible model or child-agent
+  `shell.run`, `web.search`, bodyless `network.http` GET, and configured top-level
+  `mcp.call` effects outside workflow lineage. Auto-approve only low-risk calls whose
+  recommendation is allow. Medium, high, malformed, unavailable, unsupported, and deny
+  recommendations fall back to an explicit user prompt or denial.
 - `full-access`: auto-approve approval-required operations without prompting and skip
-  model-assisted shell risk review.
+  model-assisted risk review.
 
 `full-access` MUST NOT expand workspace roots, grant missing network implementations,
 change tool schemas, bypass deterministic denies, or make unknown tools executable.
@@ -1157,16 +1158,16 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.10.2-preview.8 is the active Developer Preview release line, and every capability
+Rust 0.10.2 is the active stable core release line, and every capability
 in the Section 5 release baseline has executable evidence. The detailed
 requirement-to-test mapping lives in the
 [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and source paths belong
 there rather than being repeated in this product contract. Publication still requires
 the explicit platform, security, and artifact release gate.
 
-Latest published release proof:
+Latest published Desktop preview proof:
 
-- [v0.10.2-preview.8 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.8)
+- [v0.10.2-preview.10 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.10)
 - [Release Process](release-process.md) for the local, pull-request, platform, security, and
   packaging gates required before publication
 

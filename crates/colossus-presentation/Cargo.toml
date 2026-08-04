@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "colossus-presentation"
 version.workspace = true
 edition.workspace = true
@@ -10,6 +11,8 @@ colossus-contracts.workspace = true
 colossus-ports.workspace = true
 directories.workspace = true
 hex.workspace = true
+inkjet.workspace = true
+pulldown-cmark.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

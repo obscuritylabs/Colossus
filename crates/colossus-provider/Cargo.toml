@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "colossus-provider"
 version.workspace = true
 edition.workspace = true
@@ -7,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+colossus-codex-auth.workspace = true
 colossus-contracts.workspace = true
 colossus-network.workspace = true
 colossus-policy.workspace = true
@@ -15,17 +17,20 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 colossus-ports.workspace = true
 colossus-testkit.workspace = true
 colossus-tools.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

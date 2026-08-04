@@ -2,21 +2,18 @@ use super::*;
 use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
 /// Launch the terminal UI and retain exclusive ownership of all terminal writes.
-pub async fn run_tui(
-    host: Arc<dyn InteractiveHost>,
-    mut options: TuiOptions,
-) -> Result<(), TuiError> {
+pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Result<(), TuiError> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(TuiError::NotInteractive);
-    }
-    if std::env::var_os("ZELLIJ").is_some() {
-        options.screen_mode = ScreenMode::Inline;
     }
     let snapshot = host
         .bootstrap(options.bootstrap)
         .await
         .map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
+    if options.screen_mode == ScreenMode::Inline {
+        preload_native_history(&mut state, Arc::clone(&host)).await;
+    }
     let (event_tx, mut event_rx) = mpsc::channel::<HostEvent>(256);
     let mut terminal = OwnedTerminal::new(options.screen_mode)?;
 
@@ -25,6 +22,12 @@ pub async fn run_tui(
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        continue_native_history_preload(
+            &mut state,
+            Arc::clone(&host),
+            event_tx.clone(),
+            options.screen_mode,
+        );
         if !state.is_busy() && !state.queue_paused && state.overlay.is_none() {
             if let Some(request) = state.pending_plan_execution.take() {
                 start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
@@ -38,7 +41,18 @@ pub async fn run_tui(
         if event::poll(Duration::from_millis(33))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    handle_key(&mut state, key, Arc::clone(&host), event_tx.clone());
+                    handle_key(
+                        &mut state,
+                        key,
+                        Arc::clone(&host),
+                        event_tx.clone(),
+                        options.screen_mode,
+                    );
+                }
+                Event::Mouse(mouse) => {
+                    if handle_mouse(&mut state, mouse) {
+                        request_older_page(&mut state, Arc::clone(&host), event_tx.clone());
+                    }
                 }
                 Event::Paste(text) => insert_active_text(&mut state, &text),
                 Event::Resize(_, _) => {}
@@ -49,14 +63,113 @@ pub async fn run_tui(
     Ok(())
 }
 
-pub(super) fn handle_key(
+fn continue_native_history_preload(
+    state: &mut TuiState,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+    screen_mode: ScreenMode,
+) {
+    if screen_mode != ScreenMode::Inline || !state.has_more || state.loading_older {
+        return;
+    }
+    if state.older_page_failed {
+        state.has_more = false;
+        state.before_sequence = None;
+        return;
+    }
+    if state.native_history_pages_loaded >= MAX_NATIVE_HISTORY_PAGES {
+        state.append_entry(native_history_limit_entry());
+        state.has_more = false;
+        state.before_sequence = None;
+        return;
+    }
+    if state.before_sequence.is_none() {
+        state.append_entry(error_entry(
+            "Older transcript history advertised no continuation cursor; native scrollback starts at the oldest safely loaded page.",
+        ));
+        state.has_more = false;
+        return;
+    }
+    state.native_history_pages_loaded += 1;
+    request_older_page(state, host, event_tx);
+}
+
+async fn preload_native_history(state: &mut TuiState, host: Arc<dyn InteractiveHost>) {
+    for _ in 0..MAX_NATIVE_HISTORY_PAGES {
+        if !state.has_more {
+            return;
+        }
+        let Some(before_sequence) = state.before_sequence else {
+            state.append_entry(error_entry(
+                "Older transcript history advertised no continuation cursor; native scrollback starts at the oldest safely loaded page.",
+            ));
+            state.has_more = false;
+            return;
+        };
+        let page = match host
+            .older_messages(&state.session_id, before_sequence)
+            .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                state.append_entry(error_entry(&format!(
+                    "Older transcript history could not be restored into native scrollback: {error}"
+                )));
+                state.has_more = false;
+                return;
+            }
+        };
+        if page.has_more
+            && (page.messages.is_empty() || page.before_sequence == Some(before_sequence))
+        {
+            state.append_entry(error_entry(
+                "Older transcript history did not advance its continuation cursor; loading stopped safely.",
+            ));
+            state.has_more = false;
+            return;
+        }
+        state.prepend_page(page);
+    }
+    if state.has_more {
+        state.append_entry(native_history_limit_entry());
+        state.has_more = false;
+        state.before_sequence = None;
+    }
+}
+
+fn native_history_limit_entry() -> TranscriptEntry {
+    error_entry(&format!(
+        "Native scrollback restored at most the newest {MAX_NATIVE_HISTORY_MESSAGES} transcript messages. Use session inspection for earlier durable history."
+    ))
+}
+
+/// Apply one captured mouse event and report whether an older transcript page is needed.
+pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
+    if state.overlay.is_some() {
+        return false;
+    }
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            state.scroll_up_lines(MOUSE_SCROLL_LINES);
+            state.at_transcript_top()
+        }
+        MouseEventKind::ScrollDown => {
+            state.scroll_down_lines(MOUSE_SCROLL_LINES);
+            false
+        }
+        _ => false,
+    }
+}
+
+fn handle_key(
     state: &mut TuiState,
     key: KeyEvent,
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
+    screen_mode: ScreenMode,
 ) {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        state.cancel_focus();
+        state.interrupt_or_exit();
         return;
     }
     if state.overlay.is_some() {
@@ -119,11 +232,11 @@ pub(super) fn handle_key(
             state.accept_completion();
         }
         KeyCode::BackTab => state.previous_completion(),
-        KeyCode::PageUp => {
+        KeyCode::PageUp if screen_mode == ScreenMode::Alternate => {
             state.page_up();
             request_older_page(state, host, event_tx);
         }
-        KeyCode::PageDown => state.page_down(),
+        KeyCode::PageDown if screen_mode == ScreenMode::Alternate => state.page_down(),
         KeyCode::Enter => {
             if state.composer.completion_index.is_some() && state.accept_completion() {
                 return;
@@ -311,6 +424,7 @@ pub(super) fn request_older_page(
     let Some(before_sequence) = state.before_sequence else {
         return;
     };
+    state.older_page_failed = false;
     state.loading_older = true;
     let session_id = state.session_id.clone();
     tokio::spawn(async move {
@@ -744,10 +858,16 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
         HostEvent::OlderPage(result) => {
             state.loading_older = false;
             match result {
-                Ok(page) => state.prepend_page(page),
-                Err(error) => state.append_entry(error_entry(&format!(
-                    "Older transcript messages could not be loaded: {error}"
-                ))),
+                Ok(page) => {
+                    state.older_page_failed = false;
+                    state.prepend_page(page);
+                }
+                Err(error) => {
+                    state.older_page_failed = true;
+                    state.append_entry(error_entry(&format!(
+                        "Older transcript messages could not be loaded: {error}"
+                    )));
+                }
             }
         }
         HostEvent::OperationFinished(result) => {
@@ -932,6 +1052,7 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
             return;
         }
         RunEvent::ToolStarted { call, .. } => {
+            finalize_intermediate_assistant_output(state);
             state.activity = Some(format!("running {}", call.name));
             state
                 .active_calls
@@ -945,11 +1066,15 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
     }
 
     let (kind, call) = match &event {
-        RunEvent::ToolCompleted { result, .. } => (
-            TranscriptKind::Tool,
-            state.active_calls.remove(&result.call_id),
-        ),
+        RunEvent::ToolCompleted { result, .. } => {
+            finalize_intermediate_assistant_output(state);
+            (
+                TranscriptKind::Tool,
+                state.active_calls.remove(&result.call_id),
+            )
+        }
         RunEvent::ToolCancelled { call, .. } => {
+            finalize_intermediate_assistant_output(state);
             state.active_calls.remove(&call.call_id);
             (TranscriptKind::Tool, None)
         }
@@ -986,6 +1111,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
     if result.clear_transcript {
         state.transcript.clear();
         state.transcript_sources.clear();
+        state.transcript_epoch = state.transcript_epoch.wrapping_add(1);
+        state.native_history_pages_loaded = 0;
+        state.older_page_failed = false;
         state.end();
     }
     if !result.document.is_empty() {
@@ -1003,6 +1131,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             transcript_from_messages(page.messages, &state.preferences);
         state.transcript = transcript;
         state.transcript_sources = transcript_sources;
+        state.transcript_epoch = state.transcript_epoch.wrapping_add(1);
+        state.native_history_pages_loaded = 0;
+        state.older_page_failed = false;
         state.before_sequence = page.before_sequence;
         state.has_more = page.has_more;
         state.end();
@@ -1054,6 +1185,36 @@ pub(super) fn update_streaming_assistant(state: &mut TuiState, delta: &str) {
         document: PresentationDocument::from_block(PresentationBlock::Text(delta.into())),
         temporary: true,
     });
+}
+
+fn finalize_intermediate_assistant_output(state: &mut TuiState) {
+    let old_line_count = if state.scroll_from_bottom > 0 {
+        transcript_lines(state, state.transcript_width).len()
+    } else {
+        0
+    };
+    let render_as_markdown =
+        state.preferences.stream_mode != colossus_contracts::StreamDisplayMode::Raw;
+    let mut changed = false;
+    for entry in &mut state.transcript {
+        if !entry.temporary || entry.kind != TranscriptKind::Assistant {
+            continue;
+        }
+        if render_as_markdown && entry.document.blocks.len() == 1 {
+            let markdown = match &entry.document.blocks[0] {
+                PresentationBlock::Text(text) => Some(text.clone()),
+                _ => None,
+            };
+            if let Some(markdown) = markdown {
+                entry.document.blocks[0] = PresentationBlock::Markdown(markdown);
+            }
+        }
+        entry.temporary = false;
+        changed = true;
+    }
+    if changed && state.scroll_from_bottom > 0 {
+        state.preserve_scroll_after_line_change(old_line_count);
+    }
 }
 
 pub(super) fn finalize_assistant(state: &mut TuiState, output: &str) {

@@ -169,12 +169,16 @@ impl ApprovalProvider for WorkerInteractiveApproval {
         let bridge = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone).map_err(|_| {
             PolicyError::Unavailable("no interactive worker client attached".into())
         })?;
+        let question = request.risk.reason.as_ref().map_or_else(
+            || decision.reason.clone(),
+            |risk_reason| format!("{} Risk-auto: {risk_reason}", decision.reason),
+        );
         let answer = bridge
             .request(WorkerPrompt {
                 prompt_id: Uuid::now_v7().to_string(),
                 kind: WorkerPromptKind::Approval,
                 title: "Approval required".into(),
-                question: decision.reason.clone(),
+                question,
                 choices: vec!["Allow once".into(), "Deny".into()],
                 allow_free_form: false,
                 details: json!({
@@ -182,6 +186,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
                     "resource": request.resource,
                     "content": request.content,
                     "decision_id": decision.decision_id,
+                    "risk": request.risk,
                 }),
             })
             .await

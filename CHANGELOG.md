@@ -8,8 +8,64 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Changed
+
+- Moved PR validation, pre-merge acceptance, release, and documentation workflows onto
+  Blacksmith runners (`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-15`, and
+  `blacksmith-8vcpu-windows-2025`). Complete Rust PR validation, release readiness, and
+  the published CLI target matrix stay on GitHub-hosted runners because they require the
+  AppArmor and Landlock LSMs the Blacksmith microVM kernel does not expose, or a
+  per-target runner image.
+
+## [0.10.2] - 2026-08-03
+
 ### Added
 
+- Added a coordinated stable core release channel that publishes the six native CLI
+  archives plus version-aligned npm, PyPI, and Go SDK releases from one source commit.
+- Added immutable SDK candidate manifests and checksums, protected OIDC registry
+  publishing, exact-byte recovery checks, and an independently tagged Go submodule.
+
+### Changed
+
+- Decoupled stable CLI and SDK releases from Apple signing, notarization, updater keys,
+  and Desktop packaging. Developer Preview tags retain their explicitly unsigned
+  Desktop artifacts; production Desktop distribution remains a separate release track.
+- Marked every internal Rust package as non-publishable so the coordinated release does
+  not accidentally expose workspace crates on crates.io.
+
+### Release Notes
+
+- The first stable core release requires registry trusted-publisher setup and a
+  protected `sdk-production` GitHub environment before the approved draft is published.
+- The Python distribution is `obscuritylabs-colossus-sdk` because the normalized
+  `colossus-sdk` PyPI name belongs to an unrelated project. The import remains
+  `colossus_sdk`.
+- npm provenance is disabled while this repository is private because npm does not
+  support provenance statements for public packages built from private repositories.
+
+## [0.10.2-preview.10] - 2026-08-03
+
+### Changed
+
+- Kept YAML fenced blocks on the safe plain-text fallback so the syntax-highlighting
+  dependency graph remains compatible with the supported static musl release targets.
+
+## [0.10.2-preview.9] - 2026-08-03
+
+### Added
+
+- Added ChatGPT/Codex subscription authentication through the official Codex credential
+  store, including browser and device-code login, status and logout commands, bounded
+  token refresh, streamed Responses turns, tool calls, and model-specific reasoning
+  effort levels.
+- Added terminal-native transcript scrollback as the default TUI mode. Finalized user,
+  assistant, tool, and system entries move into ordinary terminal history for mouse
+  selection, copy, search, and wheel navigation while the composer and status remain
+  sticky.
+- Added CommonMark parsing and syntax-highlighted fenced code blocks to terminal
+  presentation, with tables, task lists, nested emphasis, blockquotes, links, image
+  fallbacks, bounded wrapping, and safe large-block fallbacks.
 - Added the complete interactive Plan workflow to full-screen TUI and scripted line
   mode, with process-local Execute/Plan state, same-session Draft selection and
   refinement, approval, discard, and Direct or bounded Goal execution in embedded and
@@ -25,6 +81,15 @@ include breaking changes while the public API is still settling.
 
 ### Changed
 
+- Made `--alt-screen` the explicit opt-in for the application-owned full-screen
+  transcript. `--no-alt-screen` remains a compatibility alias for the default inline
+  native-scrollback viewport.
+- Made Ctrl-C exit an idle TUI, request cooperative cancellation for an active run, and
+  exit on a second press during cancellation. `/exit` and Ctrl-D on an empty idle
+  composer remain available.
+- Preserved intermediate assistant output and tool boundaries as finalized transcript
+  entries so native scrollback and resumed session history retain the complete visible
+  run rather than only the final answer.
 - Added optimistic plan revisions: legacy records default to revision 0, new plans start
   at 1, and refinement or any lifecycle transition increments the revision and rejects
   stale requests.
@@ -34,15 +99,11 @@ include breaking changes while the public API is still settling.
 - Made approved-plan consumption atomic. Cancel or failure before consumption preserves
   terminal Plan mode and selection; after consumption, Direct and Goal outcomes retain
   canonical plan plus completion, cancellation, or bounded-failure evidence.
-- Moved PR validation, pre-merge acceptance, release, and documentation workflows onto
-  Blacksmith runners (`blacksmith-4vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-15`, and
-  `blacksmith-8vcpu-windows-2025`). Complete Rust PR validation, release readiness, and
-  the published CLI target matrix stay on GitHub-hosted runners because they require the
-  AppArmor and Landlock LSMs the Blacksmith microVM kernel does not expose, or a
-  per-target runner image.
-
 ### Security
 
+- Kept ChatGPT access, refresh, and account credentials out of configuration, model
+  input, diagnostics, and durable run history. Codex provider access remains bound to
+  the exact ChatGPT and OpenAI authentication origins through the normal effect gateway.
 - Bound `plan.update` to the server-selected Draft id and revision, kept
   `plan.discard` operator-only, and routed update, discard, approval, Direct execution,
   and Goal handoff through the normal effect gateway.
@@ -56,6 +117,8 @@ include breaking changes while the public API is still settling.
   the worker and client with the same Colossus version after upgrading. Interrupted
   interactive operations are not automatically retried; inspect `/plans` and linked run
   or Goal evidence first.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
 
 ## [0.10.2-preview.8] - 2026-07-30
 

@@ -14,6 +14,7 @@ use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
+const MCP_SECRET: &str = "risk-auto-mcp-secret-value";
 
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
@@ -21,7 +22,8 @@ fn command(binary: &Path, config: &Path) -> Command {
         .arg("--config")
         .arg(config)
         .env("COLOSSUS_APPROVAL_TEST_JOURNAL_KEY", JOURNAL_KEY)
-        .env("COLOSSUS_APPROVAL_TEST_SIGNING_KEY", SIGNING_KEY);
+        .env("COLOSSUS_APPROVAL_TEST_SIGNING_KEY", SIGNING_KEY)
+        .env("MCP_TEST_SECRET", MCP_SECRET);
     command
 }
 
@@ -252,6 +254,95 @@ fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHa
     (origin, task)
 }
 
+fn risk_auto_mcp_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let address = listener.local_addr().expect("provider address");
+    let origin = format!("http://{address}");
+    let tool_call = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({
+            "id": "mcp-tool",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "mcp-call",
+                        "type": "function",
+                        "function": {
+                            "name": "mcp_call",
+                            "arguments": json!({
+                                "server": "fixture",
+                                "tool": "echo",
+                                "arguments": {"text": "MCP tool test"}
+                            }).to_string()
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })
+    );
+    let risk_answer = json!({
+        "id": "mcp-risk-answer",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": json!({
+                    "risk_level": "low",
+                    "recommended_decision": "allow",
+                    "reason": "exact fixture echo call is bounded and non-destructive"
+                }).to_string()
+            },
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let final_answer = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({
+            "id": "mcp-final",
+            "choices": [{
+                "index": 0,
+                "delta": {"content": "mcp-finished"},
+                "finish_reason": "stop"
+            }]
+        })
+    );
+    let task = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut requests = Vec::new();
+        while requests.len() < 3 && Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("provider accept: {error}"),
+            };
+            stream
+                .set_nonblocking(false)
+                .expect("blocking provider stream");
+            let request = read_request(&mut stream);
+            match requests.len() {
+                0 => respond_sse(&mut stream, &tool_call),
+                1 => respond_json(&mut stream, &risk_answer),
+                2 => respond_sse(&mut stream, &final_answer),
+                _ => unreachable!("bounded request sequence"),
+            }
+            requests.push(request);
+        }
+        assert_eq!(requests.len(), 3, "provider request count");
+        requests
+    });
+    (origin, task)
+}
+
 fn write_tool_config(
     directory: &Path,
     origin: &str,
@@ -408,6 +499,98 @@ fn write_network_config(directory: &Path, origin: &str) -> std::path::PathBuf {
             "timeoutMs": 5000,
             "maxOutputBytes": 1048576,
             "maxProcesses": 2,
+            "maxMemoryBytes": 67108864,
+            "maxConcurrency": 1
+        }
+    });
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&document).expect("config JSON"),
+    )
+    .expect("write config");
+    config
+}
+
+fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> std::path::PathBuf {
+    let workflows = directory.join("workflows");
+    fs::create_dir_all(&workflows).expect("workflows");
+    let config = directory.join("config.json");
+    let document = json!({
+        "schemaVersion": 2,
+        "storage": {
+            "path": directory.join("state.redb"),
+            "keys": {
+                "kind": "environment",
+                "journal_variable": "COLOSSUS_APPROVAL_TEST_JOURNAL_KEY",
+                "journal_key_id": "approval-mcp-journal-v1",
+                "signing_variable": "COLOSSUS_APPROVAL_TEST_SIGNING_KEY",
+                "anchor_path": directory.join("anchor.json")
+            }
+        },
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": ["mcp.call"], "exclude": []},
+            "actions": {
+                "allow": ["provider.openai.chat", "mcp.tools"],
+                "requireApproval": ["mcp.call"],
+                "deny": []
+            }
+        },
+        "policy": {"kind": "built_in", "require_post_effect": true},
+        "workflows": {"repository": workflows, "user": workflows},
+        "providers": {
+            "profiles": {
+                "loopback": {
+                    "kind": "open_ai_compatible",
+                    "baseUrl": format!("{origin}/v1"),
+                    "credentialReference": null,
+                    "timeoutMs": 5000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "loopback": {
+                    "providerProfile": "loopback",
+                    "model": "approval-mcp-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
+                }
+            },
+            "roles": {"primary": "loopback", "risk_evaluator": "loopback"}
+        },
+        "agent": {"maxTurns": 4},
+        "subagents": {"maxConcurrent": 1},
+        "mcp": {
+            "servers": {
+                "fixture": {
+                    "command": mcp_server,
+                    "args": [],
+                    "workingDirectory": directory,
+                    "environment": {"MCP_TEST_SECRET": "env:MCP_TEST_SECRET"},
+                    "allowedTools": ["*"],
+                    "researchTools": [],
+                    "timeoutMs": 5000,
+                    "maxOutputBytes": 1048576
+                }
+            }
+        },
+        "sandbox": {
+            "backend": "native",
+            "profile": "approval-mcp-v1",
+            "allowBrokerFallback": false,
+            "helperPath": null,
+            "ociRuntime": null,
+            "ociImage": null,
+            "ociProxyImage": null,
+            "filesystem": [{"root": directory, "mode": "read"}],
+            "executables": [mcp_server],
+            "environment": ["MCP_TEST_SECRET"],
+            "networkDestinations": [origin],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 1048576,
+            "maxProcesses": 4,
             "maxMemoryBytes": 67108864,
             "maxConcurrency": 1
         }
@@ -645,6 +828,62 @@ fn risk_auto_reviews_read_only_network_tools_without_prompting() {
     assert!(requests[1].contains("risk_level"));
     assert!(requests[2].starts_with("GET /resource "));
     assert!(requests[3].contains(r#""tool_call_id":"network-call""#));
+}
+
+#[test]
+fn risk_auto_reviews_exact_mcp_calls_without_prompting_or_disclosing_credentials() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let mcp_server = Path::new(env!("CARGO_BIN_EXE_colossus-mcp-test-server"));
+    let directory = tempdir().expect("directory");
+    let (origin, provider) = risk_auto_mcp_server();
+    let config = write_mcp_risk_config(directory.path(), &origin, mcp_server);
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "--approval-mode",
+            "risk-auto",
+            "run",
+            "Call the configured MCP echo fixture.",
+            "--max-turns",
+            "4",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("risk-auto MCP run");
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let notice = stderr.to_ascii_lowercase();
+    assert!(!notice.contains("approval required"), "{stderr}");
+    assert!(notice.contains("automatic approval review"), "{stderr}");
+    assert!(notice.contains("mcp.call"), "{stderr}");
+    assert!(
+        notice.contains("exact fixture echo call is bounded and non-destructive"),
+        "{stderr}"
+    );
+
+    let requests = provider.join().expect("MCP provider");
+    assert!(requests[0].contains(r#""name":"mcp_call""#));
+    let review = &requests[1];
+    for expected in [
+        "mcp.call",
+        "fixture",
+        "echo",
+        "Echo one text value.",
+        "readOnlyHint",
+        "schema_sha256",
+        "MCP tool test",
+    ] {
+        assert!(review.contains(expected), "missing {expected}: {review}");
+    }
+    assert!(!review.contains("input_schema"), "{review}");
+    assert!(!requests.iter().any(|request| request.contains(MCP_SECRET)));
+    assert!(requests[2].contains(r#""tool_call_id":"mcp-call""#));
 }
 
 #[test]

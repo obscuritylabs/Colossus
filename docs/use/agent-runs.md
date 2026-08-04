@@ -54,9 +54,11 @@ colossus -w /absolute/path/to/repository \
 ```
 
 `risk-auto` can produce a request-bound proof for a low-risk `shell.run`, `web.search`,
-or bodyless `network.http` GET outside workflow lineage. It does not apply to workspace
-mutations, non-read-only network methods, integrations, MCP calls, workflows, or system
-actors.
+bodyless `network.http` GET, or configured top-level `mcp.call` outside workflow
+lineage. MCP review receives credential-free metadata for the exact freshly discovered
+call; descriptions and annotations remain untrusted hints. It does not apply to
+workspace mutations, non-read-only network methods, integrations, pack-provided MCP
+actions, workflows, or system actors.
 When it grants a proof, Colossus emits an **Automatic approval review** notice with the
 reviewed action, resource, low-risk result, authorization mode, and reason.
 If the evaluator is unavailable or returns an invalid assessment, Colossus emits an

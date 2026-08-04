@@ -190,6 +190,61 @@ fn network_request(action: &str, content: serde_json::Value) -> colossus_contrac
     request
 }
 
+fn mcp_call_request(
+    transport: &str,
+    resource: &str,
+    cwd: Option<&std::path::Path>,
+) -> colossus_contracts::EffectRequest {
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"message": {"type": "string"}},
+        "required": ["message"],
+        "additionalProperties": false,
+    });
+    let schema_sha256 =
+        super::sha256_hex(&super::canonical_bytes(&input_schema).expect("canonical MCP schema"));
+    let url = (transport == "streamable_http").then(|| resource.to_owned());
+    let mut request = effect_request(
+        Actor {
+            actor_type: ActorType::Model,
+            id: "risk-mcp-test".into(),
+        },
+        "mcp.call",
+        resource,
+        serde_json::json!({
+            "operation": {
+                "kind": "call_tool",
+                "server": "everything",
+                "tool": "echo",
+                "description": "Echo one bounded message",
+                "annotations": {
+                    "title": "Echo",
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false,
+                },
+                "arguments": {"message": "MCP tool test"},
+                "input_schema": input_schema,
+                "schema_sha256": schema_sha256,
+            },
+            "transport": transport,
+            "cwd": cwd,
+            "args": ["--stdio"],
+            "environment": {},
+            "url": url,
+            "headers": {},
+            "credential_headers": {},
+            "oauth": null,
+            "timeout_ms": 30_000,
+            "max_output_bytes": 1_048_576,
+            "provenance": null,
+        }),
+    );
+    request.capabilities = vec!["mcp.invoke".into()];
+    request
+}
+
 #[tokio::test]
 async fn action_restrictions_remove_undeclared_global_network_and_environment_grants() {
     let policy = BuiltInPolicy::offline_default()
@@ -429,6 +484,62 @@ async fn permits_bind_every_claim_expire_authenticate_and_are_one_use() {
         gateway.authenticate_and_consume(&permit, &request, &decision),
         Err(GatewayError::Safety(message)) if message.contains("already been consumed")
     ));
+}
+
+#[tokio::test]
+async fn mcp_automatic_authority_is_invalidated_by_endpoint_server_tool_schema_or_argument_changes()
+{
+    let policy = Arc::new(
+        BuiltInPolicy::offline_default()
+            .with_action("mcp.call", DecisionOutcome::Allow)
+            .with_network_destination("http://127.0.0.1:3001"),
+    );
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::clone(&policy) as Arc<dyn PolicyDecisionPoint>,
+        Arc::new(AllowApproval {
+            approved_by: "operator".into(),
+        }),
+        SafetyKernel::new(["mcp.invoke".into()]),
+        [54_u8; 32],
+    );
+    let request = mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None);
+    let decision = policy.decide(&request).await.expect("decision");
+    let mint = || {
+        let request_hash =
+            super::sha256_hex(&super::canonical_bytes(&request).expect("request bytes"));
+        gateway
+            .mint_permit(&request, request_hash, &decision)
+            .expect("permit")
+    };
+
+    let mut endpoint = request.clone();
+    endpoint.resource = "http://127.0.0.1:3002/mcp".into();
+    endpoint.content["url"] = serde_json::json!(endpoint.resource.clone());
+    let mut server = request.clone();
+    server.content["operation"]["server"] = serde_json::json!("other");
+    let mut tool = request.clone();
+    tool.content["operation"]["tool"] = serde_json::json!("other_echo");
+    let mut schema = request.clone();
+    schema.content["operation"]["schema_sha256"] = serde_json::json!("f".repeat(64));
+    let mut arguments = request.clone();
+    arguments.content["operation"]["arguments"]["message"] = serde_json::json!("changed");
+
+    for (field, changed) in [
+        ("endpoint", endpoint),
+        ("server", server),
+        ("tool", tool),
+        ("schema hash", schema),
+        ("arguments", arguments),
+    ] {
+        assert!(
+            matches!(
+                gateway.authenticate_and_consume(&mint(), &changed, &decision),
+                Err(GatewayError::Safety(_))
+            ),
+            "{field} change must invalidate authority"
+        );
+    }
 }
 
 #[tokio::test]
@@ -909,6 +1020,281 @@ async fn low_risk_read_only_network_review_auto_approves_without_prompting() {
 }
 
 #[tokio::test]
+async fn low_allow_mcp_review_auto_approves_stdio_and_streamable_http_calls() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("current executable")
+        .canonicalize()
+        .expect("canonical executable");
+    let cases: Vec<(
+        colossus_contracts::EffectRequest,
+        Arc<dyn PolicyDecisionPoint>,
+    )> = vec![
+        (
+            mcp_call_request(
+                "stdio",
+                &executable.display().to_string(),
+                Some(directory.path()),
+            ),
+            Arc::new(RiskRecordingPolicy {
+                executable: executable.display().to_string(),
+                cwd: directory.path().display().to_string(),
+                saw_available_risk: AtomicUsize::new(0),
+            }),
+        ),
+        (
+            mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action("mcp.call", DecisionOutcome::RequireApproval)
+                    .with_sandbox("native", "mcp-risk-test", false)
+                    .with_network_destination("http://127.0.0.1:3001"),
+            ),
+        ),
+    ];
+
+    for (request, policy) in cases {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(RiskAssessment {
+                risk_level: RiskLevel::Low,
+                recommended_decision: RiskRecommendation::Allow,
+                reason: "exact echo call is bounded and non-destructive".into(),
+            }),
+        });
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            policy,
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["mcp.invoke".into()]),
+            [49_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(request, &executor)
+            .await
+            .expect("low-risk MCP call");
+
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            approvals.notices.lock().expect("notices").as_slice(),
+            [ApprovalReviewNotice::AutomaticApproval {
+                notice: AutomaticApprovalNotice {
+                    action,
+                    risk_level: RiskLevel::Low,
+                    ..
+                }
+            }] if action == "mcp.call"
+        ));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+        let events = journal.read_global(1, 30).expect("events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "approval.granted.v1")
+        );
+    }
+}
+
+#[tokio::test]
+async fn destructive_or_ambiguous_mcp_assessments_preserve_explicit_approval() {
+    for assessment in [
+        RiskAssessment {
+            risk_level: RiskLevel::Medium,
+            recommended_decision: RiskRecommendation::RequireApproval,
+            reason: "the tool hints conflict with potentially mutating arguments".into(),
+        },
+        RiskAssessment {
+            risk_level: RiskLevel::High,
+            recommended_decision: RiskRecommendation::Deny,
+            reason: "the exact call may destroy external state".into(),
+        },
+    ] {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(assessment),
+        });
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action("mcp.call", DecisionOutcome::RequireApproval)
+                    .with_sandbox("native", "mcp-risk-test", false)
+                    .with_network_destination("http://127.0.0.1:3001"),
+            ),
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["mcp.invoke".into()]),
+            [50_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(
+                mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None),
+                &executor,
+            )
+            .await
+            .expect("operator-approved MCP call");
+
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+        assert!(approvals.notices.lock().expect("notices").is_empty());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    }
+}
+
+#[tokio::test]
+async fn unavailable_and_malformed_mcp_reviews_warn_and_fall_back_to_explicit_approval() {
+    let cases: Vec<(Arc<dyn RiskEvaluator>, RiskReviewFailure)> = vec![
+        (
+            Arc::new(StaticRiskEvaluator {
+                calls: AtomicUsize::new(0),
+                assessment: None,
+            }),
+            RiskReviewFailure::EvaluatorUnavailable,
+        ),
+        (
+            Arc::new(InvalidRiskEvaluator {
+                calls: AtomicUsize::new(0),
+            }),
+            RiskReviewFailure::InvalidAssessment,
+        ),
+    ];
+    for (evaluator, expected_failure) in cases {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action("mcp.call", DecisionOutcome::RequireApproval)
+                    .with_sandbox("native", "mcp-risk-test", false)
+                    .with_network_destination("http://127.0.0.1:3001"),
+            ),
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["mcp.invoke".into()]),
+            [51_u8; 32],
+        );
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(
+                mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None),
+                &executor,
+            )
+            .await
+            .expect("operator-approved MCP fallback");
+
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            approvals.notices.lock().expect("notices").as_slice(),
+            [ApprovalReviewNotice::RiskReviewFallback {
+                notice: RiskReviewFallbackNotice { failure, .. }
+            }] if *failure == expected_failure
+        ));
+        assert!(
+            journal
+                .read_global(1, 30)
+                .expect("events")
+                .iter()
+                .any(|event| event.event_type == "risk.review.unavailable.v1")
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    }
+}
+
+#[tokio::test]
+async fn unsupported_mcp_review_metadata_skips_evaluation_with_a_durable_prompt_reason() {
+    let approvals = Arc::new(RiskAutoApproval {
+        prompts: AtomicUsize::new(0),
+        notices: Mutex::new(Vec::new()),
+    });
+    let evaluator = Arc::new(StaticRiskEvaluator {
+        calls: AtomicUsize::new(0),
+        assessment: Some(RiskAssessment {
+            risk_level: RiskLevel::Low,
+            recommended_decision: RiskRecommendation::Allow,
+            reason: "must not be used for unsupported metadata".into(),
+        }),
+    });
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let gateway = EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("mcp.call", DecisionOutcome::RequireApproval)
+                .with_sandbox("native", "mcp-risk-test", false)
+                .with_network_destination("http://127.0.0.1:3001"),
+        ),
+        Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+        SafetyKernel::new(["mcp.invoke".into()]),
+        [52_u8; 32],
+    );
+    let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+    gateway
+        .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+        .expect("bind evaluator");
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let mut request = mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None);
+    request.content["operation"]["schema_sha256"] = serde_json::json!("not-a-schema-hash");
+
+    gateway
+        .execute(request, &executor)
+        .await
+        .expect("operator-approved unsupported metadata");
+
+    assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
+    assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+    assert!(approvals.notices.lock().expect("notices").is_empty());
+    let event = journal
+        .read_global(1, 30)
+        .expect("events")
+        .into_iter()
+        .find(|event| event.event_type == "risk.review.ineligible.v1")
+        .expect("ineligible review event");
+    let payload = journal.decrypt_payload(&event).expect("payload");
+    assert!(
+        payload["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("request-bound discovery metadata"))
+    );
+    assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
 async fn non_read_only_network_effects_still_require_explicit_approval() {
     for content in [
         serde_json::json!({"method": "POST"}),
@@ -1135,6 +1521,59 @@ async fn workflow_lineage_never_receives_risk_auto_approval() {
     assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
     assert!(approvals.notices.lock().expect("notices").is_empty());
     assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn workflow_and_system_mcp_calls_never_receive_risk_auto_approval() {
+    let mut workflow = mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None);
+    workflow.context.workflow_id = Some("workflow-1".into());
+    workflow.context.workflow_hash = Some("sha256:workflow".into());
+    let mut system = mcp_call_request("streamable_http", "http://127.0.0.1:3001/mcp", None);
+    system.actor = system_actor("mcp-system");
+
+    for request in [workflow, system] {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(RiskAssessment {
+                risk_level: RiskLevel::Low,
+                recommended_decision: RiskRecommendation::Allow,
+                reason: "must not be used for this lineage".into(),
+            }),
+        });
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action("mcp.call", DecisionOutcome::RequireApproval)
+                    .with_sandbox("native", "mcp-risk-test", false)
+                    .with_network_destination("http://127.0.0.1:3001"),
+            ),
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["mcp.invoke".into()]),
+            [53_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(request, &executor)
+            .await
+            .expect("explicitly approved MCP call");
+
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+        assert!(approvals.notices.lock().expect("notices").is_empty());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    }
 }
 
 #[tokio::test]

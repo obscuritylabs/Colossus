@@ -22,6 +22,8 @@ pub(super) enum Command {
     Workflow(WorkflowCommand),
     /// Inspect and diagnose configured model providers.
     Provider(ProviderCommand),
+    /// Manage the Codex/ChatGPT sign-in reused by subscription-backed providers.
+    Codex(CodexCommand),
     /// Inspect and query provider-neutral web-search routes.
     Search(SearchCommand),
     /// Inspect model role routing.

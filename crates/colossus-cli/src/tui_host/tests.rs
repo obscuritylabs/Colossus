@@ -25,6 +25,69 @@ fn provider_doctor_commands_accept_at_most_one_optional_profile() {
 }
 
 #[test]
+fn model_diagnostics_use_a_readable_route_and_named_check_table() {
+    let document = model_diagnostics_document(&json!({
+        "ready": false,
+        "route": {
+            "role": "primary",
+            "profile": "codex",
+            "model_profile": "codex",
+            "provider_profile": "codex-provider",
+            "provider": "openai_codex",
+            "model": "gpt-5.6-sol",
+            "limits": {
+                "contextWindowTokens": 128000,
+                "maxOutputTokens": 16000,
+                "safetyMarginTokens": 12800,
+                "inputBudgetTokens": 99200
+            },
+            "capabilities": {
+                "toolCalls": true,
+                "streaming": true
+            },
+            "reasoning_effort": "xhigh"
+        },
+        "checks": [
+            {
+                "name": "metadata",
+                "status": "pass",
+                "detail": "Explicit limits and capabilities are valid."
+            },
+            {
+                "name": "generation",
+                "status": "fail",
+                "detail": "provider endpoint returned HTTP 400"
+            }
+        ]
+    }))
+    .expect("model diagnostics document");
+
+    let [PresentationBlock::Card { title, tone, body }] = document.blocks.as_slice() else {
+        panic!("expected one diagnostics card");
+    };
+    assert_eq!(title, "Model diagnostics");
+    assert_eq!(*tone, PresentationTone::Error);
+    let PresentationBlock::KeyValue(details) = &body[0] else {
+        panic!("expected route details");
+    };
+    assert!(details.contains(&("Status".into(), "Not ready".into())));
+    assert!(details.contains(&("Model".into(), "gpt-5.6-sol".into())));
+    assert!(details.contains(&("Reasoning".into(), "xhigh".into())));
+    assert!(details.contains(&(
+        "Tokens".into(),
+        "128,000 context · 99,200 input budget · 16,000 max output".into()
+    )));
+    let PresentationBlock::Table(checks) = &body[1] else {
+        panic!("expected check table");
+    };
+    assert_eq!(checks.headers, ["Check", "Status", "Detail"]);
+    assert_eq!(
+        checks.rows[1],
+        ["generation", "Fail", "provider endpoint returned HTTP 400"]
+    );
+}
+
+#[test]
 fn terminal_plan_selection_is_session_scoped_and_actionable() {
     let selected = selectable_plan(
         current_session_plan(
@@ -341,6 +404,61 @@ async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
         Some(PresentationBlock::Card { title, .. })
             if title == "Automatic approval review failed"
     ));
+}
+
+#[tokio::test]
+async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+    let mut request = colossus_policy::effect_request(
+        colossus_policy::system_actor("tui-test"),
+        "mcp.call",
+        "http://127.0.0.1:3001/mcp",
+        json!({"operation": {"kind": "call_tool"}}),
+    );
+    request.risk.reason =
+        Some("Risk-auto review requires supported, request-bound MCP discovery metadata.".into());
+    let decision = PolicyDecision {
+        decision_id: "decision-test".into(),
+        policy_revision: "test-v1".into(),
+        outcome: colossus_contracts::DecisionOutcome::RequireApproval,
+        reason: "explicit operator approval required".into(),
+        obligations: colossus_contracts::PolicyObligations::default(),
+    };
+    let approval = tokio::spawn(async move {
+        provider
+            .request_approval(&request, "request-hash", &decision)
+            .await
+    });
+
+    let HostEvent::Prompt(prompt) = events.recv().await.expect("prompt") else {
+        panic!("expected an approval prompt");
+    };
+    let [PresentationBlock::Card { body, .. }] = prompt.document.blocks.as_slice() else {
+        panic!("expected one approval card");
+    };
+    let Some(PresentationBlock::KeyValue(details)) = body.first() else {
+        panic!("expected approval details");
+    };
+    assert!(details.iter().any(|(label, value)| {
+        label == "Risk review" && value.contains("request-bound MCP discovery metadata")
+    }));
+    prompt
+        .response
+        .send(PromptResponse::Answer("Deny".into()))
+        .expect("deny response");
+    assert!(
+        approval
+            .await
+            .expect("approval task")
+            .expect("result")
+            .is_none()
+    );
 }
 
 #[tokio::test]

@@ -545,11 +545,11 @@ pub trait InteractiveHost: Send + Sync {
 /// Terminal viewport selection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ScreenMode {
-    /// Full alternate screen with native scrollback protected.
+    /// Dynamic inline viewport with finalized output in native terminal scrollback.
     #[default]
-    Alternate,
-    /// Ratatui inline viewport, preserving terminal scrollback.
     Inline,
+    /// Full alternate screen with an application-owned transcript viewport.
+    Alternate,
 }
 
 /// User-visible TUI startup options.
@@ -557,7 +557,7 @@ pub enum ScreenMode {
 pub struct TuiOptions {
     /// Durable session selection.
     pub bootstrap: BootstrapRequest,
-    /// Explicit screen mode. Zellij automatically selects inline mode.
+    /// Explicit screen mode.
     pub screen_mode: ScreenMode,
 }
 

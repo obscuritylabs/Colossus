@@ -5,11 +5,13 @@ use super::{
     InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor, MemoryEmbeddingConfig,
     MemoryOperation, ModelCapabilities, ModelProfileConfig, PackProcessDeclaration,
     PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
-    ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SearchConfig, SearchProfileConfig,
-    SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
-    TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, goal_objective_from_plan,
-    recover_interrupted_subagents, recover_unknown_effects, reject_reserved_shell_environment,
-    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
+    ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
+    SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
+    SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
+    configure_shell_environment, goal_objective_from_plan, model_workspace_path,
+    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
+    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
+    terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -69,6 +71,7 @@ fn configure_primary_model(
                 tool_calls: true,
                 streaming: true,
             },
+            reasoning_effort: None,
         },
     );
     config.models.roles.insert("primary".into(), profile.into());
@@ -727,6 +730,40 @@ fn runtime_wide_ca_bundle_path_round_trips_and_rejects_an_empty_path() {
 }
 
 #[test]
+fn model_reasoning_effort_round_trips_strictly() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    for effort in [
+        ReasoningEffort::None,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
+    ] {
+        config
+            .models
+            .profiles
+            .get_mut("echo")
+            .expect("default model profile")
+            .reasoning_effort = Some(effort);
+        let yaml = config.to_yaml().expect("configuration YAML");
+        let parsed = RuntimeConfig::from_yaml(&yaml).expect("configuration");
+        assert_eq!(
+            parsed.models.profiles["echo"].reasoning_effort,
+            Some(effort)
+        );
+    }
+
+    let yaml = config
+        .to_yaml()
+        .expect("configuration YAML")
+        .replace("reasoningEffort: ultra", "reasoningEffort: extreme");
+    assert!(RuntimeConfig::from_yaml(&yaml).is_err());
+}
+
+#[test]
 fn schema_v1_is_rejected_with_model_profile_regeneration_guidance() {
     let legacy = r#"
 schemaVersion: 1
@@ -991,6 +1028,72 @@ fn shell_helpers_enforce_noninteractive_isolated_execution() {
         assert_eq!(environment["TMPDIR"], isolated.path().display().to_string());
         assert_eq!(environment["PATH"], "/bin:/usr/bin");
     }
+}
+
+#[test]
+fn model_workspace_path_normalizes_absolute_paths_inside_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = workspace.join("pcap/capture.pcap");
+
+    assert_eq!(
+        model_workspace_path(&workspace, &requested.to_string_lossy())
+            .expect("inside absolute path"),
+        requested
+    );
+}
+
+#[test]
+fn model_workspace_path_preserves_colossus_exclusion_for_absolute_paths() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = workspace.join(".colossus/state.redb");
+
+    assert!(matches!(
+        model_workspace_path(&workspace, &requested.to_string_lossy()),
+        Err(colossus_ports::ToolError::Denied(message))
+            if message.contains("outside .colossus")
+    ));
+}
+
+#[test]
+fn model_workspace_path_rejects_absolute_paths_outside_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let outside = tempdir().expect("outside");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let requested = fs::canonicalize(outside.path())
+        .expect("canonical outside")
+        .join("capture.pcap");
+
+    assert!(matches!(
+        model_workspace_path(&workspace, &requested.to_string_lossy()),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn model_workspace_path_accepts_conventional_windows_absolute_spellings() {
+    // Canonicalized workspaces use the extended-length spelling while models emit the
+    // conventional drive-letter form.
+    let workspace = std::path::Path::new(r"\\?\C:\repo");
+
+    assert_eq!(
+        model_workspace_path(workspace, r"C:\repo\src\lib.rs").expect("conventional spelling"),
+        workspace.join(r"src\lib.rs")
+    );
+    assert_eq!(
+        model_workspace_path(workspace, r"c:\REPO\src\lib.rs").expect("case-insensitive spelling"),
+        workspace.join(r"src\lib.rs")
+    );
+    assert!(matches!(
+        model_workspace_path(workspace, r"C:\other\src\lib.rs"),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
+    assert!(matches!(
+        model_workspace_path(workspace, r"C:\repo\.colossus\state.redb"),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
 }
 
 #[test]
@@ -1393,6 +1496,41 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
         RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
         "OpenAI Responses profile without a credential reference was rejected"
     );
+
+    config.providers.profiles.insert(
+        "remote".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCodex,
+            base_url: None,
+            credential_reference: Some("codex:default".into()),
+            timeout_ms: 5_000,
+        },
+    );
+    config.sandbox.network_destinations = vec![
+        "https://chatgpt.com".into(),
+        "https://auth.openai.com".into(),
+    ];
+    configure_primary_model(&mut config, "remote", "remote", "gpt-test");
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+        "Codex/ChatGPT provider profile was rejected"
+    );
+    config.sandbox.network_destinations = vec!["https://chatgpt.com".into()];
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+        "Codex profile without its token refresh origin was accepted"
+    );
+
+    config.providers.profiles.insert(
+        "remote".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiResponses,
+            base_url: Some("https://api.openai.com/v1".into()),
+            credential_reference: None,
+            timeout_ms: 5_000,
+        },
+    );
+    config.sandbox.network_destinations = vec!["https://api.openai.com".into()];
 
     config
         .providers
@@ -3081,6 +3219,7 @@ impl ModelProvider for WorkScriptedProvider {
                 tool_calls: true,
                 streaming: true,
             },
+            reasoning_effort: None,
         })
     }
 
@@ -3235,6 +3374,128 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
         evaluator.evaluate(&request, &decision).await,
         Err(RiskEvaluationError::InvalidAssessment(_))
     ));
+}
+
+#[tokio::test]
+async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
+    let request = {
+        let mut request = effect_request(
+            terminal_actor(),
+            "mcp.call",
+            "http://127.0.0.1:3001/mcp",
+            json!({
+                "operation": {
+                    "kind": "call_tool",
+                    "server": "everything",
+                    "tool": "echo",
+                    "description": "Echo one bounded message",
+                    "annotations": {
+                        "title": "Echo",
+                        "readOnlyHint": true,
+                        "destructiveHint": false,
+                        "idempotentHint": true,
+                        "openWorldHint": false,
+                    },
+                    "arguments": {
+                        "message": "MCP tool test",
+                        "password": "resolved-argument-secret",
+                        "token": "resolved-token-secret",
+                        "github_token": "resolved-compound-secret",
+                        "dbPassword": "resolved-camel-secret",
+                        "clientSecret": "resolved-client-secret",
+                        "apiKey": "resolved-api-key-secret",
+                        "service-api-key": "resolved-separated-api-key-secret",
+                        "max_output_tokens": 512,
+                        "nested": {
+                            "access_token": "nested-resolved-secret",
+                            "refreshTokenValue": "nested-camel-token-secret",
+                            "credentialBundle": {
+                                "value": "nested-compound-credential-secret"
+                            },
+                        },
+                        "monkey": "ordinary-non-secret-value",
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "description": "schema-only-marker",
+                    },
+                    "schema_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                },
+                "transport": "streamable_http",
+                "cwd": null,
+                "args": [],
+                "environment": {"CHILD_TOKEN": "env:HOST_MCP_TOKEN"},
+                "url": "http://127.0.0.1:3001/mcp",
+                "headers": {"X-Client": "colossus"},
+                "credential_headers": {
+                    "Authorization": {"scheme": "Bearer", "reference": "env:HOST_MCP_TOKEN"}
+                },
+                "oauth": {
+                    "clientId": "sensitive-client-context",
+                    "clientSecretReference": "env:HOST_MCP_CLIENT_SECRET",
+                    "callbackPort": 8787,
+                    "scopes": ["openid"],
+                },
+                "timeout_ms": 30_000,
+                "max_output_bytes": 1_048_576,
+                "provenance": null,
+            }),
+        );
+        request.credential_references = vec![CredentialReference {
+            reference: "env:HOST_MCP_TOKEN".into(),
+            value_hash: None,
+        }];
+        request
+    };
+    let decision = BuiltInPolicy::offline_default()
+        .with_action("mcp.call", DecisionOutcome::RequireApproval)
+        .decide(&request)
+        .await
+        .expect("decision");
+
+    let metadata = redacted_risk_metadata(&request, &decision);
+    let disclosed = serde_json::to_string(&metadata).expect("metadata");
+    assert!(disclosed.contains("http://127.0.0.1:3001/mcp"));
+    assert!(disclosed.contains("everything"));
+    assert!(disclosed.contains("Echo one bounded message"));
+    assert!(disclosed.contains("readOnlyHint"));
+    assert!(disclosed.contains("MCP tool test"));
+    assert!(disclosed.contains(&"a".repeat(64)));
+    assert!(disclosed.contains("[REDACTED]"));
+    assert!(!disclosed.contains("resolved-argument-secret"));
+    assert!(!disclosed.contains("resolved-token-secret"));
+    assert!(!disclosed.contains("resolved-compound-secret"));
+    assert!(!disclosed.contains("resolved-camel-secret"));
+    assert!(!disclosed.contains("resolved-client-secret"));
+    assert!(!disclosed.contains("resolved-api-key-secret"));
+    assert!(!disclosed.contains("nested-resolved-secret"));
+    assert!(!disclosed.contains("resolved-separated-api-key-secret"));
+    assert!(!disclosed.contains("nested-camel-token-secret"));
+    assert!(!disclosed.contains("nested-compound-credential-secret"));
+    assert!(disclosed.contains("ordinary-non-secret-value"));
+    assert!(
+        disclosed.contains("\"max_output_tokens\":512"),
+        "word-based redaction must keep non-secret names such as token counts"
+    );
+    assert!(!disclosed.contains("schema-only-marker"));
+    assert!(!disclosed.contains("HOST_MCP_TOKEN"));
+    assert!(!disclosed.contains("HOST_MCP_CLIENT_SECRET"));
+    assert!(!disclosed.contains("sensitive-client-context"));
+    assert!(!disclosed.contains("Authorization"));
+
+    let mut stdio_request = request.clone();
+    stdio_request.resource = "/usr/local/bin/everything-mcp".into();
+    stdio_request.content["transport"] = json!("stdio");
+    stdio_request.content["url"] = Value::Null;
+    stdio_request.content["cwd"] = json!("/workspace");
+    stdio_request.content["args"] = json!(["--token", "resolved-stdio-secret"]);
+    let stdio_disclosed = serde_json::to_string(&redacted_risk_metadata(&stdio_request, &decision))
+        .expect("stdio metadata");
+    assert!(stdio_disclosed.contains("/usr/local/bin/everything-mcp"));
+    assert!(stdio_disclosed.contains("CHILD_TOKEN"));
+    assert!(stdio_disclosed.contains("[REDACTED]"));
+    assert!(!stdio_disclosed.contains("resolved-stdio-secret"));
+    assert!(!stdio_disclosed.contains("HOST_MCP_TOKEN"));
 }
 
 #[tokio::test]
@@ -4261,6 +4522,45 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         summary["symbols"]
             .as_array()
             .is_some_and(|items| items.len() == 3)
+    );
+
+    let absolute_summary = executor
+        .execute(
+            invoke(
+                "repo.file_summary",
+                json!({
+                    "path": executor.workspace.join("src/lib.rs").to_string_lossy(),
+                    "max_lines": 2,
+                }),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("absolute in-workspace file summary");
+    let absolute_summary: Value =
+        serde_json::from_str(&absolute_summary.output).expect("absolute summary JSON");
+    assert_eq!(absolute_summary["path"], "src/lib.rs");
+    assert_eq!(absolute_summary["line_count"], 3);
+
+    let absolute_map = executor
+        .execute(
+            invoke(
+                "repo.map",
+                json!({"path": executor.workspace.to_string_lossy(), "max_files": 10}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("absolute in-workspace map");
+    let absolute_map: Value =
+        serde_json::from_str(&absolute_map.output).expect("absolute map JSON");
+    assert!(
+        absolute_map["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(|file| file["path"].as_str())
+            .any(|path| path == "src/lib.rs")
     );
 
     assert!(

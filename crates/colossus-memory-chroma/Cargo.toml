@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "colossus-memory-chroma"
 version.workspace = true
 edition.workspace = true

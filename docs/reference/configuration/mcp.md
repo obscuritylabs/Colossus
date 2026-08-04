@@ -342,9 +342,9 @@ duplicate explicit names is rejected.
 
 Wildcard mode dynamically trusts every current and future valid tool published by that
 configured server. Colossus still validates tool-name uniqueness, schema validity,
-description bounds, pages, argument objects, policy decisions, approvals, results, and
-audit records. If any wildcard-discovered tool violates the validation bounds,
-discovery fails closed.
+description and annotation bounds, pages, argument objects, policy decisions,
+approvals, results, and audit records. If any wildcard-discovered tool violates the
+validation bounds, discovery fails closed.
 
 This wildcard selects server-published tools only. It does not widen
 `access.tools.include`, authorize the endpoint in `sandbox.networkDestinations`, grant a
@@ -363,6 +363,23 @@ does not authorize a later call.
 
 This protects both explicit and wildcard selection from silent schema drift. It also
 means the MCP server must be available for discovery immediately before invocation.
+
+### Risk-auto review
+
+When policy requires approval, `--approval-mode risk-auto` may review a configured
+top-level `mcp.call` made by a model or child agent outside workflow lineage. The
+credential-free evaluator input contains the exact endpoint identity, transport,
+configured server, tool, bounded description and annotations, fresh schema hash, and
+validated arguments. Descriptions and annotations are server-provided advisory hints;
+they are not authority or hard eligibility preconditions.
+
+Both explicit tool selection and `allowedTools: ["*"]` use the same review rule because
+the automatic proof binds one exact invocation. A change to the endpoint, server, tool,
+schema hash, or arguments invalidates that authority. Stdio and Streamable HTTP calls
+also share review eligibility, while retaining their separate process and network
+obligations. Only a valid low-risk `allow` assessment avoids a dialog. Medium, high,
+uncertain, unavailable, malformed, or unsupported reviews preserve explicit approval,
+and an ineligible prompt explains why review was skipped.
 
 ### Server-specific resource limits
 

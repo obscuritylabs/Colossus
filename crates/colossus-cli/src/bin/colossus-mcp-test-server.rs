@@ -50,6 +50,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "name": "echo",
                                 "title": "Fixture echo",
                                 "description": "Echo one text value.",
+                                "annotations": {
+                                    "title": "Fixture echo",
+                                    "readOnlyHint": true,
+                                    "destructiveHint": false,
+                                    "idempotentHint": true,
+                                    "openWorldHint": false
+                                },
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {"text": {"type": "string"}},

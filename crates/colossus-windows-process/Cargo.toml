@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "colossus-windows-process"
 version.workspace = true
 edition.workspace = true

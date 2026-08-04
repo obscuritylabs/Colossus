@@ -2,6 +2,7 @@
 status: current
 replacement:
   - /develop/ci-cd/
+  - /develop/releasing/
   - /develop/setup-testing/
   - https://github.com/obscuritylabs/Colossus/blob/main/CHANGELOG.md
 ---
@@ -41,8 +42,10 @@ gh workflow run release.yml --ref main -f version=vX.Y.Z
 ```
 
 Manual dispatch is artifact-only. It cannot create or update a GitHub Release. Inspect
-the `Colossus release gate` result and download all six CLI archives plus sidecars and the
-validation-only Desktop archive plus checksum before continuing.
+the `Colossus release gate` result. A stable target builds the six CLI archives plus
+sidecars and the immutable npm/Python/Go SDK candidate while skipping Desktop. A preview
+target builds the CLI and validation-only Desktop artifacts while skipping stable SDK
+publication candidates.
 
 ## Tag and validate
 
@@ -58,10 +61,13 @@ version mismatches, failed readiness verification, and incomplete artifact sets.
 
 - macOS x64 and ARM64 native sandbox acceptance and packaging;
 - static Linux-musl x64 and ARM64 native sandbox acceptance and packaging;
-- Windows x64 and ARM64 named-pipe, AppContainer, worker, and packaging acceptance.
-- macOS ARM64 standalone Desktop packaging followed by channel-specific identity
-  validation. Stable tags require Developer ID signing, notarization, stapling, and
-  assessment.
+- Windows x64 and ARM64 named-pipe, AppContainer, worker, and packaging acceptance; and
+- for stable tags, regeneration, testing, packaging, and intrinsic-metadata verification
+  of the TypeScript, Python, and Go SDK release identities.
+
+Stable core tags skip every Desktop job and require no Apple, Tauri updater, or
+Authenticode credential. Preview tags instead skip the stable SDK candidate and package
+the explicitly unsigned Desktop Developer Preview.
 
 Each job builds with `--locked --release`, produces one archive and SHA-256 sidecar,
 installs into a clean prefix, verifies offline echo and audit behavior, and exercises a
@@ -90,29 +96,33 @@ Before publishing, confirm the warning states that the ad-hoc signature does not
 Apple publisher identity and the app is not notarized. Confirm the SHA-256 command and
 the macOS Control-click **Open** / **System Settings → Privacy & Security → Open Anyway**
 instructions are present. Never instruct users to disable Gatekeeper or remove quarantine
-metadata. This exception does not relax the stable channel: a future stable tag still
-requires the canonical Team ID, Developer ID credentials, notarization, stapling, and
-Gatekeeper assessment.
+metadata. This exception does not relax production Desktop distribution: that separate
+track still requires the canonical Team ID, Developer ID credentials, notarization,
+stapling, and Gatekeeper assessment. It is not part of a stable core tag.
 
 ## Review and publish the draft
 
 Only after `Colossus release gate` succeeds does the final job receive `contents: write`.
-It verifies the exact channel-specific asset set: 17 files for stable releases or 22 for
-Developer Previews, including six CLI archives and checksums, Desktop archives, updater
-signatures and metadata, and preview-only Windows provenance where applicable. It then
+It verifies the exact channel-specific asset set: 17 files for stable releases or 18 for
+Developer Previews. Stable drafts contain six CLI archives and checksums plus five
+immutable SDK candidate files; preview drafts contain the CLI files plus visibly
+unsigned Desktop packages and Windows provenance. It then
 creates or idempotently updates a draft release. It never publishes automatically.
 
 Before publishing the draft:
 
-1. Confirm all six CLI targets, the correctly named channel-specific Desktop archive, and
-   every checksum sidecar are present.
+1. Confirm all six CLI targets and every checksum sidecar are present. For stable drafts,
+   confirm the npm tarball, Python wheel/source distribution, SDK manifest, and SDK
+   checksum set. For preview drafts, confirm the correctly named unsigned Desktop assets.
 2. Test installation on a clean representative host where practical.
 3. Review generated notes, the changelog excerpt, known limitations, and security notes.
 4. Attach any required SBOM or independently generated signature material.
 5. Confirm the signed bundle publisher matches
    [`release/bundle-publisher.json`](https://github.com/obscuritylabs/Colossus/blob/main/release/bundle-publisher.json).
 
-Never publish the disposable signing material used by CI smoke tests. Preserve the
-workflow run, gate status, secure-anchor/audit evidence, and artifact hashes with the
-release record. The frozen Python tag and branches are not rebuilt or republished as part
-of a Rust release.
+Publishing a stable draft triggers the protected, OIDC-backed SDK publisher described in
+[Core release operations](/develop/releasing/). Never publish the disposable signing
+material used by CI smoke tests. Preserve the workflow run, gate status,
+secure-anchor/audit evidence, and artifact hashes with the release record. The frozen
+legacy Python runtime tag and branches are not rebuilt; the maintained public Python SDK
+is released from `sdk/python` with the coordinated stable core version.

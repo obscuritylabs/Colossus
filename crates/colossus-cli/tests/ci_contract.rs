@@ -311,7 +311,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 }
 
 #[test]
-fn release_includes_a_signed_notarized_apple_silicon_desktop() {
+fn release_separates_the_stable_core_from_the_desktop_preview() {
     let workflow = workflow("release.yml");
     let release_jobs = jobs(&workflow);
     assert_eq!(
@@ -321,14 +321,29 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
+    let sdk = job(release_jobs, "sdk_release");
+    assert_eq!(field(sdk, "runs-on").as_str(), Some("ubuntu-latest-m"));
+    assert_eq!(field(sdk, "needs").as_str(), Some("validate"));
+    assert_eq!(
+        field(sdk, "if").as_str(),
+        Some("needs.validate.outputs.target_channel == 'stable'")
+    );
     assert_eq!(
         field(desktop_build, "runs-on").as_str(),
         Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(field(desktop_build, "needs").as_str(), Some("validate"));
     assert_eq!(
+        field(desktop_build, "if").as_str(),
+        Some("needs.validate.outputs.target_channel != 'stable'")
+    );
+    assert_eq!(
         field(desktop, "runs-on").as_str(),
         Some("blacksmith-6vcpu-macos-15")
+    );
+    assert_eq!(
+        field(desktop, "if").as_str(),
+        Some("needs.validate.outputs.target_channel != 'stable'")
     );
     assert_eq!(
         strings(field(desktop, "needs"), "Desktop signing needs"),
@@ -347,6 +362,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
             "desktop_macos",
             "desktop_macos_build",
             "desktop_windows_preview",
+            "sdk_release",
             "validate",
         ]
         .into_iter()
@@ -357,24 +373,31 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
         .expect("read release workflow");
     for required in [
-        "needs.validate.outputs.release_channel != 'stable'",
+        "target_channel: ${{ steps.request.outputs.target_channel }}",
+        "printf 'target_channel=%s\\n' \"$tag_channel\"",
+        "if: needs.validate.outputs.target_channel == 'stable'",
+        "if: needs.validate.outputs.target_channel != 'stable'",
+        "sdk_base_tag: ${{ steps.request.outputs.sdk_base_tag }}",
+        "source_date_epoch: ${{ steps.request.outputs.source_date_epoch }}",
+        "git tag --merged \"$source_commit\"",
+        "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
+        "npm install --global npm@11.5.1",
+        "node scripts/ci/package-sdk-release.mjs",
+        "SOURCE_DATE_EPOCH",
+        "node scripts/ci/verify-sdk-release.mjs",
+        "name: colossus-sdk-release",
+        "sdk_release=\"$SDK_RELEASE_RESULT\"",
+        "test \"$MACOS_DESKTOP_BUILD_RESULT\" = skipped",
+        "test \"$MACOS_DESKTOP_RESULT\" = skipped",
+        "test \"$WINDOWS_DESKTOP_RESULT\" = skipped",
+        "test \"$SDK_RELEASE_RESULT\" = skipped",
+        "obscuritylabs-colossus-sdk-${RELEASE_VERSION}.tgz",
+        "obscuritylabs_colossus_sdk-${RELEASE_VERSION}-py3-none-any.whl",
+        "obscuritylabs_colossus_sdk-${RELEASE_VERSION}.tar.gz",
+        "colossus-sdk-${RELEASE_TAG}-manifest.json",
+        "colossus-sdk-${RELEASE_TAG}-SHA256SUMS",
         "COLOSSUS_DESKTOP_SIGNING_IDENTITY=-",
         "COLOSSUS_DESKTOP_TEAM_ID=ADHOC",
-        "needs.validate.outputs.release_channel == 'stable'",
-        "secrets.MACOS_DEVELOPER_ID_P12_BASE64",
-        "secrets.MACOS_DEVELOPER_ID_P12_PASSWORD",
-        "secrets.MACOS_NOTARY_API_KEY_BASE64",
-        "secrets.MACOS_NOTARY_KEY_ID",
-        "secrets.MACOS_NOTARY_ISSUER_ID",
-        "secrets.MACOS_TEAM_ID",
-        "vars.MACOS_TEAM_ID",
-        "[[ \"$MACOS_TEAM_ID\" =~ ^[A-Z0-9]{10}$ ]]",
-        "security create-keychain",
-        "security import",
-        "security set-key-partition-list",
-        "xcrun notarytool store-credentials",
-        "COLOSSUS_DESKTOP_NOTARY_KEYCHAIN",
-        "COLOSSUS_DESKTOP_TEAM_ID=%s",
         "COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}",
         "./scripts/package-desktop-macos build",
         "./scripts/package-desktop-macos sign \"$COLOSSUS_DESKTOP_UNSIGNED_APP\"",
@@ -385,15 +408,12 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "--extracted-root \"$destination\"",
         "protected_hashes=()",
         "realpathSync(process.execPath)",
-        "Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
         "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
-        "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
-        "desktop_macos=${{ needs.desktop_macos.result }}",
         "desktop_windows_preview=\"$WINDOWS_DESKTOP_RESULT\"",
         "runs-on: blacksmith-8vcpu-windows-2025",
         "./scripts/package-desktop-windows.ps1",
@@ -405,9 +425,13 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     ] {
         assert!(
             source.contains(required),
-            "Desktop release is missing {required}"
+            "core/preview release split is missing {required}"
         );
     }
+    assert!(
+        !source.contains("check sdk --base origin/main"),
+        "release API compatibility must not be checked against the moving origin/main"
+    );
 
     let build_start = source.find("  desktop_macos_build:").expect("build job");
     let sign_start = source[build_start..]
@@ -437,16 +461,100 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         );
     }
     assert!(sign_job.contains("actions/setup-node@"));
-    assert!(sign_job.contains("npm ci --ignore-scripts"));
     for forbidden in ["rust-toolchain@", "cargo build", "tauri build"] {
         assert!(
             !sign_job.contains(forbidden),
             "Desktop signing job contains build authority {forbidden}"
         );
     }
-    assert!(windows_job.contains("if: needs.validate.outputs.release_channel != 'stable'"));
+    assert!(windows_job.contains("if: needs.validate.outputs.target_channel != 'stable'"));
     assert!(windows_job.contains("COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED"));
     assert!(!windows_job.contains("AUTHENTICODE"));
+    let channel_source =
+        fs::read_to_string(repository_root().join(".github/workflows/desktop-update-channels.yml"))
+            .expect("read Desktop update channel workflow");
+    assert!(channel_source.contains("contains(github.event.release.assets.*.name, 'stable.json')"));
+}
+
+#[test]
+fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
+    let workflow = workflow("publish-sdk.yml");
+    let publication_jobs = jobs(&workflow);
+    let validate = job(publication_jobs, "validate");
+    let validate_permissions = mapping(
+        field(validate, "permissions"),
+        "SDK candidate validation permissions",
+    );
+    assert_eq!(
+        field(validate_permissions, "actions").as_str(),
+        Some("read")
+    );
+    assert_eq!(
+        field(validate_permissions, "contents").as_str(),
+        Some("read")
+    );
+    let publish = job(publication_jobs, "publish");
+    assert_eq!(
+        field(publish, "environment").as_str(),
+        Some("sdk-production")
+    );
+    let permissions = mapping(field(publish, "permissions"), "SDK publish permissions");
+    assert_eq!(field(permissions, "contents").as_str(), Some("write"));
+    assert_eq!(field(permissions, "id-token").as_str(), Some("write"));
+
+    let source = fs::read_to_string(repository_root().join(".github/workflows/publish-sdk.yml"))
+        .expect("read SDK publication workflow");
+    for required in [
+        "types: [published]",
+        "SDK publication requires a stable vX.Y.Z release tag",
+        "git merge-base --is-ancestor \"$source_commit\" origin/main",
+        "sdk_base_tag: ${{ steps.release.outputs.sdk_base_tag }}",
+        "source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}",
+        "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
+        "runs-on: ubuntu-latest-m",
+        "timeout-minutes: 45",
+        "npm install --global npm@11.5.1",
+        "--output dist/sdk-rebuilt",
+        "dist/sdk-release \"$RELEASE_VERSION\" \"$SOURCE_COMMIT\" dist/sdk-rebuilt",
+        "node scripts/ci/verify-sdk-release.mjs",
+        "dist/sdk-release \"$RELEASE_VERSION\" \"$SOURCE_COMMIT\" dist/sdk-trusted",
+        "repos/$GH_REPO/actions/workflows/release.yml/runs?event=push&status=success&head_sha=$SOURCE_COMMIT",
+        "--name colossus-sdk-release --dir dist/sdk-trusted",
+        "node scripts/ci/check-sdk-registry-state.mjs npm",
+        "node scripts/ci/check-sdk-registry-state.mjs pypi",
+        "--access public --provenance=false",
+        "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
+        "skip-existing: true",
+        "GO_TAG: sdk/go/${{ needs.validate.outputs.tag }}",
+        "test \"$(git rev-list -n 1 \"$GO_TAG\")\" = \"$SOURCE_COMMIT\"",
+    ] {
+        assert!(
+            source.contains(required),
+            "SDK publication is missing {required}"
+        );
+    }
+    let packager = fs::read_to_string(repository_root().join("scripts/ci/package-sdk-release.mjs"))
+        .expect("read SDK packager");
+    for required in ["SOURCE_DATE_EPOCH", "normalize_python_sdist.py"] {
+        assert!(
+            packager.contains(required),
+            "SDK packager is missing {required}"
+        );
+    }
+    let sdk_check = fs::read_to_string(repository_root().join("xtask/src/checks/sdk.rs"))
+        .expect("read SDK check");
+    assert!(sdk_check.contains("scripts/ci/sdk-release.test.mjs"));
+    for forbidden in [
+        "NODE_AUTH_TOKEN",
+        "NPM_TOKEN",
+        "PYPI_API_TOKEN",
+        "password:",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "SDK publication must not use long-lived registry secret {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -497,6 +605,7 @@ fn workflows_have_bounded_jobs_and_deterministic_concurrency() {
         "docs.yml",
         "pr.yml",
         "premerge.yml",
+        "publish-sdk.yml",
         "release.yml",
     ] {
         let workflow = workflow(name);

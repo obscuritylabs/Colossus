@@ -8,7 +8,8 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.10.2-preview.8 is the active repository-root Developer Preview release line. It
+Rust 0.10.2 is the active repository-root stable core release line. The latest published
+Desktop proof remains the separate 0.10.2-preview.10 Developer Preview. The Rust runtime
 uses Rust 1.96, edition 2024, strict schema-version-2 YAML configuration, and encrypted
 redb state. It never imports Python configuration or SQLite state. Python 0.5 remains
 frozen at `python-v0.5.0` and on the `python-legacy` branch.
@@ -27,9 +28,10 @@ frozen at `python-v0.5.0` and on the `python-legacy` branch.
 - Role-routed echo, OpenAI Responses, and OpenAI-compatible providers feed one bounded
   agent loop. Streaming items are normalized, individually released, and journaled
   before an interface observes them.
-- `risk-auto` reviews approval-required `shell.run` requests through the policy-bound
-  `risk_evaluator` role with tools disabled. Only a strict `low + allow` result creates
-  an automatic proof; every other result or evaluator failure requires a prompt.
+- `risk-auto` reviews eligible approval-required shell, read-only network, and exact
+  configured top-level MCP requests through the policy-bound `risk_evaluator` role with
+  tools disabled. Only a strict `low + allow` result creates an automatic proof; every
+  other result or evaluator failure requires a prompt.
 - Sessions, context snapshots, tasks, decisions, plans, goals, subagents, memories,
   research, skills, integrations, packs, bundles, presentation preferences, and
   telemetry are durable application services rather than CLI state.
@@ -88,7 +90,7 @@ platform, security, CLI, and channel-specific Desktop artifact matrix must pass 
 explicit release gates before a version is published.
 
 The latest published Developer Preview is
-[v0.10.2-preview.8](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.8).
+[v0.10.2-preview.10](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.10).
 Its release record carries the native runtime, sandbox, policy, dependency, fuzz,
 package, checksum, and explicitly unsigned or ad-hoc-signed Desktop evidence produced
 by the tag workflow.

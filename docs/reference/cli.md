@@ -19,7 +19,8 @@ colossus [OPTIONS] <COMMAND>
 | `--config PATH` | YAML path | `.colossus/config.yaml` | Select configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
-| `--no-alt-screen` | Flag | Off | Run the TUI in an inline viewport |
+| `--alt-screen` | Flag | Off | Use the full-screen application-owned transcript viewport |
+| `--no-alt-screen` | Flag | Off | Compatibility alias for the default inline native-scrollback viewport |
 | `-h`, `--help` | Flag | — | Show command help |
 | `-V`, `--version` | Flag | — | Show binary version |
 
@@ -41,9 +42,12 @@ executed in-process default to `deny`; when an active worker handles a command, 
 worker's configured approval mode applies. Approval mode satisfies an existing approval
 obligation—it never changes an access or policy decision.
 
-`risk-auto` is eligible only for model and child-agent `shell.run`, `web.search`, and
-bodyless `network.http` GET effects outside workflows. A low-risk `allow`
-recommendation produces a request-bound proof; other network methods and every
+`risk-auto` is eligible only for model and child-agent `shell.run`, `web.search`,
+bodyless `network.http` GET, and configured top-level `mcp.call` effects outside
+workflows. MCP review requires supported metadata from fresh discovery and evaluates
+the exact endpoint, server, tool, schema hash, and validated arguments; server-provided
+descriptions and annotations are advisory. A low-risk `allow` recommendation produces a
+request-bound proof. Other network methods, unsupported MCP metadata, and every
 non-low-risk assessment fall back to explicit approval or denial.
 Each automatic grant emits a human-readable **Automatic approval review** notice on the
 attached terminal or TUI without opening an approval prompt.
@@ -66,6 +70,7 @@ model output.
 | `network` | Perform policy-allowed brokered HTTP requests |
 | `workflow` | Validate, register, run, trigger, recover, and inspect workflows |
 | `provider` | Inspect and diagnose model profiles |
+| `codex` | Login, inspect, or logout the ChatGPT sign-in used by Codex subscription providers |
 | `search` | Inspect and query provider-neutral search routes |
 | `models` | Inspect role-to-profile routing |
 | `artifacts` | Upload, inspect, and download caller-owned released artifacts |
@@ -114,6 +119,7 @@ positional:
 | `workflow webhook` | `create WEBHOOK_ID NAME VERSION`, `list`, `show WEBHOOK_ID`, `enable WEBHOOK_ID`, `disable WEBHOOK_ID`, `ingest WEBHOOK_ID`, `serve` |
 | `workflow subscription` | `create SUBSCRIPTION_ID NAME VERSION`, `list`, `show SUBSCRIPTION_ID`, `enable SUBSCRIPTION_ID`, `disable SUBSCRIPTION_ID`, `tick` |
 | `provider` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `models [PROFILE]` |
+| `codex` | `[--codex-bin PATH] login [--device-code]`, `[--codex-bin PATH] status`, `[--codex-bin PATH] logout` |
 | `search` | `profiles`, `query QUERY` |
 | `models` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `routes`, `route [ROLE]` |
 | `artifacts` | `upload PATH`, `show ARTIFACT_ID`, `download ARTIFACT_ID OUTPUT` |
@@ -270,7 +276,8 @@ references can be reviewed intact. `audit export` emits one redacted JSON object
 line. Do not parse human or TUI rendering.
 
 Provider and model Doctor commands remain status-only by default. With
-`--include-provider-response`, a non-success check may add `provider_response` containing
+`--include-provider-response`, a failed or transport-incompatible check may add
+`provider_response` containing
 the exact credential-free request URL and JSON body plus at most 16 KiB of response body,
 the response status and content type, encoding information, and a truncation marker. The
 configured provider credential is replaced with `[REDACTED]`. This explicit diagnostic

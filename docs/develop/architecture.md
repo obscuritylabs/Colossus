@@ -73,7 +73,7 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Ports | `colossus-ports` | Application-owned interfaces for providers, state, tools, policy-adjacent services, and adapters |
 | Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry` | Use cases and durable behavior |
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
-| Infrastructure | `colossus-provider`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-packs`, `colossus-search` | External systems and storage adapters |
+| Infrastructure | `colossus-provider`, `colossus-codex-auth`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-packs`, `colossus-search` | External systems, authentication, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Wire services, host application contracts, and render released data |
 

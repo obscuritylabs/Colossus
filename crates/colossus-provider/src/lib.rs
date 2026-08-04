@@ -3,11 +3,15 @@
 #![allow(clippy::missing_errors_doc)]
 
 use async_trait::async_trait;
+use colossus_codex_auth::{
+    CODEX_API_BASE_URL, CODEX_AUTH_ORIGIN, CODEX_CREDENTIAL_REFERENCE, CODEX_PROTOCOL_VERSION,
+    CODEX_TOKEN_ENDPOINT, CodexAuthError, CodexAuthStore, CodexAuthorization, CodexRefreshRequest,
+};
 use colossus_contracts::{
     CredentialReference, EffectRequest, ModelCapabilities, ModelLimits, ModelMessage,
     ModelMessageRole, ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent,
     ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic,
-    ProviderStreamItem, ProviderTurn, ProviderUsage, QuarantinedEffectResult,
+    ProviderStreamItem, ProviderTurn, ProviderUsage, QuarantinedEffectResult, ReasoningEffort,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
@@ -26,11 +30,13 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use time::OffsetDateTime;
 use tokio::net::lookup_host;
 
 const MAX_PROVIDER_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_ADDRESSES: usize = 16;
 const MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES: usize = 16 * 1024;
+const MAX_CODEX_REFRESH_RESPONSE_BYTES: usize = 256 * 1024;
 
 mod normalization;
 use normalization::*;

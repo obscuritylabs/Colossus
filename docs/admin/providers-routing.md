@@ -17,6 +17,8 @@ routing explicit while credentials remain late-bound.
 - A valid configuration.
 - An endpoint and model identifier.
 - The credential environment variable, when the endpoint requires one.
+- For a Codex subscription, the official Codex CLI and a completed
+  `colossus codex login` flow instead of an API key.
 - An exact canonical origin grant in `sandbox.networkDestinations`.
 
 ## Steps
@@ -52,6 +54,26 @@ routing explicit while credentials remain late-bound.
     Use `open_ai_responses` for a Responses-compatible endpoint. Use `echo` for a
     credential-free, network-free smoke route.
 
+    To consume a Codex plan through a ChatGPT sign-in, use the fixed subscription
+    adapter instead:
+
+    ```yaml
+    providers:
+      profiles:
+        codex-provider:
+          kind: open_ai_codex
+          credentialReference: codex:default
+          timeoutMs: 120000
+    sandbox:
+      networkDestinations:
+        - https://chatgpt.com
+        - https://auth.openai.com
+    ```
+
+    Run `colossus codex login` before provider diagnostics. Do not configure a
+    `baseUrl`: Colossus fixes the service origin so subscription credentials cannot be
+    sent to a different host. The auth origin is separately required for token refresh.
+
     When the endpoint uses a private CA, configure the shared PEM bundle once:
 
     ```yaml
@@ -67,8 +89,8 @@ routing explicit while credentials remain late-bound.
     when `sandbox.timeoutMs` is lower; the sandbox timeout continues to bound ordinary
     sandboxed effects. An external OPA decision may impose a stricter timeout obligation.
 
-2. Export the named credential in the process environment. The YAML stores the
-   reference, not its value.
+2. Export the named API credential in the process environment, or run
+   `colossus codex login` for a subscription profile. The YAML stores only a reference.
 
 3. Review the configured profiles and role resolution:
 

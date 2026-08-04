@@ -168,10 +168,28 @@ pub struct McpToolSummary {
     pub title: Option<String>,
     /// Optional bounded description from the untrusted server.
     pub description: Option<String>,
+    /// Optional advisory behavior hints from the untrusted server.
+    pub annotations: Option<McpToolAnnotations>,
     /// Valid JSON object schema for arguments.
     pub input_schema: Value,
     /// SHA-256 of the canonical schema sent with an invocation request.
     pub schema_sha256: String,
+}
+
+/// Bounded advisory MCP tool annotations safe for model-assisted review.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpToolAnnotations {
+    /// Optional human title supplied by the untrusted server.
+    pub title: Option<String>,
+    /// Advisory claim that the tool does not modify its environment.
+    pub read_only_hint: Option<bool>,
+    /// Advisory claim that the tool may perform destructive updates.
+    pub destructive_hint: Option<bool>,
+    /// Advisory claim that repeated identical calls have no additional effect.
+    pub idempotent_hint: Option<bool>,
+    /// Advisory claim that the tool may interact with external entities.
+    pub open_world_hint: Option<bool>,
 }
 
 /// One allowlist-filtered discovery page released from quarantine.
@@ -252,10 +270,16 @@ pub enum McpOperation {
         server: String,
         /// Exact tool name.
         tool: String,
+        /// Optional bounded description from fresh discovery.
+        description: Option<String>,
+        /// Optional advisory annotations from fresh discovery.
+        annotations: Option<McpToolAnnotations>,
         /// Strict JSON object arguments.
         arguments: Value,
         /// Exact discovered input schema, bound into policy and permit hashing.
-        input_schema: Value,
+        input_schema: Box<Value>,
+        /// SHA-256 of the exact discovered input schema.
+        schema_sha256: String,
     },
 }
 

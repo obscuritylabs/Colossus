@@ -5,7 +5,7 @@ mod support;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, fs};
+use std::{collections::BTreeSet, fs, process::Command};
 use support::{field, job, jobs, mapping, named_step, repository_root, workflow};
 
 #[test]
@@ -50,6 +50,47 @@ fn release_workflow_has_exactly_six_native_cli_targets() {
 }
 
 #[test]
+fn internal_rust_packages_are_not_registry_publishable() {
+    for manifest in [
+        "Cargo.toml",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "fuzz/Cargo.toml",
+    ] {
+        let output = Command::new("cargo")
+            .args([
+                "metadata",
+                "--locked",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+                manifest,
+            ])
+            .current_dir(repository_root())
+            .output()
+            .expect("run cargo metadata");
+        assert!(
+            output.status.success(),
+            "cargo metadata failed for {manifest}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: Value = serde_json::from_slice(&output.stdout).expect("parse cargo metadata");
+        for package in field(mapping(&metadata, "cargo metadata"), "packages")
+            .as_array()
+            .expect("cargo packages")
+        {
+            let package = mapping(package, "cargo package");
+            assert_eq!(
+                field(package, "publish").as_array().map(Vec::len),
+                Some(0),
+                "{} must remain publish=false",
+                field(package, "name").as_str().expect("package name")
+            );
+        }
+    }
+}
+
+#[test]
 fn tag_validation_and_draft_publication_fail_closed() {
     let workflow = workflow("release.yml");
     let jobs = jobs(&workflow);
@@ -84,37 +125,37 @@ fn tag_validation_and_draft_publication_fail_closed() {
             .as_str()
             .is_some_and(|condition| condition.contains("publish_draft == 'true'"))
     );
+    named_step(draft, "Check out the exact release verifier");
+    named_step(draft, "Verify complete release asset set");
 }
 
 #[test]
 fn unsigned_desktop_builds_do_not_receive_updater_configuration() {
     let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
         .expect("read release workflow");
-    for variable in [
-        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT",
-        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY",
-        "TAURI_SIGNING_PRIVATE_KEY",
-        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    for required in [
+        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT: \"\"",
+        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: \"\"",
     ] {
         assert!(
-            !source.contains(&format!(
-                "{variable}: ${{{{ needs.validate.outputs.release_channel == 'validation_only' && '' ||"
-            )),
-            "{variable} must not use a falsy empty true branch"
+            source.contains(required),
+            "unsigned Desktop workflow is missing {required}"
         );
     }
-    assert!(source.contains(
-        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'stable' && format("
-    ));
-    assert!(source.contains(
-        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}"
-    ));
-    assert!(source.contains(
-        "TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}"
-    ));
-    assert!(source.contains(
-        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'stable' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}"
-    ));
+    for forbidden in [
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+        "DESKTOP_UPDATE_PRIVATE_KEY",
+        "MACOS_DEVELOPER_ID_P12",
+        "MACOS_NOTARY",
+        "secrets.MACOS",
+        "vars.MACOS",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "core release workflow must not require Desktop credential {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -125,42 +166,22 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
     let signing = job(release_jobs, "desktop_macos");
 
     assert_eq!(
-        field(
-            named_step(build, "Configure the public release code identity"),
-            "if"
-        )
-        .as_str(),
-        Some("needs.validate.outputs.release_channel == 'stable'")
+        field(build, "if").as_str(),
+        Some("needs.validate.outputs.target_channel != 'stable'")
     );
     assert_eq!(
-        field(
-            named_step(
-                build,
-                "Configure Developer Preview or validation-only code identity"
-            ),
-            "if"
-        )
-        .as_str(),
-        Some("needs.validate.outputs.release_channel != 'stable'")
+        field(signing, "if").as_str(),
+        Some("needs.validate.outputs.target_channel != 'stable'")
     );
-    assert_eq!(
-        field(
-            named_step(signing, "Import Developer ID and notarization credentials"),
-            "if"
-        )
-        .as_str(),
-        Some("needs.validate.outputs.release_channel == 'stable'")
+    assert!(
+        !named_step(build, "Configure the non-production Desktop code identity").contains_key("if")
     );
-    assert_eq!(
-        field(
-            named_step(
-                signing,
-                "Configure Developer Preview or validation-only ad-hoc signing"
-            ),
-            "if"
+    assert!(
+        !named_step(
+            signing,
+            "Configure Developer Preview or validation-only ad-hoc signing"
         )
-        .as_str(),
-        Some("needs.validate.outputs.release_channel != 'stable'")
+        .contains_key("if")
     );
 
     let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))

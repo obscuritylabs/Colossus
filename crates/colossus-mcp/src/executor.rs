@@ -301,14 +301,23 @@ impl McpExecutor {
             .ok_or_else(|| McpError::UnknownServer(operation.server().into()))?;
         if let McpOperation::CallTool {
             tool,
+            description,
+            annotations,
             arguments,
             input_schema,
+            schema_sha256,
             ..
         } = &operation
         {
             if !server.allowed_tools.allows(tool) {
                 return Err(McpError::ToolDenied(format!("{}:{tool}", server.name)));
             }
+            validate_call_review_metadata(
+                description.as_deref(),
+                annotations.as_ref(),
+                input_schema,
+                schema_sha256,
+            )?;
             validate_arguments(input_schema, arguments)?;
         }
         let action = server.effect_action_prefix.as_ref().map_or_else(
@@ -410,14 +419,24 @@ impl McpExecutor {
         }
         if let McpOperation::CallTool {
             tool,
+            description,
+            annotations,
             arguments,
             input_schema,
+            schema_sha256,
             ..
         } = &input.operation
         {
             if !server.allowed_tools.allows(tool) {
                 return Err(failed("MCP tool is not allowlisted"));
             }
+            validate_call_review_metadata(
+                description.as_deref(),
+                annotations.as_ref(),
+                input_schema,
+                schema_sha256,
+            )
+            .map_err(failed)?;
             validate_arguments(input_schema, arguments).map_err(failed)?;
         }
         Ok(server)
@@ -527,8 +546,39 @@ fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), McpError>
     Ok(())
 }
 
+fn validate_call_review_metadata(
+    description: Option<&str>,
+    annotations: Option<&McpToolAnnotations>,
+    input_schema: &Value,
+    schema_sha256: &str,
+) -> Result<(), McpError> {
+    if description.is_some_and(|value| value.len() > 32 * 1024)
+        || annotations
+            .and_then(|value| value.title.as_deref())
+            .is_some_and(|value| value.len() > 8 * 1024)
+    {
+        return Err(McpError::InvalidArguments(
+            "MCP review description or annotation title exceeds its bound".into(),
+        ));
+    }
+    let schema_bytes = serde_json::to_vec(input_schema)
+        .map_err(|error| McpError::InvalidArguments(error.to_string()))?;
+    if schema_bytes.len() > 256 * 1024 || schema_sha256 != hex_sha256(&schema_bytes) {
+        return Err(McpError::InvalidArguments(
+            "MCP review schema hash does not match the bounded input schema".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a call against one released discovery record.
 pub fn validate_tool_arguments(tool: &McpToolSummary, arguments: &Value) -> Result<(), McpError> {
+    validate_call_review_metadata(
+        tool.description.as_deref(),
+        tool.annotations.as_ref(),
+        &tool.input_schema,
+        &tool.schema_sha256,
+    )?;
     validate_arguments(&tool.input_schema, arguments)
 }
 
@@ -916,10 +966,15 @@ pub(super) fn parse_tools_result(
                 || tool
                     .description
                     .as_ref()
-                    .is_some_and(|value| value.len() > 32 * 1024))
+                    .is_some_and(|value| value.len() > 32 * 1024)
+                || tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.title.as_ref())
+                    .is_some_and(|value| value.len() > 8 * 1024))
         {
             return Err(format!(
-                "MCP tool {name} title or description exceeds its bound"
+                "MCP tool {name} title, description, or annotation title exceeds its bound"
             ));
         }
         tools.push(McpToolSummary {
@@ -929,6 +984,15 @@ pub(super) fn parse_tools_result(
             description: tool
                 .description
                 .map(|value| bounded_string(&value, 32 * 1024)),
+            annotations: tool.annotations.map(|annotations| McpToolAnnotations {
+                title: annotations
+                    .title
+                    .map(|value| bounded_string(&value, 8 * 1024)),
+                read_only_hint: annotations.read_only_hint,
+                destructive_hint: annotations.destructive_hint,
+                idempotent_hint: annotations.idempotent_hint,
+                open_world_hint: annotations.open_world_hint,
+            }),
             input_schema,
             schema_sha256: hex_sha256(&schema_bytes),
         });

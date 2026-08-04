@@ -441,6 +441,7 @@ impl SafetyKernel {
                     | "web.search"
                     | "audit.export.worm.write"
                     | "provider.openai.responses"
+                    | "provider.openai.codex"
                     | "provider.openai.chat"
                     | "provider.models"
                     | "registry.pull"

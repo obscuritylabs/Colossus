@@ -72,8 +72,8 @@ A denial cannot leak private bytes through output, errors, audit payloads, or ob
 
 Provider and model diagnostics have an explicit local-operator release. The CLI
 `--include-provider-response` option and the local TUI `/models doctor` and `/provider
-doctor` commands can return the credential-free request plus at most 16 KiB of a
-non-success response body after exact configured-credential redaction. The TUI
+doctor` commands can return the credential-free request plus at most 16 KiB of a failed
+or transport-incompatible response body after exact configured-credential redaction. The TUI
 `/provider diagnostics on` command applies the same release to failed provider turns in
 the current TUI process, including post-tool continuations, until the operator runs
 `/provider diagnostics off` or exits. These captures are represented as quarantined
@@ -144,20 +144,53 @@ behind their configured references. Each discovery page and tool call uses a fre
 initialized stateful session, disables request and expired-session retries, and treats
 an uncertain tool call as `OutcomeUnknown`.
 
+Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
+OAuth ceremony to the official Codex CLI and forces its supported file credential store;
+Colossus never handles the authorization code. The `open_ai_codex` adapter accepts only
+`codex:default`, fixes the service and refresh endpoints, rejects symlinked or non-private
+Unix auth files, resolves tokens only after a provider permit, and redacts both bearer and
+ChatGPT account identifiers from quarantined responses. Only `open_ai_codex` may reference
+`codex:default`, so a non-Codex profile cannot pass startup validation and then fail every
+call in the standard credential resolver. Proactive refresh requires the OpenAI auth origin
+in the same permit's network obligations and atomically updates the Codex-managed file
+without changing accounts: the read-compare-write cycle holds a cross-process advisory lock
+on a sibling `auth.json.lock` file and re-reads the stored tokens immediately before
+persisting, so an external writer such as the official Codex CLI is never overwritten with a
+stale snapshot. Backend requests distinguish the audited
+Codex wire-contract version from the Colossus product version: `version` is compatibility
+metadata pinned in the adapter, while `User-Agent` names the actual Colossus build.
+Codex streaming requests explicitly accept SSE. The fixed backend can omit the response
+media type, so only the Codex adapter permits an absent `Content-Type` before applying
+the same bounded strict SSE and Responses-event validation; an explicit conflicting
+media type still fails closed.
+
 One explicit bounded PEM CA bundle may augment built-in roots across Colossus-owned
 outbound clients. It is loaded once at runtime startup and never sourced from ambient
 proxy or TLS environment variables. Adapter-specific OPA and PostgreSQL CA policies
 remain exclusive overrides, and public API clients continue to verify their separately
 provisioned leaf pin. Sandboxed and MCP child processes retain independent TLS stacks.
 
-`risk-auto` is deliberately narrow: only model or child-agent `shell.run`,
-`web.search`, and bodyless `network.http` GET effects without workflow lineage can use
-a low-risk `allow` recommendation to mint a request-bound approval proof. The evaluator
-has no tools and receives redacted proposed-effect metadata: network review includes the
-requested URL or search query, while credentials remain references and environment
-values are replaced by names. Non-read-only network methods, workspace mutations,
+`risk-auto` is deliberately narrow: only model or child-agent `shell.run`, `web.search`,
+bodyless `network.http` GET, and configured top-level `mcp.call` effects without workflow
+lineage can use a low-risk `allow` recommendation to mint a request-bound approval
+proof. The evaluator has no tools and receives redacted proposed-effect metadata:
+network review includes the requested URL or search query, while MCP review includes
+the exact endpoint identity, transport, configured server/tool, bounded advisory
+description and annotations, fresh schema hash, and validated arguments. Resolved
+credentials and authentication configuration are absent, environment values become
+names, and sensitive argument fields are redacted. Field-name redaction is word based
+after camelCase and separator normalization, so compound schema-specific names such as
+`github_token`, `dbPassword`, `clientSecret`, or `apiKey` are redacted alongside the
+plain names.
+
+MCP descriptions and annotations are untrusted evaluator hints, not authority or hard
+preconditions. Explicit and wildcard tool selection share the same review rule because
+the proof binds one invocation, and stdio and Streamable HTTP share eligibility while
+retaining their different process and network obligations. Pack-provided MCP action
+prefixes, unsupported metadata, non-read-only network methods, workspace mutations,
 dynamic integrations, workflows, system actors, and every non-low-risk assessment
-preserve explicit approval or denial.
+preserve explicit approval or denial. Ineligible reviews record a bounded reason that an
+attached prompt can display.
 
 After the request-bound automatic proof is durably recorded as `approval.granted.v1`,
 the approval provider may release a bounded `AutomaticApprovalNotice` to an attached
