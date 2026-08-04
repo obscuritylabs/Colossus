@@ -1067,12 +1067,13 @@ async fn interactive_client_stale_worker_error_has_restart_guidance() {
 
 #[tokio::test]
 async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
-    let request = colossus_policy::effect_request(
+    let mut request = colossus_policy::effect_request(
         colossus_policy::system_actor("worker-test"),
         "filesystem.write",
         "note.txt",
         json!({"content": "bounded"}),
     );
+    request.risk.reason = Some("risk-auto skipped because this action is ineligible".into());
     let decision = PolicyDecision {
         decision_id: "decision-test".into(),
         policy_revision: "test-v1".into(),
@@ -1089,6 +1090,11 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
         let responder = tokio::spawn(async move {
             let prompt = receive_test_prompt(&mut outbound_rx).await;
             assert_eq!(prompt.kind, WorkerPromptKind::Approval);
+            assert!(prompt.question.contains("risk-auto skipped"));
+            assert_eq!(
+                prompt.details["risk"]["reason"],
+                "risk-auto skipped because this action is ineligible"
+            );
             responder_bridge
                 .respond(&prompt.prompt_id, Some(answer))
                 .await

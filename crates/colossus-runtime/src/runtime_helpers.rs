@@ -266,8 +266,11 @@ pub(super) async fn invoke_mcp_tool(
         McpOperation::CallTool {
             server: server.into(),
             tool: tool.into(),
+            description: tool_spec.description.clone(),
+            annotations: tool_spec.annotations.clone(),
             arguments,
-            input_schema: tool_spec.input_schema.clone(),
+            input_schema: Box::new(tool_spec.input_schema.clone()),
+            schema_sha256: tool_spec.schema_sha256.clone(),
         },
     )?;
     let released = gateway.execute(request, effect_executor).await?;

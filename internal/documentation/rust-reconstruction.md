@@ -27,9 +27,10 @@ frozen at `python-v0.5.0` and on the `python-legacy` branch.
 - Role-routed echo, OpenAI Responses, and OpenAI-compatible providers feed one bounded
   agent loop. Streaming items are normalized, individually released, and journaled
   before an interface observes them.
-- `risk-auto` reviews approval-required `shell.run` requests through the policy-bound
-  `risk_evaluator` role with tools disabled. Only a strict `low + allow` result creates
-  an automatic proof; every other result or evaluator failure requires a prompt.
+- `risk-auto` reviews eligible approval-required shell, read-only network, and exact
+  configured top-level MCP requests through the policy-bound `risk_evaluator` role with
+  tools disabled. Only a strict `low + allow` result creates an automatic proof; every
+  other result or evaluator failure requires a prompt.
 - Sessions, context snapshots, tasks, decisions, plans, goals, subagents, memories,
   research, skills, integrations, packs, bundles, presentation preferences, and
   telemetry are durable application services rather than CLI state.

@@ -170,14 +170,27 @@ proxy or TLS environment variables. Adapter-specific OPA and PostgreSQL CA polic
 remain exclusive overrides, and public API clients continue to verify their separately
 provisioned leaf pin. Sandboxed and MCP child processes retain independent TLS stacks.
 
-`risk-auto` is deliberately narrow: only model or child-agent `shell.run`,
-`web.search`, and bodyless `network.http` GET effects without workflow lineage can use
-a low-risk `allow` recommendation to mint a request-bound approval proof. The evaluator
-has no tools and receives redacted proposed-effect metadata: network review includes the
-requested URL or search query, while credentials remain references and environment
-values are replaced by names. Non-read-only network methods, workspace mutations,
+`risk-auto` is deliberately narrow: only model or child-agent `shell.run`, `web.search`,
+bodyless `network.http` GET, and configured top-level `mcp.call` effects without workflow
+lineage can use a low-risk `allow` recommendation to mint a request-bound approval
+proof. The evaluator has no tools and receives redacted proposed-effect metadata:
+network review includes the requested URL or search query, while MCP review includes
+the exact endpoint identity, transport, configured server/tool, bounded advisory
+description and annotations, fresh schema hash, and validated arguments. Resolved
+credentials and authentication configuration are absent, environment values become
+names, and sensitive argument fields are redacted. Field-name redaction is word based
+after camelCase and separator normalization, so compound schema-specific names such as
+`github_token`, `dbPassword`, `clientSecret`, or `apiKey` are redacted alongside the
+plain names.
+
+MCP descriptions and annotations are untrusted evaluator hints, not authority or hard
+preconditions. Explicit and wildcard tool selection share the same review rule because
+the proof binds one invocation, and stdio and Streamable HTTP share eligibility while
+retaining their different process and network obligations. Pack-provided MCP action
+prefixes, unsupported metadata, non-read-only network methods, workspace mutations,
 dynamic integrations, workflows, system actors, and every non-low-risk assessment
-preserve explicit approval or denial.
+preserve explicit approval or denial. Ineligible reviews record a bounded reason that an
+attached prompt can display.
 
 After the request-bound automatic proof is durably recorded as `approval.granted.v1`,
 the approval provider may release a bounded `AutomaticApprovalNotice` to an attached

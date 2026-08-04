@@ -450,12 +450,13 @@ audit labels, and retention obligations.
 
 - `deny`: block every operation that requires approval.
 - `ask`: prompt the user before approval-required operations.
-- `risk-auto`: run model-assisted review only for model or child-agent `shell.run`
-  outside workflow lineage and auto-approve only low-risk calls whose recommendation is
-  allow. Medium, high, malformed, unavailable, and deny recommendations fall back to an
-  explicit user prompt or denial.
+- `risk-auto`: run model-assisted review only for eligible model or child-agent
+  `shell.run`, `web.search`, bodyless `network.http` GET, and configured top-level
+  `mcp.call` effects outside workflow lineage. Auto-approve only low-risk calls whose
+  recommendation is allow. Medium, high, malformed, unavailable, unsupported, and deny
+  recommendations fall back to an explicit user prompt or denial.
 - `full-access`: auto-approve approval-required operations without prompting and skip
-  model-assisted shell risk review.
+  model-assisted risk review.
 
 `full-access` MUST NOT expand workspace roots, grant missing network implementations,
 change tool schemas, bypass deterministic denies, or make unknown tools executable.
