@@ -172,35 +172,21 @@ identity and the app is not notarized. The native release channel keeps a persis
 warning visible in the application. The separate `validation_only` channel also requires
 the `ADHOC` sentinel and identity `-`, but its runtime intentionally rejects Managed Local
 startup. Stable packaging rejects both ad-hoc channels, and stable release publication
-still requires Developer ID plus notarization.
+for the production Desktop track still requires Developer ID plus notarization.
 
-Tag-triggered GitHub releases require the public Actions repository variable
-`MACOS_TEAM_ID`. The credential-free build job embeds that canonical 10-character Team
-ID without receiving any Actions Secrets context. Configure the same value as the
-`MACOS_TEAM_ID` repository secret so the isolated signing job can fail closed if its
-credential set does not match the unsigned app. That signing job uses an ephemeral
-runner keychain and also requires these repository secrets:
+Stable core `vX.Y.Z` tags skip every Desktop job. They publish CLI and SDK candidates
+without any Apple signing, notarization, or Tauri updater credential. Production Desktop
+credentials belong to a separate future release track and must not be added to the core
+release environment.
 
-- `MACOS_DEVELOPER_ID_P12_BASE64`: base64-encoded Developer ID Application certificate
-  and private key in PKCS#12 form;
-- `MACOS_DEVELOPER_ID_P12_PASSWORD`: the PKCS#12 export password;
-- `MACOS_NOTARY_API_KEY_BASE64`: base64-encoded App Store Connect API private key (`.p8`);
-- `MACOS_NOTARY_KEY_ID`: the App Store Connect API key identifier;
-- `MACOS_NOTARY_ISSUER_ID`: the Team API issuer UUID;
-- `MACOS_TEAM_ID`: a protected copy of the public repository variable, cross-checked
-  against the app and the imported Developer ID identity.
-
-Stable release jobs validate the variable and every secret, compare the imported
-certificate's Team ID, grant key access only to the macOS signing tools, store the notary
-profile in that ephemeral keychain, and delete the decoded files and keychain in an
-`always()` cleanup step. Missing or inconsistent configuration fails a stable tag release
-closed. A canonical `vX.Y.Z-preview.N` Developer Preview tag (the most recent example is
-`v0.10.1-preview.2`) is the only credential-free runnable tag path: it uses the ad-hoc
-preview channel, reads no Apple signing secret, and creates a clearly named unnotarized
-Desktop asset. Manual `workflow_dispatch` remains
-validation-only, uses ad-hoc signing,
-embeds the rejected `ADHOC` sentinel, labels its artifacts `VALIDATION-ONLY-ADHOC`, and
-cannot create a runnable app or draft release.
+A canonical `vX.Y.Z-preview.N` Developer Preview tag is the credential-free runnable
+Desktop path: it uses the ad-hoc preview channel, reads no Apple signing secret, and
+creates clearly named unnotarized macOS and unsigned Windows assets. Manual dispatch of
+a preview version remains validation-only, embeds the rejected `ADHOC` sentinel, labels
+its artifacts `VALIDATION-ONLY-ADHOC`, and cannot create a runnable app or draft release.
+Manual dispatch of a stable version instead validates the immutable SDK candidate and
+requires all Desktop jobs to be skipped. See [Core release operations](releasing.md) for
+registry bootstrap, stable tag, approval, and recovery steps.
 
 ## Expected result
 

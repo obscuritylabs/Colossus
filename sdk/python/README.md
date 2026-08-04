@@ -1,6 +1,12 @@
 # Colossus Python SDK
 
 The Python SDK uses `grpc.aio` to connect to the authenticated loopback API.
+Its organization-qualified distribution name avoids an unrelated project that owns the
+normalized `colossus-sdk` name; the import namespace remains `colossus_sdk`.
+
+```console
+python -m pip install obscuritylabs-colossus-sdk==0.10.2
+```
 
 ```python
 from colossus_sdk import (

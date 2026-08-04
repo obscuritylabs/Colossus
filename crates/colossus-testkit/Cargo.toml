@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "colossus-testkit"
 version.workspace = true
 edition.workspace = true
