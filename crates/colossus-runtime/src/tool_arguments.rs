@@ -357,24 +357,90 @@ pub(super) fn configure_shell_environment(
 }
 
 pub(super) fn model_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf, ToolError> {
+    Ok(workspace.join(model_workspace_relative(workspace, input)?))
+}
+
+/// Normalizes a model-supplied path into its workspace-relative spelling.
+///
+/// Absolute paths that resolve inside the workspace are rewritten to the relative
+/// spelling so downstream executors, which reject absolute paths outright, observe a
+/// confined path. Absolute paths outside the workspace, parent traversal, and the
+/// `.colossus` control state remain denied.
+pub(super) fn model_workspace_relative(
+    workspace: &Path,
+    input: &str,
+) -> Result<PathBuf, ToolError> {
     let requested = Path::new(input);
     let requested = if requested.is_absolute() {
-        requested.strip_prefix(workspace).map_err(|_| {
-            ToolError::Denied(
-                "model filesystem paths must be workspace-relative and outside .colossus".into(),
-            )
-        })?
+        strip_workspace_prefix(workspace, requested)?
     } else {
         requested
     };
     if requested.components().any(|component| {
         matches!(component, std::path::Component::ParentDir) || component.as_os_str() == ".colossus"
     }) {
-        return Err(ToolError::Denied(
-            "model filesystem paths must be workspace-relative and outside .colossus".into(),
-        ));
+        return Err(model_workspace_denied());
     }
-    Ok(workspace.join(requested))
+    Ok(requested.to_path_buf())
+}
+
+fn model_workspace_denied() -> ToolError {
+    ToolError::Denied(
+        "model filesystem paths must be workspace-relative and outside .colossus".into(),
+    )
+}
+
+fn strip_workspace_prefix<'input>(
+    workspace: &Path,
+    requested: &'input Path,
+) -> Result<&'input Path, ToolError> {
+    requested
+        .strip_prefix(workspace)
+        .ok()
+        .or_else(|| equivalent_spelling_relative(workspace, requested))
+        .ok_or_else(model_workspace_denied)
+}
+
+/// Unix path spellings are compared byte for byte, so only the lexical prefix applies.
+#[cfg(not(target_os = "windows"))]
+fn equivalent_spelling_relative<'input>(
+    _workspace: &Path,
+    _requested: &'input Path,
+) -> Option<&'input Path> {
+    None
+}
+
+/// Compares Windows paths that name the same location with different spellings.
+///
+/// The workspace is stored canonically, which yields the extended-length form
+/// (`\\?\C:\repo`), while models emit the conventional form (`C:\repo\file`). Prefix
+/// components are reduced to their conventional spelling and comparisons ignore case,
+/// matching Windows filesystem semantics.
+#[cfg(target_os = "windows")]
+fn equivalent_spelling_relative<'input>(
+    workspace: &Path,
+    requested: &'input Path,
+) -> Option<&'input Path> {
+    fn comparable(component: std::path::Component<'_>) -> Option<String> {
+        let text = match component {
+            std::path::Component::Prefix(prefix) => {
+                let raw = prefix.as_os_str().to_str()?;
+                raw.strip_prefix(r"\\?\UNC\")
+                    .map(|rest| format!(r"\\{rest}"))
+                    .unwrap_or_else(|| raw.strip_prefix(r"\\?\").unwrap_or(raw).to_owned())
+            }
+            other => other.as_os_str().to_str()?.to_owned(),
+        };
+        Some(text.to_lowercase())
+    }
+
+    let mut remainder = requested.components();
+    for expected in workspace.components() {
+        if comparable(remainder.next()?)? != comparable(expected)? {
+            return None;
+        }
+    }
+    Some(remainder.as_path())
 }
 
 pub(super) fn workspace_relative(workspace: &Path, path: &Path) -> Result<String, ToolError> {

@@ -1071,6 +1071,31 @@ fn model_workspace_path_rejects_absolute_paths_outside_workspace() {
     ));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn model_workspace_path_accepts_conventional_windows_absolute_spellings() {
+    // Canonicalized workspaces use the extended-length spelling while models emit the
+    // conventional drive-letter form.
+    let workspace = std::path::Path::new(r"\\?\C:\repo");
+
+    assert_eq!(
+        model_workspace_path(workspace, r"C:\repo\src\lib.rs").expect("conventional spelling"),
+        workspace.join(r"src\lib.rs")
+    );
+    assert_eq!(
+        model_workspace_path(workspace, r"c:\REPO\src\lib.rs").expect("case-insensitive spelling"),
+        workspace.join(r"src\lib.rs")
+    );
+    assert!(matches!(
+        model_workspace_path(workspace, r"C:\other\src\lib.rs"),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
+    assert!(matches!(
+        model_workspace_path(workspace, r"C:\repo\.colossus\state.redb"),
+        Err(colossus_ports::ToolError::Denied(_))
+    ));
+}
+
 #[test]
 fn extension_paths_resolve_against_the_embedded_runtime_workspace() {
     let workspace = tempdir().expect("workspace");
@@ -4497,6 +4522,45 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         summary["symbols"]
             .as_array()
             .is_some_and(|items| items.len() == 3)
+    );
+
+    let absolute_summary = executor
+        .execute(
+            invoke(
+                "repo.file_summary",
+                json!({
+                    "path": executor.workspace.join("src/lib.rs").to_string_lossy(),
+                    "max_lines": 2,
+                }),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("absolute in-workspace file summary");
+    let absolute_summary: Value =
+        serde_json::from_str(&absolute_summary.output).expect("absolute summary JSON");
+    assert_eq!(absolute_summary["path"], "src/lib.rs");
+    assert_eq!(absolute_summary["line_count"], 3);
+
+    let absolute_map = executor
+        .execute(
+            invoke(
+                "repo.map",
+                json!({"path": executor.workspace.to_string_lossy(), "max_files": 10}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("absolute in-workspace map");
+    let absolute_map: Value =
+        serde_json::from_str(&absolute_map.output).expect("absolute map JSON");
+    assert!(
+        absolute_map["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(|file| file["path"].as_str())
+            .any(|path| path == "src/lib.rs")
     );
 
     assert!(
