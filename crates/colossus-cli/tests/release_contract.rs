@@ -215,11 +215,12 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
 }
 
 #[test]
-fn release_readiness_allows_only_the_public_python_sdk_and_fixtures() {
+fn release_readiness_allows_only_approved_python_sources() {
     let source = fs::read_to_string(repository_root().join("release/verify-release-readiness.sh"))
         .expect("read release readiness script");
     for required in [
         "legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \\",
+        "':(exclude)scripts/ci/normalize_python_sdist.py' \\",
         "':(exclude)examples/sdk/integration/server.py' \\",
         "':(exclude)examples/sdk/provider-failure/server.py')",
         "[ -e pyproject.toml ]",

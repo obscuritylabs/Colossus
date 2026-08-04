@@ -57,6 +57,7 @@ case $(rustc --version) in
 esac
 
 legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
+    ':(exclude)scripts/ci/normalize_python_sdist.py' \
     ':(exclude)examples/sdk/integration/server.py' \
     ':(exclude)examples/sdk/provider-failure/server.py')
 if [ -e pyproject.toml ] || [ -n "$legacy_python_sources" ]; then
