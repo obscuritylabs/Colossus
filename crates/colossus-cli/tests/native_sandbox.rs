@@ -597,6 +597,7 @@ sandbox:
                 "--cwd",
                 allowed.to_str().expect("allowed path"),
                 "--",
+                "--disable",
                 "--fail",
                 "--silent",
                 "--noproxy",
@@ -632,8 +633,11 @@ sandbox:
                 "--cwd",
                 allowed.to_str().expect("allowed path"),
                 "--",
+                "--disable",
                 "--fail",
                 "--silent",
+                "--noproxy",
+                "",
                 "--output",
                 allowed_response.to_str().expect("allowed response path"),
                 &allowed_url,
@@ -646,7 +650,10 @@ sandbox:
         );
         let result: Value =
             serde_json::from_slice(&allowed_network.stdout).expect("network result");
-        assert_eq!(result["success"], true);
+        assert_eq!(
+            result["success"], true,
+            "allowed network command failed: {result}"
+        );
         assert_eq!(result["exit_code"], 0);
         assert_eq!(result["output_truncated"], false);
         server.join().expect("server thread");
