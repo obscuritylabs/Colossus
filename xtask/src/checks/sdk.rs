@@ -32,6 +32,10 @@ pub(super) fn check(repository: &Repository, base: &str) -> Result<(), String> {
     repository.task("./sdk/scripts/check-generated").run()?;
     require_clean_generated_bindings(repository)?;
     repository
+        .task("node")
+        .args(["--test", "scripts/ci/sdk-release.test.mjs"])
+        .run()?;
+    repository
         .task("cargo")
         .args([
             "check",

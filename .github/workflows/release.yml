@@ -28,6 +28,8 @@ jobs:
       version: ${{ steps.request.outputs.version }}
       tag: ${{ steps.request.outputs.tag }}
       source_commit: ${{ steps.request.outputs.source_commit }}
+      source_date_epoch: ${{ steps.request.outputs.source_date_epoch }}
+      sdk_base_tag: ${{ steps.request.outputs.sdk_base_tag }}
       publish_draft: ${{ steps.request.outputs.publish_draft }}
       release_channel: ${{ steps.request.outputs.release_channel }}
       target_channel: ${{ steps.request.outputs.target_channel }}
@@ -106,6 +108,21 @@ jobs:
             prerelease=false
           fi
           version=${tag#v}
+          source_date_epoch=$(git show -s --format=%ct "$source_commit")
+          [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
+          sdk_base_tag=$(
+            while IFS= read -r candidate; do
+              if [ "$candidate" != "$tag" ] &&
+                [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                printf '%s\n' "$candidate"
+              fi
+            done < <(git tag --merged "$source_commit" --format='%(refname:short)') |
+              sort -V |
+              tail -n 1
+          )
+          test -n "$sdk_base_tag"
+          git merge-base --is-ancestor \
+            "$(git rev-list -n 1 "$sdk_base_tag")" "$source_commit"
           workspace_version=$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
           test "$version" = "$workspace_version"
@@ -114,6 +131,8 @@ jobs:
             printf 'version=%s\n' "$version"
             printf 'tag=%s\n' "$tag"
             printf 'source_commit=%s\n' "$source_commit"
+            printf 'source_date_epoch=%s\n' "$source_date_epoch"
+            printf 'sdk_base_tag=%s\n' "$sdk_base_tag"
             printf 'publish_draft=%s\n' "$publish_draft"
             printf 'release_channel=%s\n' "$release_channel"
             printf 'target_channel=%s\n' "$tag_channel"
@@ -261,6 +280,9 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest-m
     timeout-minutes: 45
+    env:
+      SDK_BASE_TAG: ${{ needs.validate.outputs.sdk_base_tag }}
+      SOURCE_DATE_EPOCH: ${{ needs.validate.outputs.source_date_epoch }}
     steps:
       - name: Check out complete SDK release history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -275,6 +297,9 @@ jobs:
           cache-dependency-path: |
             sdk/package-lock.json
             sdk/typescript/package-lock.json
+
+      - name: Install the pinned npm packer
+        run: npm install --global npm@11.5.1
 
       - name: Install Python 3.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -293,7 +318,7 @@ jobs:
           toolchain: 1.96.0
 
       - name: Generate, test, and validate all SDK packages
-        run: cargo xtask check sdk --base origin/main
+        run: cargo xtask check sdk --base "$SDK_BASE_TAG"
 
       - name: Package the exact registry candidates
         env:

@@ -17,6 +17,24 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function exactDirectory(directoryArgument, version) {
+  const directory = realpathSync(resolve(directoryArgument));
+  const files = expectedSdkFiles(version);
+  const expectedNames = Object.values(files).sort();
+  const entries = readdirSync(directory).sort();
+  if (JSON.stringify(entries) !== JSON.stringify(expectedNames)) {
+    fail(`SDK candidate files differ: expected ${expectedNames}; found ${entries}`);
+  }
+  for (const file of entries) {
+    const path = resolve(directory, file);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0 || stat.size > 100 * 1024 * 1024) {
+      fail(`invalid SDK candidate file: ${file}`);
+    }
+  }
+  return { directory, files, entries };
+}
+
 function metadataField(contents, field) {
   const value = contents.match(new RegExp(`^${field}: (.+)$`, "mu"))?.[1];
   if (!value) fail(`package metadata is missing ${field}`);
@@ -75,28 +93,31 @@ export function validateManifest(manifest, version, commit, files, digests) {
   }
 }
 
-function main() {
-  const [directoryArgument, version, commit] = process.argv.slice(2);
-  if (!directoryArgument || !version || !commit || process.argv.length !== 5) {
-    fail("usage: verify-sdk-release.mjs DIRECTORY X.Y.Z SOURCE_COMMIT");
+export function compareSdkReleaseDirectories(
+  candidateDirectoryArgument,
+  rebuiltDirectoryArgument,
+  version,
+) {
+  const candidate = exactDirectory(candidateDirectoryArgument, version);
+  const rebuilt = exactDirectory(rebuiltDirectoryArgument, version);
+  for (const file of candidate.entries) {
+    if (
+      sha256(resolve(candidate.directory, file)) !==
+      sha256(resolve(rebuilt.directory, file))
+    ) {
+      fail(`SDK release file does not match the exact tag rebuild: ${file}`);
+    }
+  }
+}
+
+function verify(directoryArgument, version, commit) {
+  if (!directoryArgument || !version || !commit) {
+    fail("SDK verification requires a directory, version, and source commit");
   }
   if (!stableVersionPattern.test(version)) fail("SDK release version must be stable X.Y.Z");
   if (!commitPattern.test(commit)) fail("source commit must be a lowercase 40-character SHA");
 
-  const directory = realpathSync(resolve(directoryArgument));
-  const files = expectedSdkFiles(version);
-  const expectedNames = Object.values(files).sort();
-  const entries = readdirSync(directory).sort();
-  if (JSON.stringify(entries) !== JSON.stringify(expectedNames)) {
-    fail(`SDK candidate files differ: expected ${expectedNames}; found ${entries}`);
-  }
-  for (const file of entries) {
-    const path = resolve(directory, file);
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0 || stat.size > 100 * 1024 * 1024) {
-      fail(`invalid SDK candidate file: ${file}`);
-    }
-  }
+  const { directory, files } = exactDirectory(directoryArgument, version);
 
   const packageNames = [files.npm, files.wheel, files.sdist];
   const digests = Object.fromEntries(
@@ -151,6 +172,25 @@ function main() {
     metadataField(sdistContents, "Version") !== version
   ) {
     fail("Python source distribution identity does not match the SDK release");
+  }
+}
+
+function main() {
+  const [directoryArgument, version, commit, rebuiltDirectoryArgument] = process.argv.slice(2);
+  if (
+    !directoryArgument ||
+    !version ||
+    !commit ||
+    ![5, 6].includes(process.argv.length)
+  ) {
+    fail(
+      "usage: verify-sdk-release.mjs DIRECTORY X.Y.Z SOURCE_COMMIT [EXACT_TAG_REBUILD_DIRECTORY]",
+    );
+  }
+  verify(directoryArgument, version, commit);
+  if (rebuiltDirectoryArgument) {
+    verify(rebuiltDirectoryArgument, version, commit);
+    compareSdkReleaseDirectories(directoryArgument, rebuiltDirectoryArgument, version);
   }
 }
 

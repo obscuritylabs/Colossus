@@ -363,8 +363,13 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
         "printf 'target_channel=%s\\n' \"$tag_channel\"",
         "if: needs.validate.outputs.target_channel == 'stable'",
         "if: needs.validate.outputs.target_channel != 'stable'",
-        "cargo xtask check sdk --base origin/main",
+        "sdk_base_tag: ${{ steps.request.outputs.sdk_base_tag }}",
+        "source_date_epoch: ${{ steps.request.outputs.source_date_epoch }}",
+        "git tag --merged \"$source_commit\"",
+        "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
+        "npm install --global npm@11.5.1",
         "node scripts/ci/package-sdk-release.mjs",
+        "SOURCE_DATE_EPOCH",
         "node scripts/ci/verify-sdk-release.mjs",
         "name: colossus-sdk-release",
         "sdk_release=\"$SDK_RELEASE_RESULT\"",
@@ -471,6 +476,14 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         "types: [published]",
         "SDK publication requires a stable vX.Y.Z release tag",
         "git merge-base --is-ancestor \"$source_commit\" origin/main",
+        "sdk_base_tag: ${{ steps.release.outputs.sdk_base_tag }}",
+        "source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}",
+        "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
+        "runs-on: ubuntu-latest-m",
+        "timeout-minutes: 45",
+        "npm install --global npm@11.5.1",
+        "--output dist/sdk-rebuilt",
+        "dist/sdk-release \"$RELEASE_VERSION\" \"$SOURCE_COMMIT\" dist/sdk-rebuilt",
         "node scripts/ci/verify-sdk-release.mjs",
         "node scripts/ci/check-sdk-registry-state.mjs npm",
         "node scripts/ci/check-sdk-registry-state.mjs pypi",
@@ -485,6 +498,17 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
             "SDK publication is missing {required}"
         );
     }
+    let packager = fs::read_to_string(repository_root().join("scripts/ci/package-sdk-release.mjs"))
+        .expect("read SDK packager");
+    for required in ["SOURCE_DATE_EPOCH", "normalize_python_sdist.py"] {
+        assert!(
+            packager.contains(required),
+            "SDK packager is missing {required}"
+        );
+    }
+    let sdk_check = fs::read_to_string(repository_root().join("xtask/src/checks/sdk.rs"))
+        .expect("read SDK check");
+    assert!(sdk_check.contains("scripts/ci/sdk-release.test.mjs"));
     for forbidden in [
         "NODE_AUTH_TOKEN",
         "NPM_TOKEN",

@@ -110,6 +110,10 @@ function main() {
   const { version, tag, commit, output } = parseArguments(process.argv.slice(2));
   const versions = packageVersions();
   validateReleaseIdentity(version, tag, commit, versions);
+  const sourceDateEpoch = process.env.SOURCE_DATE_EPOCH;
+  if (!/^[1-9][0-9]*$/u.test(sourceDateEpoch ?? "")) {
+    fail("SOURCE_DATE_EPOCH must be a positive integer");
+  }
 
   const destination = resolve(repository, output);
   const distRoot = resolve(repository, "dist");
@@ -140,7 +144,17 @@ function main() {
   const wheelFile = `obscuritylabs_colossus_sdk-${version}-py3-none-any.whl`;
   const sdistFile = `obscuritylabs_colossus_sdk-${version}.tar.gz`;
   copyFileSync(oneFile(pythonDist, wheelFile), join(destination, wheelFile));
-  copyFileSync(oneFile(pythonDist, sdistFile), join(destination, sdistFile));
+  const sdistPath = join(destination, sdistFile);
+  copyFileSync(oneFile(pythonDist, sdistFile), sdistPath);
+  execFileSync(
+    join(repository, "sdk/python/.codegen/bin/python"),
+    [
+      join(repository, "scripts/ci/normalize_python_sdist.py"),
+      sdistPath,
+      sourceDateEpoch,
+    ],
+    { cwd: repository, stdio: "inherit" },
+  );
 
   const packages = [npmFile, wheelFile, sdistFile].map((file) => ({
     file,

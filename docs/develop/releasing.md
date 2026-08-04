@@ -64,6 +64,14 @@ The following identities must all be the same stable `X.Y.Z` value:
 - the `CHANGELOG.md` heading; and
 - the requested `vX.Y.Z` tag.
 
+Release SDK compatibility is pinned to the most recent earlier stable `vX.Y.Z`
+tag reachable from the release commit. It never uses a moving branch as the
+compatibility baseline. Package builds use the release commit timestamp as
+`SOURCE_DATE_EPOCH` and the same pinned Node, npm, Python, Go, and Rust toolchain so the
+protected publisher can reproduce every candidate byte. The release packager also
+normalizes the Python source archive's order, ownership, permissions, and timestamps;
+setuptools does not apply `SOURCE_DATE_EPOCH` to all sdist metadata itself.
+
 All internal Rust packages must retain `publish = false`. Regenerate the SDK input
 digest after changing package metadata, then run the completion gates:
 
@@ -106,8 +114,9 @@ candidate pass. Before publishing the draft, verify that it contains exactly:
 
 Publishing the stable draft triggers `publish-sdk.yml`. Approve its one
 `sdk-production` deployment. The job reverifies the exact release assets, reconciles
-npm and PyPI, publishes only missing bytes, and finally creates the annotated
-`sdk/go/vX.Y.Z` tag on the core tag's commit.
+npm and PyPI, independently rebuilds the SDK packages from the exact stable tag and
+requires every release asset byte to match, publishes only missing bytes, and finally
+creates the annotated `sdk/go/vX.Y.Z` tag on the core tag's commit.
 
 ## Expected result
 
@@ -140,11 +149,12 @@ gh workflow run publish-sdk.yml --ref vX.Y.Z \
   -f tag=vX.Y.Z -f publish=true
 ```
 
-The recovery path never rebuilds a package. It accepts an existing version only when
-the registry bytes match the release manifest, publishes missing PyPI files with
-`skip-existing`, and accepts an existing Go tag only when it resolves to the recorded
-source commit. Any conflicting immutable version or tag fails closed; investigate it
-instead of changing or overwriting the release.
+The recovery path independently rebuilds the packages from the exact tag and refuses
+publication unless every byte matches the immutable GitHub Release candidate. It
+accepts an existing version only when the registry bytes match the release manifest,
+publishes missing PyPI files with `skip-existing`, and accepts an existing Go tag only
+when it resolves to the recorded source commit. Any conflicting immutable version or
+tag fails closed; investigate it instead of changing or overwriting the release.
 
 ## Next step
 
