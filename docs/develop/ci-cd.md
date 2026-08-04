@@ -189,6 +189,11 @@ their intrinsic metadata, and binds them to the release commit with a manifest a
 checksum set. Its aggregate gate requires every Desktop job to be skipped. It does not
 read or require Apple, Tauri updater, or Authenticode credentials.
 
+The stable SDK job compares the public API against the most recent stable tag reachable
+from the release commit, falling back to that commit's parent for a first release. The
+base is therefore fixed relative to the release commit, so rerunning an old tag after
+`main` advances cannot report newer `main` APIs as removals.
+
 An approved `vX.Y.Z-preview.N` target takes the mutually exclusive path: the stable SDK
 candidate job is skipped, while credential-free macOS ARM and Windows x64 jobs package
 the visibly unsigned Developer Preview described below. No unsigned Desktop package can

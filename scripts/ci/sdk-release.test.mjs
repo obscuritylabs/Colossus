@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { assessPypiRelease } from "./check-sdk-registry-state.mjs";
 import { validateReleaseIdentity } from "./package-sdk-release.mjs";
-import { expectedSdkFiles, validateManifest } from "./verify-sdk-release.mjs";
+import { expectedSdkFiles, validateManifest, validateTrustedBytes } from "./verify-sdk-release.mjs";
 
 const versions = {
   rust: "1.2.3",
@@ -64,6 +64,29 @@ test("candidate manifest binds npm, PyPI, and Go identities to one commit", () =
   assert.doesNotThrow(() => validateManifest(manifest, version, commit, files, digests));
   assert.throws(() =>
     validateManifest({ ...manifest, sourceCommit: "c".repeat(40) }, version, commit, files, digests),
+  );
+});
+
+test("candidate bytes must match the trusted release build for every asset", () => {
+  const files = expectedSdkFiles("1.2.3");
+  const trusted = Object.fromEntries(
+    Object.values(files).map((file, index) => [file, String(index + 1).repeat(64)]),
+  );
+  assert.doesNotThrow(() => validateTrustedBytes(files, { ...trusted }, trusted));
+  assert.throws(
+    () => validateTrustedBytes(files, { ...trusted, [files.wheel]: "f".repeat(64) }, trusted),
+    /is not the byte-exact artifact built from the release commit/u,
+  );
+  assert.throws(
+    () =>
+      validateTrustedBytes(
+        files,
+        { ...trusted },
+        Object.fromEntries(
+          Object.entries(trusted).filter(([file]) => file !== files.manifest),
+        ),
+      ),
+    /trusted release build does not contain/u,
   );
 });
 

@@ -75,16 +75,7 @@ export function validateManifest(manifest, version, commit, files, digests) {
   }
 }
 
-function main() {
-  const [directoryArgument, version, commit] = process.argv.slice(2);
-  if (!directoryArgument || !version || !commit || process.argv.length !== 5) {
-    fail("usage: verify-sdk-release.mjs DIRECTORY X.Y.Z SOURCE_COMMIT");
-  }
-  if (!stableVersionPattern.test(version)) fail("SDK release version must be stable X.Y.Z");
-  if (!commitPattern.test(commit)) fail("source commit must be a lowercase 40-character SHA");
-
-  const directory = realpathSync(resolve(directoryArgument));
-  const files = expectedSdkFiles(version);
+function digestCandidate(directory, files) {
   const expectedNames = Object.values(files).sort();
   const entries = readdirSync(directory).sort();
   if (JSON.stringify(entries) !== JSON.stringify(expectedNames)) {
@@ -97,11 +88,36 @@ function main() {
       fail(`invalid SDK candidate file: ${file}`);
     }
   }
+  return Object.fromEntries(entries.map((file) => [file, sha256(resolve(directory, file))]));
+}
 
-  const packageNames = [files.npm, files.wheel, files.sdist];
-  const digests = Object.fromEntries(
-    packageNames.map((file) => [file, sha256(resolve(directory, file))]),
-  );
+export function validateTrustedBytes(files, candidateDigests, trustedDigests) {
+  for (const file of Object.values(files)) {
+    const trusted = trustedDigests[file];
+    if (!trusted) fail(`the trusted release build does not contain ${file}`);
+    if (candidateDigests[file] !== trusted) {
+      fail(`${file} is not the byte-exact artifact built from the release commit`);
+    }
+  }
+}
+
+function main() {
+  const [directoryArgument, version, commit, trustedArgument] = process.argv.slice(2);
+  if (
+    !directoryArgument ||
+    !version ||
+    !commit ||
+    process.argv.length < 5 ||
+    process.argv.length > 6
+  ) {
+    fail("usage: verify-sdk-release.mjs DIRECTORY X.Y.Z SOURCE_COMMIT [TRUSTED_DIRECTORY]");
+  }
+  if (!stableVersionPattern.test(version)) fail("SDK release version must be stable X.Y.Z");
+  if (!commitPattern.test(commit)) fail("source commit must be a lowercase 40-character SHA");
+
+  const directory = realpathSync(resolve(directoryArgument));
+  const files = expectedSdkFiles(version);
+  const digests = digestCandidate(directory, files);
   const manifestPath = resolve(directory, files.manifest);
   validateManifest(
     JSON.parse(readFileSync(manifestPath, "utf8")),
@@ -111,12 +127,18 @@ function main() {
     digests,
   );
 
-  const checksumNames = [...packageNames, files.manifest].sort();
+  const checksumNames = [files.npm, files.wheel, files.sdist, files.manifest].sort();
   const expectedChecksums = `${checksumNames
-    .map((file) => `${sha256(resolve(directory, file))}  ${file}`)
+    .map((file) => `${digests[file]}  ${file}`)
     .join("\n")}\n`;
   if (readFileSync(resolve(directory, files.checksums), "ascii") !== expectedChecksums) {
     fail("SDK checksum set is incomplete, unordered, or does not match the candidate bytes");
+  }
+
+  if (trustedArgument) {
+    const trusted = realpathSync(resolve(trustedArgument));
+    if (trusted === directory) fail("the trusted release build must be an independent copy");
+    validateTrustedBytes(files, digests, digestCandidate(trusted, files));
   }
 
   const npmPath = resolve(directory, files.npm);
