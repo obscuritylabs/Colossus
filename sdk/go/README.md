@@ -6,7 +6,7 @@ endpoint and provides durable run-watch cursor handling.
 Install the module version aligned with the Colossus core release:
 
 ```console
-go get github.com/obscuritylabs/colossus/sdk/go@v0.10.2
+go get github.com/obscuritylabs/colossus/sdk/go@v0.10.3
 ```
 
 ```go
