@@ -83,6 +83,7 @@ impl OwnedTerminal {
         let current = self.inline_area.expect("inline viewport area");
         let previous_screen = self.inline_screen_size.expect("inline terminal size");
         let (next, scroll_up) = next_inline_area(current, previous_screen, screen_size, height);
+        let scroll_down = next.y.saturating_sub(current.y);
         if next == current && screen_size == previous_screen {
             return Ok(());
         }
@@ -90,6 +91,8 @@ impl OwnedTerminal {
         clear_backend_rows(self.terminal.backend_mut(), current, screen_size.height)?;
         if scroll_up > 0 {
             scroll_screen_up(self.terminal.backend_mut(), screen_size.height, scroll_up)?;
+        } else if scroll_down > 0 {
+            scroll_screen_down(self.terminal.backend_mut(), scroll_down)?;
         }
         self.terminal.resize(next)?;
         self.inline_area = Some(next);
@@ -173,7 +176,7 @@ pub(super) fn next_inline_area(
     )
 }
 
-fn clear_backend_rows<B: Backend>(
+pub(super) fn clear_backend_rows<B: Backend>(
     backend: &mut B,
     area: Rect,
     screen_height: u16,
@@ -234,7 +237,7 @@ pub(super) fn insert_history_buffer<B: Backend>(
     Ok(())
 }
 
-fn scroll_screen_up<B: Backend>(
+pub(super) fn scroll_screen_up<B: Backend>(
     backend: &mut B,
     screen_height: u16,
     rows: u16,
@@ -244,6 +247,17 @@ fn scroll_screen_up<B: Backend>(
     }
     backend.set_cursor_position(Position::new(0, screen_height.saturating_sub(1)))?;
     backend.append_lines(rows)
+}
+
+pub(super) fn scroll_screen_down(
+    backend: &mut CrosstermBackend<Stdout>,
+    rows: u16,
+) -> Result<(), io::Error> {
+    if rows == 0 {
+        return Ok(());
+    }
+    queue!(backend, ScrollDown(rows))?;
+    std::io::Write::flush(backend)
 }
 
 fn draw_buffer_rows<B: Backend>(

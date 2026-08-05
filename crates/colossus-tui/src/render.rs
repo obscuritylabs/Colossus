@@ -123,8 +123,10 @@ pub(super) fn desired_inline_viewport_height(
 
     let composer_height = composer_height(state, width);
     let activity_height = u16::from(state.operation.is_some());
-    let completion_height =
-        completion_menu_height(state, screen_height, composer_height, activity_height);
+    // Reserve the maximum menu footprint for the whole structured-completion
+    // interaction. Candidate filtering then redraws one stable physical viewport
+    // instead of growing and shrinking terminal history on every keystroke.
+    let completion_height = completion_menu_viewport_reserve(state);
     let chrome_height = activity_height
         .saturating_add(completion_height)
         .saturating_add(composer_height)

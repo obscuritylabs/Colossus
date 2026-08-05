@@ -7,7 +7,7 @@ use colossus_contracts::{
     ToolResult,
 };
 use colossus_ports::RunControl;
-use colossus_presentation::{PresentationBlock, PresentationDocument};
+use colossus_presentation::{PresentationBlock, PresentationDocument, PresentationTone};
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionResult,
     HostRunResult, InteractiveHost, InteractivePlanExecutionRequest, InteractiveRunRequest,
@@ -66,12 +66,26 @@ impl InteractiveHost for FixtureHost {
 
     async fn execute_command(
         &self,
-        _command: RuntimeCommand,
+        command: RuntimeCommand,
         _session_id: &str,
         _sticky_skills: &[String],
         _events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostCommandResult, String> {
+        if matches!(
+            command,
+            RuntimeCommand::Known { ref name, .. } if name == "missing"
+        ) {
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Card {
+                    title: "Unknown command".into(),
+                    tone: PresentationTone::Warning,
+                    body: vec![PresentationBlock::Text(
+                        "/missing is not available; use /help".into(),
+                    )],
+                }),
+            ));
+        }
         Ok(HostCommandResult::document(
             PresentationDocument::from_block(PresentationBlock::Text("ok".into())),
         ))
@@ -449,6 +463,220 @@ fn completed_streaming_output_moves_immediately_into_native_scrollback() {
 }
 
 #[test]
+fn inline_completion_chrome_never_enters_native_scrollback() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "inline");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_raw(&output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+
+    writer.write_all(b"/").expect("open completion");
+    writer.flush().expect("flush completion open");
+    wait_for_screen(&output, 24, 80, "Commands");
+    writer.write_all(b"t").expect("filter completion");
+    writer.flush().expect("flush completion filter");
+    wait_for_screen(&output, 24, 80, "/tools");
+    writer.write_all(&[127]).expect("grow completion again");
+    writer.flush().expect("flush completion growth");
+    wait_for_screen(&output, 24, 80, "Commands");
+    writer.write_all(&[27]).expect("dismiss completion");
+    writer.flush().expect("flush completion dismissal");
+    thread::sleep(Duration::from_millis(100));
+    writer.write_all(&[127]).expect("clear dismissed draft");
+    writer.flush().expect("flush dismissed draft clear");
+    thread::sleep(Duration::from_millis(50));
+
+    writer
+        .write_all(b"/missing\r")
+        .expect("submit fixture command");
+    writer.flush().expect("flush fixture command");
+    wait_for_screen(&output, 24, 80, "Unknown command");
+    thread::sleep(Duration::from_millis(150));
+
+    let command_screen = screen_rows(&output, 24, 80);
+    let command_body_row = command_screen
+        .iter()
+        .position(|row| row.contains("/missing is not available"))
+        .expect("command result body");
+    let composer_row = command_screen
+        .iter()
+        .position(|row| row.contains("Message · Enter sends"))
+        .expect("composer row");
+    assert!(
+        composer_row <= command_body_row + 2,
+        "completion dismissal must restore the command result directly above the composer: {command_screen:?}"
+    );
+
+    writer
+        .write_all(b"/t")
+        .expect("open completion after command");
+    writer.flush().expect("flush post-command completion");
+    wait_for_screen(&output, 24, 80, "Commands");
+    wait_for_screen(&output, 24, 80, "/tools");
+
+    let open_history = native_history_rows(&output, 24, 80, "Commands");
+    let open_history_text = open_history.join("\n");
+    assert!(
+        open_history_text.contains("durable-row-05"),
+        "{open_history_text}"
+    );
+    assert_eq!(
+        open_history
+            .iter()
+            .filter(|row| row.contains("Unknown command"))
+            .count(),
+        1,
+        "{open_history_text}"
+    );
+    let latest_durable_row = open_history
+        .iter()
+        .position(|row| row.contains("durable-row-05"))
+        .expect("latest durable transcript row");
+    let command_result_row = open_history
+        .iter()
+        .position(|row| row.contains("Unknown command"))
+        .expect("command result row");
+    assert!(
+        command_result_row <= latest_durable_row + 2,
+        "completion chrome must not leave a blank band between durable transcript entries: {open_history:?}"
+    );
+    for transient in [
+        "Commands",
+        "/tools",
+        "Message · Enter sends",
+        "fixture@local",
+    ] {
+        assert!(
+            !open_history_text.contains(transient),
+            "transient {transient:?} leaked into native history: {open_history_text}"
+        );
+    }
+    assert_eq!(
+        open_history
+            .iter()
+            .filter(|row| row.trim() == "/missing")
+            .count(),
+        0,
+        "submitted command input leaked into native history: {open_history_text}"
+    );
+
+    writer.write_all(b"\t").expect("accept completion");
+    writer.flush().expect("flush completion acceptance");
+    thread::sleep(Duration::from_millis(50));
+    writer.write_all(b"\r").expect("submit accepted command");
+    writer.flush().expect("flush accepted command");
+    wait_for_screen(&output, 24, 80, "ok");
+    thread::sleep(Duration::from_millis(150));
+
+    let settled_history = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let settled_history_text = settled_history.join("\n");
+    assert_eq!(
+        settled_history
+            .iter()
+            .filter(|row| row.trim() == "ok")
+            .count(),
+        1,
+        "{settled_history_text}"
+    );
+    for transient in [
+        "Commands",
+        "/tools",
+        "Message · Enter sends",
+        "fixture@local",
+    ] {
+        assert!(
+            !settled_history_text.contains(transient),
+            "transient {transient:?} leaked into native history: {settled_history_text}"
+        );
+    }
+
+    writer
+        .write_all(b"/")
+        .expect("open completion before resize");
+    writer.flush().expect("flush pre-resize completion");
+    wait_for_screen(&output, 24, 80, "Commands");
+    let resize_output_offset = output.lock().expect("output").len();
+    pair.master
+        .resize(PtySize {
+            rows: 12,
+            cols: 40,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("resize while completion is open");
+    wait_for_resized_screen(
+        &output,
+        (24, 80),
+        resize_output_offset,
+        (12, 40),
+        "Commands",
+    );
+    wait_for_resized_screen(
+        &output,
+        (24, 80),
+        resize_output_offset,
+        (12, 40),
+        "Message · Enter sends",
+    );
+    let resized_history = resized_native_history_rows(
+        &output,
+        (24, 80),
+        resize_output_offset,
+        (12, 40),
+        "Commands",
+    );
+    let resized_history_text = resized_history.join("\n");
+    for transient in ["Commands", "Message · Enter sends", "fixture@local"] {
+        assert!(
+            !resized_history_text.contains(transient),
+            "resize leaked transient {transient:?} into native history: {resized_history_text}"
+        );
+    }
+
+    writer.write_all(&[3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    assert!(status.success());
+    drop(writer);
+    reader_thread.join().expect("reader thread");
+}
+
+#[test]
 fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -575,6 +803,26 @@ fn wait_for_screen(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16, needle: &
     );
 }
 
+fn wait_for_resized_screen(
+    output: &Arc<Mutex<Vec<u8>>>,
+    initial: (u16, u16),
+    resize_output_offset: usize,
+    resized: (u16, u16),
+    needle: &str,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let bytes = output.lock().expect("output").clone();
+        let mut parser = resized_parser(&bytes, initial, resize_output_offset, resized);
+        parser.screen_mut().set_scrollback(0);
+        if parser.screen().contents().contains(needle) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("resized screen never contained {needle}");
+}
+
 fn screen_contents(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16) -> String {
     let bytes = output.lock().expect("output").clone();
     let mut parser = vt100::Parser::new(rows, cols, 0);
@@ -597,4 +845,77 @@ fn scrollback_contains(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16, needl
         parser.screen_mut().set_scrollback(offset);
         parser.screen().contents().contains(needle)
     })
+}
+
+fn native_scrollback_rows(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16) -> Vec<String> {
+    let bytes = output.lock().expect("output").clone();
+    let mut parser = vt100::Parser::new(rows, cols, 512);
+    parser.process(&bytes);
+    parser.screen_mut().set_scrollback(usize::MAX);
+    let scrollback_len = parser.screen().scrollback();
+    (1..=scrollback_len)
+        .rev()
+        .filter_map(|offset| {
+            parser.screen_mut().set_scrollback(offset);
+            parser.screen().rows(0, cols).next()
+        })
+        .collect()
+}
+
+fn native_history_rows(
+    output: &Arc<Mutex<Vec<u8>>>,
+    rows: u16,
+    cols: u16,
+    live_marker: &str,
+) -> Vec<String> {
+    let mut history = native_scrollback_rows(output, rows, cols);
+    let visible = screen_rows(output, rows, cols);
+    let live_viewport = visible
+        .iter()
+        .rposition(|row| row.contains(live_marker))
+        .expect("live viewport marker");
+    history.extend_from_slice(&visible[..live_viewport]);
+    history
+}
+
+fn resized_native_history_rows(
+    output: &Arc<Mutex<Vec<u8>>>,
+    initial: (u16, u16),
+    resize_output_offset: usize,
+    resized: (u16, u16),
+    live_marker: &str,
+) -> Vec<String> {
+    let bytes = output.lock().expect("output").clone();
+    let mut parser = resized_parser(&bytes, initial, resize_output_offset, resized);
+    parser.screen_mut().set_scrollback(usize::MAX);
+    let scrollback_len = parser.screen().scrollback();
+    let mut history = (1..=scrollback_len)
+        .rev()
+        .filter_map(|offset| {
+            parser.screen_mut().set_scrollback(offset);
+            parser.screen().rows(0, resized.1).next()
+        })
+        .collect::<Vec<_>>();
+    parser.screen_mut().set_scrollback(0);
+    let visible = parser.screen().rows(0, resized.1).collect::<Vec<_>>();
+    let live_viewport = visible
+        .iter()
+        .rposition(|row| row.contains(live_marker))
+        .expect("resized live viewport marker");
+    history.extend_from_slice(&visible[..live_viewport]);
+    history
+}
+
+fn resized_parser(
+    bytes: &[u8],
+    initial: (u16, u16),
+    resize_output_offset: usize,
+    resized: (u16, u16),
+) -> vt100::Parser {
+    let split = resize_output_offset.min(bytes.len());
+    let mut parser = vt100::Parser::new(initial.0, initial.1, 512);
+    parser.process(&bytes[..split]);
+    parser.screen_mut().set_size(resized.0, resized.1);
+    parser.process(&bytes[split..]);
+    parser
 }

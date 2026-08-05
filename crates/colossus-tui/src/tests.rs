@@ -617,6 +617,22 @@ fn visible_completion_menu_is_adaptive_at_minimum_size() {
 }
 
 #[test]
+fn alternate_screen_completion_never_uses_native_scrollback() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+
+    for draft in ["/", "/t", "/missing", ""] {
+        state.composer.clear();
+        state.composer.insert(draft);
+        terminal
+            .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+            .expect("draw alternate-screen completion state");
+        terminal.backend().assert_scrollback_empty();
+    }
+}
+
+#[test]
 fn completion_ghost_uses_a_distinct_low_emphasis_style() {
     let backend = TestBackend::new(40, 3);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -1118,6 +1134,87 @@ fn inline_viewport_stays_bottom_anchored_as_live_content_grows_and_shrinks() {
     let (shrunk, scroll_up) = next_inline_area(grown, screen, screen, 5);
     assert_eq!(shrunk, current);
     assert_eq!(scroll_up, 0);
+}
+
+#[test]
+fn inline_completion_keeps_candidate_changes_out_of_native_scrollback() {
+    for screen in [Size::new(40, 12), Size::new(80, 24)] {
+        let mut area = Rect::new(
+            0,
+            screen.height - MINIMUM_INLINE_VIEWPORT_HEIGHT,
+            screen.width,
+            MINIMUM_INLINE_VIEWPORT_HEIGHT,
+        );
+        let backend = TestBackend::new(screen.width, screen.height);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(area),
+            },
+        )
+        .expect("test terminal");
+        let mut state = TuiState::from_snapshot(snapshot());
+        let transcript_start = state.transcript.len();
+
+        terminal
+            .draw(|frame| render(frame, &mut state, transcript_start, ScreenMode::Inline))
+            .expect("draw initial inline chrome");
+
+        let mut completion_scrollback_height = None;
+        for draft in ["/", "/t", "/missing", "/", ""] {
+            state.composer.clear();
+            state.composer.insert(draft);
+            let requested = desired_inline_viewport_height(
+                &state,
+                screen.width,
+                screen.height,
+                transcript_start,
+            );
+            let (next, scroll_up) = next_inline_area(area, screen, screen, requested);
+            clear_backend_rows(terminal.backend_mut(), area, screen.height)
+                .expect("clear previous viewport");
+            scroll_screen_up(terminal.backend_mut(), screen.height, scroll_up)
+                .expect("move inline viewport");
+            terminal.resize(next).expect("resize inline viewport");
+            area = next;
+            terminal
+                .draw(|frame| render(frame, &mut state, transcript_start, ScreenMode::Inline))
+                .expect("redraw inline chrome");
+            if draft == "/" {
+                assert!(
+                    terminal.backend().to_string().contains("Commands"),
+                    "{}x{} inline menu was not visible",
+                    screen.width,
+                    screen.height
+                );
+            }
+            if draft.starts_with('/') {
+                let height = terminal.backend().scrollback().area.height;
+                if let Some(expected) = completion_scrollback_height {
+                    assert_eq!(
+                        height, expected,
+                        "candidate count changes must reuse the existing inline viewport"
+                    );
+                } else {
+                    completion_scrollback_height = Some(height);
+                }
+            }
+        }
+
+        let scrollback = terminal
+            .backend()
+            .scrollback()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        for transient in ["Commands", "/tools", "Message", "Enter sends", "/t"] {
+            assert!(
+                !scrollback.contains(transient),
+                "transient {transient:?} leaked into native scrollback: {scrollback:?}"
+            );
+        }
+    }
 }
 
 #[test]
