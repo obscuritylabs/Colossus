@@ -120,10 +120,11 @@ fn tag_validation_and_draft_publication_fail_closed() {
     let draft = job(jobs, "draft-release");
     let permissions = mapping(field(draft, "permissions"), "draft permissions");
     assert_eq!(field(permissions, "contents").as_str(), Some("write"));
-    assert!(
-        field(draft, "if")
-            .as_str()
-            .is_some_and(|condition| condition.contains("publish_draft == 'true'"))
+    assert_eq!(
+        field(draft, "if").as_str(),
+        Some(
+            "always() && needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success'"
+        )
     );
     named_step(draft, "Check out the exact release verifier");
     named_step(draft, "Verify complete release asset set");
@@ -294,6 +295,9 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
     assert!(windows.contains("schemaVersion = 2"));
     assert!(!windows.contains("schemaVersion = 1"));
     assert!(windows.contains("providerProfile = \"echo\""));
+    assert!(windows.contains("[IO.File]::WriteAllText("));
+    assert!(windows.contains("$hash  $package.zip`n"));
+    assert!(!windows.contains("| Set-Content -Encoding ascii \"${archive}.sha256\""));
 }
 
 #[test]

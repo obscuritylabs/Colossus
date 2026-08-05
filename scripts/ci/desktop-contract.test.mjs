@@ -793,6 +793,10 @@ test("draft release checks out the exact verifier and binds GitHub CLI", () => {
   assert.ok(draftStart >= 0);
 
   const draftJob = workflow.slice(draftStart);
+  assert.match(
+    draftJob,
+    /if: always\(\) && needs\.validate\.outputs\.publish_draft == 'true' && needs\.gate\.result == 'success'/u,
+  );
   assert.match(draftJob, /GH_REPO: \$\{\{ github\.repository \}\}/u);
   assert.match(draftJob, /gh release upload "\$RELEASE_TAG" dist\/\*/u);
   assert.match(draftJob, /gh release create "\$RELEASE_TAG" dist\/\*/u);
