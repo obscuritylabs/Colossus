@@ -17,6 +17,15 @@ include breaking changes while the public API is still settling.
   AppArmor and Landlock LSMs the Blacksmith microVM kernel does not expose, or a
   per-target runner image.
 
+## [0.10.4] - 2026-08-04
+
+### Fixed
+
+- Ensured the stable draft-release job runs after the intentionally skipped Desktop
+  jobs once the complete core release gate succeeds.
+- Wrote Windows CLI checksum sidecars with portable LF endings so the Linux draft
+  verifier and Unix consumers can validate them with `sha256sum --check`.
+
 ## [0.10.3] - 2026-08-04
 
 ### Fixed

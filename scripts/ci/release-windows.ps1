@@ -40,7 +40,11 @@ Copy-Item README.md (Join-Path $stage "README.md")
 $archive = Join-Path $dist "$package.zip"
 Compress-Archive -Path $stage -DestinationPath $archive -Force
 $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-"$hash  $package.zip" | Set-Content -Encoding ascii "${archive}.sha256"
+[IO.File]::WriteAllText(
+    "${archive}.sha256",
+    "$hash  $package.zip`n",
+    [Text.Encoding]::ASCII
+)
 
 $extract = Join-Path $env:RUNNER_TEMP "colossus-install-extract-$Target"
 $prefix = Join-Path $env:RUNNER_TEMP "colossus-install-prefix-$Target"

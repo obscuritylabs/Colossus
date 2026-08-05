@@ -793,6 +793,13 @@ test("draft release checks out the exact verifier and binds GitHub CLI", () => {
   assert.ok(draftStart >= 0);
 
   const draftJob = workflow.slice(draftStart);
+  // `!cancelled()` keeps a status function so intentionally skipped Desktop preview
+  // jobs cannot skip this job before its gate check runs, while still refusing to
+  // publish or mutate a draft release once the workflow is cancelled.
+  assert.match(
+    draftJob,
+    /if: \$\{\{ !cancelled\(\) && needs\.validate\.outputs\.publish_draft == 'true' && needs\.gate\.result == 'success' \}\}/u,
+  );
   assert.match(draftJob, /GH_REPO: \$\{\{ github\.repository \}\}/u);
   assert.match(draftJob, /gh release upload "\$RELEASE_TAG" dist\/\*/u);
   assert.match(draftJob, /gh release create "\$RELEASE_TAG" dist\/\*/u);

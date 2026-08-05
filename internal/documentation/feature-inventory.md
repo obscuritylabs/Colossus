@@ -1158,7 +1158,7 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.10.3 is the active stable core release line, and every capability
+Rust 0.10.4 is the active stable core release line, and every capability
 in the Section 5 release baseline has executable evidence. The detailed
 requirement-to-test mapping lives in the
 [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and source paths belong
