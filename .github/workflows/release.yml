@@ -825,7 +825,7 @@ jobs:
 
   draft-release:
     name: Create draft GitHub Release
-    if: needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success'
+    if: ${{ !cancelled() && needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success' }}
     needs: [validate, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 10

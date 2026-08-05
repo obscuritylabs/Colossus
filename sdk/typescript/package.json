@@ -1,6 +1,6 @@
 {
   "name": "@obscuritylabs/colossus-sdk",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "Security-focused Node.js SDK for the Colossus public gRPC API",
   "license": "Apache-2.0",
   "repository": {
