@@ -28,6 +28,14 @@ nav = [
   ] },
   { "Use Colossus" = [
     { "Overview" = "use/index.md" },
+    { "Connect providers" = [
+      { "Choose a provider" = "use/providers/index.md" },
+      { "Codex or ChatGPT subscription" = "use/providers/codex-chatgpt.md" },
+      { "OpenAI API" = "use/providers/openai-api.md" },
+      { "OpenRouter" = "use/providers/openrouter.md" },
+      { "Local models" = "use/providers/local-models.md" },
+      { "Other OpenAI-compatible endpoints" = "use/providers/openai-compatible.md" },
+    ] },
     { "Agent runs" = "use/agent-runs.md" },
     { "Terminal UI" = "use/terminal-ui.md" },
     { "Sessions and context" = "use/sessions-context.md" },
@@ -127,7 +135,6 @@ features = [
   "navigation.instant",
   "navigation.instant.progress",
   "navigation.path",
-  "navigation.sections",
   "navigation.tabs",
   "navigation.tabs.sticky",
   "navigation.top",

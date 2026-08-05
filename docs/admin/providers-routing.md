@@ -12,6 +12,10 @@ type: how-to
 Connect a provider endpoint, define its model limits and capabilities, and keep role
 routing explicit while credentials remain late-bound.
 
+Users choosing an access method can start with the focused
+[Connect a model provider](../use/providers/index.md) guides. This page owns the
+operator workflow for routing, deployment policy, and diagnostics.
+
 ## Prerequisites
 
 - A valid configuration.
