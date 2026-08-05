@@ -8,6 +8,14 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-08-04
+
+### Fixed
+
+- Allowed the exact deterministic Python source-distribution normalizer through stable
+  release readiness while continuing to reject the retired root Python package and any
+  other unapproved Python source.
+
 ## [0.10.2] - 2026-08-03
 
 ### Added
