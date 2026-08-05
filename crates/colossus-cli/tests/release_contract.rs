@@ -120,10 +120,13 @@ fn tag_validation_and_draft_publication_fail_closed() {
     let draft = job(jobs, "draft-release");
     let permissions = mapping(field(draft, "permissions"), "draft permissions");
     assert_eq!(field(permissions, "contents").as_str(), Some("write"));
+    // `!cancelled()` keeps a status function so the intentionally skipped Desktop
+    // preview jobs cannot skip this job before its explicit gate check runs, while
+    // still refusing to publish a draft once the release workflow is cancelled.
     assert_eq!(
         field(draft, "if").as_str(),
         Some(
-            "always() && needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success'"
+            "${{ !cancelled() && needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success' }}"
         )
     );
     named_step(draft, "Check out the exact release verifier");
