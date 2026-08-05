@@ -189,6 +189,10 @@ fn zensical_site_is_pinned_searchable_and_complete() {
         !configuration.contains("internal/documentation"),
         "repository-only documentation entered the public configuration"
     );
+    assert!(
+        !configuration.contains("\"navigation.sections\""),
+        "nested navigation must remain collapsible on desktop"
+    );
     for (label, page) in [
         ("Research overview", "docs/use/research-search.md"),
         ("Deep research", "docs/use/deep-research.md"),
@@ -644,6 +648,131 @@ fn published_config_and_workflow_examples_are_accepted_by_rust_parsers() {
         .expect("reference workflow must validate");
 }
 
+fn merge_yaml_value(target: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (target, overlay) {
+        (serde_json::Value::Object(target), serde_json::Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                if let Some(current) = target.get_mut(&key) {
+                    merge_yaml_value(current, value);
+                } else {
+                    target.insert(key, value);
+                }
+            }
+        }
+        (target, overlay) => *target = overlay,
+    }
+}
+
+#[test]
+fn provider_task_guides_are_linked_complete_and_parser_backed() {
+    let chooser = read("docs/use/providers/index.md");
+    let use_overview = read("docs/use/index.md");
+    let navigation = read("zensical.toml");
+    let guides = [
+        (
+            "Codex or ChatGPT subscription",
+            "docs/use/providers/codex-chatgpt.md",
+            "kind: open_ai_codex",
+            "credentialReference: codex:default",
+            "https://chatgpt.com",
+        ),
+        (
+            "OpenAI API",
+            "docs/use/providers/openai-api.md",
+            "kind: open_ai_responses",
+            "credentialReference: env:OPENAI_API_KEY",
+            "https://api.openai.com",
+        ),
+        (
+            "OpenRouter",
+            "docs/use/providers/openrouter.md",
+            "kind: open_ai_compatible",
+            "credentialReference: env:OPENROUTER_API_KEY",
+            "https://openrouter.ai",
+        ),
+        (
+            "Local models",
+            "docs/use/providers/local-models.md",
+            "kind: open_ai_compatible",
+            "credentialReference: null",
+            "http://127.0.0.1:11434",
+        ),
+        (
+            "Other OpenAI-compatible endpoints",
+            "docs/use/providers/openai-compatible.md",
+            "kind: open_ai_compatible",
+            "credentialReference: env:COLOSSUS_MODEL_TOKEN",
+            "https://models.example.com",
+        ),
+    ];
+    let baseline = read("docs/reference/configuration.md");
+    let baseline = marked_yaml(&baseline, "rust-config-example");
+
+    for (label, path, kind, credential, origin) in guides {
+        let relative_path = path.strip_prefix("docs/").expect("public guide path");
+        let document = read(path);
+        for required in [
+            "schemaVersion: 2",
+            kind,
+            credential,
+            origin,
+            "models route primary",
+            "provider doctor",
+            "models doctor",
+            "Reply with exactly: connected",
+            "../../reference/configuration/providers-models.md",
+            "../../admin/providers-routing.md",
+        ] {
+            assert!(
+                document.contains(required),
+                "{path} is missing provider-guide contract {required:?}"
+            );
+        }
+        let chooser_target = relative_path.trim_start_matches("use/providers/");
+        assert!(
+            chooser.contains(&format!("]({chooser_target})")),
+            "provider chooser does not link {label}"
+        );
+        let overview_target = relative_path.trim_start_matches("use/");
+        assert!(
+            use_overview.contains(overview_target),
+            "Use overview does not link {label}"
+        );
+        assert!(
+            navigation.contains(relative_path),
+            "Zensical navigation does not include {label}"
+        );
+
+        let mut configuration: serde_json::Value =
+            serde_saphyr::from_str(baseline).expect("baseline configuration YAML");
+        let overlay: serde_json::Value =
+            serde_saphyr::from_str(marked_yaml(&document, "provider-guide-config"))
+                .unwrap_or_else(|error| panic!("parse {path} provider overlay: {error}"));
+        let overlay = overlay
+            .as_object()
+            .expect("provider overlay mapping")
+            .clone();
+        let configuration_root = configuration
+            .as_object_mut()
+            .expect("baseline configuration mapping");
+        for (key, value) in overlay {
+            if key == "sandbox" {
+                merge_yaml_value(
+                    configuration_root
+                        .get_mut("sandbox")
+                        .expect("baseline sandbox configuration"),
+                    value,
+                );
+            } else {
+                configuration_root.insert(key, value);
+            }
+        }
+        let yaml = serde_saphyr::to_string(&configuration).expect("provider guide YAML");
+        RuntimeConfig::from_yaml(&yaml)
+            .unwrap_or_else(|error| panic!("{path} provider overlay must parse: {error}"));
+    }
+}
+
 #[test]
 fn repository_workflow_examples_are_accepted_by_the_rust_parser() {
     let directory = repository_root().join("examples/workflows");
@@ -869,10 +998,16 @@ fn documented_command_families_are_real_clap_routes() {
         &["policy", "doctor"],
         &["state", "doctor"],
         &["sandbox", "doctor"],
+        &["codex", "login"],
+        &["codex", "status"],
+        &["codex", "logout"],
+        &["provider", "doctor"],
         &["provider", "models"],
         &["search", "profiles"],
         &["search", "query"],
         &["models", "route"],
+        &["models", "doctor"],
+        &["run"],
         &["artifacts", "upload"],
         &["sessions", "messages"],
         &["context", "restore"],

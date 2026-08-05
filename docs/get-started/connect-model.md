@@ -13,6 +13,11 @@ Replace the offline `echo` route with a provider connection and explicit model p
 while keeping the credential outside configuration and granting only the provider's
 exact network origin.
 
+For a provider-specific copy/paste path, choose from
+[Connect a model provider](../use/providers/index.md). This onboarding page retains the
+single end-to-end starting flow; the focused guides cover Codex/ChatGPT, the OpenAI API,
+OpenRouter, local servers, and other compatible endpoints separately.
+
 ## Prerequisites
 
 - A completed [five-minute quickstart](quickstart.md).

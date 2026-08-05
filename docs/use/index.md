@@ -10,6 +10,20 @@ type: concept
 Colossus supports quick one-shot requests and long-running, restart-safe work. Both use
 the same model routing, tools, authorization, encrypted journal, and recovery semantics.
 
+## Connect a model provider
+
+Model-backed workflows need one explicit provider route. Start with
+[Connect a model provider](providers/index.md), then choose the focused guide for your
+access method:
+
+| Access method | Setup guide |
+| --- | --- |
+| ChatGPT/Codex subscription | [Codex or ChatGPT subscription](providers/codex-chatgpt.md) |
+| OpenAI public API key | [OpenAI API](providers/openai-api.md) |
+| OpenRouter API key | [OpenRouter](providers/openrouter.md) |
+| Loopback model server | [Local models](providers/local-models.md) |
+| Hosted gateway or another compatible API | [Other OpenAI-compatible endpoints](providers/openai-compatible.md) |
+
 ## Choose a working style
 
 | Need | Start here |

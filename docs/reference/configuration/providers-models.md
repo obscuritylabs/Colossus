@@ -20,6 +20,11 @@ different providers without duplicating connection settings.
 Use this page to construct the YAML. For credential setup and live diagnostics, see
 [Providers and routing](../../admin/providers-routing.md).
 
+For a task-oriented setup path, start with
+[Connect a model provider](../../use/providers/index.md). This page remains the
+canonical owner for provider and model field semantics, validation rules, and adapter
+compatibility boundaries.
+
 ## Choose a starting point
 
 | Scenario | Provider kind | Credential | Sandbox destination |
