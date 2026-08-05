@@ -617,6 +617,22 @@ fn visible_completion_menu_is_adaptive_at_minimum_size() {
 }
 
 #[test]
+fn alternate_screen_completion_never_uses_native_scrollback() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+
+    for draft in ["/", "/t", "/missing", ""] {
+        state.composer.clear();
+        state.composer.insert(draft);
+        terminal
+            .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+            .expect("draw alternate-screen completion state");
+        terminal.backend().assert_scrollback_empty();
+    }
+}
+
+#[test]
 fn completion_ghost_uses_a_distinct_low_emphasis_style() {
     let backend = TestBackend::new(40, 3);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -1118,6 +1134,31 @@ fn inline_viewport_stays_bottom_anchored_as_live_content_grows_and_shrinks() {
     let (shrunk, scroll_up) = next_inline_area(grown, screen, screen, 5);
     assert_eq!(shrunk, current);
     assert_eq!(scroll_up, 0);
+}
+
+#[test]
+fn inline_completion_does_not_resize_the_main_screen_viewport() {
+    for screen in [Size::new(40, 12), Size::new(80, 24)] {
+        let mut state = TuiState::from_snapshot(snapshot());
+        let transcript_start = state.transcript.len();
+        let expected =
+            desired_inline_viewport_height(&state, screen.width, screen.height, transcript_start);
+        for draft in ["/", "/t", "/missing", "/", ""] {
+            state.composer.clear();
+            state.composer.insert(draft);
+            let requested = desired_inline_viewport_height(
+                &state,
+                screen.width,
+                screen.height,
+                transcript_start,
+            );
+            assert_eq!(
+                requested, expected,
+                "completion draft {draft:?} changed the main-screen viewport at {}x{}",
+                screen.width, screen.height
+            );
+        }
+    }
 }
 
 #[test]

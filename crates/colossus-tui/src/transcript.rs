@@ -299,7 +299,7 @@ pub(super) fn completion_menu_height(
         return 0;
     }
     let available = total_height
-        .saturating_sub(3)
+        .saturating_sub(MINIMUM_COMPLETION_TRANSCRIPT_ROWS)
         .saturating_sub(activity_height)
         .saturating_sub(composer_height)
         .saturating_sub(1);

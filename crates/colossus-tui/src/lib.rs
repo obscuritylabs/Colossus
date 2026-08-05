@@ -54,6 +54,8 @@ pub const MINIMUM_TERMINAL_WIDTH: u16 = 40;
 pub const MINIMUM_TERMINAL_HEIGHT: u16 = 12;
 /// Most completion rows shown before the suggestion menu scrolls.
 const MAX_COMPLETION_MENU_ROWS: usize = 6;
+/// Transcript rows retained above completion chrome so the menu remains renderable.
+const MINIMUM_COMPLETION_TRANSCRIPT_ROWS: u16 = 3;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
 /// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.

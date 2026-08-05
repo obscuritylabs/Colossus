@@ -495,10 +495,10 @@ pub(super) fn start_line(
         InteractiveCommand::Empty => {}
         InteractiveCommand::Local(command) => handle_local_command(state, command, host, event_tx),
         InteractiveCommand::Runtime(command) => {
-            start_host_command(state, &line, command, host, event_tx);
+            start_host_command(state, command, host, event_tx);
         }
         InteractiveCommand::Plan(command) => {
-            handle_plan_command(state, command, &line, host, event_tx);
+            handle_plan_command(state, command, host, event_tx);
         }
         InteractiveCommand::Invalid(message) => state.append_entry(error_entry(&message)),
         InteractiveCommand::Turn(prompt) => {
@@ -531,12 +531,10 @@ pub(super) fn start_line(
 
 fn start_host_command(
     state: &mut TuiState,
-    line: &str,
     command: RuntimeCommand,
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
-    state.append_entry(user_entry(line, TranscriptKind::Command));
     state.operation = Some(OperationKind::Command);
     state.started_at = Some(Instant::now());
     state.activity = Some(format!("running /{}", runtime_command_name(&command)));
@@ -565,7 +563,6 @@ fn start_host_command(
 fn handle_plan_command(
     state: &mut TuiState,
     command: PlanCommand,
-    line: &str,
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
@@ -593,14 +590,12 @@ fn handle_plan_command(
         }
         PlanCommand::List => start_host_command(
             state,
-            line,
             RuntimeCommand::Plan(PlanHostCommand::List),
             host,
             event_tx,
         ),
         PlanCommand::Use { plan_id } => start_host_command(
             state,
-            line,
             RuntimeCommand::Plan(PlanHostCommand::Use { plan_id }),
             host,
             event_tx,
@@ -616,7 +611,6 @@ fn handle_plan_command(
             };
             start_host_command(
                 state,
-                line,
                 RuntimeCommand::Plan(PlanHostCommand::Show { plan_id }),
                 host,
                 event_tx,
@@ -628,7 +622,6 @@ fn handle_plan_command(
             };
             start_host_command(
                 state,
-                line,
                 RuntimeCommand::Plan(PlanHostCommand::Approve {
                     plan_id: plan.id,
                     revision: plan.revision,
@@ -643,7 +636,6 @@ fn handle_plan_command(
             };
             start_host_command(
                 state,
-                line,
                 RuntimeCommand::Plan(PlanHostCommand::Discard {
                     plan_id: plan.id,
                     revision: plan.revision,
@@ -656,7 +648,6 @@ fn handle_plan_command(
             let Some(plan) = selected_approved_plan(state) else {
                 return;
             };
-            state.append_entry(user_entry(line, TranscriptKind::Command));
             if let Some(strategy) = strategy {
                 start_plan_execution(
                     state,

@@ -5,6 +5,7 @@ pub(super) struct OwnedTerminal {
     mode: ScreenMode,
     inline_area: Option<Rect>,
     inline_screen_size: Option<Size>,
+    inline_completion_screen_size: Option<Size>,
     committed_entries: usize,
     committed_epoch: u64,
     has_native_history: bool,
@@ -34,6 +35,7 @@ impl OwnedTerminal {
             mode,
             inline_area,
             inline_screen_size,
+            inline_completion_screen_size: None,
             committed_entries: 0,
             committed_epoch: u64::MAX,
             has_native_history: false,
@@ -49,6 +51,11 @@ impl OwnedTerminal {
         }
 
         self.synchronize_native_history_progress(state);
+        if state.structured_completion_context().is_some() {
+            self.draw_inline_completion(state)?;
+            return Ok(());
+        }
+        self.leave_inline_completion_screen()?;
         let transcript_start = if state.has_more || state.loading_older {
             self.committed_entries
         } else {
@@ -66,6 +73,46 @@ impl OwnedTerminal {
         self.commit_native_history(state, transcript_start)?;
         self.terminal
             .draw(|frame| render(frame, state, transcript_start, ScreenMode::Inline))?;
+        Ok(())
+    }
+
+    fn draw_inline_completion(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
+        if !self._guard.transient_alternate_screen {
+            Backend::flush(self.terminal.backend_mut())?;
+            self._guard.enter_transient_alternate_screen()?;
+            self.inline_completion_screen_size = None;
+        }
+        let screen_size = self.terminal.backend().size()?;
+        if self.inline_completion_screen_size != Some(screen_size) {
+            self.terminal
+                .resize(Rect::new(0, 0, screen_size.width, screen_size.height))?;
+            self.inline_completion_screen_size = Some(screen_size);
+        }
+        state.transcript_width = usize::from(screen_size.width).max(20);
+        self.terminal
+            .draw(|frame| render(frame, state, 0, ScreenMode::Alternate))?;
+        Ok(())
+    }
+
+    fn leave_inline_completion_screen(&mut self) -> Result<(), io::Error> {
+        if !self._guard.transient_alternate_screen {
+            return Ok(());
+        }
+        Backend::flush(self.terminal.backend_mut())?;
+        self._guard.leave_transient_alternate_screen()?;
+        self.inline_completion_screen_size = None;
+
+        // Leaving the alternate screen restores the main screen byte-for-byte.
+        // Re-establish only the app-owned bottom viewport; the next normal draw
+        // may then resize it for live transcript or activity without touching
+        // the terminal rows that completion temporarily covered.
+        let screen_size = self.terminal.backend().size()?;
+        let current = self.inline_area.expect("inline viewport area");
+        let previous_screen = self.inline_screen_size.expect("inline terminal size");
+        let (restored, _) = next_inline_area(current, previous_screen, screen_size, current.height);
+        self.terminal.resize(restored)?;
+        self.inline_area = Some(restored);
+        self.inline_screen_size = Some(screen_size);
         Ok(())
     }
 
@@ -173,7 +220,7 @@ pub(super) fn next_inline_area(
     )
 }
 
-fn clear_backend_rows<B: Backend>(
+pub(super) fn clear_backend_rows<B: Backend>(
     backend: &mut B,
     area: Rect,
     screen_height: u16,
@@ -234,7 +281,7 @@ pub(super) fn insert_history_buffer<B: Backend>(
     Ok(())
 }
 
-fn scroll_screen_up<B: Backend>(
+pub(super) fn scroll_screen_up<B: Backend>(
     backend: &mut B,
     screen_height: u16,
     rows: u16,
@@ -288,6 +335,7 @@ pub(super) fn committable_transcript_end(
 
 struct TerminalGuard {
     mode: ScreenMode,
+    transient_alternate_screen: bool,
 }
 
 impl TerminalGuard {
@@ -311,14 +359,42 @@ impl TerminalGuard {
             let _ = disable_raw_mode();
             return Err(error);
         }
-        Ok(Self { mode })
+        Ok(Self {
+            mode,
+            transient_alternate_screen: false,
+        })
     }
 
-    fn restore(&self) {
+    fn enter_transient_alternate_screen(&mut self) -> Result<(), io::Error> {
+        debug_assert_eq!(self.mode, ScreenMode::Inline);
+        if self.transient_alternate_screen {
+            return Ok(());
+        }
         let mut stdout = io::stdout();
-        if self.mode == ScreenMode::Alternate {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+            let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
+            return Err(error);
+        }
+        self.transient_alternate_screen = true;
+        Ok(())
+    }
+
+    fn leave_transient_alternate_screen(&mut self) -> Result<(), io::Error> {
+        if !self.transient_alternate_screen {
+            return Ok(());
+        }
+        let mut stdout = io::stdout();
+        execute!(stdout, DisableMouseCapture, LeaveAlternateScreen)?;
+        self.transient_alternate_screen = false;
+        Ok(())
+    }
+
+    fn restore(&mut self) {
+        let mut stdout = io::stdout();
+        if self.mode == ScreenMode::Alternate || self.transient_alternate_screen {
             let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
         }
+        self.transient_alternate_screen = false;
         let _ = execute!(stdout, Show, DisableBracketedPaste);
         let _ = stdout.flush();
         let _ = disable_raw_mode();
