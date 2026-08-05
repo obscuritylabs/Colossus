@@ -8,6 +8,7 @@ pub(super) struct OwnedTerminal {
     committed_entries: usize,
     committed_epoch: u64,
     has_native_history: bool,
+    history_rows: VecDeque<Vec<Cell>>,
     _guard: TerminalGuard,
 }
 
@@ -37,6 +38,7 @@ impl OwnedTerminal {
             committed_entries: 0,
             committed_epoch: u64::MAX,
             has_native_history: false,
+            history_rows: VecDeque::new(),
             _guard: guard,
         })
     }
@@ -88,11 +90,24 @@ impl OwnedTerminal {
             return Ok(());
         }
 
+        if screen_size != previous_screen {
+            // Terminal resizes reflow the rows above the viewport, so previously
+            // committed rows can no longer be mapped back onto physical rows.
+            self.history_rows.clear();
+        }
+
         clear_backend_rows(self.terminal.backend_mut(), current, screen_size.height)?;
         if scroll_up > 0 {
             scroll_screen_up(self.terminal.backend_mut(), screen_size.height, scroll_up)?;
         } else if scroll_down > 0 {
             scroll_screen_down(self.terminal.backend_mut(), scroll_down)?;
+            restore_history_rows(
+                self.terminal.backend_mut(),
+                &self.history_rows,
+                current.y,
+                scroll_down,
+                screen_size.width,
+            )?;
         }
         self.terminal.resize(next)?;
         self.inline_area = Some(next);
@@ -129,6 +144,7 @@ impl OwnedTerminal {
             let buffer_area = buffer.area;
             Paragraph::new(rendered).render(buffer_area, &mut buffer);
             insert_history_buffer(self.terminal.backend_mut(), &buffer, &mut area, screen_size)?;
+            retain_history_rows(&mut self.history_rows, &buffer, screen_size.height);
         }
         self.terminal.resize(area)?;
         self.inline_area = Some(area);
@@ -247,6 +263,75 @@ pub(super) fn scroll_screen_up<B: Backend>(
     }
     backend.set_cursor_position(Position::new(0, screen_height.saturating_sub(1)))?;
     backend.append_lines(rows)
+}
+
+/// Retains the most recently committed native-history rows so a later inline
+/// viewport shrink can repaint the rows an earlier growth displaced. Only one
+/// screen of rows is kept, which is the most a shrink can ever expose.
+fn retain_history_rows(
+    history_rows: &mut VecDeque<Vec<Cell>>,
+    buffer: &Buffer,
+    screen_height: u16,
+) {
+    let width = usize::from(buffer.area.width);
+    if width == 0 {
+        return;
+    }
+    for row in buffer.content().chunks(width) {
+        history_rows.push_back(row.to_vec());
+    }
+    let capacity = usize::from(screen_height).max(1);
+    while history_rows.len() > capacity {
+        history_rows.pop_front();
+    }
+}
+
+/// Repaints the committed rows that an earlier inline viewport growth displaced
+/// into native scrollback.
+///
+/// Scrolling the screen down blanks the freed rows instead of pulling rows back
+/// out of scrollback, so the rows above a shrinking viewport must be redrawn from
+/// the history Colossus committed itself. The newest committed row always sits
+/// directly above the viewport, which anchors retained rows onto physical rows.
+/// Rows older than the retained window, or rows that predate the session, stay
+/// blank because they were never ours to redraw.
+pub(super) fn restore_history_rows<B: Backend>(
+    backend: &mut B,
+    history_rows: &VecDeque<Vec<Cell>>,
+    previous_viewport_top: u16,
+    freed_rows: u16,
+    screen_width: u16,
+) -> Result<(), B::Error> {
+    if freed_rows == 0 {
+        return Ok(());
+    }
+    let visible_above = usize::from(previous_viewport_top);
+    let freed = usize::from(freed_rows);
+    let retained = history_rows.len();
+    for offset in 0..freed {
+        let Some(index) = (retained + offset).checked_sub(visible_above + freed) else {
+            continue;
+        };
+        let Some(row) = history_rows
+            .get(index)
+            .filter(|row| row.len() == usize::from(screen_width))
+        else {
+            continue;
+        };
+        let destination_y = u16::try_from(offset).unwrap_or(u16::MAX);
+        backend.draw(
+            row.iter()
+                .enumerate()
+                .map(|(column, cell): (usize, &Cell)| {
+                    (
+                        u16::try_from(column).unwrap_or(u16::MAX),
+                        destination_y,
+                        cell,
+                    )
+                }),
+        )?;
+    }
+    backend.flush()
 }
 
 pub(super) fn scroll_screen_down(

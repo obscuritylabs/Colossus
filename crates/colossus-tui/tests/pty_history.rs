@@ -677,6 +677,98 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
 }
 
 #[test]
+fn dismissing_completion_repaints_rows_displaced_out_of_a_full_screen() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "inline");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_raw(&output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+
+    // Fill every row above the composer. Each submitted command opens and closes
+    // completion, so the menu repeatedly displaces durable rows into native
+    // scrollback and the shrink back has to repaint them.
+    for _ in 0..6 {
+        writer
+            .write_all(b"/missing\r")
+            .expect("submit fixture command");
+        writer.flush().expect("flush fixture command");
+        thread::sleep(Duration::from_millis(120));
+    }
+    wait_for_screen(&output, 24, 80, "Unknown command");
+
+    let filled = screen_rows(&output, 24, 80);
+    let filled_above = rows_above_viewport(&filled);
+    assert!(
+        longest_blank_run(filled_above) <= 2,
+        "completion chrome left a blank band above the viewport: {filled:?}"
+    );
+    assert!(
+        populated_rows(filled_above) >= 12,
+        "durable rows never filled the screen above the viewport: {filled:?}"
+    );
+
+    writer.write_all(b"/").expect("open completion");
+    writer.flush().expect("flush completion open");
+    wait_for_screen(&output, 24, 80, "Commands");
+    writer.write_all(&[27]).expect("dismiss completion");
+    writer.flush().expect("flush completion dismissal");
+    thread::sleep(Duration::from_millis(150));
+
+    let dismissed = screen_rows(&output, 24, 80);
+    let dismissed_above = rows_above_viewport(&dismissed);
+    assert!(
+        longest_blank_run(dismissed_above) <= 2,
+        "dismissal left the rows displaced by completion growth blank: {dismissed:?}"
+    );
+    assert!(
+        populated_rows(dismissed_above) + 2 >= populated_rows(filled_above),
+        "dismissal dropped visible transcript rows: {dismissed:?}"
+    );
+
+    writer.write_all(&[3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    assert!(status.success());
+    drop(writer);
+    reader_thread.join().expect("reader thread");
+}
+
+#[test]
 fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -821,6 +913,32 @@ fn wait_for_resized_screen(
         thread::sleep(Duration::from_millis(25));
     }
     panic!("resized screen never contained {needle}");
+}
+
+fn rows_above_viewport(rows: &[String]) -> &[String] {
+    let viewport_top = rows
+        .iter()
+        .rposition(|row| row.contains("Message · Enter sends"))
+        .expect("composer row");
+    &rows[..viewport_top]
+}
+
+fn populated_rows(rows: &[String]) -> usize {
+    rows.iter().filter(|row| !row.trim().is_empty()).count()
+}
+
+fn longest_blank_run(rows: &[String]) -> usize {
+    let mut longest = 0;
+    let mut current = 0;
+    for row in rows {
+        if row.trim().is_empty() {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
 }
 
 fn screen_contents(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16) -> String {

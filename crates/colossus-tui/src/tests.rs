@@ -1136,6 +1136,51 @@ fn inline_viewport_stays_bottom_anchored_as_live_content_grows_and_shrinks() {
     assert_eq!(scroll_up, 0);
 }
 
+fn history_row(text: &str, width: u16) -> Vec<Cell> {
+    let mut row = vec![Cell::default(); usize::from(width)];
+    for (cell, symbol) in row.iter_mut().zip(text.chars()) {
+        cell.set_char(symbol);
+    }
+    row
+}
+
+#[test]
+fn inline_viewport_shrink_repaints_rows_displaced_by_completion_growth() {
+    // Completion growth scrolled "oldest" and "older" off the top of the screen.
+    // Scrolling back down only blanks the freed rows, so dismissal must repaint
+    // them from committed history instead of leaving a band of blanks.
+    let width = 8_u16;
+    let history_rows = ["oldest", "older", "newest"]
+        .into_iter()
+        .map(|text| history_row(text, width))
+        .collect::<VecDeque<_>>();
+    let mut backend = TestBackend::with_lines(["        ", "        ", "newest  ", "composer"]);
+
+    restore_history_rows(&mut backend, &history_rows, 1, 2, width)
+        .expect("repaint displaced history rows");
+
+    backend.assert_buffer_lines(["oldest  ", "older   ", "newest  ", "composer"]);
+    backend.assert_scrollback_empty();
+}
+
+#[test]
+fn inline_viewport_shrink_leaves_rows_blank_when_no_history_was_displaced() {
+    // Two committed rows still sit above a viewport that starts at row three, so
+    // the shrink displaced nothing and must not duplicate visible transcript rows.
+    let width = 8_u16;
+    let history_rows = ["first", "second"]
+        .into_iter()
+        .map(|text| history_row(text, width))
+        .collect::<VecDeque<_>>();
+    let mut backend = TestBackend::with_lines(["        ", "first   ", "second  ", "composer"]);
+
+    restore_history_rows(&mut backend, &history_rows, 3, 1, width)
+        .expect("skip rows the session never committed");
+
+    backend.assert_buffer_lines(["        ", "first   ", "second  ", "composer"]);
+    backend.assert_scrollback_empty();
+}
+
 #[test]
 fn inline_completion_keeps_candidate_changes_out_of_native_scrollback() {
     for screen in [Size::new(40, 12), Size::new(80, 24)] {
