@@ -20,10 +20,8 @@ use crossterm::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
     },
-    execute, queue,
-    terminal::{
-        EnterAlternateScreen, LeaveAlternateScreen, ScrollDown, disable_raw_mode, enable_raw_mode,
-    },
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,

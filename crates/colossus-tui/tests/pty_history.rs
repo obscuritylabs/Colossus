@@ -29,7 +29,12 @@ impl InteractiveHost for FixtureHost {
     async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let inline = std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline");
         let first_sequence = if inline { 2 } else { 1 };
-        let messages = (first_sequence..=5)
+        let last_sequence = if std::env::var_os("COLOSSUS_TUI_LONG_HISTORY").is_some() {
+            30
+        } else {
+            5
+        };
+        let messages = (first_sequence..=last_sequence)
             .map(|sequence| SessionMessage {
                 session_id: "019f-pty".into(),
                 run_id: "run-pty".into(),
@@ -667,6 +672,102 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
             "resize leaked transient {transient:?} into native history: {resized_history_text}"
         );
     }
+
+    writer.write_all(&[3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    assert!(status.success());
+    drop(writer);
+    reader_thread.join().expect("reader thread");
+}
+
+#[test]
+fn inline_completion_restores_a_full_main_screen_without_changing_history() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "inline");
+    command.env("COLOSSUS_TUI_LONG_HISTORY", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_raw(&output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    thread::sleep(Duration::from_millis(150));
+
+    let history_before = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let history_before_text = history_before.join("\n");
+    for sequence in 1..=30 {
+        let row = format!("durable-row-{sequence:02}");
+        assert_eq!(
+            history_before
+                .iter()
+                .filter(|line| line.contains(&row))
+                .count(),
+            1,
+            "{row} was not present exactly once before completion: {history_before_text}"
+        );
+    }
+
+    let completion_output_offset = output.lock().expect("output").len();
+    writer.write_all(b"/").expect("open completion");
+    writer.flush().expect("flush completion open");
+    wait_for_screen(&output, 24, 80, "Commands");
+    writer.write_all(&[27]).expect("dismiss completion");
+    writer.flush().expect("flush completion dismissal");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    thread::sleep(Duration::from_millis(150));
+
+    let history_after = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    assert_eq!(
+        history_after, history_before,
+        "transient completion changed the restored main-screen history"
+    );
+    let completion_output = output.lock().expect("output").clone();
+    let completion_output = &completion_output[completion_output_offset..];
+    assert!(
+        completion_output
+            .windows(b"\x1b[?1049h".len())
+            .any(|window| window == b"\x1b[?1049h"),
+        "completion did not enter its transient screen"
+    );
+    assert!(
+        completion_output
+            .windows(b"\x1b[?1049l".len())
+            .any(|window| window == b"\x1b[?1049l"),
+        "completion did not restore the main screen"
+    );
 
     writer.write_all(&[3]).expect("exit");
     writer.flush().expect("flush exit");

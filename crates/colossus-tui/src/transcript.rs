@@ -311,15 +311,6 @@ pub(super) fn completion_menu_height(
         .min(available)
 }
 
-pub(super) fn completion_menu_viewport_reserve(state: &TuiState) -> u16 {
-    if state.structured_completion_context().is_none() {
-        return 0;
-    }
-    u16::try_from(MAX_COMPLETION_MENU_ROWS + 2)
-        .unwrap_or(u16::MAX)
-        .saturating_add(MINIMUM_COMPLETION_TRANSCRIPT_ROWS)
-}
-
 pub(super) fn composer_cursor_position(before: &str, width: usize) -> (usize, usize) {
     let mut row = 0;
     let mut column = 0;
