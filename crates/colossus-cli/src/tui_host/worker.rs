@@ -80,24 +80,96 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
     }
 
     async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
-        let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
-        if !prompt.details.is_null() {
-            body.extend(document_from_json(&prompt.details, None).blocks);
-        }
-        let tone = match prompt.kind {
-            WorkerPromptKind::Approval => PresentationTone::Warning,
-            WorkerPromptKind::UserInput => PresentationTone::Neutral,
+        let (kind, document) = match prompt.kind {
+            WorkerPromptKind::Approval => {
+                let actor = prompt
+                    .details
+                    .get("actor")
+                    .and_then(Value::as_object)
+                    .map(|actor| {
+                        let kind = actor
+                            .get("actor_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                            .replace('_', " ");
+                        let id = actor.get("id").and_then(Value::as_str).unwrap_or("unknown");
+                        format!("{kind} · {id}")
+                    });
+                let action = prompt
+                    .details
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or("effect");
+                let resource = prompt
+                    .details
+                    .get("resource")
+                    .and_then(Value::as_str)
+                    .unwrap_or("configured resource");
+                let reason = prompt
+                    .details
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&prompt.question);
+                let risk = prompt.details.get("risk").and_then(Value::as_object);
+                let risk_reason = risk
+                    .and_then(|risk| risk.get("reason"))
+                    .and_then(Value::as_str);
+                let risk_level = risk
+                    .and_then(|risk| risk.get("level"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("not assessed");
+                let mut details = Vec::new();
+                if let Some(actor) = actor {
+                    details.push(("Requested by".into(), actor));
+                }
+                details.extend([
+                    ("Action".into(), action.into()),
+                    ("Resource".into(), resource.into()),
+                    ("Reason".into(), reason.into()),
+                ]);
+                if let Some(risk_reason) = risk_reason {
+                    details.push(("Risk review".into(), format!("{risk_level}: {risk_reason}")));
+                }
+                let content =
+                    bounded_approval_content(prompt.details.get("content").unwrap_or(&Value::Null))
+                        .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                (
+                    InteractivePromptKind::Approval,
+                    PresentationDocument::from_block(PresentationBlock::Card {
+                        title: prompt.title.clone(),
+                        tone: PresentationTone::Warning,
+                        body: vec![
+                            PresentationBlock::KeyValue(details),
+                            PresentationBlock::Code {
+                                language: Some("exact prepared request".into()),
+                                content,
+                            },
+                        ],
+                    }),
+                )
+            }
+            WorkerPromptKind::UserInput => {
+                let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
+                if !prompt.details.is_null() {
+                    body.extend(document_from_json(&prompt.details, None).blocks);
+                }
+                (
+                    InteractivePromptKind::UserInput,
+                    PresentationDocument::from_block(PresentationBlock::Card {
+                        title: prompt.title.clone(),
+                        tone: PresentationTone::Neutral,
+                        body,
+                    }),
+                )
+            }
         };
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(HostEvent::Prompt(InteractivePrompt {
                 id: prompt.prompt_id,
+                kind,
                 title: prompt.title.clone(),
-                document: PresentationDocument::from_block(PresentationBlock::Card {
-                    title: prompt.title,
-                    tone,
-                    body,
-                }),
+                document,
                 choices: prompt.choices,
                 initial_choice: None,
                 allow_free_form: prompt.allow_free_form,
@@ -165,6 +237,7 @@ impl WorkerInteractiveHost {
         events
             .send(HostEvent::Prompt(InteractivePrompt {
                 id: id.into(),
+                kind: InteractivePromptKind::Choice,
                 title: title.into(),
                 document: PresentationDocument::new(),
                 choices,

@@ -269,39 +269,67 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             request,
             input,
             selected,
-        } => match key.code {
+            approval_section,
+            document_scroll,
+        } if request.kind == InteractivePromptKind::Approval => match key.code {
             KeyCode::Enter => {
-                let overlay = state.overlay.take();
-                if let Some(Overlay::Prompt {
-                    request,
-                    input,
-                    selected,
-                }) = overlay
-                {
-                    let answer = input.trim();
-                    let response = if answer.is_empty() {
-                        selected
-                            .and_then(|index| request.choices.get(index))
-                            .cloned()
-                            .map(PromptResponse::Answer)
-                            .unwrap_or(PromptResponse::Cancelled)
-                    } else if let Ok(index) = answer.parse::<usize>() {
-                        request
-                            .choices
-                            .get(index.saturating_sub(1))
-                            .cloned()
-                            .map(PromptResponse::Answer)
-                            .unwrap_or(PromptResponse::Cancelled)
-                    } else if request.allow_free_form
-                        || request.choices.iter().any(|choice| choice == answer)
-                    {
-                        PromptResponse::Answer(answer.to_owned())
-                    } else {
-                        PromptResponse::Cancelled
-                    };
-                    let _ = request.response.send(response);
-                }
+                finish_prompt(state);
             }
+            KeyCode::Up if !request.choices.is_empty() => {
+                let current = selected.unwrap_or(0);
+                *selected = Some(if current == 0 {
+                    request.choices.len() - 1
+                } else {
+                    current - 1
+                });
+            }
+            KeyCode::Down if !request.choices.is_empty() => {
+                *selected =
+                    Some(selected.map_or(0, |current| (current + 1) % request.choices.len()));
+            }
+            KeyCode::Home if !request.choices.is_empty() => {
+                *selected = Some(0);
+            }
+            KeyCode::End if !request.choices.is_empty() => {
+                *selected = Some(request.choices.len() - 1);
+            }
+            KeyCode::PageUp => {
+                *document_scroll = document_scroll.saturating_sub(5);
+            }
+            KeyCode::PageDown => {
+                *document_scroll = document_scroll.saturating_add(5);
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                *approval_section = approval_section.next();
+                *document_scroll = 0;
+            }
+            KeyCode::BackTab | KeyCode::Left => {
+                *approval_section = approval_section.previous();
+                *document_scroll = 0;
+            }
+            KeyCode::Char('s' | 'S') => {
+                *approval_section = ApprovalSection::Summary;
+                *document_scroll = 0;
+            }
+            KeyCode::Char('r' | 'R') => {
+                *approval_section = ApprovalSection::Request;
+                *document_scroll = 0;
+            }
+            KeyCode::Char('p' | 'P') => {
+                *approval_section = ApprovalSection::Protections;
+                *document_scroll = 0;
+            }
+            KeyCode::Char('a' | 'A') => select_prompt_choice(request, selected, "Allow once"),
+            KeyCode::Char('d' | 'D') => select_prompt_choice(request, selected, "Deny"),
+            _ => {}
+        },
+        Overlay::Prompt {
+            request,
+            input,
+            selected,
+            ..
+        } => match key.code {
+            KeyCode::Enter => finish_prompt(state),
             KeyCode::Up | KeyCode::BackTab if !request.choices.is_empty() => {
                 let current = selected.unwrap_or(0);
                 *selected = Some(if current == 0 {
@@ -413,6 +441,49 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
     }
 }
 
+fn select_prompt_choice(request: &InteractivePrompt, selected: &mut Option<usize>, choice: &str) {
+    if let Some(index) = request
+        .choices
+        .iter()
+        .position(|candidate| candidate == choice)
+    {
+        *selected = Some(index);
+    }
+}
+
+fn finish_prompt(state: &mut TuiState) {
+    let overlay = state.overlay.take();
+    let Some(Overlay::Prompt {
+        request,
+        input,
+        selected,
+        ..
+    }) = overlay
+    else {
+        return;
+    };
+    let answer = input.trim();
+    let response = if answer.is_empty() {
+        selected
+            .and_then(|index| request.choices.get(index))
+            .cloned()
+            .map(PromptResponse::Answer)
+            .unwrap_or(PromptResponse::Cancelled)
+    } else if let Ok(index) = answer.parse::<usize>() {
+        request
+            .choices
+            .get(index.saturating_sub(1))
+            .cloned()
+            .map(PromptResponse::Answer)
+            .unwrap_or(PromptResponse::Cancelled)
+    } else if request.allow_free_form || request.choices.iter().any(|choice| choice == answer) {
+        PromptResponse::Answer(answer.to_owned())
+    } else {
+        PromptResponse::Cancelled
+    };
+    let _ = request.response.send(response);
+}
+
 pub(super) fn request_older_page(
     state: &mut TuiState,
     host: Arc<dyn InteractiveHost>,
@@ -437,10 +508,16 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
     let text = sanitize_input(text);
     if let Some(overlay) = state.overlay.as_mut() {
         match overlay {
-            Overlay::Prompt { input, .. } | Overlay::HistorySearch { query: input } => {
+            Overlay::Prompt { request, input, .. }
+                if request.kind != InteractivePromptKind::Approval =>
+            {
                 input.push_str(&text);
             }
-            Overlay::PlanExecutionChoice { .. } | Overlay::QueuePaused => {}
+            Overlay::HistorySearch { query: input } => {
+                input.push_str(&text);
+            }
+            Overlay::Prompt { .. } | Overlay::PlanExecutionChoice { .. } | Overlay::QueuePaused => {
+            }
         }
     } else {
         state.composer.insert(&text);
@@ -840,6 +917,8 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     request,
                     input: String::new(),
                     selected,
+                    approval_section: ApprovalSection::Summary,
+                    document_scroll: 0,
                 });
             }
         }

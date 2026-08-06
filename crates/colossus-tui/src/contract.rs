@@ -449,10 +449,23 @@ pub enum PromptResponse {
     Cancelled,
 }
 
+/// Presentation and interaction class for one focus-taking prompt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractivePromptKind {
+    /// Policy requires a request-bound effect approval.
+    Approval,
+    /// A tool needs bounded operator input but grants no effect authority.
+    UserInput,
+    /// A local interface picker such as session or plan selection.
+    Choice,
+}
+
 /// Focus-taking prompt sent by the trusted runtime bridge to the TUI.
 pub struct InteractivePrompt {
     /// One-use prompt identity bound by the host to the connection and run.
     pub id: String,
+    /// Typed presentation and interaction behavior.
+    pub kind: InteractivePromptKind,
     /// Short overlay title.
     pub title: String,
     /// Policy-released prompt details.

@@ -54,7 +54,7 @@ cards. The notice is informational and never opens a modal or interrupts typing.
 
 If the evaluator is unavailable or returns an invalid assessment, an **Automatic
 approval review failed** card explains that Colossus is falling back to manual approval
-before the approval overlay opens.
+before the bottom approval dock opens.
 
 The canonical workspace is also the worker compatibility identity. A TUI client refuses
 to attach to a worker serving another workspace.
@@ -131,8 +131,11 @@ cancellation pauses the queue for confirmation.
 
 ### 5. Handle approvals and questions
 
-Approval and `user.ask` prompts take focus without discarding your draft. Select an exact
-option or type an answer, then press Enter. Esc or a blank response fails closed.
+Effect approvals take focus in a bottom dock above the preserved composer. Use `S`, `R`,
+and `P` to inspect Summary, Exact request, and Protections; PageUp/PageDown scrolls the
+active section. Up/Down or `A`/`D` selects a decision, and Enter confirms it. Nothing is
+selected initially, so Enter, Esc, disconnect, or timeout fails closed. `user.ask`
+continues to use a focused overlay without discarding your draft.
 
 Use `wait_for_input` in a workflow when a run must wait durably without an attached
 terminal; `user.ask` is turn-scoped.

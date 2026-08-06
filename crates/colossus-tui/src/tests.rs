@@ -1162,6 +1162,43 @@ fn inline_completion_does_not_resize_the_main_screen_viewport() {
 }
 
 #[test]
+fn approval_uses_transient_inline_chrome_and_adapts_at_minimum_height() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("/");
+    let (response, _received) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::Prompt(InteractivePrompt {
+            id: "inline-approval".into(),
+            kind: InteractivePromptKind::Approval,
+            title: "Approval required".into(),
+            document: PresentationDocument::from_block(PresentationBlock::Text("Allow?".into())),
+            choices: vec!["Allow once".into(), "Deny".into()],
+            initial_choice: None,
+            allow_free_form: false,
+            response,
+        }),
+    );
+
+    assert!(state.transient_inline_chrome_active());
+    let composer_height = composer_height(&state, 80);
+    assert_eq!(
+        approval_dock_height(&state, 24, composer_height, 1),
+        MAX_APPROVAL_DOCK_ROWS
+    );
+    assert_eq!(approval_dock_height(&state, 12, composer_height, 1), 0);
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw approval instead of completion");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Approval required · Summary"));
+    assert!(!rendered.contains("Commands ·"));
+}
+
+#[test]
 fn finalized_multiline_output_has_no_trailing_rendered_separator() {
     let mut state = TuiState::from_snapshot(snapshot());
     let start = state.transcript.len();
@@ -1262,6 +1299,7 @@ fn prompt_cancel_is_one_use_and_preserves_the_composer_draft() {
         &mut state,
         HostEvent::Prompt(InteractivePrompt {
             id: "prompt-1".into(),
+            kind: InteractivePromptKind::Approval,
             title: "Approval".into(),
             document: PresentationDocument::from_block(PresentationBlock::Text("Allow?".into())),
             choices: vec!["allow".into(), "deny".into()],
@@ -1284,6 +1322,7 @@ fn terminal_operation_releases_an_open_prompt_overlay() {
         &mut state,
         HostEvent::Prompt(InteractivePrompt {
             id: "prompt-disconnect".into(),
+            kind: InteractivePromptKind::Approval,
             title: "Approval".into(),
             document: PresentationDocument::from_block(PresentationBlock::Text("Allow?".into())),
             choices: vec!["allow".into(), "deny".into()],
@@ -1325,6 +1364,133 @@ fn policy_notice_appends_to_the_transcript_without_taking_focus() {
 }
 
 #[test]
+fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("draft stays visible");
+    let request_content = (0..32)
+        .map(|index| format!("request-line-{index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (response, _received) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::Prompt(InteractivePrompt {
+            id: "approval-dock".into(),
+            kind: InteractivePromptKind::Approval,
+            title: "Approval required".into(),
+            document: PresentationDocument::from_block(PresentationBlock::Card {
+                title: "Approval required".into(),
+                tone: PresentationTone::Warning,
+                body: vec![
+                    PresentationBlock::KeyValue(vec![
+                        ("Action".into(), "mcp.call".into()),
+                        (
+                            "Risk review".into(),
+                            "not assessed: evaluator unavailable".into(),
+                        ),
+                    ]),
+                    PresentationBlock::Code {
+                        language: Some("exact prepared request".into()),
+                        content: request_content,
+                    },
+                ],
+            }),
+            choices: vec!["Allow once".into(), "Deny".into()],
+            initial_choice: None,
+            allow_free_form: false,
+            response,
+        }),
+    );
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw approval summary");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Approval required · Summary"));
+    assert!(rendered.contains("mcp.call"));
+    assert!(!rendered.contains("request-line-00"));
+    assert!(rendered.contains("Message · paused for approval · draft preserved"));
+    assert!(rendered.contains("draft stays visible"));
+    let approval_row = rendered
+        .lines()
+        .position(|line| line.contains("Approval required · Summary"))
+        .expect("approval row");
+    let composer_row = rendered
+        .lines()
+        .position(|line| line.contains("paused for approval"))
+        .expect("composer row");
+    assert!(approval_row < composer_row, "{rendered}");
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
+    for _ in 0..5 {
+        handle_overlay_key(
+            &mut state,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        );
+    }
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw scrolled exact request");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Approval required · Exact request"));
+    assert!(rendered.contains("request-line-25"), "{rendered}");
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw protections");
+    assert!(terminal.backend().to_string().contains("Exact scope"));
+}
+
+#[test]
+fn approval_shortcuts_select_but_still_require_enter_to_confirm() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let (response, mut received) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::Prompt(InteractivePrompt {
+            id: "approval-shortcut".into(),
+            kind: InteractivePromptKind::Approval,
+            title: "Approval required".into(),
+            document: PresentationDocument::from_block(PresentationBlock::Text("Allow?".into())),
+            choices: vec!["Allow once".into(), "Deny".into()],
+            initial_choice: None,
+            allow_free_form: false,
+            response,
+        }),
+    );
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    assert!(received.try_recv().is_err());
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::Prompt {
+            selected: Some(0),
+            ..
+        })
+    ));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert_eq!(
+        received.try_recv(),
+        Ok(PromptResponse::Answer("Allow once".into()))
+    );
+}
+
+#[test]
 fn prompt_keyboard_selection_returns_the_highlighted_choice() {
     let mut state = TuiState::from_snapshot(snapshot());
     let (response, mut received) = oneshot::channel();
@@ -1332,6 +1498,7 @@ fn prompt_keyboard_selection_returns_the_highlighted_choice() {
         &mut state,
         HostEvent::Prompt(InteractivePrompt {
             id: "session-picker".into(),
+            kind: InteractivePromptKind::Choice,
             title: "Resume session".into(),
             document: PresentationDocument::new(),
             choices: vec![
@@ -1365,6 +1532,7 @@ fn blank_approval_submission_still_fails_closed() {
         &mut state,
         HostEvent::Prompt(InteractivePrompt {
             id: "approval".into(),
+            kind: InteractivePromptKind::Approval,
             title: "Approval".into(),
             document: PresentationDocument::from_block(PresentationBlock::Text("Allow?".into())),
             choices: vec!["Allow once".into(), "Deny".into()],
@@ -1399,6 +1567,7 @@ fn resume_picker_is_responsive_and_keeps_the_selected_preview_visible() {
             &mut state,
             HostEvent::Prompt(InteractivePrompt {
                 id: "session-picker".into(),
+                kind: InteractivePromptKind::Choice,
                 title: "Resume session".into(),
                 document: PresentationDocument::new(),
                 choices,

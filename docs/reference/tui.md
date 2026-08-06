@@ -19,8 +19,17 @@ With `--approval-mode risk-auto`, successful low-risk reviews appear as non-bloc
 or require a response.
 
 Evaluator outages and invalid assessments appear as non-blocking **Automatic approval
-review failed** cards before the explicit approval overlay opens. These cards contain
-only a sanitized failure category, action, resource, and manual-fallback explanation.
+review failed** cards before the explicit approval dock opens above the composer. These
+cards contain only a sanitized failure category, action, resource, and manual-fallback
+explanation.
+
+Effect approvals use a bottom-docked, focus-taking surface that keeps the current
+transcript visible and the composer draft preserved. **Summary** shows released actor,
+action, resource, policy reason, and risk metadata. **Exact request** shows the bounded
+prepared request, with any 65,536-character display truncation marked explicitly.
+**Protections** explains request binding, one-use behavior, policy re-evaluation, and
+the enforcement layers that remain active. Inline mode renders this transient dock on a
+temporary terminal screen, so dismissing it restores native scrollback byte-for-byte.
 
 ## Keys
 
@@ -39,6 +48,12 @@ only a sanitized failure category, action, resource, and manual-fallback explana
 | Mouse wheel | Transcript | Use native scrollback by default; scroll a few retained lines in alternate-screen mode |
 | `End` | Alternate-screen transcript | Return to live output |
 | `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
+| `Up` / `Down` | Effect approval | Select a decision without submitting it |
+| `A` / `D` | Effect approval | Select **Allow once** or **Deny**; Enter still confirms |
+| `S` / `R` / `P` | Effect approval | Inspect Summary, Exact request, or Protections |
+| `Tab` / `Shift-Tab` | Effect approval | Move between approval detail sections |
+| `PageUp` / `PageDown` | Effect approval | Scroll the active approval detail section |
+| `Enter` | Effect approval | Confirm the explicitly selected decision; blank remains deny |
 | `Down` | Suggestions | Select the next item |
 | `Shift-Tab` / `Up` | Suggestions | Select the previous item |
 | `Tab` / `Right` | Suggestions | Accept the visible suggestion |
@@ -142,7 +157,8 @@ Use the CLI `research run` route when depth or lane selection must be explicit.
   next item starts, and the queue does not drain while the execution-choice overlay is
   open.
 - A failure or cooperative cancellation pauses the queue for explicit confirmation.
-- Approval and `user.ask` use focus-taking, one-use overlays and preserve the draft.
+- Effect approval uses a focus-taking bottom dock; `user.ask` retains its one-use
+  overlay. Both preserve the draft.
 - Blank, cancelled, timed-out, disconnected, replayed, or malformed prompt answers fail
   closed.
 - New output does not move an operator reading older content; the UI shows a new-item

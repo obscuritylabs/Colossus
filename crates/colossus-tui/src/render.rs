@@ -26,8 +26,13 @@ pub(super) fn render(
 
     let composer_height = composer_height(state, area.width);
     let activity_height = u16::from(state.operation.is_some());
-    let completion_height =
-        completion_menu_height(state, area.height, composer_height, activity_height);
+    let approval_height =
+        approval_dock_height(state, area.height, composer_height, activity_height);
+    let completion_height = if state.approval_prompt_active() {
+        0
+    } else {
+        completion_menu_height(state, area.height, composer_height, activity_height)
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -38,6 +43,7 @@ pub(super) fn render(
             }),
             Constraint::Length(activity_height),
             Constraint::Length(completion_height),
+            Constraint::Length(approval_height),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
@@ -55,9 +61,12 @@ pub(super) fn render(
     if completion_height > 0 {
         render_completion_menu(frame, state, rows[2]);
     }
-    render_composer(frame, state, rows[3]);
-    render_footer(frame, state, rows[4]);
-    if state.overlay.is_some() {
+    if approval_height > 0 {
+        render_approval_dock(frame, state, rows[3]);
+    }
+    render_composer(frame, state, rows[4]);
+    render_footer(frame, state, rows[5]);
+    if state.overlay.is_some() && approval_height == 0 {
         render_overlay(frame, state, area);
     }
 }
@@ -349,27 +358,31 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         "Enter sends"
     };
-    let title = match state.mode {
-        InteractiveMode::Execute => format!(" Message · {action} "),
-        InteractiveMode::Plan if state.selected_plan.is_none() => {
-            format!(" Plan · new draft · {action} ")
-        }
-        InteractiveMode::Plan => {
-            let plan = state
-                .selected_plan
-                .as_ref()
-                .expect("selected plan checked above");
-            if plan.status == PlanStatus::Approved {
-                format!(
-                    " Plan {} · approved · use /plan execute ",
-                    short_plan_id(&plan.id)
-                )
-            } else {
-                format!(
-                    " Plan {} · refine r{} · {action} ",
-                    short_plan_id(&plan.id),
-                    plan.revision
-                )
+    let title = if state.approval_prompt_active() {
+        " Message · paused for approval · draft preserved ".into()
+    } else {
+        match state.mode {
+            InteractiveMode::Execute => format!(" Message · {action} "),
+            InteractiveMode::Plan if state.selected_plan.is_none() => {
+                format!(" Plan · new draft · {action} ")
+            }
+            InteractiveMode::Plan => {
+                let plan = state
+                    .selected_plan
+                    .as_ref()
+                    .expect("selected plan checked above");
+                if plan.status == PlanStatus::Approved {
+                    format!(
+                        " Plan {} · approved · use /plan execute ",
+                        short_plan_id(&plan.id)
+                    )
+                } else {
+                    format!(
+                        " Plan {} · refine r{} · {action} ",
+                        short_plan_id(&plan.id),
+                        plan.revision
+                    )
+                }
             }
         }
     };
@@ -388,7 +401,10 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
         .y
         .saturating_add(1)
         .saturating_add(u16::try_from(cursor_row).unwrap_or(u16::MAX));
-    if x < area.right().saturating_sub(1) && y < area.bottom().saturating_sub(1) {
+    if state.overlay.is_none()
+        && x < area.right().saturating_sub(1)
+        && y < area.bottom().saturating_sub(1)
+    {
         frame.set_cursor_position((x, y));
     }
 }
@@ -433,6 +449,10 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
 }
 
 pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
+    if state.approval_prompt_active() {
+        render_approval_dock(frame, state, area);
+        return;
+    }
     let overlay_area = match state.overlay.as_ref() {
         Some(Overlay::Prompt { request, .. })
             if request.document.is_empty() && !request.choices.is_empty() =>
@@ -448,6 +468,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
             request,
             input,
             selected,
+            ..
         }) => {
             let inner_width = usize::from(overlay_area.width.saturating_sub(2)).max(1);
             let inner_height = usize::from(overlay_area.height.saturating_sub(2)).max(1);
@@ -542,6 +563,276 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
             .wrap(Wrap { trim: false }),
         overlay_area,
     );
+}
+
+pub(super) fn approval_dock_height(
+    state: &TuiState,
+    total_height: u16,
+    composer_height: u16,
+    activity_height: u16,
+) -> u16 {
+    if !state.approval_prompt_active() {
+        return 0;
+    }
+    let available = total_height
+        .saturating_sub(MINIMUM_APPROVAL_TRANSCRIPT_ROWS)
+        .saturating_sub(activity_height)
+        .saturating_sub(composer_height)
+        .saturating_sub(1);
+    if available < MIN_APPROVAL_DOCK_ROWS {
+        return 0;
+    }
+    available.min(MAX_APPROVAL_DOCK_ROWS)
+}
+
+fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
+    let Some(Overlay::Prompt {
+        request,
+        selected,
+        approval_section,
+        document_scroll,
+        ..
+    }) = state.overlay.as_ref()
+    else {
+        return;
+    };
+    let palette = TerminalPalette::for_preferences(&state.preferences);
+    let title = selected.map_or_else(
+        || format!(" {} · {} ", request.title, approval_section.label()),
+        |index| {
+            format!(
+                " {} · {} · {}/{} ",
+                request.title,
+                approval_section.label(),
+                index + 1,
+                request.choices.len()
+            )
+        },
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(title, ratatui_style(palette.warning_style())));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let controls = inner.height.min(3);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(u16::from(controls >= 3)),
+            Constraint::Length(u16::from(controls >= 2)),
+            Constraint::Length(u16::from(controls >= 1)),
+        ])
+        .split(inner);
+    let document = approval_section_document(&request.document, *approval_section);
+    let document_lines = styled_document_lines(
+        &document,
+        &state.preferences,
+        usize::from(rows[0].width).max(1),
+    );
+    let visible = usize::from(rows[0].height);
+    let maximum_scroll = document_lines.len().saturating_sub(visible);
+    let scroll = (*document_scroll).min(maximum_scroll);
+    frame.render_widget(
+        Paragraph::new(document_lines)
+            .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0))
+            .wrap(Wrap { trim: false }),
+        rows[0],
+    );
+
+    if rows[1].height > 0 {
+        frame.render_widget(
+            Paragraph::new(approval_section_line(
+                *approval_section,
+                &palette,
+                rows[1].width,
+            )),
+            rows[1],
+        );
+    }
+    if rows[2].height > 0 {
+        frame.render_widget(
+            Paragraph::new(approval_choice_line(
+                request,
+                *selected,
+                &palette,
+                rows[2].width,
+            )),
+            rows[2],
+        );
+    }
+    if rows[3].height > 0 {
+        let hint = "↑/↓ choose · Enter confirm · S/R/P inspect · PgUp/PgDn scroll · Esc deny";
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                truncate_width(hint, usize::from(rows[3].width)),
+                ratatui_style(palette.warning_style()),
+            )),
+            rows[3],
+        );
+    }
+}
+
+fn styled_document_lines(
+    document: &PresentationDocument,
+    preferences: &TerminalPreferences,
+    width: usize,
+) -> Vec<Line<'static>> {
+    StyledDocumentRenderer::new(preferences.clone(), width)
+        .render(document)
+        .into_iter()
+        .map(|line| {
+            Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content, ratatui_style(span.style)))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
+fn approval_section_document(
+    document: &PresentationDocument,
+    section: ApprovalSection,
+) -> PresentationDocument {
+    match section {
+        ApprovalSection::Summary => PresentationDocument {
+            blocks: approval_summary_blocks(&document.blocks),
+        },
+        ApprovalSection::Request => {
+            let mut blocks = Vec::new();
+            collect_approval_request_blocks(&document.blocks, &mut blocks);
+            if blocks.is_empty() {
+                blocks.push(PresentationBlock::Text(
+                    "Exact request details are included in the summary.".into(),
+                ));
+            }
+            PresentationDocument { blocks }
+        }
+        ApprovalSection::Protections => {
+            PresentationDocument::from_block(PresentationBlock::KeyValue(vec![
+                (
+                    "Exact scope".into(),
+                    "The approval proof is bound to this prepared request.".into(),
+                ),
+                (
+                    "One use".into(),
+                    "Replay against another request is rejected.".into(),
+                ),
+                (
+                    "Policy re-check".into(),
+                    "Approval satisfies an obligation; it cannot reverse a denial.".into(),
+                ),
+                (
+                    "Containment".into(),
+                    "Permit, sandbox, output quarantine, release policy, and audit remain active."
+                        .into(),
+                ),
+            ]))
+        }
+    }
+}
+
+fn approval_summary_blocks(blocks: &[PresentationBlock]) -> Vec<PresentationBlock> {
+    let mut summary = Vec::new();
+    for block in blocks {
+        match block {
+            PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => {}
+            PresentationBlock::Card { body, .. } => {
+                summary.extend(approval_summary_blocks(body));
+            }
+            block => summary.push(block.clone()),
+        }
+    }
+    summary
+}
+
+fn collect_approval_request_blocks(
+    blocks: &[PresentationBlock],
+    request: &mut Vec<PresentationBlock>,
+) {
+    for block in blocks {
+        match block {
+            PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => {
+                request.push(block.clone());
+            }
+            PresentationBlock::Card { body, .. } => {
+                collect_approval_request_blocks(body, request);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn approval_section_line(
+    selected: ApprovalSection,
+    palette: &TerminalPalette,
+    width: u16,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, (section, shortcut)) in [
+        (ApprovalSection::Summary, "S"),
+        (ApprovalSection::Request, "R"),
+        (ApprovalSection::Protections, "P"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let style = if section == selected {
+            ratatui_style(palette.user_style()).add_modifier(Modifier::REVERSED)
+        } else {
+            ratatui_style(palette.meta_style())
+        };
+        spans.push(Span::styled(
+            truncate_width(
+                &format!(" {shortcut} {} ", section.label()),
+                usize::from(width),
+            ),
+            style,
+        ));
+    }
+    Line::from(spans)
+}
+
+fn approval_choice_line(
+    request: &InteractivePrompt,
+    selected: Option<usize>,
+    palette: &TerminalPalette,
+    width: u16,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, choice) in request.choices.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let marker = if selected == Some(index) { "›" } else { " " };
+        let shortcut = match choice.as_str() {
+            "Allow once" => "A",
+            "Deny" => "D",
+            _ => " ",
+        };
+        let style = if selected == Some(index) {
+            ratatui_style(palette.user_style())
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::REVERSED)
+        } else {
+            ratatui_style(palette.assistant_style())
+        };
+        spans.push(Span::styled(
+            truncate_width(&format!("{marker} {shortcut} {choice}"), usize::from(width)),
+            style,
+        ));
+    }
+    Line::from(spans)
 }
 
 fn plan_execution_choices() -> Vec<String> {
