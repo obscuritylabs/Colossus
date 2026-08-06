@@ -2150,6 +2150,18 @@ async fn hard_secrets_are_hashed_and_structured_credential_references_are_preser
                             "reference": "env:SPLUNK_MCP_TOKEN",
                             "value": "must-not-leak"
                         }
+                    },
+                    "password": {
+                        "scheme": "must-not-leak-scheme",
+                        "reference": "env:SPLUNK_MCP_TOKEN"
+                    },
+                    "arguments": {
+                        "credential_headers": {
+                            "password": {
+                                "scheme": "must-not-leak-scheme",
+                                "reference": "env:SPLUNK_MCP_TOKEN"
+                            }
+                        }
                     }
                 }),
             ),
@@ -2181,6 +2193,11 @@ async fn hard_secrets_are_hashed_and_structured_credential_references_are_preser
     );
     assert_eq!(
         request.content["invalid_credential_header"]["authorization"]["redacted"],
+        true
+    );
+    assert_eq!(request.content["password"]["redacted"], true);
+    assert_eq!(
+        request.content["arguments"]["credential_headers"]["password"]["redacted"],
         true
     );
     assert!(

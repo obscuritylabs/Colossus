@@ -670,8 +670,24 @@ fn configured_http_server(endpoint: String) -> ConfiguredServer {
     }
 }
 
+/// How the fixture acknowledges the one-way `notifications/initialized` frame.
+#[derive(Clone, Copy)]
+enum EmptyAck {
+    /// Empty `200 OK` with an exact `Content-Length: 0`.
+    Measured,
+    /// Empty `200 OK` delimited by chunked encoding, so no size hint is exposed.
+    Chunked,
+}
+
 async fn execute_stateless_discovery(
     allow_stateless: bool,
+) -> Option<Result<RemoteOperationResult, ExecutionError>> {
+    execute_stateless_discovery_with_ack(allow_stateless, EmptyAck::Measured).await
+}
+
+async fn execute_stateless_discovery_with_ack(
+    allow_stateless: bool,
+    empty_ack: EmptyAck,
 ) -> Option<Result<RemoteOperationResult, ExecutionError>> {
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
         Ok(listener) => listener,
@@ -713,15 +729,27 @@ async fn execute_stateless_discovery(
                         break;
                     }
                 }
-                Some("notifications/initialized") => {
-                    write_http_response(
-                        &mut stream,
-                        "200 OK",
-                        "Content-Type: application/json\r\n",
-                        "",
-                    )
-                    .await;
-                }
+                Some("notifications/initialized") => match empty_ack {
+                    EmptyAck::Measured => {
+                        write_http_response(
+                            &mut stream,
+                            "200 OK",
+                            "Content-Type: application/json\r\n",
+                            "",
+                        )
+                        .await;
+                    }
+                    EmptyAck::Chunked => {
+                        use tokio::io::AsyncWriteExt as _;
+
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+                            )
+                            .await
+                            .expect("chunked acknowledgement");
+                    }
+                },
                 Some("tools/list") => {
                     let body = json!({
                         "jsonrpc": "2.0",
@@ -786,6 +814,17 @@ async fn streamable_http_stateless_discovery_requires_explicit_opt_in() {
         .expect("loopback listener")
         .expect("opt-in stateless discovery");
     let RemoteOperationResult::Tools(tools) = allowed else {
+        panic!("tools result");
+    };
+    assert_eq!(tools.tools[0].name, "splunk_get_info");
+}
+
+#[tokio::test]
+async fn streamable_http_accepts_size_hintless_empty_one_way_acknowledgement() {
+    let Some(result) = execute_stateless_discovery_with_ack(true, EmptyAck::Chunked).await else {
+        return;
+    };
+    let RemoteOperationResult::Tools(tools) = result.expect("chunked empty acknowledgement") else {
         panic!("tools result");
     };
     assert_eq!(tools.tools[0].name, "splunk_get_info");
