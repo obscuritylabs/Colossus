@@ -707,25 +707,82 @@ pub(super) fn is_hard_secret_key(key: &str) -> bool {
     )
 }
 
+/// Effect-content field holding the configured secret HTTP header references.
+const CREDENTIAL_HEADERS_FIELD: &str = "credential_headers";
+
 pub(super) fn redact_hard_secrets(value: &mut Value) {
+    redact_effect_content(value, true);
+}
+
+fn redact_effect_content(value: &mut Value, at_content_root: bool) {
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
-                    let bytes = serde_json::to_vec(child).unwrap_or_default();
-                    *child = json!({
-                        "redacted": true,
-                        "sha256": sha256_hex(&bytes),
-                        "size": bytes.len()
-                    });
+                if at_content_root && key == CREDENTIAL_HEADERS_FIELD {
+                    redact_credential_headers(child);
+                } else if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
+                    *child = redacted_placeholder(child);
                 } else {
-                    redact_hard_secrets(child);
+                    redact_effect_content(child, false);
                 }
             }
         }
-        Value::Array(array) => array.iter_mut().for_each(redact_hard_secrets),
+        Value::Array(array) => array
+            .iter_mut()
+            .for_each(|child| redact_effect_content(child, false)),
         _ => {}
     }
+}
+
+/// Preserve well-formed structured references only inside the configured
+/// `credential_headers` map, so strict downstream input validation still accepts
+/// the effect shape without granting a general exemption to hard-secret keys.
+fn redact_credential_headers(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        redact_effect_content(value, false);
+        return;
+    };
+    for child in object.values_mut() {
+        if !is_environment_credential_header_reference(child) {
+            *child = redacted_placeholder(child);
+        }
+    }
+}
+
+fn redacted_placeholder(value: &Value) -> Value {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    json!({
+        "redacted": true,
+        "sha256": sha256_hex(&bytes),
+        "size": bytes.len()
+    })
+}
+
+fn is_environment_credential_header_reference(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.len() > 2
+        || !object.contains_key("reference")
+        || object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "reference" | "scheme"))
+        || !object
+            .get("reference")
+            .is_some_and(is_environment_credential_reference)
+    {
+        return false;
+    }
+    object.get("scheme").is_none_or(|scheme| {
+        scheme.is_null()
+            || scheme.as_str().is_some_and(|scheme| {
+                !scheme.is_empty()
+                    && scheme.len() <= 64
+                    && scheme
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+    })
 }
 
 pub(super) fn is_environment_credential_reference(value: &Value) -> bool {

@@ -230,6 +230,7 @@ mcp:
         Authorization:
           scheme: Bearer
           reference: env:SPLUNK_MCP_TOKEN
+      allowStateless: true
       allowedTools: [splunk_run_search]
 sandbox:
   environment:

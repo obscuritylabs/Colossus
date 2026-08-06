@@ -187,6 +187,7 @@ fn sanitized_mcp_risk_content(request: &EffectRequest) -> Value {
         "endpoint": {
             "identity": request.resource,
             "transport": transport,
+            "allow_stateless": content.and_then(|content| content.get("allow_stateless")),
         },
         "server": operation.and_then(|operation| operation.get("server")),
         "tool": {

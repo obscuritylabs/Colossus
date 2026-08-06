@@ -1151,6 +1151,7 @@ dependencies = [
  "colossus-policy",
  "colossus-ports",
  "colossus-sandbox",
+ "colossus-testkit",
  "futures",
  "getrandom 0.4.3",
  "hex",

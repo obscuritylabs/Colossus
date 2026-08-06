@@ -22,7 +22,9 @@ use colossus_contracts::{
     RiskRecommendation, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
     ToolCall,
 };
-use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
+use colossus_mcp::{
+    McpCredentialHeaderConfig, McpResearchToolConfig, McpServerConfig, McpTransportKind,
+};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, SafetyKernel,
     effect_request,
@@ -1376,6 +1378,7 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
             url: None,
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
+            allow_stateless: false,
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: vec![McpResearchToolConfig {
@@ -1390,6 +1393,20 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
         },
     );
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+    config
+        .mcp
+        .servers
+        .get_mut("fixture")
+        .expect("fixture")
+        .allow_stateless = true;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config
+        .mcp
+        .servers
+        .get_mut("fixture")
+        .expect("fixture")
+        .allow_stateless = false;
 
     config
         .mcp
@@ -1420,6 +1437,52 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
         .expect("fixture")
         .allowed_tools = Vec::new();
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn remote_mcp_stateless_opt_in_round_trips_and_defaults_off() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.environment.push("SPLUNK_MCP_TOKEN".into());
+    config
+        .sandbox
+        .network_destinations
+        .push("http://127.0.0.1:18000".into());
+    config.mcp.servers.insert(
+        "splunk".into(),
+        McpServerConfig {
+            transport: McpTransportKind::StreamableHttp,
+            command: PathBuf::new(),
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            url: Some("http://127.0.0.1:18000/services/mcp".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::from([(
+                "Authorization".into(),
+                McpCredentialHeaderConfig {
+                    scheme: Some("Bearer".into()),
+                    reference: "env:SPLUNK_MCP_TOKEN".into(),
+                },
+            )]),
+            allow_stateless: true,
+            oauth: None,
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: Some(5_000),
+            max_output_bytes: Some(64 * 1024),
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+
+    let yaml = config.to_yaml().expect("YAML");
+    assert!(yaml.contains("allowStateless: true"));
+    let parsed = RuntimeConfig::from_yaml(&yaml).expect("stateless remote config");
+    assert!(parsed.mcp.servers["splunk"].allow_stateless);
+
+    let default_yaml = yaml.replacen("      allowStateless: true\n", "", 1);
+    let defaulted = RuntimeConfig::from_yaml(&default_yaml).expect("default stateful config");
+    assert!(!defaulted.mcp.servers["splunk"].allow_stateless);
 }
 
 #[test]
@@ -3430,6 +3493,7 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
                 "credential_headers": {
                     "Authorization": {"scheme": "Bearer", "reference": "env:HOST_MCP_TOKEN"}
                 },
+                "allow_stateless": true,
                 "oauth": {
                     "clientId": "sensitive-client-context",
                     "clientSecretReference": "env:HOST_MCP_CLIENT_SECRET",
@@ -3454,6 +3518,10 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
         .expect("decision");
 
     let metadata = redacted_risk_metadata(&request, &decision);
+    assert_eq!(
+        metadata["proposed_effect"]["endpoint"]["allow_stateless"],
+        true
+    );
     let disclosed = serde_json::to_string(&metadata).expect("metadata");
     assert!(disclosed.contains("http://127.0.0.1:3001/mcp"));
     assert!(disclosed.contains("everything"));

@@ -210,6 +210,16 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         if !status.is_success() {
             return Err(unexpected_status(status));
         }
+        let one_way = matches!(
+            message,
+            ClientJsonRpcMessage::Notification(_)
+                | ClientJsonRpcMessage::Response(_)
+                | ClientJsonRpcMessage::Error(_)
+        );
+        let declared_length = response.content_length();
+        if one_way && declared_length == Some(0) {
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
         let session_id = response
             .headers()
             .get(HEADER_SESSION_ID)
@@ -230,8 +240,22 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             }
             Some(value) if content_type_matches(value, JSON_MIME_TYPE) => {
                 let bytes = bounded_body(response, self.max_response_bytes).await?;
+                if one_way && is_empty_body(&bytes) {
+                    return Ok(StreamableHttpPostResponse::Accepted);
+                }
                 let message = serde_json::from_slice::<ServerJsonRpcMessage>(&bytes)?;
                 Ok(StreamableHttpPostResponse::Json(message, session_id))
+            }
+            // Chunked and close-delimited responses expose no size hint, so the
+            // bounded body is the only way to tell an empty one-way acknowledgement
+            // apart from a genuinely malformed payload.
+            _ if one_way && declared_length.is_none() => {
+                let bytes = bounded_body(response, self.max_response_bytes).await?;
+                if is_empty_body(&bytes) {
+                    Ok(StreamableHttpPostResponse::Accepted)
+                } else {
+                    Err(StreamableHttpError::UnexpectedContentType(content_type))
+                }
             }
             _ => Err(StreamableHttpError::UnexpectedContentType(content_type)),
         }
@@ -253,6 +277,11 @@ fn require_content_type(
             content_type.map(str::to_owned),
         ))
     }
+}
+
+/// A body carrying no JSON-RPC frame, allowing only insignificant HTTP whitespace.
+fn is_empty_body(bytes: &[u8]) -> bool {
+    bytes.iter().all(u8::is_ascii_whitespace)
 }
 
 pub(super) fn content_type_matches(value: &str, required: &str) -> bool {
