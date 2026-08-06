@@ -132,17 +132,20 @@ pin DNS results, validate TLS authority, reject ambient proxies and redirects, b
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
 
-Configured stdio MCP remains a process effect. Stateful Streamable HTTP MCP is a network
-effect and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and
-redirect rejection, CA roots, permit timeouts, and bounded response path. Remote
+Configured stdio MCP remains a process effect. Streamable HTTP MCP is a network effect
+and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and redirect
+rejection, CA roots, permit timeouts, and bounded response path. Remote
 declarations contain only literal non-secret headers and environment credential
 references; the permit-bearing adapter resolves those references immediately before the
 request. OAuth authorization is an operator-only PKCE flow and never starts from an agent
 tool call. Tokens are server/endpoint/repository-bound in the platform credential
 namespace or a domain-separated XChaCha20-Poly1305 redb sidecar, and client secrets remain
-behind their configured references. Each discovery page and tool call uses a fresh
-initialized stateful session, disables request and expired-session retries, and treats
-an uncertain tool call as `OutcomeUnknown`.
+behind their configured references. Stateful sessions remain the default. A strict,
+request-bound `allowStateless` opt-in permits one top-level remote declaration to omit
+`Mcp-Session-Id`; stdio and pack-provided servers reject that field. Each discovery page
+and tool call uses a fresh initialized transport, disables request and expired-session
+retries, accepts empty success responses only for one-way JSON-RPC frames, and treats an
+uncertain tool call as `OutcomeUnknown`.
 
 Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
 OAuth ceremony to the official Codex CLI and forces its supported file credential store;
@@ -175,7 +178,7 @@ bodyless `network.http` GET, and configured top-level `mcp.call` effects without
 lineage can use a low-risk `allow` recommendation to mint a request-bound approval
 proof. The evaluator has no tools and receives redacted proposed-effect metadata:
 network review includes the requested URL or search query, while MCP review includes
-the exact endpoint identity, transport, configured server/tool, bounded advisory
+the exact endpoint identity, transport and stateless opt-in, configured server/tool, bounded advisory
 description and annotations, fresh schema hash, and validated arguments. Resolved
 credentials and authentication configuration are absent, environment values become
 names, and sensitive argument fields are redacted. Field-name redaction is word based

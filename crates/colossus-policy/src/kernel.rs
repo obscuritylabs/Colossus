@@ -711,7 +711,10 @@ pub(super) fn redact_hard_secrets(value: &mut Value) {
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
+                if is_hard_secret_key(key)
+                    && !is_environment_credential_reference(child)
+                    && !is_environment_credential_header_reference(child)
+                {
                     let bytes = serde_json::to_vec(child).unwrap_or_default();
                     *child = json!({
                         "redacted": true,
@@ -726,6 +729,33 @@ pub(super) fn redact_hard_secrets(value: &mut Value) {
         Value::Array(array) => array.iter_mut().for_each(redact_hard_secrets),
         _ => {}
     }
+}
+
+fn is_environment_credential_header_reference(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.len() > 2
+        || !object.contains_key("reference")
+        || object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "reference" | "scheme"))
+        || !object
+            .get("reference")
+            .is_some_and(is_environment_credential_reference)
+    {
+        return false;
+    }
+    object.get("scheme").is_none_or(|scheme| {
+        scheme.is_null()
+            || scheme.as_str().is_some_and(|scheme| {
+                !scheme.is_empty()
+                    && scheme.len() <= 64
+                    && scheme
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+    })
 }
 
 pub(super) fn is_environment_credential_reference(value: &Value) -> bool {

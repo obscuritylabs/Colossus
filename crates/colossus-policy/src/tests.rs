@@ -235,6 +235,7 @@ fn mcp_call_request(
             "url": url,
             "headers": {},
             "credential_headers": {},
+            "allow_stateless": false,
             "oauth": null,
             "timeout_ms": 30_000,
             "max_output_bytes": 1_048_576,
@@ -2110,7 +2111,7 @@ impl colossus_ports::PolicyDecisionPoint for RecordingPolicy {
 }
 
 #[tokio::test]
-async fn hard_secrets_are_hashed_before_policy_disclosure() {
+async fn hard_secrets_are_hashed_and_structured_credential_references_are_preserved() {
     let seen = Arc::new(Mutex::new(None));
     let gateway = EffectGateway::new(
         Arc::new(InMemoryEventJournal::default()),
@@ -2136,7 +2137,20 @@ async fn hard_secrets_are_hashed_before_policy_disclosure() {
                     "message": "safe",
                     "api_key": "must-not-leak",
                     "headers": {"authorization": "Bearer secret"},
-                    "credential_references": {"password": "env:SAFE_PASSWORD_REF"}
+                    "credential_references": {"password": "env:SAFE_PASSWORD_REF"},
+                    "credential_headers": {
+                        "Authorization": {
+                            "scheme": "Bearer",
+                            "reference": "env:SPLUNK_MCP_TOKEN"
+                        }
+                    },
+                    "invalid_credential_header": {
+                        "authorization": {
+                            "scheme": "Bearer",
+                            "reference": "env:SPLUNK_MCP_TOKEN",
+                            "value": "must-not-leak"
+                        }
+                    }
                 }),
             ),
             &executor,
@@ -2157,6 +2171,17 @@ async fn hard_secrets_are_hashed_before_policy_disclosure() {
     assert_eq!(
         request.content["credential_references"]["password"],
         "env:SAFE_PASSWORD_REF"
+    );
+    assert_eq!(
+        request.content["credential_headers"]["Authorization"],
+        serde_json::json!({
+            "scheme": "Bearer",
+            "reference": "env:SPLUNK_MCP_TOKEN"
+        })
+    );
+    assert_eq!(
+        request.content["invalid_credential_header"]["authorization"]["redacted"],
+        true
     );
     assert!(
         !serde_json::to_string(&request)

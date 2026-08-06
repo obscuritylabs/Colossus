@@ -202,6 +202,7 @@ pub(super) fn compile_active_pack_extensions(
                         url: None,
                         headers: BTreeMap::new(),
                         credential_headers: BTreeMap::new(),
+                        allow_stateless: false,
                         oauth: None,
                         allowed_tools: server.allowed_tools.clone(),
                         research_tools: Vec::new(),

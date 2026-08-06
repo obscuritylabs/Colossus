@@ -210,6 +210,16 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         if !status.is_success() {
             return Err(unexpected_status(status));
         }
+        if response.content_length() == Some(0)
+            && matches!(
+                message,
+                ClientJsonRpcMessage::Notification(_)
+                    | ClientJsonRpcMessage::Response(_)
+                    | ClientJsonRpcMessage::Error(_)
+            )
+        {
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
         let session_id = response
             .headers()
             .get(HEADER_SESSION_ID)
