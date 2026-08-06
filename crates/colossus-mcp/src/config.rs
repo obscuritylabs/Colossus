@@ -105,6 +105,9 @@ pub struct McpServerConfig {
     /// Secret HTTP headers resolved from credential references after authorization.
     #[serde(default)]
     pub credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
+    /// Permit explicitly configured remote servers to omit MCP session identifiers.
+    #[serde(default)]
+    pub allow_stateless: bool,
     /// Optional OAuth 2.1 authorization-code flow.
     pub oauth: Option<McpOAuthConfig>,
     /// Exact tools that may be discovered or invoked, or the sole wildcard `*`.
@@ -150,6 +153,9 @@ pub struct McpServerSummary {
     pub name: String,
     /// Fixed transport implemented by this adapter.
     pub transport: String,
+    /// Whether this remote server may operate without MCP session identifiers.
+    #[serde(default)]
+    pub allow_stateless: bool,
     /// Exact tool allowlist.
     pub allowed_tools: Vec<String>,
     /// Tool names configured for research collection.
@@ -314,6 +320,8 @@ pub(super) struct McpEffectInput {
     pub(super) url: Option<String>,
     pub(super) headers: BTreeMap<String, String>,
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
+    #[serde(default)]
+    pub(super) allow_stateless: bool,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) timeout_ms: Option<u64>,
     pub(super) max_output_bytes: Option<u64>,
@@ -379,6 +387,7 @@ pub(super) struct ConfiguredServer {
     pub(super) url: Option<String>,
     pub(super) headers: BTreeMap<String, String>,
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
+    pub(super) allow_stateless: bool,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) allowed_tools: ToolAllowlist,
     pub(super) research_tools: Vec<McpResearchToolConfig>,
@@ -508,6 +517,7 @@ fn validate_stdio_server(
     if server.url.is_some()
         || !server.headers.is_empty()
         || !server.credential_headers.is_empty()
+        || server.allow_stateless
         || server.oauth.is_some()
     {
         return Err(McpError::Invalid(format!(

@@ -1,6 +1,6 @@
 ---
 title: MCP
-description: Configure stdio or stateful Streamable HTTP MCP servers through Colossus's policy boundary.
+description: Configure stdio or Streamable HTTP MCP servers through Colossus's policy boundary.
 audience: operator
 type: how-to
 ---
@@ -11,8 +11,10 @@ type: how-to
 
 Configure a local stdio or remote Streamable HTTP MCP server, select explicit tools or
 opt into dynamic wildcard discovery, and invoke tools without bypassing Colossus policy.
-The native remote transport targets MCP `2025-11-25`; legacy HTTP+SSE and the stateless
-`2026-07-28` release-candidate behavior are not enabled.
+The native remote transport targets MCP `2025-11-25`. Stateful sessions are required
+by default; exact remote declarations may explicitly allow a server that omits
+`Mcp-Session-Id`. Legacy HTTP+SSE and `2026-07-28` release-candidate semantics are not
+enabled.
 
 ## Prerequisites
 
@@ -65,6 +67,7 @@ mcp:
         Authorization:
           scheme: Bearer
           reference: env:SPLUNK_MCP_TOKEN
+      allowStateless: true
       allowedTools: ["*"]
       timeoutMs: 30000
       maxOutputBytes: 1048576
@@ -75,7 +78,8 @@ Add the exact endpoint origin to `sandbox.networkDestinations` and
 broad: every currently or subsequently published valid tool becomes eligible for normal
 schema validation, policy, approval, quarantine, and audit. An empty list, duplicate
 names, or a wildcard mixed with explicit names is rejected. Signed-pack MCP declarations
-remain explicit-only.
+remain explicit-only. Set `allowStateless: true` only when the reviewed remote server
+intentionally omits `Mcp-Session-Id`; omit it for stateful servers.
 
 OAuth is an alternative to `credentialHeaders`:
 
@@ -106,8 +110,9 @@ colossus --config .colossus/config.yaml mcp tools \
   --server local-docs
 ```
 
-Discovery launches the exact executable or creates a fresh stateful HTTP session and
-returns only selected, validated tool schemas.
+Discovery launches the exact executable or creates a fresh initialized HTTP exchange
+and returns only selected, validated tool schemas. Stateful remote servers receive
+best-effort session cleanup; explicitly stateless servers have no session to close.
 
 ### 4. Invoke the exact tool
 

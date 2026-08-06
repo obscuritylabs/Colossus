@@ -1,5 +1,8 @@
 use super::*;
+use colossus_contracts::{ActorType, DecisionOutcome};
+use colossus_policy::{AllowApproval, BuiltInPolicy, EffectGateway, SafetyKernel};
 use colossus_ports::{KeyProvider, StoreError};
+use colossus_testkit::InMemoryEventJournal;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -157,6 +160,7 @@ fn remote_server(endpoint: &str) -> McpServerConfig {
         url: Some(endpoint.into()),
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
+        allow_stateless: false,
         oauth: None,
         allowed_tools: vec!["*".into()],
         research_tools: Vec::new(),
@@ -193,6 +197,12 @@ fn streamable_http_config_accepts_env_credentials_and_rejects_unsafe_http_identi
         )
     };
     validate(&config).expect("valid remote config");
+    config
+        .servers
+        .get_mut("splunk")
+        .expect("server")
+        .allow_stateless = true;
+    validate(&config).expect("explicit stateless remote server");
     config.servers.get_mut("splunk").expect("server").url = Some("http://[::1]:8787/mcp".into());
     validate(&config).expect("IPv6 loopback development endpoint");
 
@@ -259,6 +269,93 @@ fn streamable_http_config_accepts_env_credentials_and_rejects_unsafe_http_identi
     assert!(validate(&config).is_err());
 }
 
+struct McpEffectShapeExecutor;
+
+#[async_trait]
+impl EffectExecutor for McpEffectShapeExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let input: McpEffectInput = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let authorization = input
+            .credential_headers
+            .get("Authorization")
+            .ok_or_else(|| ExecutionError::Failed("authorization reference was removed".into()))?;
+        assert_eq!(authorization.scheme.as_deref(), Some("Bearer"));
+        assert_eq!(authorization.reference, "env:SPLUNK_MCP_TOKEN");
+        assert!(input.allow_stateless);
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: br#"{"ok":true}"#.to_vec(),
+            effect_succeeded: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn gateway_preserves_remote_credential_reference_shape_and_session_mode() {
+    let endpoint = "http://127.0.0.1:8787/mcp";
+    let mut server = remote_server(endpoint);
+    server.allow_stateless = true;
+    server.credential_headers.insert(
+        "Authorization".into(),
+        McpCredentialHeaderConfig {
+            scheme: Some("Bearer".into()),
+            reference: "env:SPLUNK_MCP_TOKEN".into(),
+        },
+    );
+    let executor = McpExecutor::new(
+        &McpConfig {
+            oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+            servers: BTreeMap::from([("splunk".into(), server)]),
+        },
+        Path::new("."),
+        "native",
+        Arc::new(McpEffectShapeExecutor),
+    )
+    .expect("MCP executor");
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("mcp.tools", DecisionOutcome::Allow)
+        .with_post_effect(false)
+        .with_sandbox("native", "mcp-regression", false)
+        .with_action_restrictions(
+            "mcp.tools",
+            Vec::new(),
+            vec!["SPLUNK_MCP_TOKEN".into()],
+            vec!["http://127.0.0.1:8787".into()],
+        );
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(AllowApproval {
+            approved_by: "test".into(),
+        }),
+        SafetyKernel::new(["mcp.invoke".into()]),
+        [7_u8; 32],
+    );
+    let request = executor
+        .request(
+            Actor {
+                actor_type: ActorType::System,
+                id: "mcp-credential-regression".into(),
+            },
+            ExecutionContext::default(),
+            McpOperation::ListTools {
+                server: "splunk".into(),
+                cursor: None,
+            },
+        )
+        .expect("effect request");
+    assert_eq!(request.content["transport"], "streamable_http");
+    gateway
+        .execute(request, &McpEffectShapeExecutor)
+        .await
+        .expect("gateway execution");
+}
+
 #[test]
 fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
     let server = ConfiguredServer {
@@ -271,6 +368,7 @@ fn wildcard_releases_new_valid_tools_but_rejects_invalid_discovery_names() {
         url: Some("https://splunk.example.com/services/mcp".into()),
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
+        allow_stateless: false,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -336,6 +434,7 @@ fn wildcard_and_explicit_discovery_preserve_bounded_risk_review_metadata() {
         url: Some("http://127.0.0.1:3001/mcp".into()),
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
+        allow_stateless: false,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -560,6 +659,7 @@ fn configured_http_server(endpoint: String) -> ConfiguredServer {
         url: Some(endpoint),
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
+        allow_stateless: false,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -568,6 +668,166 @@ fn configured_http_server(endpoint: String) -> ConfiguredServer {
         effect_action_prefix: None,
         provenance: None,
     }
+}
+
+/// How the fixture acknowledges the one-way `notifications/initialized` frame.
+#[derive(Clone, Copy)]
+enum EmptyAck {
+    /// Empty `200 OK` with an exact `Content-Length: 0`.
+    Measured,
+    /// Empty `200 OK` delimited by chunked encoding, so no size hint is exposed.
+    Chunked,
+}
+
+async fn execute_stateless_discovery(
+    allow_stateless: bool,
+) -> Option<Result<RemoteOperationResult, ExecutionError>> {
+    execute_stateless_discovery_with_ack(allow_stateless, EmptyAck::Measured).await
+}
+
+async fn execute_stateless_discovery_with_ack(
+    allow_stateless: bool,
+    empty_ack: EmptyAck,
+) -> Option<Result<RemoteOperationResult, ExecutionError>> {
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping loopback transport test: sandbox forbids listeners");
+            return None;
+        }
+        Err(error) => panic!("listener: {error}"),
+    };
+    let address = listener.local_addr().expect("address");
+    let server_task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let (_, message) = read_http_request(&mut stream).await;
+            let method = message
+                .as_ref()
+                .and_then(|value| value.get("method"))
+                .and_then(Value::as_str);
+            match method {
+                Some("initialize") => {
+                    let body = json!({
+                        "jsonrpc": "2.0",
+                        "id": message.as_ref().and_then(|value| value.get("id")).cloned().unwrap(),
+                        "result": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "stateless-fixture", "version": "1.0.0"}
+                        }
+                    })
+                    .to_string();
+                    write_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        &body,
+                    )
+                    .await;
+                    if !allow_stateless {
+                        break;
+                    }
+                }
+                Some("notifications/initialized") => match empty_ack {
+                    EmptyAck::Measured => {
+                        write_http_response(
+                            &mut stream,
+                            "200 OK",
+                            "Content-Type: application/json\r\n",
+                            "",
+                        )
+                        .await;
+                    }
+                    EmptyAck::Chunked => {
+                        use tokio::io::AsyncWriteExt as _;
+
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+                            )
+                            .await
+                            .expect("chunked acknowledgement");
+                    }
+                },
+                Some("tools/list") => {
+                    let body = json!({
+                        "jsonrpc": "2.0",
+                        "id": message.as_ref().and_then(|value| value.get("id")).cloned().unwrap(),
+                        "result": {
+                            "tools": [{
+                                "name": "splunk_get_info",
+                                "inputSchema": {"type": "object"}
+                            }]
+                        }
+                    })
+                    .to_string();
+                    write_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        &body,
+                    )
+                    .await;
+                    break;
+                }
+                _ => panic!("unexpected stateless MCP request: {message:?}"),
+            }
+        }
+    });
+    let endpoint = format!("http://{address}/mcp");
+    let http = HardenedStreamableHttpClient::for_test(
+        endpoint.clone(),
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .expect("client"),
+        1024 * 1024,
+    );
+    let mut configured = configured_http_server(endpoint);
+    configured.allow_stateless = allow_stateless;
+    let result = execute_remote_operation(
+        http,
+        &configured,
+        &McpOperation::ListTools {
+            server: "fixture".into(),
+            cursor: None,
+        },
+        HashMap::new(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .await;
+    server_task.await.expect("server task");
+    Some(result)
+}
+
+#[tokio::test]
+async fn streamable_http_stateless_discovery_requires_explicit_opt_in() {
+    let Some(denied) = execute_stateless_discovery(false).await else {
+        return;
+    };
+    assert!(matches!(denied, Err(ExecutionError::Failed(_))));
+
+    let allowed = execute_stateless_discovery(true)
+        .await
+        .expect("loopback listener")
+        .expect("opt-in stateless discovery");
+    let RemoteOperationResult::Tools(tools) = allowed else {
+        panic!("tools result");
+    };
+    assert_eq!(tools.tools[0].name, "splunk_get_info");
+}
+
+#[tokio::test]
+async fn streamable_http_accepts_size_hintless_empty_one_way_acknowledgement() {
+    let Some(result) = execute_stateless_discovery_with_ack(true, EmptyAck::Chunked).await else {
+        return;
+    };
+    let RemoteOperationResult::Tools(tools) = result.expect("chunked empty acknowledgement") else {
+        panic!("tools result");
+    };
+    assert_eq!(tools.tools[0].name, "splunk_get_info");
 }
 
 #[tokio::test]
@@ -842,6 +1102,7 @@ async fn streamable_http_json_session_discovery_uses_fresh_stateful_transport() 
         url: Some(endpoint),
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
+        allow_stateless: false,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),
@@ -899,6 +1160,7 @@ async fn live_splunk_streamable_http_discovery() {
         url: Some(endpoint),
         headers: BTreeMap::new(),
         credential_headers: BTreeMap::new(),
+        allow_stateless: true,
         oauth: None,
         allowed_tools: ToolAllowlist::All,
         research_tools: Vec::new(),

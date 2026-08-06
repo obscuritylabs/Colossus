@@ -8,8 +8,9 @@ type: reference
 # MCP server configuration
 
 `mcp` connects Colossus to explicitly configured Model Context Protocol servers. A
-server may be a local process using stdio or an exact remote endpoint using stateful
-Streamable HTTP.
+server may be a local process using stdio or an exact remote endpoint using Streamable
+HTTP. Remote servers are stateful by default, with an explicit stateless compatibility
+opt-in.
 
 Colossus exposes only the MCP tool surface:
 
@@ -40,19 +41,24 @@ configured server itself is trusted to publish future callable tools.
 ## Supported MCP surface
 
 The native remote transport targets MCP `2025-11-25` and requires stateful Streamable
-HTTP. It supports bounded JSON and SSE responses, server session headers, POST requests,
-stateful GET event streams, and best-effort DELETE session cleanup.
+HTTP by default. It supports bounded JSON and SSE responses, server session headers,
+POST requests, stateful GET event streams, and best-effort DELETE session cleanup.
+`allowStateless: true` permits one reviewed server to omit `Mcp-Session-Id`; it does not
+enable a different protocol version or legacy transport. For one-way JSON-RPC frames,
+the bounded HTTP adapter accepts an empty successful response as equivalent to `202
+Accepted`; requests still require a valid bounded JSON or SSE response.
 
 The following modes are not enabled:
 
 - The legacy HTTP+SSE transport with separate message and event endpoints.
-- Stateless Streamable HTTP behavior from the `2026-07-28` release candidate.
+- Streamable HTTP semantics specific to the `2026-07-28` release candidate.
 - Automatic request retry or transparent expired-session reinitialization.
 
-Each discovery page and tool call receives a fresh initialized session. Colossus closes
-that session best-effort after the result. If a remote call may have reached the server
-but completion cannot be confirmed, the effect becomes `OutcomeUnknown` and is not
-automatically retried.
+Each discovery page and tool call receives a fresh initialized transport. Colossus
+closes a negotiated session best-effort after the result. Explicitly stateless servers
+receive no GET event stream or DELETE cleanup because they publish no session identity.
+If a remote call may have reached the server but completion cannot be confirmed, the
+effect becomes `OutcomeUnknown` and is not automatically retried.
 
 ## Top-level `mcp` fields
 
@@ -119,7 +125,7 @@ child variable, not the host variable. Using the same name for both is also vali
 | `args` | Literal arguments passed without a shell; at most 256 |
 | `workingDirectory` | Existing workspace-relative or absolute directory inside a sandbox read/write grant |
 | `environment` | At most 128 child variable names mapped to `env:HOST_VARIABLE` references |
-| HTTP and OAuth fields | `url`, `headers`, `credentialHeaders`, and `oauth` must be absent |
+| HTTP and OAuth fields | `url`, `headers`, `credentialHeaders`, `allowStateless`, and `oauth` must be absent |
 
 When `workingDirectory` is omitted, Colossus uses the selected workspace, which still
 needs a containing filesystem grant. Arguments do not use shell expansion, executable
@@ -145,6 +151,7 @@ mcp:
         Authorization:
           scheme: Bearer
           reference: env:SPLUNK_MCP_TOKEN
+      allowStateless: true
       allowedTools:
         - splunk_run_search
         - splunk_get_indexes
@@ -170,6 +177,7 @@ host variable itself in `sandbox.environment`.
 | `url` | Exact HTTP(S) endpoint with a host and path |
 | `headers` | Optional non-secret literal headers; at most 64 |
 | `credentialHeaders` | Optional secret headers backed by environment references; at most 16 |
+| `allowStateless` | Optional boolean; default `false`; remote-only compatibility opt-in for servers that omit `Mcp-Session-Id` |
 | `oauth` | Optional OAuth 2.1 authorization-code configuration |
 | Stdio fields | `command`, `args`, `workingDirectory`, and `environment` must be absent |
 
@@ -474,7 +482,7 @@ server. Discovery and invocation are separately authorized effects.
 | Credentials | Cleared child environment populated from declared references | Permit-time static header or persisted OAuth token |
 | TLS | Owned by the child process | Colossus-owned pinned client and shared CA bundle |
 | Response | Bounded JSON-RPC on stdout | Bounded JSON or SSE |
-| Session | Fresh process initialization | Fresh stateful HTTP session with best-effort close |
+| Session | Fresh process initialization | Fresh initialized transport; stateful by default, explicit stateless opt-in |
 
 Configured credential values are hard-redacted from released schemas, results, errors,
 policy input, diagnostics, and audit evidence. If discovery itself contains one of the
@@ -507,7 +515,7 @@ or unexpectedly upgraded server; wildcard selection intentionally broadens that 
 | A call fails argument validation | Rediscover the live schema and send a JSON object matching it |
 | Discovery fails after a server update | Inspect invalid names, duplicate tools, schemas, descriptions, pagination, or limit overruns |
 | A server-specific bound is rejected | It may only narrow the sandbox timeout/output cap; output must remain at least 1,024 bytes |
-| A remote server only supports stateless HTTP or legacy SSE | Use a stateful Streamable HTTP endpoint or a local stdio adapter |
+| A remote server omits `Mcp-Session-Id` | Review the server and set `allowStateless: true`; legacy HTTP+SSE still requires another adapter |
 | A call reports `OutcomeUnknown` | Inspect the remote system before retrying; Colossus will not guess whether the tool executed |
 
 Return to the [configuration overview](../configuration.md).
