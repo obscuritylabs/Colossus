@@ -2,7 +2,7 @@ use super::{
     AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, NetworkDestinationMatch, QuarantinedEffectObserver, ReleasedEffectObserver,
     ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, StreamingEffectExecutor,
-    effect_request, network_destination_match, system_actor,
+    effect_request, network_destination_match, system_actor, with_sandbox_boundary_acknowledgement,
 };
 use async_trait::async_trait;
 use colossus_contracts::{
@@ -668,6 +668,8 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
         SandboxBoundaryMode::External,
         SandboxBoundaryMode::DangerFullAccess,
     ] {
+        const INTERACTIVE_CAPABILITY: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let policy = BuiltInPolicy::offline_default()
             .with_action("process.spawn", DecisionOutcome::Allow)
             .with_sandbox(mode.as_backend(), "test", false)
@@ -718,13 +720,50 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
         assert!(gateway.execute(request(), &executor).await.is_err());
         assert_eq!(executor.calls.load(Ordering::Acquire), 0);
 
+        gate.acknowledge_interactive_client(INTERACTIVE_CAPABILITY, "session-1", mode)
+            .expect("interactive client acknowledgement");
+        assert!(
+            gate.acknowledge_interactive_client(INTERACTIVE_CAPABILITY, "session-1", mode)
+                .is_err()
+        );
+        assert!(gateway.execute(request(), &executor).await.is_err());
+        assert!(
+            with_sandbox_boundary_acknowledgement(
+                Some("wrong-capability".into()),
+                gateway.execute(request(), &executor),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        let mut other_session_request = request();
+        other_session_request.context.session_id = Some("unacknowledged-session".into());
+        assert!(
+            with_sandbox_boundary_acknowledgement(
+                Some(INTERACTIVE_CAPABILITY.into()),
+                gateway.execute(other_session_request, &executor),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        with_sandbox_boundary_acknowledgement(
+            Some(INTERACTIVE_CAPABILITY.into()),
+            gateway.execute(request(), &executor),
+        )
+        .await
+        .expect("client-scoped acknowledgement authorizes its attached operation");
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+        assert!(gateway.execute(request(), &executor).await.is_err());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+
         gate.acknowledge_session("session-1", mode)
             .expect("active session acknowledgement");
         gateway
             .execute(request(), &executor)
             .await
             .expect("direct process cwd does not require an unenforced filesystem declaration");
-        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+        assert_eq!(executor.calls.load(Ordering::Acquire), 2);
     }
 }
 

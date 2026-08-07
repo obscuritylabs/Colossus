@@ -15,7 +15,6 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::StateDoctor => "state_doctor",
         WorkerOperation::SandboxDoctor => "sandbox_doctor",
         WorkerOperation::SandboxBoundaryStatus { .. } => "sandbox_boundary_status",
-        WorkerOperation::SandboxBoundaryAcknowledge { .. } => "sandbox_boundary_acknowledge",
         WorkerOperation::ProviderProfiles => "provider_profiles",
         WorkerOperation::ProviderDoctor { .. } => "provider_doctor",
         WorkerOperation::ProviderModels { .. } => "provider_models",
@@ -31,7 +30,10 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ArtifactGet { .. } => "artifact_get",
         WorkerOperation::ArtifactDownload { .. } => "artifact_download",
         WorkerOperation::RunModel { .. } => "run_model",
-        WorkerOperation::RunInteractive { request } => match request {
+        WorkerOperation::RunInteractive { request, .. } => match request {
+            InteractiveWorkerRequest::SandboxBoundaryAcknowledge { .. } => {
+                "run_interactive.sandbox_boundary_acknowledge"
+            }
             InteractiveWorkerRequest::Run { .. } => "run_interactive.run",
             InteractiveWorkerRequest::PlanApprove { .. } => "run_interactive.plan_approve",
             InteractiveWorkerRequest::PlanDiscard { .. } => "run_interactive.plan_discard",

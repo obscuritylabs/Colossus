@@ -121,8 +121,11 @@ sandbox:
 
 `acknowledgeExternalBoundary` defaults to `false`. An interactive TUI then presents the
 same bottom-docked, fail-closed decision flow used for effect approvals and requires a
-process-local session acknowledgement before any process permit can be minted. A headless
-runtime fails process effects closed unless the field is explicitly `true`.
+session acknowledgement before any process permit can be minted. Embedded mode keeps that
+acknowledgement process-local. Worker-backed mode issues an opaque capability to the attached
+TUI client and accepts it only for that session's interactive operations; ordinary worker API
+calls and other clients remain blocked. A headless runtime fails process effects closed unless
+the field is explicitly `true`.
 
 Use unrestricted execution only when ambient runtime access is intentional:
 

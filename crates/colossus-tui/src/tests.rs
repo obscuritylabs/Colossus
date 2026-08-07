@@ -49,11 +49,14 @@ fn direct_execution_acknowledgement_is_process_local_tui_state() {
         state.pending_sandbox_boundary_acknowledgement,
         Some(SandboxBoundaryMode::External)
     );
+    state.sandbox_boundary_acknowledgement_in_progress = true;
+    assert!(state.is_busy());
 
     handle_host_event(
         &mut state,
         HostEvent::SandboxBoundaryAcknowledgement(Ok(Some(SandboxBoundaryMode::External))),
     );
+    assert!(!state.sandbox_boundary_acknowledgement_in_progress);
     assert!(matches!(
         state
             .transcript
@@ -378,9 +381,14 @@ fn plan_state_is_process_local_and_session_switch_clears_only_selection() {
             before_sequence: None,
             has_more: false,
         },
+        Some(SandboxBoundaryMode::External),
     ));
     assert!(apply_command_result(&mut state, switched));
     assert_eq!(state.session_id, "019f-other");
+    assert_eq!(
+        state.pending_sandbox_boundary_acknowledgement,
+        Some(SandboxBoundaryMode::External)
+    );
     assert_eq!(state.mode, InteractiveMode::Plan);
     assert!(state.selected_plan.is_none());
 
@@ -1025,6 +1033,7 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
                     before_sequence: Some(1),
                     has_more: true,
                 },
+                None,
             )),
             preferences: None,
             completions: None,

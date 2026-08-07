@@ -75,6 +75,7 @@ const MAX_NATIVE_HISTORY_MESSAGES: usize =
 const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
 mod app;
+pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
 mod contract;
 mod render;
 mod state;

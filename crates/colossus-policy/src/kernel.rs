@@ -237,11 +237,38 @@ pub trait ReleasedEffectObserver: Send {
 
 const MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS: usize = 4_096;
 
+tokio::task_local! {
+    static ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT: Option<String>;
+}
+
+/// Scope one worker-issued acknowledgement to the current interactive operation.
+///
+/// Task-local state deliberately does not propagate into detached tasks, so process
+/// effects outside the attached operation continue to fail closed.
+pub async fn with_sandbox_boundary_acknowledgement<F>(
+    acknowledgement: Option<String>,
+    future: F,
+) -> F::Output
+where
+    F: Future,
+{
+    ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT
+        .scope(acknowledgement, future)
+        .await
+}
+
+#[derive(Clone)]
+struct ScopedSandboxBoundaryAcknowledgement {
+    session_id: String,
+    mode: SandboxBoundaryMode,
+}
+
 /// Process-local acknowledgement state for backends that do not isolate processes.
 pub struct SandboxBoundaryGate {
     mode: Option<SandboxBoundaryMode>,
     globally_acknowledged: bool,
     acknowledged_sessions: RwLock<BTreeSet<String>>,
+    scoped_acknowledgements: RwLock<BTreeMap<String, ScopedSandboxBoundaryAcknowledgement>>,
 }
 
 impl SandboxBoundaryGate {
@@ -251,6 +278,7 @@ impl SandboxBoundaryGate {
             mode,
             globally_acknowledged,
             acknowledged_sessions: RwLock::new(BTreeSet::new()),
+            scoped_acknowledgements: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -318,6 +346,83 @@ impl SandboxBoundaryGate {
         }
     }
 
+    /// Register an opaque acknowledgement issued to one attached interactive client.
+    pub fn acknowledge_interactive_client(
+        &self,
+        acknowledgement: &str,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), GatewayError> {
+        if acknowledgement.len() != 64
+            || !acknowledgement
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || session_id.is_empty()
+        {
+            return Err(GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement requires an exact opaque capability and nonempty session id"
+                    .into(),
+            ));
+        }
+        if self.mode != Some(mode) {
+            return Err(GatewayError::Safety(format!(
+                "cannot acknowledge {} when that sandbox backend is not configured",
+                mode.as_backend()
+            )));
+        }
+        let mut acknowledgements = self.scoped_acknowledgements.write().map_err(|_| {
+            GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement lock is poisoned".into(),
+            )
+        })?;
+        if acknowledgements.contains_key(acknowledgement) {
+            return Err(GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement was replayed".into(),
+            ));
+        }
+        if acknowledgements.len() >= MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS {
+            return Err(GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement capacity is exhausted; restart the runtime"
+                    .into(),
+            ));
+        }
+        acknowledgements.insert(
+            acknowledgement.into(),
+            ScopedSandboxBoundaryAcknowledgement {
+                session_id: session_id.into(),
+                mode,
+            },
+        );
+        Ok(())
+    }
+
+    /// Roll back a worker-issued acknowledgement when durable audit append fails.
+    pub fn revoke_interactive_client_acknowledgement(&self, acknowledgement: &str) {
+        if let Ok(mut acknowledgements) = self.scoped_acknowledgements.write() {
+            acknowledgements.remove(acknowledgement);
+        }
+    }
+
+    fn active_scoped_acknowledgement_matches(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> bool {
+        ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT
+            .try_with(|active| {
+                active.as_deref().is_some_and(|acknowledgement| {
+                    self.scoped_acknowledgements
+                        .read()
+                        .is_ok_and(|acknowledgements| {
+                            acknowledgements.get(acknowledgement).is_some_and(|entry| {
+                                entry.session_id == session_id && entry.mode == mode
+                            })
+                        })
+                })
+            })
+            .unwrap_or(false)
+    }
+
     fn validate(
         &self,
         request: &EffectRequest,
@@ -340,6 +445,7 @@ impl SandboxBoundaryGate {
                 self.acknowledged_sessions
                     .read()
                     .is_ok_and(|sessions| sessions.contains(session_id))
+                    || self.active_scoped_acknowledgement_matches(session_id, mode)
             });
         if acknowledged {
             return Ok(());

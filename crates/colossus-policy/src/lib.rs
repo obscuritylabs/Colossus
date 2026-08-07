@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    future::Future,
     net::IpAddr,
     path::Path,
     sync::{

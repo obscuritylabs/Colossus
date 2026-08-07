@@ -349,8 +349,8 @@ pub enum PlanSelectionUpdate {
 pub struct HostCommandResult {
     /// Human presentation to append to the transcript.
     pub document: PresentationDocument,
-    /// New active session and its newest page after a session switch.
-    pub session: Option<(String, SessionMessagePage)>,
+    /// New active session, newest page, and direct-execution boundary status after a switch.
+    pub session: Option<(String, SessionMessagePage, Option<SandboxBoundaryMode>)>,
     /// Updated preferences when the command changed presentation state.
     pub preferences: Option<TerminalPreferences>,
     /// Updated completion catalog when host state changed.
@@ -456,7 +456,7 @@ pub enum PromptResponse {
 pub enum InteractivePromptKind {
     /// Policy requires a request-bound effect approval.
     Approval,
-    /// Startup requires explicit acceptance of a configured direct-execution boundary.
+    /// The active session requires explicit acceptance of a direct-execution boundary.
     SandboxBoundaryAcknowledgement,
     /// A tool needs bounded operator input but grants no effect authority.
     UserInput,
@@ -504,7 +504,7 @@ pub enum HostEvent {
     HistoryWarning(String),
     /// An asynchronously requested older transcript page completed.
     OlderPage(Result<SessionMessagePage, String>),
-    /// Startup direct-execution acknowledgement reached a terminal result.
+    /// Active-session direct-execution acknowledgement reached a terminal result.
     SandboxBoundaryAcknowledgement(Result<Option<SandboxBoundaryMode>, String>),
 }
 
@@ -524,12 +524,13 @@ pub trait InteractiveHost: Send + Sync {
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
 
-    /// Acknowledge one configured direct-execution boundary for the active TUI session.
+    /// Prompt for and acknowledge one direct-execution boundary for the active TUI session.
     async fn acknowledge_sandbox_boundary(
         &self,
         session_id: &str,
         mode: SandboxBoundaryMode,
-    ) -> Result<(), String>;
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String>;
 
     /// Execute one typed application command without writing to the terminal.
     async fn execute_command(

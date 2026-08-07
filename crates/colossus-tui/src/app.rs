@@ -25,6 +25,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
         continue_native_history_preload(
             &mut state,
             Arc::clone(&host),
@@ -71,35 +72,27 @@ fn start_sandbox_boundary_acknowledgement(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
+    if state.sandbox_boundary_acknowledgement_in_progress {
+        return;
+    }
     let Some(mode) = state.pending_sandbox_boundary_acknowledgement.take() else {
         return;
     };
-    let acknowledge = sandbox_boundary_acknowledgement_choice(mode).to_owned();
-    let (response_tx, response_rx) = oneshot::channel();
-    let request = sandbox_boundary_prompt(mode, response_tx);
-    state.overlay = Some(Overlay::Prompt {
-        request,
-        input: String::new(),
-        selected: None,
-        approval_section: ApprovalSection::Summary,
-        document_scroll: 0,
-    });
+    state.sandbox_boundary_acknowledgement_in_progress = true;
     let session_id = state.session_id.clone();
     tokio::spawn(async move {
-        let result = match response_rx.await {
-            Ok(PromptResponse::Answer(answer)) if answer == acknowledge => host
-                .acknowledge_sandbox_boundary(&session_id, mode)
-                .await
-                .map(|()| Some(mode)),
-            Ok(PromptResponse::Answer(_)) | Ok(PromptResponse::Cancelled) | Err(_) => Ok(None),
-        };
+        let result = host
+            .acknowledge_sandbox_boundary(&session_id, mode, event_tx.clone())
+            .await
+            .map(|acknowledged| acknowledged.then_some(mode));
         let _ = event_tx
             .send(HostEvent::SandboxBoundaryAcknowledgement(result))
             .await;
     });
 }
 
-pub(super) fn sandbox_boundary_prompt(
+/// Build the fail-closed acknowledgement prompt for one direct-execution boundary.
+pub fn sandbox_boundary_prompt(
     mode: SandboxBoundaryMode,
     response: oneshot::Sender<PromptResponse>,
 ) -> InteractivePrompt {
@@ -147,7 +140,8 @@ pub(super) fn sandbox_boundary_prompt(
     }
 }
 
-const fn sandbox_boundary_acknowledgement_choice(mode: SandboxBoundaryMode) -> &'static str {
+/// Return the exact affirmative choice accepted for one direct-execution boundary.
+pub const fn sandbox_boundary_acknowledgement_choice(mode: SandboxBoundaryMode) -> &'static str {
     match mode {
         SandboxBoundaryMode::External => "Acknowledge the external boundary",
         SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
@@ -1040,23 +1034,28 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 }
             }
         }
-        HostEvent::SandboxBoundaryAcknowledgement(result) => match result {
-            Ok(Some(mode)) => state.append_entry(TranscriptEntry {
-                sequence: None,
-                kind: TranscriptKind::Command,
-                document: PresentationDocument::from_block(PresentationBlock::Markdown(format!(
-                    "Acknowledged `{}` for this TUI session. Process effects still require normal policy authorization and approvals.",
-                    mode.as_backend()
+        HostEvent::SandboxBoundaryAcknowledgement(result) => {
+            state.sandbox_boundary_acknowledgement_in_progress = false;
+            match result {
+                Ok(Some(mode)) => state.append_entry(TranscriptEntry {
+                    sequence: None,
+                    kind: TranscriptKind::Command,
+                    document: PresentationDocument::from_block(PresentationBlock::Markdown(
+                        format!(
+                            "Acknowledged `{}` for this TUI session. Process effects still require normal policy authorization and approvals.",
+                            mode.as_backend()
+                        ),
+                    )),
+                    temporary: false,
+                }),
+                Ok(None) => state.append_entry(error_entry(
+                    "Process execution remains blocked because the configured direct-execution boundary was not acknowledged.",
+                )),
+                Err(error) => state.append_entry(error_entry(&format!(
+                    "Sandbox boundary acknowledgement failed: {error}"
                 ))),
-                temporary: false,
-            }),
-            Ok(None) => state.append_entry(error_entry(
-                "Process execution remains blocked because the configured direct-execution boundary was not acknowledged.",
-            )),
-            Err(error) => state.append_entry(error_entry(&format!(
-                "Sandbox boundary acknowledgement failed: {error}"
-            ))),
-        },
+            }
+        }
         HostEvent::OperationFinished(result) => {
             if matches!(state.overlay, Some(Overlay::Prompt { .. }))
                 && let Some(Overlay::Prompt { request, .. }) = state.overlay.take()
@@ -1311,8 +1310,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             temporary: false,
         });
     }
-    if let Some((session_id, page)) = result.session {
+    if let Some((session_id, page, pending_sandbox_boundary_acknowledgement)) = result.session {
         state.session_id = session_id;
+        state.pending_sandbox_boundary_acknowledgement = pending_sandbox_boundary_acknowledgement;
         state.selected_plan = None;
         let (transcript, transcript_sources) =
             transcript_from_messages(page.messages, &state.preferences);

@@ -26,14 +26,16 @@ use colossus_tui::{
     HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractivePlanExecutionRequest,
     InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSnapshot,
     PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand,
+    sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt,
 };
 use colossus_worker::{
-    InteractiveWorkerRequest, WorkerClient, WorkerError, WorkerOperation, WorkerPrompt,
-    WorkerPromptHandler, WorkerPromptKind,
+    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerClient, WorkerError,
+    WorkerOperation, WorkerPrompt, WorkerPromptHandler, WorkerPromptKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,

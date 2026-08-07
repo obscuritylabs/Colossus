@@ -41,6 +41,8 @@ pub enum WorkerApprovalMode {
 pub enum WorkerPromptKind {
     /// Policy approval obligation.
     Approval,
+    /// Direct-execution boundary acknowledgement for the attached client.
+    SandboxBoundaryAcknowledgement,
     /// Tool-requested operator input.
     UserInput,
 }

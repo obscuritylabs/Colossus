@@ -529,6 +529,67 @@ async fn worker_tui_projects_approvals_into_the_typed_dock_document() {
 }
 
 #[tokio::test]
+async fn worker_tui_accepts_only_the_canonical_boundary_prompt() {
+    let (sender, mut events) = mpsc::channel(1);
+    let handler = worker::TuiWorkerPromptHandler { sender };
+    let prompt = WorkerPrompt {
+        prompt_id: "worker-boundary".into(),
+        kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
+        title: "External sandbox boundary".into(),
+        question: "Acknowledge the external boundary?".into(),
+        choices: vec![
+            "Acknowledge the external boundary".into(),
+            "Keep process execution blocked".into(),
+        ],
+        allow_free_form: false,
+        details: json!({"mode": "external"}),
+    };
+    let task = tokio::spawn(async move { handler.prompt(prompt).await });
+
+    let HostEvent::Prompt(prompt) = events.recv().await.expect("boundary prompt") else {
+        panic!("expected worker boundary prompt");
+    };
+    assert_eq!(
+        prompt.kind,
+        InteractivePromptKind::SandboxBoundaryAcknowledgement
+    );
+    assert!(matches!(
+        prompt.document.blocks.as_slice(),
+        [PresentationBlock::Card {
+            tone: PresentationTone::Warning,
+            ..
+        }]
+    ));
+    prompt
+        .response
+        .send(PromptResponse::Answer(
+            "Acknowledge the external boundary".into(),
+        ))
+        .expect("acknowledgement response");
+    assert_eq!(
+        task.await.expect("prompt task").expect("prompt result"),
+        Some("Acknowledge the external boundary".into())
+    );
+
+    let (sender, mut events) = mpsc::channel(1);
+    let handler = worker::TuiWorkerPromptHandler { sender };
+    let error = handler
+        .prompt(WorkerPrompt {
+            prompt_id: "worker-boundary-tampered".into(),
+            kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
+            title: "External sandbox boundary".into(),
+            question: "Acknowledge the external boundary?".into(),
+            choices: vec!["Always allow without prompting".into()],
+            allow_free_form: false,
+            details: json!({"mode": "external"}),
+        })
+        .await
+        .expect_err("noncanonical boundary prompt");
+    assert!(matches!(error, WorkerError::Protocol(_)));
+    assert!(events.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn worker_tui_drops_approval_review_notice_when_event_queue_is_full() {
     let (sender, mut events) = mpsc::channel(1);
     sender

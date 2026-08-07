@@ -51,10 +51,6 @@ pub(super) async fn dispatch(
         WorkerOperation::SandboxBoundaryStatus { session_id } => Ok(serde_json::to_value(
             runtime.pending_sandbox_boundary_acknowledgement(&session_id)?,
         )?),
-        WorkerOperation::SandboxBoundaryAcknowledge { session_id, mode } => {
-            runtime.acknowledge_sandbox_boundary(&session_id, mode)?;
-            Ok(json!({"acknowledged": true, "backend": mode.as_backend()}))
-        }
         WorkerOperation::ProviderProfiles => Ok(serde_json::to_value(runtime.provider_profiles())?),
         WorkerOperation::ProviderDoctor {
             profile,

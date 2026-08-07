@@ -449,6 +449,54 @@ async fn dispatch_interactive(
     control: &RunControl,
 ) -> Result<Value, WorkerError> {
     match request {
+        InteractiveWorkerRequest::SandboxBoundaryAcknowledge { session_id, mode } => {
+            let bridge = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone).map_err(|_| {
+                WorkerError::Protocol("no interactive worker client attached".into())
+            })?;
+            let acknowledgement_choice = match mode {
+                SandboxBoundaryMode::External => "Acknowledge the external boundary",
+                SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
+            };
+            let title = match mode {
+                SandboxBoundaryMode::External => "External sandbox boundary",
+                SandboxBoundaryMode::DangerFullAccess => "Danger full access",
+            };
+            let answer = bridge
+                .request(WorkerPrompt {
+                    prompt_id: Uuid::now_v7().to_string(),
+                    kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
+                    title: title.into(),
+                    question: format!(
+                        "Acknowledge the configured {} direct-execution boundary for this attached client session?",
+                        mode.as_backend()
+                    ),
+                    choices: vec![
+                        acknowledgement_choice.into(),
+                        "Keep process execution blocked".into(),
+                    ],
+                    allow_free_form: false,
+                    details: json!({"mode": mode}),
+                })
+                .await
+                .map_err(WorkerError::Protocol)?;
+            if answer.as_deref() != Some(acknowledgement_choice) {
+                return Ok(json!({"acknowledged": false}));
+            }
+            let mut acknowledgement = [0_u8; 32];
+            getrandom::fill(&mut acknowledgement)
+                .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+            let acknowledgement =
+                SandboxBoundaryAcknowledgement::new(hex::encode(acknowledgement))?;
+            runtime.acknowledge_sandbox_boundary_for_interactive_client(
+                &session_id,
+                mode,
+                acknowledgement.expose(),
+            )?;
+            Ok(json!({
+                "acknowledged": true,
+                "sandbox_boundary_acknowledgement": acknowledgement,
+            }))
+        }
         InteractiveWorkerRequest::Run {
             mode,
             role,
@@ -534,6 +582,7 @@ async fn handle_interactive_connection<S>(
     request_id: &str,
     connection_nonce: &str,
     request: InteractiveWorkerRequest,
+    sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -544,9 +593,17 @@ where
     let mut observer = ChannelWorkerObserver {
         sender: outbound_tx,
     };
-    let run = ACTIVE_INTERACTIVE_RUN.scope(bridge.clone(), async {
-        dispatch_interactive(runtime, request, &mut observer, &control).await
-    });
+    let run = ACTIVE_INTERACTIVE_RUN.scope(
+        bridge.clone(),
+        colossus_policy::with_sandbox_boundary_acknowledgement(
+            sandbox_boundary_acknowledgement
+                .as_ref()
+                .map(|acknowledgement| acknowledgement.expose().to_owned()),
+            Box::pin(async {
+                dispatch_interactive(runtime, request, &mut observer, &control).await
+            }),
+        ),
+    );
     drive_interactive_connection(
         stream,
         InteractiveConnectionContext {
@@ -762,7 +819,10 @@ where
     let request_id = request.request_id.clone();
     let requests_drain = operation_requests_drain(&request.operation);
     match request.operation {
-        WorkerOperation::RunInteractive { request } => {
+        WorkerOperation::RunInteractive {
+            request,
+            sandbox_boundary_acknowledgement,
+        } => {
             handle_interactive_connection(
                 stream,
                 key,
@@ -770,6 +830,7 @@ where
                 &request_id,
                 &connection_nonce,
                 request,
+                sandbox_boundary_acknowledgement,
             )
             .await
         }

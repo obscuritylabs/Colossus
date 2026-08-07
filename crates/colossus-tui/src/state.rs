@@ -175,6 +175,7 @@ pub struct TuiState {
     pub(super) overlay: Option<Overlay>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
     pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
+    pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
@@ -217,6 +218,7 @@ impl TuiState {
             pending_plan_execution: None,
             pending_sandbox_boundary_acknowledgement: snapshot
                 .pending_sandbox_boundary_acknowledgement,
+            sandbox_boundary_acknowledgement_in_progress: false,
             activity: None,
             started_at: None,
             scroll_from_bottom: 0,
@@ -326,7 +328,7 @@ impl TuiState {
 
     /// Whether a serialized command or run is active.
     pub const fn is_busy(&self) -> bool {
-        self.operation.is_some()
+        self.operation.is_some() || self.sandbox_boundary_acknowledgement_in_progress
     }
 
     /// Append an older page without duplicating or exposing system messages.

@@ -4,6 +4,56 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Opaque capability proving one attached client completed a boundary prompt.
+///
+/// Clones share zeroizing storage and debug output is always redacted.
+#[derive(Clone, Eq, PartialEq)]
+pub struct SandboxBoundaryAcknowledgement(Arc<zeroize::Zeroizing<String>>);
+
+impl SandboxBoundaryAcknowledgement {
+    pub(super) fn new(value: String) -> Result<Self, WorkerError> {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(WorkerError::Protocol(
+                "sandbox boundary acknowledgement capability is invalid".into(),
+            ));
+        }
+        Ok(Self(Arc::new(zeroize::Zeroizing::new(value))))
+    }
+
+    pub(super) fn expose(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::fmt::Debug for SandboxBoundaryAcknowledgement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SandboxBoundaryAcknowledgement([REDACTED])")
+    }
+}
+
+impl Serialize for SandboxBoundaryAcknowledgement {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.expose())
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxBoundaryAcknowledgement {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ClientHello {
@@ -77,6 +127,13 @@ pub enum WorkerError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractiveWorkerRequest {
+    /// Prompt for and issue one client-scoped direct-execution acknowledgement.
+    SandboxBoundaryAcknowledge {
+        /// Exact durable session displayed by the attached client.
+        session_id: String,
+        /// Exact configured boundary being acknowledged.
+        mode: SandboxBoundaryMode,
+    },
     /// Run either normal Execute Mode or structurally constrained Plan Mode.
     Run {
         /// Explicit application run mode and optional selected Plan draft.
@@ -184,13 +241,6 @@ pub enum WorkerOperation {
         /// Exact durable session.
         session_id: String,
     },
-    /// Acknowledge one direct-execution boundary for one TUI session.
-    SandboxBoundaryAcknowledge {
-        /// Exact durable session.
-        session_id: String,
-        /// Exact configured boundary being acknowledged.
-        mode: SandboxBoundaryMode,
-    },
     /// List provider profile readiness without network access.
     ProviderProfiles,
     /// Exercise one provider diagnostic path.
@@ -283,6 +333,9 @@ pub enum WorkerOperation {
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,
+        /// Opaque capability issued by an earlier acknowledgement prompt on this client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
     },
     /// Execute structurally read-only Plan Mode.
     RunPlan {

@@ -74,8 +74,9 @@ impl InteractiveHost for FixtureHost {
         &self,
         _session_id: &str,
         _mode: SandboxBoundaryMode,
-    ) -> Result<(), String> {
-        Ok(())
+        _events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String> {
+        Ok(true)
     }
 
     async fn execute_command(

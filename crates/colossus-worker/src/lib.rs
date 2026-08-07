@@ -78,7 +78,9 @@ mod server;
 pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
 pub use frames::{WorkerApprovalMode, WorkerPrompt, WorkerPromptKind};
-pub use operations::{InteractiveWorkerRequest, WorkerError, WorkerOperation};
+pub use operations::{
+    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerError, WorkerOperation,
+};
 pub use public_api::{PublicApiDeploymentMode, PublicApiHostOptions, PublicApiReadyMetadata};
 pub use public_credentials::{
     ApplicationGrant, IssuedCredential, PublicApiAuthenticationKey, PublicApiCredentialError,
