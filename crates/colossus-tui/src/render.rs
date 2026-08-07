@@ -724,7 +724,7 @@ fn collect_approval_summary_entries(
     }
 }
 
-fn compact_approval_summary_lines(
+pub(super) fn compact_approval_summary_lines(
     entries: &[(String, String)],
     palette: &TerminalPalette,
     width: usize,
@@ -742,24 +742,67 @@ fn compact_approval_summary_lines(
     let mut value_style = palette.meta_style();
     value_style.dim = false;
 
-    entries
-        .iter()
-        .map(|(label, value)| {
-            let label = sanitize_approval_field(label);
-            let label = truncate_width_with_ellipsis(&label, label_width);
-            let padding = label_width.saturating_sub(UnicodeWidthStr::width(label.as_str()));
-            let value = sanitize_approval_field(value);
-            let value = truncate_width_with_ellipsis(&value, value_width);
-            Line::from(vec![
-                Span::styled(
-                    format!("{label}{}", " ".repeat(padding)),
-                    ratatui_style(label_style),
-                ),
+    let mut lines = Vec::new();
+    for (label, value) in entries {
+        let label = sanitize_approval_field(label);
+        let label = truncate_width_with_ellipsis(&label, label_width);
+        let padding = label_width.saturating_sub(UnicodeWidthStr::width(label.as_str()));
+        let value = sanitize_approval_field(value);
+        for (index, segment) in wrap_approval_value(&value, value_width)
+            .into_iter()
+            .enumerate()
+        {
+            let gutter = if index == 0 {
+                format!("{label}{}", " ".repeat(padding))
+            } else {
+                " ".repeat(label_width)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(gutter, ratatui_style(label_style)),
                 Span::raw("  "),
-                Span::styled(value, ratatui_style(value_style)),
-            ])
-        })
-        .collect()
+                Span::styled(segment, ratatui_style(value_style)),
+            ]));
+        }
+    }
+    lines
+}
+
+/// Wraps a sanitized approval value to `width` display columns without
+/// discarding any character, so authorization-relevant detail stays legible and
+/// scrollable instead of being replaced by an ellipsis.
+fn wrap_approval_value(value: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+    let mut break_at = None;
+    for character in value.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if !current.is_empty() && current_width + character_width > width {
+            match break_at.filter(|index| *index < current.len()) {
+                Some(index) => {
+                    let remainder = current.split_off(index);
+                    lines.push(std::mem::take(&mut current));
+                    current_width = UnicodeWidthStr::width(remainder.as_str());
+                    current = remainder;
+                }
+                None => {
+                    lines.push(std::mem::take(&mut current));
+                    current_width = 0;
+                }
+            }
+            break_at = None;
+        }
+        current.push(character);
+        current_width += character_width;
+        if character == ' ' {
+            break_at = Some(current.len());
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 pub(super) fn sanitize_approval_field(value: &str) -> String {

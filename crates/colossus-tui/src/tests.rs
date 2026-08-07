@@ -1554,6 +1554,47 @@ fn approval_summary_fields_remove_terminal_controls_and_invisible_joiners() {
 }
 
 #[test]
+fn approval_summary_wraps_long_values_instead_of_dropping_their_suffix() {
+    let palette = TerminalPalette::for_theme(colossus_contracts::ThemeName::Default);
+    let resource = format!("file:///workspace/{}/secrets.yaml", "nested/".repeat(12));
+    let lines = compact_approval_summary_lines(
+        &[
+            ("Resource".into(), resource.clone()),
+            (
+                "Risk".into(),
+                "Writes outside the approved workspace root and may exfiltrate credentials.".into(),
+            ),
+        ],
+        &palette,
+        48,
+    );
+
+    let rendered = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(rendered.len() > 2);
+    assert!(rendered.iter().all(|line| !line.contains('…')));
+    assert!(
+        rendered
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 48)
+    );
+
+    let joined = rendered
+        .iter()
+        .map(|line| line.trim_start())
+        .collect::<String>();
+    assert!(joined.contains(&resource));
+    assert!(joined.ends_with("credentials."));
+}
+
+#[test]
 fn prompt_keyboard_selection_returns_the_highlighted_choice() {
     let mut state = TuiState::from_snapshot(snapshot());
     let (response, mut received) = oneshot::channel();
