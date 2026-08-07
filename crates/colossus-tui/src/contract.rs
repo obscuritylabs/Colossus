@@ -456,10 +456,18 @@ pub enum PromptResponse {
 pub enum InteractivePromptKind {
     /// Policy requires a request-bound effect approval.
     Approval,
+    /// Startup requires explicit acceptance of a configured direct-execution boundary.
+    SandboxBoundaryAcknowledgement,
     /// A tool needs bounded operator input but grants no effect authority.
     UserInput,
     /// A local interface picker such as session or plan selection.
     Choice,
+}
+
+impl InteractivePromptKind {
+    pub(crate) const fn uses_decision_dock(self) -> bool {
+        matches!(self, Self::Approval | Self::SandboxBoundaryAcknowledgement)
+    }
 }
 
 /// Focus-taking prompt sent by the trusted runtime bridge to the TUI.

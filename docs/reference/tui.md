@@ -53,12 +53,13 @@ native scrollback byte-for-byte.
 | Mouse wheel | Transcript | Use native scrollback by default; scroll a few retained lines in alternate-screen mode |
 | `End` | Alternate-screen transcript | Return to live output |
 | `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
-| `Up` / `Down` | Effect approval | Select a decision without submitting it |
+| `Up` / `Down` | Docked security decision | Select a decision without submitting it |
 | `A` / `D` | Effect approval | Select **Allow once** or **Deny**; Enter still confirms |
-| `S` / `R` / `P` | Effect approval | Inspect Summary, Exact request, or Protections |
-| `Tab` / `Shift-Tab` | Effect approval | Move between approval detail sections |
-| `PageUp` / `PageDown` | Effect approval | Scroll the active approval detail section |
-| `Enter` | Effect approval | Confirm the explicitly selected decision; blank remains deny |
+| `A` / `D` | Sandbox boundary acknowledgement | Select acknowledge/enable or keep blocked; Enter still confirms |
+| `S` / `R` / `P` | Docked security decision | Inspect Summary, Exact request, or Protections |
+| `Tab` / `Shift-Tab` | Docked security decision | Move between detail sections |
+| `PageUp` / `PageDown` | Docked security decision | Scroll the active detail section |
+| `Enter` | Docked security decision | Confirm the explicitly selected decision; blank remains fail closed |
 | `Down` | Suggestions | Select the next item |
 | `Shift-Tab` / `Up` | Suggestions | Select the previous item |
 | `Tab` / `Right` | Suggestions | Accept the visible suggestion |

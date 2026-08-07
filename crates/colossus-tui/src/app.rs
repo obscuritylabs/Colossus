@@ -74,40 +74,15 @@ fn start_sandbox_boundary_acknowledgement(
     let Some(mode) = state.pending_sandbox_boundary_acknowledgement.take() else {
         return;
     };
-    let acknowledge = match mode {
-        SandboxBoundaryMode::External => "Acknowledge the external boundary",
-        SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
-    }
-    .to_owned();
-    let title = match mode {
-        SandboxBoundaryMode::External => "External sandbox boundary",
-        SandboxBoundaryMode::DangerFullAccess => "Danger full access",
-    };
-    let details = match mode {
-        SandboxBoundaryMode::External => {
-            "Colossus will supervise child processes but will not isolate their filesystem or network access. Continue only when Coder, Kubernetes, or another trusted host boundary enforces the isolation you require. Policy approvals remain separate and active."
-        }
-        SandboxBoundaryMode::DangerFullAccess => {
-            "Colossus will supervise child processes without a Colossus sandbox or an asserted external isolation boundary. Commands receive the ambient access of this runtime. Policy approvals remain separate and active."
-        }
-    };
+    let acknowledge = sandbox_boundary_acknowledgement_choice(mode).to_owned();
     let (response_tx, response_rx) = oneshot::channel();
+    let request = sandbox_boundary_prompt(mode, response_tx);
     state.overlay = Some(Overlay::Prompt {
-        request: InteractivePrompt {
-            id: format!("sandbox-boundary:{}", mode.as_backend()),
-            title: title.into(),
-            document: PresentationDocument::from_block(PresentationBlock::Card {
-                title: title.into(),
-                tone: PresentationTone::Warning,
-                body: vec![PresentationBlock::Markdown(details.into())],
-            }),
-            choices: vec![acknowledge.clone(), KEEP_PROCESS_EXECUTION_BLOCKED.into()],
-            initial_choice: None,
-            allow_free_form: false,
-            response: response_tx,
-        },
+        request,
         input: String::new(),
         selected: None,
+        approval_section: ApprovalSection::Summary,
+        document_scroll: 0,
     });
     let session_id = state.session_id.clone();
     tokio::spawn(async move {
@@ -122,6 +97,61 @@ fn start_sandbox_boundary_acknowledgement(
             .send(HostEvent::SandboxBoundaryAcknowledgement(result))
             .await;
     });
+}
+
+pub(super) fn sandbox_boundary_prompt(
+    mode: SandboxBoundaryMode,
+    response: oneshot::Sender<PromptResponse>,
+) -> InteractivePrompt {
+    let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
+    let title = match mode {
+        SandboxBoundaryMode::External => "External sandbox boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Danger full access",
+    };
+    let (boundary, isolation, details) = match mode {
+        SandboxBoundaryMode::External => (
+            "Operator-asserted external boundary",
+            "Provided by Coder, Kubernetes, or another trusted host",
+            "Colossus will supervise child processes but will not isolate their filesystem or network access. Continue only when the trusted host boundary enforces the isolation you require. Policy approvals remain separate and active.",
+        ),
+        SandboxBoundaryMode::DangerFullAccess => (
+            "Ambient runtime access",
+            "No Colossus or asserted external filesystem/network isolation",
+            "Colossus will supervise child processes without a Colossus sandbox or an asserted external isolation boundary. Commands receive the ambient access of this runtime. Policy approvals remain separate and active.",
+        ),
+    };
+    InteractivePrompt {
+        id: format!("sandbox-boundary:{}", mode.as_backend()),
+        kind: InteractivePromptKind::SandboxBoundaryAcknowledgement,
+        title: title.into(),
+        document: PresentationDocument::from_block(PresentationBlock::Card {
+            title: title.into(),
+            tone: PresentationTone::Warning,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Mode".into(), mode.as_backend().into()),
+                    ("Boundary".into(), boundary.into()),
+                    ("Isolation".into(), isolation.into()),
+                    (
+                        "Acknowledgement".into(),
+                        "Current TUI session in this Colossus process".into(),
+                    ),
+                ]),
+                PresentationBlock::Markdown(details.into()),
+            ],
+        }),
+        choices: vec![acknowledge.into(), KEEP_PROCESS_EXECUTION_BLOCKED.into()],
+        initial_choice: None,
+        allow_free_form: false,
+        response,
+    }
+}
+
+const fn sandbox_boundary_acknowledgement_choice(mode: SandboxBoundaryMode) -> &'static str {
+    match mode {
+        SandboxBoundaryMode::External => "Acknowledge the external boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
+    }
 }
 
 fn continue_native_history_preload(
@@ -332,7 +362,7 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             selected,
             approval_section,
             document_scroll,
-        } if request.kind == InteractivePromptKind::Approval => match key.code {
+        } if request.kind.uses_decision_dock() => match key.code {
             KeyCode::Enter => {
                 finish_prompt(state);
             }
@@ -380,8 +410,8 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
                 *approval_section = ApprovalSection::Protections;
                 *document_scroll = 0;
             }
-            KeyCode::Char('a' | 'A') => select_prompt_choice(request, selected, "Allow once"),
-            KeyCode::Char('d' | 'D') => select_prompt_choice(request, selected, "Deny"),
+            KeyCode::Char('a' | 'A') => select_decision_choice(request, selected, true),
+            KeyCode::Char('d' | 'D') => select_decision_choice(request, selected, false),
             _ => {}
         },
         Overlay::Prompt {
@@ -512,6 +542,17 @@ fn select_prompt_choice(request: &InteractivePrompt, selected: &mut Option<usize
     }
 }
 
+fn select_decision_choice(request: &InteractivePrompt, selected: &mut Option<usize>, allow: bool) {
+    if request.kind == InteractivePromptKind::SandboxBoundaryAcknowledgement {
+        let index = usize::from(!allow);
+        if index < request.choices.len() {
+            *selected = Some(index);
+        }
+    } else {
+        select_prompt_choice(request, selected, if allow { "Allow once" } else { "Deny" });
+    }
+}
+
 fn finish_prompt(state: &mut TuiState) {
     let overlay = state.overlay.take();
     let Some(Overlay::Prompt {
@@ -569,9 +610,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
     let text = sanitize_input(text);
     if let Some(overlay) = state.overlay.as_mut() {
         match overlay {
-            Overlay::Prompt { request, input, .. }
-                if request.kind != InteractivePromptKind::Approval =>
-            {
+            Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
                 input.push_str(&text);
             }
             Overlay::HistorySearch { query: input } => {

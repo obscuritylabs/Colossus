@@ -236,16 +236,21 @@ impl TuiState {
         &self.composer.draft
     }
 
-    pub(super) fn approval_prompt_active(&self) -> bool {
-        matches!(
-            self.overlay.as_ref(),
-            Some(Overlay::Prompt { request, .. })
-                if request.kind == InteractivePromptKind::Approval
-        )
+    pub(super) fn docked_decision_kind(&self) -> Option<InteractivePromptKind> {
+        match self.overlay.as_ref() {
+            Some(Overlay::Prompt { request, .. }) if request.kind.uses_decision_dock() => {
+                Some(request.kind)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn docked_decision_active(&self) -> bool {
+        self.docked_decision_kind().is_some()
     }
 
     pub(super) fn transient_inline_chrome_active(&self) -> bool {
-        self.approval_prompt_active() || self.structured_completion_context().is_some()
+        self.docked_decision_active() || self.structured_completion_context().is_some()
     }
 
     pub(super) fn run_request(&self, prompt: String) -> Result<InteractiveRunRequest, String> {

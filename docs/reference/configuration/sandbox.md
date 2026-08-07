@@ -119,8 +119,9 @@ sandbox:
   acknowledgeExternalBoundary: true
 ```
 
-`acknowledgeExternalBoundary` defaults to `false`. An interactive TUI then requires a
-session-scoped acknowledgement before any process permit can be minted. A headless
+`acknowledgeExternalBoundary` defaults to `false`. An interactive TUI then presents the
+same bottom-docked, fail-closed decision flow used for effect approvals and requires a
+process-local session acknowledgement before any process permit can be minted. A headless
 runtime fails process effects closed unless the field is explicitly `true`.
 
 Use unrestricted execution only when ambient runtime access is intentional:
