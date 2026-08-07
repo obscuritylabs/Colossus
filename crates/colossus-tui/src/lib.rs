@@ -57,7 +57,7 @@ const MAX_COMPLETION_MENU_ROWS: usize = 6;
 /// Transcript rows retained above completion chrome so the menu remains renderable.
 const MINIMUM_COMPLETION_TRANSCRIPT_ROWS: u16 = 3;
 /// Most rows occupied by the bottom-docked effect approval surface.
-const MAX_APPROVAL_DOCK_ROWS: u16 = 14;
+const MAX_APPROVAL_DOCK_ROWS: u16 = 10;
 /// Fewest rows that keep approval summary, navigation, and decisions usable.
 const MIN_APPROVAL_DOCK_ROWS: u16 = 8;
 /// Transcript rows retained above a bottom-docked approval.

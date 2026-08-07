@@ -23,13 +23,17 @@ review failed** cards before the explicit approval dock opens above the composer
 cards contain only a sanitized failure category, action, resource, and manual-fallback
 explanation.
 
-Effect approvals use a bottom-docked, focus-taking surface that keeps the current
-transcript visible and the composer draft preserved. **Summary** shows released actor,
-action, resource, policy reason, and risk metadata. **Exact request** shows the bounded
-prepared request, with any 65,536-character display truncation marked explicitly.
+Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
+current transcript visible and the composer draft preserved. **Summary** presents the
+released actor, action, resource, policy reason, and risk metadata as borderless rows so
+the complete decision context is visible without opening a nested table. **Exact
+request** shows the bounded prepared request, with any 65,536-character display
+truncation marked explicitly.
 **Protections** explains request binding, one-use behavior, policy re-evaluation, and
-the enforcement layers that remain active. Inline mode renders this transient dock on a
-temporary terminal screen, so dismissing it restores native scrollback byte-for-byte.
+the enforcement layers that remain active. Section and decision controls use filled,
+theme-resolved surfaces so focus remains visible without implying approval. Inline mode
+renders this transient dock on a temporary terminal screen, so dismissing it restores
+native scrollback byte-for-byte.
 
 ## Keys
 

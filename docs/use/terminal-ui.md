@@ -131,11 +131,15 @@ cancellation pauses the queue for confirmation.
 
 ### 5. Handle approvals and questions
 
-Effect approvals take focus in a bottom dock above the preserved composer. Use `S`, `R`,
-and `P` to inspect Summary, Exact request, and Protections; PageUp/PageDown scrolls the
-active section. Up/Down or `A`/`D` selects a decision, and Enter confirms it. Nothing is
-selected initially, so Enter, Esc, disconnect, or timeout fails closed. `user.ask`
-continues to use a focused overlay without discarding your draft.
+Effect approvals take focus in a compact bottom dock above the preserved composer. The
+borderless Summary keeps requester, action, resource, policy reason, and risk review in
+the initial view. Use `S`, `R`, and `P` to inspect Summary, Exact request, and
+Protections; PageUp/PageDown appears in the help row only when the active section
+overflows. Up/Down or `A`/`D` selects a decision, and Enter confirms it. Nothing is
+selected initially, so Enter, Esc, disconnect, or timeout fails closed. Filled neutral
+controls distinguish available actions from the amber active control without implying
+that an action has already been approved. `user.ask` continues to use a focused overlay
+without discarding your draft.
 
 Use `wait_for_input` in a workflow when a run must wait durably without an attached
 terminal; `user.ask` is turn-scoped.

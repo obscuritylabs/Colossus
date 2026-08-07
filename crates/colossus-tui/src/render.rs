@@ -629,14 +629,16 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
             Constraint::Length(u16::from(controls >= 1)),
         ])
         .split(inner);
-    let document = approval_section_document(&request.document, *approval_section);
-    let document_lines = styled_document_lines(
-        &document,
+    let document_lines = approval_section_lines(
+        &request.document,
+        *approval_section,
         &state.preferences,
+        &palette,
         usize::from(rows[0].width).max(1),
     );
     let visible = usize::from(rows[0].height);
-    let maximum_scroll = document_lines.len().saturating_sub(visible);
+    let document_line_count = document_lines.len();
+    let maximum_scroll = document_line_count.saturating_sub(visible);
     let scroll = (*document_scroll).min(maximum_scroll);
     frame.render_widget(
         Paragraph::new(document_lines)
@@ -667,10 +669,18 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
         );
     }
     if rows[3].height > 0 {
-        let hint = "↑/↓ choose · Enter confirm · S/R/P inspect · PgUp/PgDn scroll · Esc deny";
+        let mut hint = "Esc deny · ↑/↓ choose · Enter confirm · Tab sections".to_owned();
+        if maximum_scroll > 0 {
+            let first = scroll.saturating_add(1);
+            let last = scroll.saturating_add(visible).min(document_line_count);
+            hint.push_str(&format!(
+                " · PgUp/PgDn details {first}-{last}/{}",
+                document_line_count
+            ));
+        }
         frame.render_widget(
             Paragraph::new(Span::styled(
-                truncate_width(hint, usize::from(rows[3].width)),
+                truncate_width(&hint, usize::from(rows[3].width)),
                 ratatui_style(palette.warning_style()),
             )),
             rows[3],
@@ -678,12 +688,111 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     }
 }
 
+fn approval_section_lines(
+    document: &PresentationDocument,
+    section: ApprovalSection,
+    preferences: &TerminalPreferences,
+    palette: &TerminalPalette,
+    width: usize,
+) -> Vec<Line<'static>> {
+    if section == ApprovalSection::Summary {
+        let mut entries = Vec::new();
+        collect_approval_summary_entries(&document.blocks, &mut entries);
+        if !entries.is_empty() {
+            return compact_approval_summary_lines(&entries, palette, width);
+        }
+    }
+    styled_document_lines(
+        &approval_section_document(document, section),
+        preferences,
+        width,
+    )
+}
+
+fn collect_approval_summary_entries(
+    blocks: &[PresentationBlock],
+    entries: &mut Vec<(String, String)>,
+) {
+    for block in blocks {
+        match block {
+            PresentationBlock::KeyValue(values) => entries.extend(values.iter().cloned()),
+            PresentationBlock::Card { body, .. } => {
+                collect_approval_summary_entries(body, entries);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn compact_approval_summary_lines(
+    entries: &[(String, String)],
+    palette: &TerminalPalette,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let label_width = entries
+        .iter()
+        .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
+        .max()
+        .unwrap_or(1)
+        .min((width / 3).clamp(8, 18));
+    let value_width = width.saturating_sub(label_width.saturating_add(2)).max(1);
+    let mut label_style = palette.meta_style();
+    label_style.bold = true;
+    label_style.dim = false;
+    let mut value_style = palette.meta_style();
+    value_style.dim = false;
+
+    entries
+        .iter()
+        .map(|(label, value)| {
+            let label = sanitize_approval_field(label);
+            let label = truncate_width_with_ellipsis(&label, label_width);
+            let padding = label_width.saturating_sub(UnicodeWidthStr::width(label.as_str()));
+            let value = sanitize_approval_field(value);
+            let value = truncate_width_with_ellipsis(&value, value_width);
+            Line::from(vec![
+                Span::styled(
+                    format!("{label}{}", " ".repeat(padding)),
+                    ratatui_style(label_style),
+                ),
+                Span::raw("  "),
+                Span::styled(value, ratatui_style(value_style)),
+            ])
+        })
+        .collect()
+}
+
+pub(super) fn sanitize_approval_field(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|character| match character {
+            '\n' | '\r' | '\t' => Some(' '),
+            '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}' => None,
+            character if character.is_control() => None,
+            character => Some(character),
+        })
+        .take(1024 * 1024)
+        .collect()
+}
+
+fn truncate_width_with_ellipsis(value: &str, maximum: usize) -> String {
+    if UnicodeWidthStr::width(value) <= maximum {
+        return value.to_owned();
+    }
+    if maximum == 0 {
+        return String::new();
+    }
+    let mut truncated = truncate_width(value, maximum.saturating_sub(1));
+    truncated.push('…');
+    truncated
+}
+
 fn styled_document_lines(
     document: &PresentationDocument,
     preferences: &TerminalPreferences,
     width: usize,
 ) -> Vec<Line<'static>> {
-    StyledDocumentRenderer::new(preferences.clone(), width)
+    StyledDocumentRenderer::for_transcript(preferences.clone(), width)
         .render(document)
         .into_iter()
         .map(|line| {
@@ -770,7 +879,7 @@ fn collect_approval_request_blocks(
     }
 }
 
-fn approval_section_line(
+pub(super) fn approval_section_line(
     selected: ApprovalSection,
     palette: &TerminalPalette,
     width: u16,
@@ -785,18 +894,29 @@ fn approval_section_line(
     .enumerate()
     {
         if index > 0 {
-            spans.push(Span::raw("  "));
+            spans.push(Span::raw(if width < 56 { " " } else { "  " }));
         }
         let style = if section == selected {
-            ratatui_style(palette.user_style()).add_modifier(Modifier::REVERSED)
+            filled_approval_control_style(palette.warning_style(), true)
         } else {
-            ratatui_style(palette.meta_style())
+            filled_approval_control_style(palette.meta_style(), false)
+        };
+        let label = if width < 56 {
+            match section {
+                ApprovalSection::Summary => "Summary",
+                ApprovalSection::Request => "Request",
+                ApprovalSection::Protections => "Protect",
+            }
+        } else {
+            section.label()
+        };
+        let content = if width < 56 {
+            format!("[{shortcut}] {label}")
+        } else {
+            format!(" [{shortcut}] {label} ")
         };
         spans.push(Span::styled(
-            truncate_width(
-                &format!(" {shortcut} {} ", section.label()),
-                usize::from(width),
-            ),
+            truncate_width(&content, usize::from(width)),
             style,
         ));
     }
@@ -810,29 +930,88 @@ fn approval_choice_line(
     width: u16,
 ) -> Line<'static> {
     let mut spans = Vec::new();
+    if width >= 72 {
+        spans.push(Span::styled(
+            "Decision  ",
+            ratatui_style(palette.meta_style()).add_modifier(Modifier::BOLD),
+        ));
+    }
     for (index, choice) in request.choices.iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw("  "));
         }
-        let marker = if selected == Some(index) { "›" } else { " " };
         let shortcut = match choice.as_str() {
             "Allow once" => "A",
             "Deny" => "D",
             _ => " ",
         };
         let style = if selected == Some(index) {
-            ratatui_style(palette.user_style())
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(Modifier::REVERSED)
+            filled_approval_control_style(palette.warning_style(), true)
         } else {
-            ratatui_style(palette.assistant_style())
+            filled_approval_control_style(palette.meta_style(), false)
+        };
+        let content = if width < 56 {
+            format!("[{shortcut}] {choice}")
+        } else {
+            format!(" [{shortcut}] {choice} ")
         };
         spans.push(Span::styled(
-            truncate_width(&format!("{marker} {shortcut} {choice}"), usize::from(width)),
+            truncate_width(&content, usize::from(width)),
             style,
         ));
     }
+    if selected.is_none() {
+        let prompt = if width >= 72 {
+            "  No decision selected"
+        } else {
+            " · Select one"
+        };
+        spans.push(Span::styled(
+            prompt,
+            ratatui_style(palette.warning_style()).add_modifier(Modifier::BOLD),
+        ));
+    }
     Line::from(spans)
+}
+
+fn filled_approval_control_style(base: ThemeTextStyle, selected: bool) -> Style {
+    let mut style = ratatui_style(base);
+    let Some(accent) = base.foreground else {
+        style = style.add_modifier(Modifier::REVERSED);
+        if !selected {
+            style = style.add_modifier(Modifier::DIM);
+        }
+        return style;
+    };
+
+    let accent_color = Color::Rgb(accent.red, accent.green, accent.blue);
+    if selected {
+        style
+            .fg(contrasting_terminal_color(accent))
+            .bg(accent_color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        style.fg(accent_color).bg(Color::Rgb(
+            subdued_approval_channel(accent.red),
+            subdued_approval_channel(accent.green),
+            subdued_approval_channel(accent.blue),
+        ))
+    }
+}
+
+const fn subdued_approval_channel(value: u8) -> u8 {
+    (value / 10) * 3 + ((value % 10) * 3) / 10
+}
+
+fn contrasting_terminal_color(background: colossus_contracts::ThemeColor) -> Color {
+    let luminance = u32::from(background.red) * 299
+        + u32::from(background.green) * 587
+        + u32::from(background.blue) * 114;
+    if luminance >= 150_000 {
+        Color::Black
+    } else {
+        Color::White
+    }
 }
 
 fn plan_execution_choices() -> Vec<String> {

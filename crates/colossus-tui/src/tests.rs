@@ -1196,6 +1196,18 @@ fn approval_uses_transient_inline_chrome_and_adapts_at_minimum_height() {
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Approval required · Summary"));
     assert!(!rendered.contains("Commands ·"));
+
+    let backend = TestBackend::new(40, 12);
+    let mut terminal = Terminal::new(backend).expect("narrow test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw compact full-screen approval");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("[S] Summary"));
+    assert!(rendered.contains("[R] Request"));
+    assert!(rendered.contains("[P] Protect"));
+    assert!(rendered.contains("Select one"));
+    assert!(rendered.contains("Esc deny"));
 }
 
 #[test]
@@ -1385,7 +1397,19 @@ fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() 
                 tone: PresentationTone::Warning,
                 body: vec![
                     PresentationBlock::KeyValue(vec![
+                        (
+                            "Requested by".into(),
+                            "Model · tool-call:call_9xS9WDT8NZnDk7TnqrgCJkmS".into(),
+                        ),
                         ("Action".into(), "mcp.call".into()),
+                        (
+                            "Resource".into(),
+                            "http://127.0.0.1:18000/en-US/splunkd/__raw/services/mcp".into(),
+                        ),
+                        (
+                            "Reason".into(),
+                            "explicit operator approval required".into(),
+                        ),
                         (
                             "Risk review".into(),
                             "not assessed: evaluator unavailable".into(),
@@ -1410,6 +1434,14 @@ fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() 
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Approval required · Summary"));
     assert!(rendered.contains("mcp.call"));
+    assert!(rendered.contains("Requested by"));
+    assert!(rendered.contains("Reason"));
+    assert!(rendered.contains("Risk review"));
+    assert!(!rendered.contains("Field"));
+    assert!(rendered.contains("[A] Allow once"));
+    assert!(rendered.contains("No decision selected"));
+    assert!(rendered.contains("Tab sections"));
+    assert!(!rendered.contains("S/R/P inspect"));
     assert!(!rendered.contains("request-line-00"));
     assert!(rendered.contains("Message · paused for approval · draft preserved"));
     assert!(rendered.contains("draft stays visible"));
@@ -1438,7 +1470,7 @@ fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() 
         .expect("draw scrolled exact request");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Approval required · Exact request"));
-    assert!(rendered.contains("request-line-25"), "{rendered}");
+    assert!(rendered.contains("request-line-29"), "{rendered}");
 
     handle_overlay_key(
         &mut state,
@@ -1487,6 +1519,37 @@ fn approval_shortcuts_select_but_still_require_enter_to_confirm() {
     assert_eq!(
         received.try_recv(),
         Ok(PromptResponse::Answer("Allow once".into()))
+    );
+}
+
+#[test]
+fn approval_controls_use_filled_theme_resolved_surfaces() {
+    let palette = TerminalPalette::for_theme(colossus_contracts::ThemeName::Default);
+    let sections = approval_section_line(ApprovalSection::Summary, &palette, 120);
+    let active = sections.spans[0].style;
+    let inactive = sections.spans[2].style;
+
+    assert_eq!(active.bg, Some(Color::Rgb(255, 223, 93)));
+    assert_eq!(active.fg, Some(Color::Black));
+    assert_eq!(inactive.bg, Some(Color::Rgb(52, 55, 58)));
+    assert_eq!(inactive.fg, Some(Color::Rgb(174, 184, 194)));
+
+    let mono = TerminalPalette::for_theme(colossus_contracts::ThemeName::Mono);
+    let sections = approval_section_line(ApprovalSection::Summary, &mono, 120);
+    assert!(
+        sections.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::REVERSED)
+    );
+    assert!(sections.spans[2].style.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn approval_summary_fields_remove_terminal_controls_and_invisible_joiners() {
+    assert_eq!(
+        sanitize_approval_field("safe\u{1b}]8;;evil\u{7}\u{200b}\nnext"),
+        "safe]8;;evil next"
     );
 }
 
