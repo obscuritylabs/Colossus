@@ -1312,6 +1312,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                             let _ = no_alt_screen;
                             ScreenMode::Inline
                         },
+                        background_notice: Some(default_update_notice_provider()),
                     },
                 )
                 .await?;
@@ -1339,9 +1340,11 @@ pub(super) async fn dispatch_to_worker_if_active(
             print_json(&client.call(WorkerOperation::AccessEffective).await?)?;
             Ok(true)
         }
-        Command::Worker(_) | Command::Config(_) | Command::Codex(_) | Command::SandboxHelper => {
-            Ok(false)
-        }
+        Command::Update(_)
+        | Command::Worker(_)
+        | Command::Config(_)
+        | Command::Codex(_)
+        | Command::SandboxHelper => Ok(false),
     }
 }
 

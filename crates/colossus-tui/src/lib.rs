@@ -77,12 +77,12 @@ mod transcript;
 
 pub use app::run_tui;
 pub use contract::{
-    BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
-    HostPlanExecutionResult, HostRunResult, InteractiveCommand, InteractiveHost, InteractiveMode,
-    InteractivePlanExecutionRequest, InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot,
-    LocalCommand, OperationResult, PlanCommand, PlanHostCommand, PlanSelectionUpdate,
-    PromptResponse, RuntimeCommand, ScreenMode, TranscriptEntry, TranscriptKind, TuiError,
-    TuiOptions, parse_interactive_command,
+    BackgroundNoticeProvider, BootstrapRequest, FooterState, HostCommandResult, HostEvent,
+    HostPlanExecutionOutcome, HostPlanExecutionResult, HostRunResult, InteractiveCommand,
+    InteractiveHost, InteractiveMode, InteractivePlanExecutionRequest, InteractivePrompt,
+    InteractiveRunRequest, InteractiveSnapshot, LocalCommand, OperationResult, PlanCommand,
+    PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode,
+    TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
 };
 pub use state::TuiState;
 

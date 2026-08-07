@@ -62,8 +62,10 @@ The product must be useful in three environments:
 2. Locally operated with selected network integrations enabled and approved.
 3. Connected to an online model provider while keeping tools and durable state local.
 
-The default installation MUST work without credentials and MUST NOT make network calls
-until the operator explicitly configures and permits a network-capable feature.
+The default installation MUST work without credentials and continue normally offline.
+Except for the documented, credential-free, fixed-origin stable release discovery check,
+it MUST NOT make network calls until the operator explicitly configures and permits a
+network-capable feature.
 
 ## 2. Product Goals
 
@@ -153,7 +155,8 @@ inspect hashes, audit records, and package contents without network access.
 | EXT-01 | Skills and resources | P1 | Skills compose prompt context under precedence and resource-access rules. |
 | INT-01 | Integrations and credential broker | P2 | Connected services expose normal tools without exposing credentials. |
 | PACK-01 | Capability packs | P2 | Executable extensions are declared, verified, trusted, and lifecycle-managed. |
-| DIST-01 | Trusted distribution | P2 | Offline bundles and signed pack/skill collections can be verified, transported, and installed without weakening offline operation. |
+| DIST-01 | Trusted distribution | P2 | Fixed-origin bootstrap installers verify exact public release assets, record direct ownership, and preserve offline bundle plus signed pack/skill verification without weakening offline operation. |
+| DIST-02 | Fail-soft update discovery | P2 | The standalone CLI and asynchronous TUI check one fixed stable channel at most daily; strict cached metadata and typed offline/rate-limit outcomes never block normal operation or replace a binary. |
 
 P0 is the minimum useful and secure product. P1 provides full agent workflow parity. P2
 provides the complete extension and distribution ecosystem.
@@ -927,6 +930,8 @@ reference, HTTP environment-trust toggle, and shell completion.
 
 ### 18.2 Top-Level Commands
 
+- `update check`: read-only fixed-channel stable release discovery with structured,
+  fail-soft offline output.
 - `run`: normal turn, plan creation, approved-plan execution, or plan-to-goal handoff.
 - `goal`: bounded autonomous goal loop.
 - `research`: deep research with persisted cited output.
@@ -1126,7 +1131,8 @@ to local or air-gapped operation.
 - No shell-string execution in brokered subprocess paths.
 - No raw secret in model-visible schemas, prompts, transcripts, telemetry, or audit.
 - No mutation before schema validation, policy, and approval.
-- No hidden network use in the default configuration.
+- No default network use except documented, bounded, credential-free stable release
+  discovery; every other network path requires explicit configuration and permission.
 - No hidden reasoning in default persisted or rendered data.
 - Path containment is verified after canonicalization and across symlinks.
 

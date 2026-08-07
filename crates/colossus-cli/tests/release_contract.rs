@@ -109,8 +109,8 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "release_channel=validation_only",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 17",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 18",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 21",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
     ] {
         assert!(
             source.contains(required),
@@ -301,6 +301,101 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
     assert!(windows.contains("[IO.File]::WriteAllText("));
     assert!(windows.contains("$hash  $package.zip`n"));
     assert!(!windows.contains("| Set-Content -Encoding ascii \"${archive}.sha256\""));
+}
+
+#[test]
+fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
+    let workflow = workflow("release.yml");
+    let release_jobs = jobs(&workflow);
+    let bootstrap = job(release_jobs, "bootstrap_installers");
+    named_step(bootstrap, "Validate bootstrap installer syntax");
+    named_step(bootstrap, "Stage immutable bootstrap installer assets");
+    named_step(bootstrap, "Upload bootstrap installers and checksums");
+
+    let workflow_source =
+        fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
+            .expect("read release workflow");
+    for required in [
+        "bootstrap_installers=${{ needs.bootstrap_installers.result }}",
+        "dist/colossus-install.sh",
+        "dist/colossus-install.ps1",
+        "colossus-install.sh.sha256",
+        "colossus-install.ps1.sha256",
+    ] {
+        assert!(
+            workflow_source.contains(required),
+            "bootstrap release contract is missing {required}"
+        );
+    }
+
+    let unix = fs::read_to_string(repository_root().join("release/bootstrap/install.sh"))
+        .expect("read Unix bootstrap");
+    let windows = fs::read_to_string(repository_root().join("release/bootstrap/install.ps1"))
+        .expect("read PowerShell bootstrap");
+    for source in [&unix, &windows] {
+        for required in [
+            "obscuritylabs/Colossus",
+            "api.github.com",
+            "release-assets.githubusercontent.com",
+        ] {
+            assert!(source.contains(required), "bootstrap is missing {required}");
+        }
+        assert!(!source.contains("COLOSSUS_DIST_ORIGIN"));
+    }
+    for required in [
+        "maximum_metadata_bytes=1048576",
+        "maximum_archive_bytes=268435456",
+        "archive contains a link or special file",
+        "archive checksum mismatch",
+        "package metadata version mismatch",
+        "--version",
+        "--prefix",
+        "--channel",
+        "--dry-run",
+        "--no-modify-path",
+        "--yes",
+    ] {
+        assert!(
+            unix.contains(required),
+            "Unix bootstrap is missing {required}"
+        );
+    }
+    for required in [
+        "$maximumMetadataBytes = 1MB",
+        "$maximumArchiveBytes = 256MB",
+        "ResponseHeadersRead",
+        "archive contains a link or reparse point",
+        "archive checksum mismatch",
+        "package metadata mismatch",
+        "[string]$Version",
+        "[string]$Prefix",
+        "[string]$Channel",
+        "[switch]$DryRun",
+        "[switch]$NoModifyPath",
+        "[switch]$Yes",
+    ] {
+        assert!(
+            windows.contains(required),
+            "PowerShell bootstrap is missing {required}"
+        );
+    }
+
+    for installer_path in ["release/install.sh", "release/install.ps1"] {
+        let installer = fs::read_to_string(repository_root().join(installer_path))
+            .unwrap_or_else(|error| panic!("read {installer_path}: {error}"));
+        for required in [
+            "install-metadata",
+            "install.json",
+            "schemaVersion",
+            "distributionOrigin",
+            "installerKind",
+        ] {
+            assert!(
+                installer.contains(required),
+                "{installer_path} is missing receipt contract {required}"
+            );
+        }
+    }
 }
 
 #[test]

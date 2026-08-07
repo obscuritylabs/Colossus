@@ -22,13 +22,17 @@ use colossus_ports::{
     UserPromptProvider,
 };
 use colossus_presentation::{
-    EventDisplayMode, PresentationBlock, PresentationDocument, PresentationTable, SemanticRenderer,
-    StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette, TerminalPreferences,
-    ThemeLibrary, ThemeName, TranscriptDensity, automatic_approval_document, document_from_json,
-    risk_review_fallback_document,
+    EventDisplayMode, PresentationBlock, PresentationDocument, PresentationTable, PresentationTone,
+    SemanticRenderer, StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette,
+    TerminalPreferences, ThemeLibrary, ThemeName, TranscriptDensity, automatic_approval_document,
+    document_from_json, risk_review_fallback_document,
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
-use colossus_tui::{BootstrapRequest, ScreenMode, TuiOptions, run_tui};
+use colossus_tui::{BackgroundNoticeProvider, BootstrapRequest, ScreenMode, TuiOptions, run_tui};
+use colossus_update::{
+    InstallerKind, UpdateCheckReport, UpdateCheckStatus, UpdateChecker, UpdateService,
+    UpdateUnavailableReason,
+};
 use colossus_worker::{
     InteractiveWorkerRequest, WorkerApprovalMode, WorkerClient, WorkerError, WorkerOperation,
     WorkerPrompt, WorkerPromptHandler, WorkerPromptKind, WorkerServer,
@@ -69,6 +73,7 @@ mod presentation_commands;
 mod public_api_admin;
 mod service_args;
 mod terminal_io;
+mod update_commands;
 mod webhooks;
 mod work_args;
 mod worker_dispatch;
@@ -94,6 +99,7 @@ use presentation_commands::*;
 use public_api_admin::*;
 use service_args::*;
 use terminal_io::*;
+use update_commands::*;
 use webhooks::*;
 use work_args::*;
 use worker_dispatch::*;

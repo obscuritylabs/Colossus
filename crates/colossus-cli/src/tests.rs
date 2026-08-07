@@ -54,6 +54,17 @@ fn codex_login_supports_browser_and_device_code_flows() {
 }
 
 #[test]
+fn update_check_is_a_standalone_command() {
+    let cli = Cli::try_parse_from(["colossus", "update", "check"]).expect("update check");
+    assert!(matches!(
+        cli.command,
+        Command::Update(UpdateCommand {
+            command: UpdateAction::Check
+        })
+    ));
+}
+
+#[test]
 fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
     assert!(worker_probe_allows_embedded_fallback(
         &colossus_worker::WorkerError::Unavailable("worker-endpoint".into()),

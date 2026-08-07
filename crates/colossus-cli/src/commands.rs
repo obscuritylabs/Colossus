@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Check the fixed stable Colossus release channel.
+    Update(UpdateCommand),
     /// Create or inspect fresh YAML configuration.
     Config(ConfigCommand),
     /// Verify and inspect the authoritative journal.
@@ -134,6 +136,18 @@ pub(super) enum Command {
     /// Internal authenticated one-shot sandbox helper.
     #[command(name = "__sandbox-helper", hide = true)]
     SandboxHelper,
+}
+
+#[derive(Args)]
+pub(super) struct UpdateCommand {
+    #[command(subcommand)]
+    pub(super) command: UpdateAction,
+}
+
+#[derive(Subcommand)]
+pub(super) enum UpdateAction {
+    /// Check whether a newer stable CLI release is available.
+    Check,
 }
 
 #[derive(Args)]

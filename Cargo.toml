@@ -26,6 +26,7 @@ members = [
     "crates/colossus-codex-auth",
     "crates/colossus-provider",
     "crates/colossus-search",
+    "crates/colossus-update",
     "crates/colossus-tools",
     "crates/colossus-agent",
     "crates/colossus-session",
@@ -182,6 +183,7 @@ colossus-policy = { version = "=0.10.4", path = "crates/colossus-policy" }
 colossus-codex-auth = { version = "=0.10.4", path = "crates/colossus-codex-auth" }
 colossus-provider = { version = "=0.10.4", path = "crates/colossus-provider" }
 colossus-search = { version = "=0.10.4", path = "crates/colossus-search" }
+colossus-update = { version = "=0.10.4", path = "crates/colossus-update" }
 colossus-tools = { version = "=0.10.4", path = "crates/colossus-tools" }
 colossus-agent = { version = "=0.10.4", path = "crates/colossus-agent" }
 colossus-session = { version = "=0.10.4", path = "crates/colossus-session" }

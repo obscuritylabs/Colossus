@@ -9,8 +9,9 @@ type: how-to
 
 ## Goal
 
-Publish one stable Colossus core version as six GitHub CLI archives,
-`@obscuritylabs/colossus-sdk` on npm, `obscuritylabs-colossus-sdk` on PyPI,
+Publish one stable Colossus core version as six GitHub CLI archives, two reviewed
+bootstrap installers, `@obscuritylabs/colossus-sdk` on npm,
+`obscuritylabs-colossus-sdk` on PyPI,
 and `sdk/go/vX.Y.Z` from the same immutable source commit. Stable core releases do not
 contain Desktop artifacts and do not require Apple, Tauri updater, or Authenticode
 credentials.
@@ -107,6 +108,7 @@ The tag workflow creates a draft only after the six CLI archives and immutable S
 candidate pass. Before publishing the draft, verify that it contains exactly:
 
 - six CLI archives and six adjacent `.sha256` files;
+- `colossus-install.sh` and `colossus-install.ps1`, each with an adjacent `.sha256`;
 - one npm `.tgz`;
 - one Python wheel and one source distribution;
 - `colossus-sdk-vX.Y.Z-manifest.json`; and
@@ -124,10 +126,11 @@ the core tag's commit.
 
 ## Expected result
 
-The stable GitHub Release contains exactly the six CLI archives, their checksums, and
-the five immutable SDK candidate files. The protected publisher releases the same
-version to npm and PyPI and creates the Go module tag at the identical source commit.
-No stable core job requests or produces Desktop signing material.
+The stable GitHub Release contains exactly the six CLI archives, their checksums, the
+two repository-owned bootstrap installers and their checksums, and the five immutable
+SDK candidate files. The protected publisher releases the same version to npm and PyPI
+and creates the Go module tag at the identical source commit. No stable core job
+requests or produces Desktop signing material.
 
 ## Verification
 
@@ -142,6 +145,15 @@ Also verify that `git rev-list -n 1 vX.Y.Z` and
 `git rev-list -n 1 sdk/go/vX.Y.Z` are identical. A stable core GitHub Release must not
 contain an unsigned Desktop asset. The Desktop update-channel workflow runs only for a
 separately produced stable release that contains a verified `stable.json` asset.
+Confirm that the public bootstrap route resolves to the newly published, byte-identical
+release asset:
+
+```bash
+curl -fsSL \
+  https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.sh \
+  -o /tmp/colossus-install.sh
+sh /tmp/colossus-install.sh --version vX.Y.Z --dry-run --yes
+```
 
 ## Failure path
 

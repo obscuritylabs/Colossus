@@ -9,6 +9,7 @@ $binary = Join-Path $env:GITHUB_WORKSPACE "target/$Target/release/colossus.exe"
 $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
 $version = ($metadata.packages | Where-Object name -eq "colossus-cli").version
 $package = "colossus-$version-$Target"
+$channel = if ($version -match '-preview\.') { "preview" } else { "stable" }
 
 $smoke = Join-Path $env:RUNNER_TEMP "colossus-release-smoke-$Target"
 Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
@@ -35,6 +36,18 @@ Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage, $dist | Out-Null
 Copy-Item $binary (Join-Path $stage "colossus.exe")
 Copy-Item release/install.ps1 (Join-Path $stage "install.ps1")
+[IO.File]::WriteAllText(
+    (Join-Path $stage "install-metadata"),
+    (@(
+        "schema_version=1",
+        "version=$version",
+        "target=$Target",
+        "channel=$channel",
+        "distribution_origin=https://github.com/obscuritylabs/Colossus/releases",
+        "installer_kind=direct"
+    ) -join "`n") + "`n",
+    [Text.Encoding]::ASCII
+)
 Copy-Item LICENSE (Join-Path $stage "LICENSE")
 Copy-Item README.md (Join-Path $stage "README.md")
 $archive = Join-Path $dist "$package.zip"
@@ -51,8 +64,16 @@ $prefix = Join-Path $env:RUNNER_TEMP "colossus-install-prefix-$Target"
 $installedSmoke = Join-Path $env:RUNNER_TEMP "colossus-install-smoke-$Target"
 Remove-Item -Recurse -Force $extract, $prefix, $installedSmoke -ErrorAction SilentlyContinue
 Expand-Archive -LiteralPath $archive -DestinationPath $extract
-& (Join-Path $extract "$package/install.ps1") -Prefix $prefix
 New-Item -ItemType Directory -Force (Join-Path $installedSmoke "workflows") | Out-Null
+$originalLocalAppData = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = Join-Path $installedSmoke "data"
+try {
+    & (Join-Path $extract "$package/install.ps1") -Prefix $prefix
+} finally {
+    $env:LOCALAPPDATA = $originalLocalAppData
+}
+$receipt = Join-Path $installedSmoke "data/Colossus/install.json"
+if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "installation receipt is missing" }
 Copy-Item release/smoke-config.yaml (Join-Path $installedSmoke "config.yaml")
 $installed = Join-Path $prefix "bin/colossus.exe"
 Push-Location $installedSmoke
