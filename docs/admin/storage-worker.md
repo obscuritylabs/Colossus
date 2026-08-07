@@ -51,7 +51,12 @@ causes a one-time complete bootstrap audit and writes the version-two attestatio
 can take tens of seconds for a large existing journal. Later clean starts verify one
 checkpoint boundary plus any uncheckpointed tail instead of decrypting all history.
 In keyless mode, incremental startup validates local head and index invariants without
-replaying historical payloads. Set `startupVerification: full` when policy requires complete replay before every
+replaying historical payloads. Those checks stay bounded: redb reads its constant-time
+table lengths, and PostgreSQL reads only the first and last indexed sequence of each
+canonical table rather than counting rows, so startup cost does not grow with journal
+size. A PostgreSQL journal with an interior deletion is therefore detected by
+`startupVerification: full` rather than at every start.
+Set `startupVerification: full` when policy requires complete replay before every
 writable start. `state doctor` reports the configured mode, actual path, verified
 sequence range, event count, and anchor version.
 

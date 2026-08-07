@@ -218,42 +218,31 @@ impl PostgresEventJournal {
                 "plaintext journal contains a signed checkpoint".into(),
             ));
         }
-        let event_count = to_u64(
-            transaction
-                .query_one("SELECT COUNT(*) FROM journal_events", &[])
-                .map_err(database_error)?
-                .get::<_, i64>(0),
-            "journal event count",
-        )?;
-        let outbox_count = to_u64(
-            transaction
-                .query_one("SELECT COUNT(*) FROM projection_outbox", &[])
-                .map_err(database_error)?
-                .get::<_, i64>(0),
-            "projection outbox count",
-        )?;
+        // Incremental startup must stay bounded, so the sequence bounds are read as
+        // ordered single-row primary-key lookups. PostgreSQL cannot answer COUNT(*)
+        // from an index under MVCC, so counting either canonical table would make
+        // every start linear in journal size. Interior gaps remain the responsibility
+        // of `startupVerification: full`.
         let event_bounds = transaction
             .query_one(
-                "SELECT MIN(global_sequence), MAX(global_sequence) FROM journal_events",
+                "SELECT (SELECT global_sequence FROM journal_events ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM journal_events ORDER BY global_sequence DESC LIMIT 1)",
                 &[],
             )
             .map_err(database_error)?;
         let outbox_bounds = transaction
             .query_one(
-                "SELECT MIN(global_sequence), MAX(global_sequence) FROM projection_outbox",
+                "SELECT (SELECT global_sequence FROM projection_outbox ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM projection_outbox ORDER BY global_sequence DESC LIMIT 1)",
                 &[],
             )
             .map_err(database_error)?;
         let expected_head = to_i64(head_sequence, "journal head")?;
-        if event_count != head_sequence
-            || outbox_count != head_sequence
-            || event_bounds.get::<_, Option<i64>>(0) != Some(1)
+        if event_bounds.get::<_, Option<i64>>(0) != Some(1)
             || event_bounds.get::<_, Option<i64>>(1) != Some(expected_head)
             || outbox_bounds.get::<_, Option<i64>>(0) != Some(1)
             || outbox_bounds.get::<_, Option<i64>>(1) != Some(expected_head)
         {
             return Err(StoreError::Verification(
-                "plaintext journal local indexes do not match its head".into(),
+                "plaintext journal local index bounds do not match its head".into(),
             ));
         }
         let row = transaction

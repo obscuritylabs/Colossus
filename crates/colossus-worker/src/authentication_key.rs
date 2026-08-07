@@ -1,10 +1,7 @@
 use crate::WorkerError;
-use std::{
-    fmt, fs,
-    io::{Read as _, Write as _},
-    path::Path,
-    sync::Arc,
-};
+#[cfg(not(windows))]
+use std::io::Write as _;
+use std::{fmt, fs, io::Read as _, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
 const FILE_PREFIX: &str = "colossus-worker-auth-v1:";
@@ -88,6 +85,7 @@ fn parse_key(encoded: &[u8]) -> Result<[u8; 32], WorkerError> {
 fn read_owner_only(path: &Path) -> Result<Vec<u8>, WorkerError> {
     let before = fs::symlink_metadata(path)?;
     validate_metadata(&before)?;
+    validate_private_access(path)?;
     let file = open_read_no_follow(path)?;
     let after = file.metadata()?;
     validate_metadata(&after)?;
@@ -117,6 +115,17 @@ fn read_owner_only(path: &Path) -> Result<Vec<u8>, WorkerError> {
     Ok(encoded)
 }
 
+/// Create the secret with an explicit current-user-only Windows ACL.
+///
+/// Inheriting the state directory's DACL would let any other local account granted
+/// access there read the HMAC key and authenticate as the worker client, so the file
+/// carries its own protected owner-only descriptor instead.
+#[cfg(windows)]
+fn create_owner_only(path: &Path, encoded: &[u8]) -> std::io::Result<()> {
+    colossus_windows_native::create_private_file(path, encoded).map_err(windows_error)
+}
+
+#[cfg(not(windows))]
 fn create_owner_only(path: &Path, encoded: &[u8]) -> std::io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.create_new(true).read(true).write(true);
@@ -136,6 +145,30 @@ fn create_owner_only(path: &Path, encoded: &[u8]) -> std::io::Result<()> {
     file.write_all(encoded)?;
     file.sync_all()?;
     validate_metadata_io(&file.metadata()?)
+}
+
+/// Require an owner-private Windows DACL before the secret is read.
+#[cfg(windows)]
+fn validate_private_access(path: &Path) -> Result<(), WorkerError> {
+    let binding = colossus_windows_native::BoundPath::open_file(path).map_err(windows_error)?;
+    binding
+        .validate_private_owner_dacl()
+        .and_then(|()| binding.revalidate())
+        .map_err(windows_error)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn validate_private_access(_path: &Path) -> Result<(), WorkerError> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_error(error: colossus_windows_native::WindowsNativeError) -> std::io::Error {
+    match error {
+        colossus_windows_native::WindowsNativeError::Io { source, .. } => source,
+        other => std::io::Error::new(std::io::ErrorKind::PermissionDenied, other.to_string()),
+    }
 }
 
 fn open_read_no_follow(path: &Path) -> std::io::Result<fs::File> {
@@ -201,6 +234,13 @@ mod tests {
         let loaded = WorkerAuthenticationKey::load(&path).expect("load key");
         assert_eq!(created.expose(), loaded.expose());
         assert_eq!(fs::read(&path).expect("encoded secret").len(), FILE_BYTES);
+        #[cfg(windows)]
+        {
+            colossus_windows_native::BoundPath::open_file(&path)
+                .expect("bind worker secret")
+                .validate_private_owner_dacl()
+                .expect("worker secret carries an owner-only DACL");
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

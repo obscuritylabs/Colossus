@@ -45,6 +45,23 @@ fn private_directory_creation_protects_the_directory_and_children() {
 
 #[cfg(windows)]
 #[test]
+fn private_file_creation_is_exclusive_and_owner_private() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let path = parent.path().join("secret");
+
+    create_private_file(&path, b"colossus").expect("create private file");
+
+    assert_eq!(std::fs::read(&path).expect("read secret"), b"colossus");
+    BoundPath::open_file(&path)
+        .expect("bind private file")
+        .validate_private_owner_dacl()
+        .expect("private file DACL");
+    assert!(create_private_file(&path, b"other").is_err());
+    assert_eq!(std::fs::read(&path).expect("read secret"), b"colossus");
+}
+
+#[cfg(windows)]
+#[test]
 fn private_file_replacement_is_atomic_and_preserves_private_access() {
     let parent = tempfile::tempdir().expect("temporary parent");
     let directory = parent.path().join("private");

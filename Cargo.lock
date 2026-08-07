@@ -1674,6 +1674,7 @@ dependencies = [
  "colossus-ports",
  "colossus-runtime",
  "colossus-testkit",
+ "colossus-windows-native",
  "colossus-workflow",
  "getrandom 0.4.3",
  "hex",

@@ -35,5 +35,8 @@ zeroize.workspace = true
 colossus-testkit.workspace = true
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native.workspace = true
+
 [lints]
 workspace = true
