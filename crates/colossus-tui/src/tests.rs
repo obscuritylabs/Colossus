@@ -1470,7 +1470,7 @@ fn approval_is_bottom_docked_with_preserved_composer_and_inspectable_sections() 
         .expect("draw scrolled exact request");
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Approval required · Exact request"));
-    assert!(rendered.contains("request-line-29"), "{rendered}");
+    assert!(rendered.contains("request-line-19"), "{rendered}");
 
     handle_overlay_key(
         &mut state,
@@ -1592,6 +1592,29 @@ fn approval_summary_wraps_long_values_instead_of_dropping_their_suffix() {
         .collect::<String>();
     assert!(joined.contains(&resource));
     assert!(joined.ends_with("credentials."));
+}
+
+#[test]
+fn approval_exact_request_repeats_the_complete_sanitized_scope() {
+    let resource = format!(
+        "https://example.test/{}/actor-distinguishing-suffix",
+        "nested/".repeat(24)
+    );
+    let document = PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Approval required".into(),
+        tone: PresentationTone::Warning,
+        body: vec![PresentationBlock::KeyValue(vec![(
+            "Resource".into(),
+            format!("{resource}\u{200b}\ncontinued"),
+        )])],
+    });
+
+    let exact = approval_section_document(&document, ApprovalSection::Request);
+    let PresentationBlock::KeyValue(scope) = &exact.blocks[0] else {
+        panic!("exact request must begin with the complete approval scope");
+    };
+    assert_eq!(scope[0].0, "Resource");
+    assert_eq!(scope[0].1, format!("{resource} continued"));
 }
 
 #[test]

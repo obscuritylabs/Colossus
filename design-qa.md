@@ -218,6 +218,10 @@ terminal, font, color profile, and approval state as the source capture.
    - Fix: give every section and decision a theme-derived filled surface. Inactive
      controls use a subdued tint; the active control uses the warning accent with
      contrast-selected text. Mono terminals retain reverse-video and dim distinctions.
+7. P1 — compact Summary values could lose an authorization-relevant suffix with no
+   complete representation in another section.
+   - Fix: wrap complete values in Summary and repeat the sanitized, wrapped, scrollable
+     approval scope before the prepared body in Exact request.
 
 ## Verification
 

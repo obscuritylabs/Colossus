@@ -849,7 +849,7 @@ fn styled_document_lines(
         .collect()
 }
 
-fn approval_section_document(
+pub(super) fn approval_section_document(
     document: &PresentationDocument,
     section: ApprovalSection,
 ) -> PresentationDocument {
@@ -859,10 +859,25 @@ fn approval_section_document(
         },
         ApprovalSection::Request => {
             let mut blocks = Vec::new();
+            let mut scope = Vec::new();
+            collect_approval_summary_entries(&document.blocks, &mut scope);
+            if !scope.is_empty() {
+                blocks.push(PresentationBlock::KeyValue(
+                    scope
+                        .into_iter()
+                        .map(|(label, value)| {
+                            (
+                                sanitize_approval_field(&label),
+                                sanitize_approval_field(&value),
+                            )
+                        })
+                        .collect(),
+                ));
+            }
             collect_approval_request_blocks(&document.blocks, &mut blocks);
             if blocks.is_empty() {
                 blocks.push(PresentationBlock::Text(
-                    "Exact request details are included in the summary.".into(),
+                    "No additional prepared-request body was released.".into(),
                 ));
             }
             PresentationDocument { blocks }

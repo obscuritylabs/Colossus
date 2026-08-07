@@ -26,9 +26,10 @@ explanation.
 Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
 current transcript visible and the composer draft preserved. **Summary** presents the
 released actor, action, resource, policy reason, and risk metadata as borderless rows so
-the complete decision context is visible without opening a nested table. **Exact
-request** shows the bounded prepared request, with any 65,536-character display
-truncation marked explicitly.
+the decision context is visible without opening a nested table; long values wrap and
+remain scrollable. **Exact request** shows the bounded prepared request, with any
+65,536-character display truncation marked explicitly, and repeats the complete
+sanitized approval scope before confirmation.
 **Protections** explains request binding, one-use behavior, policy re-evaluation, and
 the enforcement layers that remain active. Section and decision controls use filled,
 theme-resolved surfaces so focus remains visible without implying approval. Inline mode
