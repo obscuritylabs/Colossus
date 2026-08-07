@@ -3,7 +3,7 @@
 use super::{ApprovalMode, TERMINAL_HISTORY_CAPACITY, doctor_profile, terminal_completion_values};
 use async_trait::async_trait;
 use colossus_contracts::{
-    AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
+    ActorType, AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
     MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
     ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
@@ -24,8 +24,8 @@ use colossus_runtime::{Runtime, RuntimeError, format_provider_response_diagnosti
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
     HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractivePlanExecutionRequest,
-    InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot, PlanHostCommand,
-    PlanSelectionUpdate, PromptResponse, RuntimeCommand,
+    InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSnapshot,
+    PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand,
 };
 use colossus_worker::{
     InteractiveWorkerRequest, WorkerClient, WorkerError, WorkerOperation, WorkerPrompt,
@@ -44,6 +44,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const APPROVAL_CONTENT_PREVIEW_CHARACTERS: usize = 64 * 1024;
 
 fn current_session_plan(
     plan: Option<PlanRecord>,

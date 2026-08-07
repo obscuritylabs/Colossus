@@ -85,11 +85,47 @@ pub(super) struct CompletionContext<'a> {
     pub(super) kind: CompletionKind,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ApprovalSection {
+    #[default]
+    Summary,
+    Request,
+    Protections,
+}
+
+impl ApprovalSection {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Summary => "Summary",
+            Self::Request => "Exact request",
+            Self::Protections => "Protections",
+        }
+    }
+
+    pub(super) const fn next(self) -> Self {
+        match self {
+            Self::Summary => Self::Request,
+            Self::Request => Self::Protections,
+            Self::Protections => Self::Summary,
+        }
+    }
+
+    pub(super) const fn previous(self) -> Self {
+        match self {
+            Self::Summary => Self::Protections,
+            Self::Request => Self::Summary,
+            Self::Protections => Self::Request,
+        }
+    }
+}
+
 pub(super) enum Overlay {
     Prompt {
         request: InteractivePrompt,
         input: String,
         selected: Option<usize>,
+        approval_section: ApprovalSection,
+        document_scroll: usize,
     },
     HistorySearch {
         query: String,
@@ -198,6 +234,18 @@ impl TuiState {
     /// Current editable draft, excluding type-ahead ghost text.
     pub fn draft(&self) -> &str {
         &self.composer.draft
+    }
+
+    pub(super) fn approval_prompt_active(&self) -> bool {
+        matches!(
+            self.overlay.as_ref(),
+            Some(Overlay::Prompt { request, .. })
+                if request.kind == InteractivePromptKind::Approval
+        )
+    }
+
+    pub(super) fn transient_inline_chrome_active(&self) -> bool {
+        self.approval_prompt_active() || self.structured_completion_context().is_some()
     }
 
     pub(super) fn run_request(&self, prompt: String) -> Result<InteractiveRunRequest, String> {

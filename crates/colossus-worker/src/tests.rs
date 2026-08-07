@@ -1122,6 +1122,9 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
                 prompt.details["risk"]["reason"],
                 "risk-auto skipped because this action is ineligible"
             );
+            assert_eq!(prompt.details["actor"]["actor_type"], "system");
+            assert_eq!(prompt.details["actor"]["id"], "worker-test");
+            assert_eq!(prompt.details["reason"], "operator must approve");
             responder_bridge
                 .respond(&prompt.prompt_id, Some(answer))
                 .await

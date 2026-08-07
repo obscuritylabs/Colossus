@@ -109,6 +109,9 @@ fn live_oci_enforces_mount_environment_network_timeout_and_cleanup_boundaries() 
     fs::create_dir_all(&workflows).expect("workflows");
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");
+    // Container creation is charged to the sandbox process budget, and that budget is
+    // further reduced by the OCI cleanup reserve, so rootless runtimes need real headroom
+    // for the phases that must succeed. Enforcement phases use `bounded_config` below.
     let config = directory.path().join("config.yaml");
     fs::write(
         &config,
@@ -155,7 +158,7 @@ sandbox:
     - /usr/local/bin/python3
   environment: [SAFE]
   networkDestinations: []
-  timeoutMs: 12000
+  timeoutMs: 20000
   maxOutputBytes: 1048576
   maxProcesses: 16
   maxMemoryBytes: 134217728
@@ -272,13 +275,10 @@ sandbox:
     let network_config = directory.path().join("network-config.yaml");
     fs::write(
         &network_config,
-        fs::read_to_string(&config)
-            .expect("read config")
-            .replace(
-                "  networkDestinations: []",
-                "  networkDestinations:\n    - http://example.com\n    - https://example.com",
-            )
-            .replace("  timeoutMs: 12000", "  timeoutMs: 20000"),
+        fs::read_to_string(&config).expect("read config").replace(
+            "  networkDestinations: []",
+            "  networkDestinations:\n    - http://example.com\n    - https://example.com",
+        ),
     )
     .expect("network config");
     let allowed_network = run(
@@ -380,9 +380,20 @@ sandbox:
         "OCI proxy network leaked"
     );
 
+    // Enforcement phases keep a tight budget so a 30 second sleep must be killed well
+    // before it can exit on its own, and so the cancellation guard still observes the
+    // fault helper's detached container while it is running.
+    let bounded_config = directory.path().join("bounded-config.yaml");
+    fs::write(
+        &bounded_config,
+        fs::read_to_string(&config)
+            .expect("read config")
+            .replace("  timeoutMs: 20000", "  timeoutMs: 12000"),
+    )
+    .expect("bounded config");
     let timeout = run(
         binary,
-        &config,
+        &bounded_config,
         &[
             "process",
             "run",
@@ -434,10 +445,12 @@ time.sleep(30)
     let fault_config = directory.path().join("fault-config.yaml");
     fs::write(
         &fault_config,
-        fs::read_to_string(&config).expect("read config").replace(
-            "  helperPath: null",
-            &format!("  helperPath: {}", fault_helper.display()),
-        ),
+        fs::read_to_string(&bounded_config)
+            .expect("read bounded config")
+            .replace(
+                "  helperPath: null",
+                &format!("  helperPath: {}", fault_helper.display()),
+            ),
     )
     .expect("fault config");
     let unknown = run(

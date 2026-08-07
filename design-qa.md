@@ -151,6 +151,90 @@ final result: passed
 
 ---
 
+# TUI effect-approval dock refinement QA
+
+## Comparison target
+
+- Source defect capture:
+  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-38cee459-4020-41a2-988e-f7d95b7061e4.png`
+- Source pixels: 2830 × 632. The terminal's font scale and display density were not
+  recorded in the capture.
+- Filled-control refinement capture:
+  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-d58bd717-c2c9-4e38-af62-43a10552bb95.png`
+- Refinement-capture pixels: 1392 × 295. The terminal's font scale and display density
+  were not recorded in the capture.
+- Rendered implementation screenshot: pending capture from
+  `target/debug/colossus`; the exact Ratatui cell buffer was verified at 120 × 32
+  cells and the minimum layout at 40 × 12 cells.
+- State: MCP effect approval, Summary selected, no decision selected, composer paused,
+  and draft preserved.
+
+## Findings
+
+The implementation-level layout checks have no remaining P0, P1, or P2 findings. A
+final raster comparison is blocked until the revised binary reaches the same real
+terminal, font, color profile, and approval state as the source capture.
+
+### Required fidelity surfaces
+
+- Typography and hierarchy: the nested `Field`/`Value` table is replaced with five
+  borderless summary rows. Labels remain bold and neutral while values retain normal
+  emphasis.
+- Layout and spacing: the dock is capped at 10 rows instead of 14. Requester, action,
+  resource, policy reason, and risk review fit in the initial 120-column view while
+  preserving 18 transcript rows above the dock in the canonical test state.
+- Color and state semantics: amber now identifies the active section, selected
+  decision, and fail-closed prompt. Green no longer makes an unresolved approval look
+  successful.
+- Copy and controls: `[S]`, `[R]`, and `[P]` make the section shortcuts explicit;
+  `[A]` and `[D]` identify the decisions; `No decision selected` exposes the initial
+  fail-closed state. The help row leads with `Esc deny` and only shows paging help when
+  details overflow.
+- Responsive behavior: the 40 × 12 cell check retains all three compact section tabs,
+  the decision prompt, and the fail-closed Escape hint.
+- Safety: summary values remove control characters and invisible joiners before
+  rendering, and the existing explicit Enter confirmation remains unchanged.
+
+## Comparison history
+
+1. P1 — the nested summary table occupied most of the dock and visually read like a
+   debug inspector.
+   - Fix: extract the released summary key/value entries and render compact borderless
+     rows.
+2. P1 — policy reason and risk review were below the visible area in the source state.
+   - Fix: cap the dock at 10 rows and keep all five decision-context fields in the
+     initial summary view.
+3. P2 — unresolved approval controls used the same green language as successful state.
+   - Fix: use the warning treatment for focus and selection and neutral styling for
+     unselected actions.
+4. P2 — the initial decision state was visually ambiguous.
+   - Fix: show explicit bracketed shortcuts and `No decision selected` without
+     preselecting an action.
+5. P2 — the help row competed with the decision content.
+   - Fix: reduce it to the primary fail-closed and navigation controls, adding scroll
+     range only when needed.
+6. P2 — inactive section and decision controls blended into the surrounding terminal
+   surface, leaving the active tab as the only visibly bounded control.
+   - Fix: give every section and decision a theme-derived filled surface. Inactive
+     controls use a subdued tint; the active control uses the warning accent with
+     contrast-selected text. Mono terminals retain reverse-video and dim distinctions.
+7. P1 — compact Summary values could lose an authorization-relevant suffix with no
+   complete representation in another section.
+   - Fix: wrap complete values in Summary and repeat the sanitized, wrapped, scrollable
+     approval scope before the prepared body in Exact request.
+
+## Verification
+
+- `cargo test -p colossus-tui --lib`: passed, 55 tests.
+- `cargo xtask check rust`: passed, including formatting, crate-root structure,
+  locked metadata, workspace Clippy, workspace tests, and fuzz-harness Clippy.
+- `cargo build -p colossus-cli --bin colossus`: passed and rebuilt the debug binary.
+- Real-terminal raster comparison: pending a revised approval capture.
+
+final result: blocked
+
+---
+
 # Workspace Files side-drawer QA
 
 ## Comparison target

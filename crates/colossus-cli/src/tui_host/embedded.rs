@@ -73,6 +73,7 @@ impl EmbeddedInteractiveHost {
         events
             .send(HostEvent::Prompt(InteractivePrompt {
                 id: id.into(),
+                kind: InteractivePromptKind::Choice,
                 title: title.into(),
                 document,
                 choices,
