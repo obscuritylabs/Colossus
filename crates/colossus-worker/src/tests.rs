@@ -7,6 +7,30 @@ fn windows_pipe_saturation_is_classified_as_busy() {
     assert!(platform::connection_is_busy(&error));
 }
 
+#[cfg(unix)]
+#[test]
+fn only_an_accepting_endpoint_reports_an_incompatible_worker() {
+    let directory = tempfile::tempdir().expect("directory");
+    let endpoint = directory.path().join("worker.sock");
+    let path = endpoint.to_str().expect("endpoint path");
+
+    assert!(!platform::endpoint_is_live(path));
+    assert!(missing_secret_outcome(path).is_ok());
+
+    let listener = std::os::unix::net::UnixListener::bind(&endpoint).expect("listener");
+    assert!(platform::endpoint_is_live(path));
+    assert!(matches!(
+        missing_secret_outcome(path),
+        Err(WorkerError::Incompatible(reported)) if reported == path
+    ));
+
+    // A killed worker leaves its socket file behind while accepting nothing.
+    drop(listener);
+    assert!(endpoint.exists());
+    assert!(!platform::endpoint_is_live(path));
+    assert!(missing_secret_outcome(path).is_ok());
+}
+
 #[test]
 fn delayed_authenticated_handshake_is_never_worker_absence() {
     assert!(matches!(
@@ -1275,7 +1299,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 7);
+    assert_eq!(PROTOCOL_VERSION, 8);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
