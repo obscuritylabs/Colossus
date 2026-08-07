@@ -14,8 +14,10 @@ pub(super) async fn dispatch(
             "protocol_version": PROTOCOL_VERSION,
             "pid": std::process::id(),
             "workspace": runtime.workspace(),
+            "security_posture": runtime.security_posture(),
         })),
         WorkerOperation::AuditVerify => Ok(serde_json::to_value(runtime.journal().verify()?)?),
+        WorkerOperation::AuditAnchorStatus => Ok(runtime.audit_anchor_status()?),
         WorkerOperation::AuditRead { from, limit } => Ok(serde_json::to_value(
             runtime
                 .journal()

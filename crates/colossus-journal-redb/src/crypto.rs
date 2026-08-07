@@ -1,5 +1,27 @@
 use super::*;
 
+/// Checkpoint signer placeholder for journal modes where checkpoints are disabled.
+#[derive(Default)]
+pub struct DisabledCheckpointSigner;
+
+impl CheckpointSigner for DisabledCheckpointSigner {
+    fn key_id(&self) -> &str {
+        "none"
+    }
+
+    fn sign(&self, _message: &[u8]) -> Result<Vec<u8>, StoreError> {
+        Err(StoreError::Adapter(
+            "checkpoint signing is disabled for plaintext storage".into(),
+        ))
+    }
+
+    fn verify(&self, _message: &[u8], _signature: &[u8]) -> Result<(), StoreError> {
+        Err(StoreError::Verification(
+            "plaintext storage cannot contain signed checkpoints".into(),
+        ))
+    }
+}
+
 /// Ed25519 checkpoint signer created from explicit secret key bytes.
 pub struct Ed25519CheckpointSigner {
     key_id: String,

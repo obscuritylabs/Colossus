@@ -29,13 +29,15 @@ effective access surface easy to review.
     ```
 
    `config init` defaults `access.profile: development` to
-   `sandbox.profile: workspace-development`. Override either choice explicitly:
+   `sandbox.profile: workspace-development` and uses keyless plaintext journal storage.
+   Override these choices explicitly:
 
     ```bash
     colossus -w /absolute/path/to/repository \
       --config .colossus/config.yaml config init \
       --access-profile pinned \
-      --sandbox-profile offline-default
+      --sandbox-profile offline-default \
+      --storage-keys platform
     ```
 
 2. Parse and render the result:
@@ -79,10 +81,28 @@ workspace writes and a trusted non-interactive shell for users and agents outsid
 workflow lineage; it does not change the `development` profile's approval-required
 execution decision.
 
+## Storage protection choices
+
+`config init --storage-keys none|platform|environment` selects the complete storage
+protection tier. The default, `none`, needs no keychain or environment secrets and is
+suited to disposable containers and simple jobs. It retains the append-only hash chain
+and complete `audit verify`, but payload JSON and automatically selected MCP OAuth state
+are plaintext. Interactive terminals show this effective posture; noninteractive logs
+remain unchanged.
+
+Protection mode is fixed when a redb path or PostgreSQL schema is initialized. Colossus
+rejects opening a nonempty journal with a different mode; create a fresh path or schema
+instead of attempting an in-place change.
+
 ## Headless environment-backed keys
 
-On a headless host without Keychain, DPAPI, or Secret Service, replace the generated
-`storage.keys` block with explicit environment references:
+On a headless host that requires encryption, generate the references directly:
+
+```bash
+colossus --config .colossus/config.yaml config init --storage-keys environment
+```
+
+This produces an equivalent `storage.keys` block without secret values:
 
 ```yaml
 storage:

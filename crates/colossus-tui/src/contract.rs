@@ -55,6 +55,8 @@ pub struct InteractiveSnapshot {
     pub completions: Vec<String>,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Effective runtime security posture rendered as non-durable terminal state.
+    pub security_posture: SecurityPostureReport,
     /// Direct-execution boundary that still requires this TUI session's acknowledgement.
     pub pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
 }

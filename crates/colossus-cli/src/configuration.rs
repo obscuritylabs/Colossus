@@ -35,6 +35,7 @@ pub(super) fn init_config(
     from: Option<&Path>,
     access_profile: AccessProfile,
     sandbox_profile: Option<SandboxProfile>,
+    storage_keys: StorageKeys,
 ) -> Result<(), Box<dyn Error>> {
     if path.exists() {
         return Err(format!("refusing to overwrite {}", path.display()).into());
@@ -54,8 +55,14 @@ pub(super) fn init_config(
     } else {
         "state.redb"
     });
-    let anchor = parent.join("secure-anchor.dev.json");
-    if development && (state.exists() || anchor.exists()) {
+    let anchor = parent.join(if development {
+        "secure-anchor.dev.json"
+    } else {
+        "secure-anchor.json"
+    });
+    if development
+        && (state.exists() || (storage_keys == StorageKeys::Environment && anchor.exists()))
+    {
         return Err(format!(
             "refusing to create {} while isolated development state or anchor already exists; restore the matching config or remove both {} and {}",
             path.display(),
@@ -81,16 +88,22 @@ pub(super) fn init_config(
             })
             .as_str(),
     );
-    let config = if development {
-        config.with_isolated_development_storage(state, anchor)
+    let mut config = if development {
+        config.with_isolated_development_storage(state, anchor.clone())
     } else {
         config
     };
+    match storage_keys {
+        StorageKeys::None => config.use_plaintext_storage(),
+        StorageKeys::Platform => config.use_platform_storage(),
+        StorageKeys::Environment => config.use_environment_storage(anchor),
+    }
     let mut destination = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
     destination.write_all(config.to_yaml()?.as_bytes())?;
     println!("created {}", path.display());
+    emit_security_posture_warning(&config.security_posture())?;
     Ok(())
 }

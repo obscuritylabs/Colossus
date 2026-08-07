@@ -13,8 +13,11 @@ CREATE TABLE IF NOT EXISTS journal_metadata (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     last_sequence BIGINT NOT NULL CHECK (last_sequence >= 0),
     last_hash TEXT NOT NULL,
-    latest_checkpoint BYTEA NULL
+    latest_checkpoint BYTEA NULL,
+    payload_protection TEXT NULL
 );
+ALTER TABLE journal_metadata
+ADD COLUMN IF NOT EXISTS payload_protection TEXT NULL;
 INSERT INTO journal_metadata (singleton, last_sequence, last_hash)
 VALUES (TRUE, 0, '0000000000000000000000000000000000000000000000000000000000000000')
 ON CONFLICT (singleton) DO NOTHING;

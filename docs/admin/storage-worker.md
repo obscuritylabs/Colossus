@@ -7,7 +7,7 @@ type: concept
 
 # Storage and worker
 
-The encrypted event journal is canonical. Session transcripts, work records, workflow
+The event journal is canonical. Session transcripts, work records, workflow
 runs, approvals, and effect evidence are reconstructed from append-only events.
 Projections, memory indexes, and exports are disposable consumers, not alternate write
 models.
@@ -41,15 +41,17 @@ storage:
 does not import, merge, or delete another journal. Provision and verify a new target as
 a separate reviewed operation.
 
-Journal and signing keys are independent 32-byte values managed by the platform
-credential service or injected environment variables. There is no plaintext fallback.
-The secure anchor is protected separately from the journal.
+`storage.keys.kind: none` stores hash-chained plaintext payloads without checkpoints or
+anchors. `platform` and `environment` enable the complete protected tier using
+independent 32-byte journal and signing keys plus a separately protected secure anchor.
+The mode is recorded in each redb file or PostgreSQL schema and cannot change in place.
 
 Startup verification defaults to `incremental`. A legacy or missing versioned anchor
 causes a one-time complete bootstrap audit and writes the version-two attestation; this
 can take tens of seconds for a large existing journal. Later clean starts verify one
 checkpoint boundary plus any uncheckpointed tail instead of decrypting all history.
-Set `startupVerification: full` when policy requires complete replay before every
+In keyless mode, incremental startup validates local head and index invariants without
+replaying historical payloads. Set `startupVerification: full` when policy requires complete replay before every
 writable start. `state doctor` reports the configured mode, actual path, verified
 sequence range, event count, and anchor version.
 
@@ -72,6 +74,11 @@ embedded operation. It does not move policy, provider, or repository logic into 
 If no endpoint exists, a one-shot command may safely use the embedded runtime. A wrong,
 stale, replayed, malformed, or incorrectly permissioned endpoint fails authentication;
 it never authorizes a second embedded writer.
+
+Ordinary workers create or load an independent versioned secret at
+`<storage.path>.worker-auth`. The file must be a current-user, owner-only, single-link
+regular file; clients only load it. Managed Desktop continues to deliver its independent
+worker key through inherited native bootstrap memory.
 
 ## Public application API
 

@@ -23,7 +23,8 @@ use colossus_contracts::{
     ToolCall,
 };
 use colossus_mcp::{
-    McpCredentialHeaderConfig, McpResearchToolConfig, McpServerConfig, McpTransportKind,
+    McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
+    McpTransportKind,
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, SafetyKernel,
@@ -709,6 +710,79 @@ workflows:
 surprise: true
 "#;
     assert!(RuntimeConfig::from_yaml(yaml).is_err());
+}
+
+#[test]
+fn storage_keys_default_to_explicit_plaintext_none() {
+    let config = RuntimeConfig::offline_template("state.redb");
+    assert!(matches!(config.storage.keys, super::KeyConfig::None));
+    assert!(config.to_yaml().expect("YAML").contains("kind: none"));
+
+    let mut document: Value =
+        serde_saphyr::from_str(&config.to_yaml().expect("YAML")).expect("YAML value");
+    document["storage"]
+        .as_object_mut()
+        .expect("storage mapping")
+        .remove("keys");
+    let parsed = RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("YAML"))
+        .expect("configuration without keys");
+    assert!(matches!(parsed.storage.keys, super::KeyConfig::None));
+}
+
+#[test]
+fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    assert_eq!(
+        config.security_posture().findings[0].code,
+        "storage.plaintext"
+    );
+    config.mcp.servers.insert(
+        "remote".into(),
+        McpServerConfig {
+            transport: McpTransportKind::StreamableHttp,
+            command: PathBuf::new(),
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            url: Some("https://mcp.example.com/".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: false,
+            oauth: Some(McpOAuthConfig {
+                client_id: "colossus".into(),
+                client_secret_reference: None,
+                callback_port: 8765,
+                scopes: Vec::new(),
+            }),
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+    let report = config.security_posture();
+    assert_eq!(
+        report
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        ["storage.plaintext", "credentials.mcp_oauth_plaintext"]
+    );
+
+    config.use_platform_storage();
+    assert!(config.security_posture().is_hardened());
+}
+
+#[test]
+fn worker_authentication_path_is_adjacent_to_local_state() {
+    let config = RuntimeConfig::offline_template(".colossus/state.redb");
+    assert_eq!(
+        config.worker_ipc_auth_path_at(PathBuf::from("/workspace").as_path()),
+        PathBuf::from("/workspace/.colossus/state.redb.worker-auth")
+    );
 }
 
 #[test]

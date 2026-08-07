@@ -153,7 +153,7 @@ positional:
 | --- | --- |
 | `audit show` | `--from 1`, `--limit 100` |
 | `audit export` | `--from 1`, `--limit 1000` |
-| `config init` | `--access-profile development`; sandbox defaults to `workspace-development` for development and `offline-default` otherwise |
+| `config init` | `--access-profile development`; `--storage-keys none`; sandbox defaults to `workspace-development` for development and `offline-default` otherwise |
 | `process run` | Exact executable; `--cwd .`; `--env KEY=VALUE` repeats; arguments after `--` are literal |
 | `workflow run` | `--inputs {}`; foreground unless `--queued` |
 | `workflow schedule create` | cadence required in `60..=2678400`; `--misfire fire-once`; enabled by default |

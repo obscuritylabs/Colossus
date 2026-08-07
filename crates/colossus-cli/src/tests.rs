@@ -266,6 +266,7 @@ fn development_config_init_clones_settings_and_isolates_storage() {
         Some(&source),
         AccessProfile::Development,
         None,
+        StorageKeys::None,
     )
     .expect("development configuration");
     let development = RuntimeConfig::from_path(&destination).expect("strict development config");
@@ -279,22 +280,10 @@ fn development_config_init_clones_settings_and_isolates_storage() {
         colossus_runtime::StorageAdapter::Redb
     );
     assert!(development.storage.postgres.is_none());
-    match development.storage.keys {
-        colossus_runtime::KeyConfig::Environment {
-            journal_variable,
-            journal_key_id,
-            signing_variable,
-            anchor_path,
-        } => {
-            assert_eq!(journal_variable, "COLOSSUS_DEV_JOURNAL_KEY");
-            assert!(journal_key_id.starts_with("journal-development-"));
-            assert_eq!(signing_variable, "COLOSSUS_DEV_SIGNING_KEY");
-            assert_eq!(anchor_path, directory.path().join("secure-anchor.dev.json"));
-        }
-        colossus_runtime::KeyConfig::Platform { .. } => {
-            panic!("development config must not use the platform credential store")
-        }
-    }
+    assert!(matches!(
+        development.storage.keys,
+        colossus_runtime::KeyConfig::None
+    ));
     assert!(
         init_config(
             &destination,
@@ -302,6 +291,7 @@ fn development_config_init_clones_settings_and_isolates_storage() {
             Some(&source),
             AccessProfile::Development,
             None,
+            StorageKeys::None,
         )
         .is_err()
     );
@@ -331,8 +321,15 @@ fn development_config_init_refuses_orphaned_state() {
     fs::write(directory.path().join("state.dev.redb"), b"orphaned state")
         .expect("orphaned development state");
 
-    let error = init_config(&destination, true, None, AccessProfile::Development, None)
-        .expect_err("orphaned state must fail closed");
+    let error = init_config(
+        &destination,
+        true,
+        None,
+        AccessProfile::Development,
+        None,
+        StorageKeys::None,
+    )
+    .expect_err("orphaned state must fail closed");
     assert!(error.to_string().contains("restore the matching config"));
     assert!(!destination.exists());
 }
@@ -356,12 +353,18 @@ fn config_cli_defaults_to_development_and_accepts_allow_all_spelling() {
     let default =
         Cli::try_parse_from(["colossus", "config", "init"]).expect("default init command");
     let Command::Config(ConfigCommand {
-        command: ConfigAction::Init { access_profile, .. },
+        command:
+            ConfigAction::Init {
+                access_profile,
+                storage_keys,
+                ..
+            },
     }) = default.command
     else {
         panic!("expected config init");
     };
     assert_eq!(access_profile, AccessProfile::Development);
+    assert_eq!(storage_keys, StorageKeys::None);
 
     let permissive = Cli::try_parse_from([
         "colossus",
@@ -381,6 +384,50 @@ fn config_cli_defaults_to_development_and_accepts_allow_all_spelling() {
 }
 
 #[test]
+fn config_init_generates_each_storage_key_mode_without_secret_values() {
+    for (argument, expected_kind) in [
+        ("none", "none"),
+        ("platform", "platform"),
+        ("environment", "environment"),
+    ] {
+        let directory = tempfile::tempdir().expect("directory");
+        let destination = directory.path().join("config.yaml");
+        let mode = match argument {
+            "none" => StorageKeys::None,
+            "platform" => StorageKeys::Platform,
+            "environment" => StorageKeys::Environment,
+            _ => unreachable!(),
+        };
+        init_config(
+            &destination,
+            false,
+            None,
+            AccessProfile::Development,
+            None,
+            mode,
+        )
+        .expect("generated config");
+        let generated = RuntimeConfig::from_path(&destination).expect("strict config");
+        assert_eq!(
+            generated.storage.keys.protection_label(),
+            if argument == "none" {
+                "plaintext"
+            } else {
+                "encrypted"
+            }
+        );
+        let yaml = fs::read_to_string(&destination).expect("configuration YAML");
+        assert!(yaml.contains(&format!("kind: {expected_kind}")));
+        assert!(!yaml.contains("secret:"));
+        if argument == "environment" {
+            assert!(yaml.contains("COLOSSUS_JOURNAL_KEY"));
+            assert!(yaml.contains("COLOSSUS_SIGNING_KEY"));
+            assert!(yaml.contains("secure-anchor.json"));
+        }
+    }
+}
+
+#[test]
 fn config_init_generates_all_four_access_profiles() {
     for profile in [
         AccessProfile::Minimal,
@@ -390,7 +437,8 @@ fn config_init_generates_all_four_access_profiles() {
     ] {
         let directory = tempfile::tempdir().expect("temporary directory");
         let destination = directory.path().join("config.yaml");
-        init_config(&destination, false, None, profile, None).expect("generated config");
+        init_config(&destination, false, None, profile, None, StorageKeys::None)
+            .expect("generated config");
         let generated = RuntimeConfig::from_path(&destination).expect("strict config");
         assert_eq!(generated.access.profile, profile);
         assert_eq!(
@@ -432,6 +480,7 @@ fn config_init_accepts_an_explicit_sandbox_profile_override() {
         None,
         AccessProfile::Development,
         Some(SandboxProfile::OfflineDefault),
+        StorageKeys::None,
     )
     .expect("generated config");
     let generated = RuntimeConfig::from_path(destination).expect("strict config");

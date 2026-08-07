@@ -1265,6 +1265,14 @@ impl InteractiveHost for WorkerInteractiveHost {
             .filter_map(|skill| skill.get("name").and_then(Value::as_str))
             .map(str::to_owned)
             .collect::<Vec<_>>();
+        let status = self.value(WorkerOperation::Ping).await?;
+        let security_posture = serde_json::from_value(
+            status
+                .get("security_posture")
+                .cloned()
+                .ok_or_else(|| "worker status has no security posture".to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         Ok(InteractiveSnapshot {
             session_id: session.id.clone(),
             transcript,
@@ -1272,6 +1280,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            security_posture,
             pending_sandbox_boundary_acknowledgement: self
                 .pending_sandbox_boundary_acknowledgement(&session.id)
                 .await?,

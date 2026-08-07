@@ -1,5 +1,10 @@
 use super::*;
 
+/// Existing authenticated journal payload algorithm.
+pub const ENCRYPTED_PAYLOAD_ALGORITHM: &str = "XChaCha20-Poly1305";
+/// Plaintext journal payload descriptor used by unprotected stores.
+pub const PLAINTEXT_PAYLOAD_ALGORITHM: &str = "plaintext-json-v1";
+
 /// Serializable actor provenance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -188,21 +193,21 @@ pub struct NewEvent {
     pub actor: Actor,
     /// Shared execution context.
     pub context: ExecutionContext,
-    /// Logical event payload, encrypted by the journal adapter.
+    /// Logical event payload, encoded and protected by the journal adapter.
     pub payload: Value,
 }
 
-/// Descriptor for an encrypted journal payload.
+/// Stable payload descriptor retained for encrypted and plaintext journal formats.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EncryptedPayload {
     /// Key identifier, never key material.
     pub key_id: String,
-    /// Authenticated encryption algorithm.
+    /// Authenticated encryption or plaintext encoding algorithm.
     pub algorithm: String,
-    /// Hex-encoded nonce.
+    /// Hex-encoded nonce, empty for plaintext payloads.
     pub nonce: String,
-    /// Hex-encoded ciphertext and authentication tag.
+    /// Hex-encoded ciphertext/tag or canonical plaintext JSON bytes.
     pub ciphertext: String,
     /// Hash of canonical plaintext bytes.
     pub plaintext_hash: String,

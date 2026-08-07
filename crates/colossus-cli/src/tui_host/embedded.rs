@@ -1211,6 +1211,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            security_posture: self.runtime.security_posture().clone(),
             pending_sandbox_boundary_acknowledgement: self
                 .runtime
                 .pending_sandbox_boundary_acknowledgement(&session.id)

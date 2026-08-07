@@ -268,7 +268,7 @@ pub(super) enum PreferencesAction {
 pub(super) enum ConfigAction {
     /// Create a strict offline configuration without overwriting an existing file.
     Init {
-        /// Use isolated redb state and environment keys for source development.
+        /// Use isolated redb state for source development.
         #[arg(long)]
         development: bool,
         /// Clone non-storage settings from an existing strict configuration.
@@ -280,11 +280,25 @@ pub(super) enum ConfigAction {
         /// Resource sandbox preset; defaults from the selected access profile.
         #[arg(long, value_enum)]
         sandbox_profile: Option<SandboxProfile>,
+        /// Journal storage protection and key provider.
+        #[arg(long, value_enum, default_value = "none")]
+        storage_keys: StorageKeys,
     },
     /// Parse and print the active configuration with references intact.
     Show,
     /// Show credential-free effective tool and action resolution.
     Effective,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(super) enum StorageKeys {
+    /// Hash-chained plaintext storage with no external key requirement.
+    #[default]
+    None,
+    /// OS credential-store backed journal encryption and signing.
+    Platform,
+    /// Environment-backed journal encryption and signing references.
+    Environment,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -310,7 +324,7 @@ pub(super) struct AuditCommand {
 
 #[derive(Subcommand)]
 pub(super) enum AuditAction {
-    /// Verify encryption, chain, checkpoint signature, and secure anchor.
+    /// Fully verify payloads, chain, indexes, and any configured checkpoint/anchor.
     Verify,
     /// Show bounded envelope metadata without decrypted payload content.
     Show {

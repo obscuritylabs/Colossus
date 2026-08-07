@@ -37,6 +37,7 @@ colossus-tools.workspace = true
 colossus-workflow.workspace = true
 colossus-work.workspace = true
 fs4.workspace = true
+getrandom.workspace = true
 hex.workspace = true
 ignore.workspace = true
 rustix.workspace = true

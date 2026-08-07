@@ -1,5 +1,37 @@
 use super::*;
 
+/// Keyless provider selecting hash-chained plaintext journal payloads.
+#[derive(Default)]
+pub struct PlaintextKeyProvider;
+
+impl KeyProvider for PlaintextKeyProvider {
+    fn payload_protection(&self) -> JournalPayloadProtection {
+        JournalPayloadProtection::Plaintext
+    }
+
+    fn active_key(&self) -> Result<(String, [u8; 32]), StoreError> {
+        Err(StoreError::KeyUnavailable(
+            "plaintext journal has no encryption key".into(),
+        ))
+    }
+
+    fn key_by_id(&self, _key_id: &str) -> Result<[u8; 32], StoreError> {
+        Err(StoreError::KeyUnavailable(
+            "plaintext journal has no encryption key".into(),
+        ))
+    }
+
+    fn store_anchor(&self, _anchor: &SecureAnchor) -> Result<(), StoreError> {
+        Err(StoreError::Adapter(
+            "plaintext journal does not support secure anchors".into(),
+        ))
+    }
+
+    fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
+        Ok(None)
+    }
+}
+
 /// Explicit in-memory key provider for tests and embedded applications.
 pub struct StaticKeyProvider {
     active_id: Mutex<String>,

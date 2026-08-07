@@ -101,6 +101,23 @@ registry validates model arguments against the unchanged canonical schema before
 or dispatch, and execution handlers independently recheck security-relevant cross-field
 invariants.
 
+## Journal protection tiers
+
+The canonical journal always retains optimistic stream concurrency, record hashes, the
+global hash chain, indexes, projection outbox, per-read payload validation, and complete
+`audit verify`. `storage.keys.kind: none` encodes canonical JSON with
+`plaintext-json-v1`; it intentionally provides no confidentiality, signed checkpoint,
+or external rollback anchor. `platform` and `environment` enable authenticated payload
+encryption, Ed25519 checkpoints, and a separately protected anchor as one complete tier.
+
+Each redb file and PostgreSQL schema stores a protection marker. Empty stores initialize
+from configuration; nonempty markerless stores are conservatively classified as
+encrypted. A mismatch aborts runtime construction before event writes. Mixed algorithms
+and in-place protection migration are unsupported. Incremental plaintext startup checks
+only bounded local head/index invariants, while full startup and explicit audit
+verification replay all payloads. Runtime-owned structured posture findings feed CLI,
+worker, and TUI diagnostics; automatic warnings are interactive-only.
+
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
@@ -139,8 +156,9 @@ declarations contain only literal non-secret headers and environment credential
 references; the permit-bearing adapter resolves those references immediately before the
 request. OAuth authorization is an operator-only PKCE flow and never starts from an agent
 tool call. Tokens are server/endpoint/repository-bound in the platform credential
-namespace or a domain-separated XChaCha20-Poly1305 redb sidecar, and client secrets remain
-behind their configured references. Stateful sessions remain the default. A strict,
+namespace, a domain-separated XChaCha20-Poly1305 redb sidecar, or an explicitly reported
+owner-only plaintext sidecar selected by keyless `auto`; client secrets remain behind
+their configured references. Stateful sessions remain the default. A strict,
 request-bound `allowStateless` opt-in permits one top-level remote declaration to omit
 `Mcp-Session-Id`; stdio and pack-provided servers reject that field. Each discovery page
 and tool call uses a fresh initialized transport, disables request and expired-session
@@ -223,8 +241,9 @@ certificate or chain as the local API identity.
 
 Authentication creates the application actor and its exact scope, role, and tool
 ceilings on the server. Public requests cannot submit identity or authority. Credential
-verifiers and grants are encrypted in the journal under an API-specific authentication
-root; bearer secrets exist only during issuance and in the application's platform
+verifiers are keyed under an API-specific authentication root and the verifier plus
+grant are recorded in the journal; bearer secrets exist only during issuance and in
+the application's platform
 credential store. API TLS, API authentication, private worker IPC, journal encryption,
 checkpoint signing, permit MAC, and provider keys are independent.
 
@@ -356,6 +375,11 @@ coordination directory used by the workspace writer lease. The sidecar binds thi
 endpoint before acknowledging bootstrap activation, so an unsafe or unavailable local
 endpoint fails on the inherited control channel rather than being misreported as a
 public TLS failure. No worker key or provider credential is written into the pathname.
+For ordinary CLI-started workers, the server creates or loads a versioned random key
+from the owner-only, no-follow regular file at `<storage.path>.worker-auth`; clients
+never create or repair that file. This key is independent of journal encryption,
+checkpoint signing, permit MACs, and sandbox job authentication. Managed Local instead
+retains inherited-channel delivery and never persists its worker bootstrap key.
 
 Skill discovery is part of model input and therefore uses the same object-bound
 discipline. On Unix, repository skill roots are traversed relative to the retained

@@ -26,9 +26,17 @@ impl WorkerClient {
         if !platform::endpoint_is_trusted(&endpoint)? {
             return Ok(None);
         }
+        let authentication_key =
+            match WorkerAuthenticationKey::load(&config.worker_ipc_auth_path()?) {
+                Ok(key) => key,
+                Err(WorkerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            };
         Ok(Some(Self {
             endpoint,
-            authentication_key: WorkerAuthenticationKey::new(config.worker_ipc_auth_key()?),
+            authentication_key,
         }))
     }
 
@@ -38,9 +46,16 @@ impl WorkerClient {
         if !platform::endpoint_is_trusted(&endpoint)? {
             return Err(WorkerError::Unavailable(endpoint));
         }
+        let authentication_key = WorkerAuthenticationKey::load(&config.worker_ipc_auth_path()?)
+            .map_err(|error| match error {
+                WorkerError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    WorkerError::Unavailable(endpoint.clone())
+                }
+                error => error,
+            })?;
         Ok(Self {
             endpoint,
-            authentication_key: WorkerAuthenticationKey::new(config.worker_ipc_auth_key()?),
+            authentication_key,
         })
     }
 

@@ -208,6 +208,8 @@ pub enum WorkerOperation {
     Ping,
     /// Verify the authoritative journal chain and anchors.
     AuditVerify,
+    /// Verify the journal and report whether secure anchors are enabled.
+    AuditAnchorStatus,
     /// Read bounded redacted event envelopes.
     AuditRead {
         /// First global sequence.

@@ -29,20 +29,21 @@ use colossus_contracts::{
     RegistryPushResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
     ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
     SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
-    SessionMessage, SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate,
-    SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry,
-    SkillResourceRead, SkillScaffoldResult, SkillValidationResult, SkillWriteResult,
-    StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord,
-    TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
-    UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
+    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
+    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
+    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
+    WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
 };
 use colossus_journal_postgres::{PostgresEventJournal, PostgresJournalConfig};
 use colossus_journal_redb::{
-    Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
-    RedbWriterLease, platform_secret,
+    DisabledCheckpointSigner, Ed25519CheckpointSigner, EnvironmentKeyProvider,
+    PlaintextKeyProvider, PlatformKeyProvider, RedbEventJournal, RedbWriterLease, platform_secret,
 };
 use colossus_mcp::{
     MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor,
@@ -68,9 +69,9 @@ use colossus_policy::{
     effect_request, network_destination_match, system_actor,
 };
 use colossus_ports::{
-    ApprovalProvider, AuditExporter, ContextError, ContextPreparer, ContextRepository,
-    EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
-    MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
+    ApprovalProvider, AuditExporter, CheckpointSigner, ContextError, ContextPreparer,
+    ContextRepository, EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue,
+    KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
     ProviderTurnOptions, ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl,
     RunEventObserver, SearchError, SearchProvider, SessionRepository, SkillRepository, StoreError,
@@ -157,6 +158,7 @@ mod research_gateway;
 mod research_skill_effects;
 mod runtime_helpers;
 mod sandbox_boundary;
+mod security_posture;
 mod services;
 mod sessions_context;
 mod subagents;

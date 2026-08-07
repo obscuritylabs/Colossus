@@ -447,10 +447,23 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
         footer = truncate_width(&footer, width);
     }
     let palette = TerminalPalette::for_preferences(&state.preferences);
-    frame.render_widget(
-        Paragraph::new(Span::styled(footer, ratatui_style(palette.meta_style()))),
-        area,
-    );
+    if state.security_posture.is_hardened() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(footer, ratatui_style(palette.meta_style()))),
+            area,
+        );
+    } else {
+        let badge = format!(" ⚠ Security: {} · ", state.security_posture.finding_count());
+        let remaining = width.saturating_sub(UnicodeWidthStr::width(badge.as_str()));
+        let footer = truncate_width(&footer, remaining);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(badge, ratatui_style(palette.warning_style())),
+                Span::styled(footer, ratatui_style(palette.meta_style())),
+            ])),
+            area,
+        );
+    }
 }
 
 pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {

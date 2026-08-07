@@ -1,7 +1,32 @@
 use super::*;
 
-/// Supplies journal encryption keys without a plaintext fallback.
+/// Durable payload-protection mode selected for a canonical journal.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum JournalPayloadProtection {
+    /// Authenticated encryption with external key material and signed anchors.
+    #[default]
+    Encrypted,
+    /// Hash-chained canonical JSON without encryption or signed anchors.
+    Plaintext,
+}
+
+impl JournalPayloadProtection {
+    /// Stable value persisted beside journal head metadata.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Encrypted => "encrypted",
+            Self::Plaintext => "plaintext",
+        }
+    }
+}
+
+/// Selects journal payload protection and supplies keys when encryption is active.
 pub trait KeyProvider: Send + Sync {
+    /// Payload-protection mode requested by this provider.
+    fn payload_protection(&self) -> JournalPayloadProtection {
+        JournalPayloadProtection::Encrypted
+    }
+
     /// Active key identifier and exactly 32 bytes of key material.
     fn active_key(&self) -> Result<(String, [u8; 32]), StoreError>;
 

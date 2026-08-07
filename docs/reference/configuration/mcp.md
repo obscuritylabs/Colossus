@@ -309,8 +309,9 @@ refresh and retry a tool call whose outcome may already be unknown.
 
 | `oauthCredentialStore` | Behavior |
 | --- | --- |
-| `auto` | Uses platform storage with `storage.keys.kind: platform`; otherwise uses encrypted state |
+| `auto` | Uses plaintext state with `storage.keys.kind: none`, platform storage with `platform`, and encrypted state with `environment` |
 | `platform` | Stores the server-bound OAuth record in the operating-system credential store |
+| `plaintext_state` | Stores the server-bound OAuth record in an owner-only plaintext redb sidecar |
 | `encrypted_state` | Stores a domain-separated XChaCha20-Poly1305 record in a dedicated redb sidecar derived from `storage.path` |
 
 Encrypted records are bound to repository, configured server name, endpoint, and active
@@ -318,8 +319,9 @@ storage key ID. They are re-encrypted after storage-key rotation when the histor
 remains available. Changing the workspace identity, server name, or endpoint therefore
 requires a separate login instead of silently reusing another server's credentials.
 
-Platform-store failure does not fall back to disk. Encrypted-state failure does not fall
-back to plaintext or a platform entry.
+Platform-store and encrypted-state failures do not fall back to another store.
+Plaintext state is selected automatically only for keyless storage or when configured
+explicitly, and its effective posture is reported by diagnostics and interactive UI.
 
 ## Selection and bounds
 

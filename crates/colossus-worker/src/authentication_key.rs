@@ -1,5 +1,14 @@
-use std::{fmt, sync::Arc};
-use zeroize::Zeroizing;
+use crate::WorkerError;
+use std::{
+    fmt, fs,
+    io::{Read as _, Write as _},
+    path::Path,
+    sync::Arc,
+};
+use zeroize::{Zeroize as _, Zeroizing};
+
+const FILE_PREFIX: &str = "colossus-worker-auth-v1:";
+const FILE_BYTES: usize = FILE_PREFIX.len() + 64;
 
 /// Independent authentication key for the private worker IPC protocol.
 ///
@@ -20,9 +29,151 @@ impl WorkerAuthenticationKey {
         Self(Arc::new(authentication))
     }
 
+    /// Load an existing normal-worker key without creating or repairing it.
+    pub fn load(path: &Path) -> Result<Self, WorkerError> {
+        let mut encoded = read_owner_only(path)?;
+        let result = parse_key(&encoded).map(Self::new);
+        encoded.zeroize();
+        result
+    }
+
+    /// Load the normal-worker key or securely create it exactly once.
+    pub fn load_or_create(path: &Path) -> Result<Self, WorkerError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut key = [0_u8; 32];
+        getrandom::fill(&mut key)
+            .map_err(|_| WorkerError::Protocol("worker secret generation failed".into()))?;
+        let mut encoded = format!("{FILE_PREFIX}{}", hex::encode(key));
+        match create_owner_only(path, encoded.as_bytes()) {
+            Ok(()) => {
+                encoded.zeroize();
+                Ok(Self::new(key))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                key.zeroize();
+                encoded.zeroize();
+                Self::load(path)
+            }
+            Err(error) => {
+                key.zeroize();
+                encoded.zeroize();
+                Err(error.into())
+            }
+        }
+    }
+
     pub(super) fn expose(&self) -> &[u8; 32] {
         self.0.as_ref()
     }
+}
+
+fn parse_key(encoded: &[u8]) -> Result<[u8; 32], WorkerError> {
+    if encoded.len() != FILE_BYTES || !encoded.starts_with(FILE_PREFIX.as_bytes()) {
+        return Err(WorkerError::Protocol(
+            "worker secret file has an invalid format".into(),
+        ));
+    }
+    let mut decoded = hex::decode(&encoded[FILE_PREFIX.len()..])
+        .map_err(|_| WorkerError::Protocol("worker secret file has an invalid format".into()))?;
+    let key = decoded
+        .as_slice()
+        .try_into()
+        .map_err(|_| WorkerError::Protocol("worker secret file has an invalid length".into()));
+    decoded.zeroize();
+    key
+}
+
+fn read_owner_only(path: &Path) -> Result<Vec<u8>, WorkerError> {
+    let before = fs::symlink_metadata(path)?;
+    validate_metadata(&before)?;
+    let file = open_read_no_follow(path)?;
+    let after = file.metadata()?;
+    validate_metadata(&after)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(WorkerError::Protocol(
+                "worker secret file changed while opening".into(),
+            ));
+        }
+    }
+    if after.len() != FILE_BYTES as u64 {
+        return Err(WorkerError::Protocol(
+            "worker secret file has an invalid length".into(),
+        ));
+    }
+    let mut encoded = Vec::with_capacity(FILE_BYTES);
+    file.take((FILE_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)?;
+    if encoded.len() != FILE_BYTES {
+        encoded.zeroize();
+        return Err(WorkerError::Protocol(
+            "worker secret file has an invalid length".into(),
+        ));
+    }
+    Ok(encoded)
+}
+
+fn create_owner_only(path: &Path, encoded: &[u8]) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(encoded)?;
+    file.sync_all()?;
+    validate_metadata_io(&file.metadata()?)
+}
+
+fn open_read_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    options.open(path)
+}
+
+fn validate_metadata(metadata: &fs::Metadata) -> Result<(), WorkerError> {
+    validate_metadata_io(metadata).map_err(Into::into)
+}
+
+fn validate_metadata_io(metadata: &fs::Metadata) -> std::io::Result<()> {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "worker secret must be a regular non-symlink file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.mode() & 0o777 != 0o600
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "worker secret must be a current-user owner-only single-link file",
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Debug for WorkerAuthenticationKey {
@@ -40,5 +191,46 @@ mod tests {
         let key = WorkerAuthenticationKey::new([0xa5; 32]);
         assert!(!format!("{key:?}").contains("a5"));
         assert_eq!(key.expose(), &[0xa5; 32]);
+    }
+
+    #[test]
+    fn normal_worker_secret_is_created_once_and_loaded_by_clients() {
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("state.redb.worker-auth");
+        let created = WorkerAuthenticationKey::load_or_create(&path).expect("create key");
+        let loaded = WorkerAuthenticationKey::load(&path).expect("load key");
+        assert_eq!(created.expose(), loaded.expose());
+        assert_eq!(fs::read(&path).expect("encoded secret").len(), FILE_BYTES);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::symlink_metadata(&path)
+                    .expect("metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normal_worker_secret_rejects_symlinks_and_permissive_modes() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let directory = tempfile::tempdir().expect("directory");
+        let target = directory.path().join("target");
+        fs::write(&target, vec![b'0'; FILE_BYTES]).expect("target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
+        let linked = directory.path().join("linked");
+        symlink(&target, &linked).expect("symlink");
+        assert!(WorkerAuthenticationKey::load(&linked).is_err());
+
+        let path = directory.path().join("worker-auth");
+        WorkerAuthenticationKey::load_or_create(&path).expect("create key");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("loosen mode");
+        assert!(WorkerAuthenticationKey::load(&path).is_err());
     }
 }

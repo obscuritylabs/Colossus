@@ -1,5 +1,31 @@
 use super::*;
 
+static SECURITY_WARNING_EMITTED: AtomicU8 = AtomicU8::new(0);
+
+pub(super) fn emit_security_posture_warning(report: &SecurityPostureReport) -> io::Result<()> {
+    if report.is_hardened()
+        || !io::stderr().is_terminal()
+        || SECURITY_WARNING_EMITTED.swap(1, Ordering::Relaxed) != 0
+    {
+        return Ok(());
+    }
+    let body = report
+        .findings
+        .iter()
+        .map(|finding| {
+            PresentationBlock::Markdown(format!(
+                "**{}**\n\n{}",
+                finding.summary, finding.remediation
+            ))
+        })
+        .collect();
+    write_stderr_document(&PresentationDocument::from_block(PresentationBlock::Card {
+        title: format!("Security posture · {} warning(s)", report.finding_count()),
+        tone: colossus_presentation::PresentationTone::Warning,
+        body,
+    }))
+}
+
 pub(super) fn set_output_mode(mode: OutputMode) {
     let encoded = match mode {
         OutputMode::Auto => 0,
