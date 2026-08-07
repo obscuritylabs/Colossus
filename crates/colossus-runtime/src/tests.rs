@@ -8,10 +8,10 @@ use super::{
     ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, goal_objective_from_plan, model_workspace_path,
-    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
-    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
-    terminal_actor,
+    configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
+    model_workspace_path, recover_interrupted_subagents, recover_unknown_effects,
+    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -709,6 +709,53 @@ workflows:
 surprise: true
 "#;
     assert!(RuntimeConfig::from_yaml(yaml).is_err());
+}
+
+#[test]
+fn direct_sandbox_backends_have_distinct_explicit_acknowledgements() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    for backend in ["external", "danger_full_access"] {
+        config.sandbox.backend = backend.into();
+        config.sandbox.acknowledge_external_boundary = false;
+        config.sandbox.acknowledge_danger_full_access = false;
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+        if backend == "external" {
+            config.sandbox.acknowledge_external_boundary = true;
+        } else {
+            config.sandbox.acknowledge_danger_full_access = true;
+        }
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+    }
+
+    config.sandbox.backend = "native".into();
+    config.sandbox.acknowledge_external_boundary = true;
+    config.sandbox.acknowledge_danger_full_access = false;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config.sandbox.acknowledge_external_boundary = false;
+    config.sandbox.acknowledge_danger_full_access = true;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn sandbox_profile_defaults_but_direct_backends_cannot_use_workspace_development() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.backend = "external".into();
+    let mut document: Value =
+        serde_saphyr::from_str(&config.to_yaml().expect("YAML")).expect("YAML value");
+    document["sandbox"]
+        .as_object_mut()
+        .expect("sandbox object")
+        .remove("profile");
+    let parsed = RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("YAML"))
+        .expect("default sandbox profile");
+    assert_eq!(parsed.sandbox.profile, "offline-default");
+
+    config.sandbox.profile = "workspace-development".into();
+    let workspace = tempdir().expect("workspace");
+    assert!(derive_development_sandbox(&config, workspace.path()).is_err());
+    config.sandbox.backend = "danger_full_access".into();
+    assert!(derive_development_sandbox(&config, workspace.path()).is_err());
 }
 
 #[test]

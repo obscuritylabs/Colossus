@@ -126,6 +126,7 @@ pub(super) fn execute_sandbox_job(
                 "broker downgrade was not explicitly authorized".into(),
             ));
         }
+        "external" | "danger_full_access" => direct_command(&job),
         other => {
             return Err(SandboxHelperError::Setup(format!(
                 "unknown sandbox backend {other}"

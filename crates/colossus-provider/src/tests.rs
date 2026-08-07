@@ -1437,6 +1437,70 @@ async fn codex_provider_uses_chatgpt_account_headers_and_responses_shape() {
 }
 
 #[tokio::test]
+async fn codex_non_stream_effect_uses_sse_transport_and_collects_one_turn() {
+    let body = [
+        r#"data: {"type":"response.created","response":{"id":"response-collected"}}
+
+"#,
+        r#"data: {"type":"response.output_text.delta","delta":"ok"}
+
+"#,
+        r#"data: {"type":"response.completed","response":{"id":"response-collected","status":"completed","output":[]}}
+
+"#,
+    ]
+    .concat();
+    let (base_url, server) = one_sse_server_with_content_type(body, None).await;
+    let mut profile = ProviderProfile::new(
+        "codex",
+        ProviderKind::OpenAiCodex,
+        None,
+        Some(CODEX_CREDENTIAL_REFERENCE.into()),
+        5_000,
+    )
+    .expect("Codex profile");
+    profile.base_url = Some(base_url);
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let auth_path = directory.path().join("auth.json");
+    write_test_codex_auth(&auth_path, 4_102_444_800);
+    let executor = ProviderExecutor::new(profile.clone())
+        .with_codex_auth_store(CodexAuthStore::at_path(auth_path));
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [27_u8; 32],
+    );
+
+    let released = gateway
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect("non-stream logical Codex call");
+    let turn: ProviderTurn = serde_json::from_slice(&released.bytes).expect("provider turn");
+    assert_eq!(turn.response_id.as_deref(), Some("response-collected"));
+    assert!(matches!(
+        turn.events.last(),
+        Some(ProviderEvent::FinalOutput { text }) if text == "ok"
+    ));
+    let request = server.await.expect("server task");
+    assert!(request.contains("\"stream\":true"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("accept: text/event-stream")
+    );
+}
+
+#[tokio::test]
 async fn codex_refresh_requires_the_openai_auth_origin_in_the_permit() {
     let mut profile = ProviderProfile::new(
         "codex",

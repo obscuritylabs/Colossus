@@ -25,7 +25,10 @@ pub(super) fn derive_development_sandbox(
                 .into(),
         ));
     }
-    if config.sandbox.backend == "broker" {
+    if matches!(
+        config.sandbox.backend.as_str(),
+        "broker" | "external" | "danger_full_access"
+    ) {
         return Err(RuntimeError::Config(
             "workspace-development requires an isolating sandbox backend".into(),
         ));

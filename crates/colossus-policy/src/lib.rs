@@ -6,7 +6,7 @@ use colossus_contracts::{
     Actor, ActorType, ApprovalProof, AutomaticApprovalNotice, DecisionOutcome, EffectPhase,
     EffectRequest, EventClassification, NewEvent, PolicyDecision, PolicyObligations,
     QuarantinedEffectResult, RiskLevel, RiskRecommendation, RiskReviewFailure,
-    RiskReviewFallbackNotice, RiskStatus,
+    RiskReviewFallbackNotice, RiskStatus, SandboxBoundaryMode,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_ports::{
@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    future::Future,
     net::IpAddr,
     path::Path,
     sync::{

@@ -174,6 +174,8 @@ pub struct TuiState {
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
+    pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
+    pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
@@ -214,6 +216,9 @@ impl TuiState {
             control: None,
             overlay: None,
             pending_plan_execution: None,
+            pending_sandbox_boundary_acknowledgement: snapshot
+                .pending_sandbox_boundary_acknowledgement,
+            sandbox_boundary_acknowledgement_in_progress: false,
             activity: None,
             started_at: None,
             scroll_from_bottom: 0,
@@ -233,16 +238,21 @@ impl TuiState {
         &self.composer.draft
     }
 
-    pub(super) fn approval_prompt_active(&self) -> bool {
-        matches!(
-            self.overlay.as_ref(),
-            Some(Overlay::Prompt { request, .. })
-                if request.kind == InteractivePromptKind::Approval
-        )
+    pub(super) fn docked_decision_kind(&self) -> Option<InteractivePromptKind> {
+        match self.overlay.as_ref() {
+            Some(Overlay::Prompt { request, .. }) if request.kind.uses_decision_dock() => {
+                Some(request.kind)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn docked_decision_active(&self) -> bool {
+        self.docked_decision_kind().is_some()
     }
 
     pub(super) fn transient_inline_chrome_active(&self) -> bool {
-        self.approval_prompt_active() || self.structured_completion_context().is_some()
+        self.docked_decision_active() || self.structured_completion_context().is_some()
     }
 
     pub(super) fn run_request(&self, prompt: String) -> Result<InteractiveRunRequest, String> {
@@ -318,7 +328,7 @@ impl TuiState {
 
     /// Whether a serialized command or run is active.
     pub const fn is_busy(&self) -> bool {
-        self.operation.is_some()
+        self.operation.is_some() || self.sandbox_boundary_acknowledgement_in_progress
     }
 
     /// Append an older page without duplicating or exposing system messages.

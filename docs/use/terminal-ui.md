@@ -59,6 +59,13 @@ before the bottom approval dock opens.
 The canonical workspace is also the worker compatibility identity. A TUI client refuses
 to attach to a worker serving another workspace.
 
+When `sandbox.backend` is `external` or `danger_full_access` and its matching
+configuration acknowledgement is `false`, startup opens a boundary warning. Accepting
+it enables process effects only for the active session in this runtime process and
+records audit evidence. Cancelling or submitting a blank response keeps process effects
+blocked. This boundary acknowledgement is separate from approval mode; every normal
+policy and approval obligation still applies.
+
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never
 falls back to a second local writer. This TUI retains normal Colossus policy and
@@ -176,7 +183,7 @@ and `/audit verify` to confirm the active session and journal.
   revision. Reload it with `/plan use PLAN_ID`, inspect it, and deliberately retry.
 - **An Approved plan will not refine:** Approved plans are immutable. Execute, discard,
   start a new plan, or return to Execute mode.
-- **A worker protocol mismatch appears:** protocol v6 is not compatible with an older
+- **A worker protocol mismatch appears:** protocol v7 is not compatible with an older
   resident worker. Restart the worker and client with the same Colossus version, inspect
   `/plans`, and do not assume an interrupted request was retried.
 - **Terminal state looks damaged after a crash:** reset the terminal, then use durable

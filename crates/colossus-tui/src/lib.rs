@@ -6,8 +6,8 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy,
-    PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SessionMessage,
-    SessionMessagePage, TerminalPreferences, ThemeTextStyle,
+    PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode,
+    SessionMessage, SessionMessagePage, TerminalPreferences, ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{
@@ -75,6 +75,7 @@ const MAX_NATIVE_HISTORY_MESSAGES: usize =
 const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
 mod app;
+pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
 mod contract;
 mod render;
 mod state;

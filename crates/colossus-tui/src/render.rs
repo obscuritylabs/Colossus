@@ -28,7 +28,7 @@ pub(super) fn render(
     let activity_height = u16::from(state.operation.is_some());
     let approval_height =
         approval_dock_height(state, area.height, composer_height, activity_height);
-    let completion_height = if state.approval_prompt_active() {
+    let completion_height = if state.docked_decision_active() {
         0
     } else {
         completion_menu_height(state, area.height, composer_height, activity_height)
@@ -358,8 +358,13 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         "Enter sends"
     };
-    let title = if state.approval_prompt_active() {
-        " Message · paused for approval · draft preserved ".into()
+    let title = if let Some(kind) = state.docked_decision_kind() {
+        let decision = match kind {
+            InteractivePromptKind::Approval => "approval",
+            InteractivePromptKind::SandboxBoundaryAcknowledgement => "boundary acknowledgement",
+            InteractivePromptKind::UserInput | InteractivePromptKind::Choice => "decision",
+        };
+        format!(" Message · paused for {decision} · draft preserved ")
     } else {
         match state.mode {
             InteractiveMode::Execute => format!(" Message · {action} "),
@@ -449,7 +454,7 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
 }
 
 pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
-    if state.approval_prompt_active() {
+    if state.docked_decision_active() {
         render_approval_dock(frame, state, area);
         return;
     }
@@ -571,7 +576,7 @@ pub(super) fn approval_dock_height(
     composer_height: u16,
     activity_height: u16,
 ) -> u16 {
-    if !state.approval_prompt_active() {
+    if !state.docked_decision_active() {
         return 0;
     }
     let available = total_height
@@ -631,6 +636,7 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
         .split(inner);
     let document_lines = approval_section_lines(
         &request.document,
+        request.kind,
         *approval_section,
         &state.preferences,
         &palette,
@@ -669,7 +675,12 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
         );
     }
     if rows[3].height > 0 {
-        let mut hint = "Esc deny · ↑/↓ choose · Enter confirm · Tab sections".to_owned();
+        let dismissal = if request.kind == InteractivePromptKind::SandboxBoundaryAcknowledgement {
+            "Esc keep blocked"
+        } else {
+            "Esc deny"
+        };
+        let mut hint = format!("{dismissal} · ↑/↓ choose · Enter confirm · Tab sections");
         if maximum_scroll > 0 {
             let first = scroll.saturating_add(1);
             let last = scroll.saturating_add(visible).min(document_line_count);
@@ -690,12 +701,13 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
 
 fn approval_section_lines(
     document: &PresentationDocument,
+    kind: InteractivePromptKind,
     section: ApprovalSection,
     preferences: &TerminalPreferences,
     palette: &TerminalPalette,
     width: usize,
 ) -> Vec<Line<'static>> {
-    if section == ApprovalSection::Summary {
+    if section == ApprovalSection::Summary && kind == InteractivePromptKind::Approval {
         let mut entries = Vec::new();
         collect_approval_summary_entries(&document.blocks, &mut entries);
         if !entries.is_empty() {
@@ -703,7 +715,7 @@ fn approval_section_lines(
         }
     }
     styled_document_lines(
-        &approval_section_document(document, section),
+        &approval_section_document(document, kind, section),
         preferences,
         width,
     )
@@ -851,6 +863,7 @@ fn styled_document_lines(
 
 pub(super) fn approval_section_document(
     document: &PresentationDocument,
+    kind: InteractivePromptKind,
     section: ApprovalSection,
 ) -> PresentationDocument {
     match section {
@@ -881,6 +894,34 @@ pub(super) fn approval_section_document(
                 ));
             }
             PresentationDocument { blocks }
+        }
+        ApprovalSection::Protections
+            if kind == InteractivePromptKind::SandboxBoundaryAcknowledgement =>
+        {
+            PresentationDocument::from_block(PresentationBlock::KeyValue(vec![
+                (
+                    "Fail closed".into(),
+                    "Process execution stays blocked unless this acknowledgement is confirmed."
+                        .into(),
+                ),
+                (
+                    "Scope".into(),
+                    "This acknowledgement covers only this TUI session and is retained only by the current Colossus process."
+                        .into(),
+                ),
+                (
+                    "Policy".into(),
+                    "Effect policy and separate approval obligations remain active.".into(),
+                ),
+                (
+                    "Isolation".into(),
+                    "Acknowledgement does not add filesystem or network isolation.".into(),
+                ),
+                (
+                    "Audit".into(),
+                    "The selected boundary mode and acknowledgement remain auditable.".into(),
+                ),
+            ]))
         }
         ApprovalSection::Protections => {
             PresentationDocument::from_block(PresentationBlock::KeyValue(vec![
@@ -998,9 +1039,11 @@ fn approval_choice_line(
         if index > 0 {
             spans.push(Span::raw("  "));
         }
-        let shortcut = match choice.as_str() {
-            "Allow once" => "A",
-            "Deny" => "D",
+        let shortcut = match (request.kind, index, choice.as_str()) {
+            (InteractivePromptKind::SandboxBoundaryAcknowledgement, 0, _) => "A",
+            (InteractivePromptKind::SandboxBoundaryAcknowledgement, 1, _) => "D",
+            (_, _, "Allow once") => "A",
+            (_, _, "Deny") => "D",
             _ => " ",
         };
         let style = if selected == Some(index) {

@@ -474,12 +474,19 @@ const fn default_provider_timeout_ms() -> u64 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxConfig {
-    /// `native`, `oci`, `windows_job`, or explicitly downgraded `broker`.
+    /// Isolating backend or an explicitly acknowledged direct-execution boundary.
     pub backend: String,
     /// Stable policy profile label.
+    #[serde(default = "default_sandbox_profile")]
     pub profile: String,
     /// Permit a policy-authorized native-to-broker downgrade.
     pub allow_broker_fallback: bool,
+    /// Assert that an embedding platform enforces the process isolation boundary.
+    #[serde(default)]
+    pub acknowledge_external_boundary: bool,
+    /// Explicitly accept process execution without an asserted isolation boundary.
+    #[serde(default)]
+    pub acknowledge_danger_full_access: bool,
     /// Optional trusted helper executable for embedded applications.
     pub helper_path: Option<PathBuf>,
     /// Exact Docker or Podman executable for OCI fallback.
@@ -524,6 +531,8 @@ impl Default for SandboxConfig {
             },
             profile: "offline-default".into(),
             allow_broker_fallback: false,
+            acknowledge_external_boundary: false,
+            acknowledge_danger_full_access: false,
             helper_path: None,
             oci_runtime: None,
             oci_image: None,
@@ -539,6 +548,10 @@ impl Default for SandboxConfig {
             max_concurrency: 1,
         }
     }
+}
+
+fn default_sandbox_profile() -> String {
+    "offline-default".into()
 }
 
 /// Canonical storage configuration.
@@ -717,7 +730,7 @@ impl RuntimeConfig {
         }
         if !matches!(
             config.sandbox.backend.as_str(),
-            "native" | "oci" | "windows_job" | "broker"
+            "native" | "oci" | "windows_job" | "broker" | "external" | "danger_full_access"
         ) {
             return Err(RuntimeError::Config(format!(
                 "unknown sandbox backend {}",
@@ -727,6 +740,19 @@ impl RuntimeConfig {
         if config.sandbox.backend == "broker" && !config.sandbox.allow_broker_fallback {
             return Err(RuntimeError::Config(
                 "broker sandbox backend requires allowBrokerFallback: true".into(),
+            ));
+        }
+        if config.sandbox.acknowledge_external_boundary && config.sandbox.backend != "external" {
+            return Err(RuntimeError::Config(
+                "sandbox.acknowledgeExternalBoundary is valid only with backend: external".into(),
+            ));
+        }
+        if config.sandbox.acknowledge_danger_full_access
+            && config.sandbox.backend != "danger_full_access"
+        {
+            return Err(RuntimeError::Config(
+                "sandbox.acknowledgeDangerFullAccess is valid only with backend: danger_full_access"
+                    .into(),
             ));
         }
         if config.sandbox.profile.is_empty()

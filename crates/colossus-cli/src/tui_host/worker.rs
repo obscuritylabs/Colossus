@@ -148,6 +148,25 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                     }),
                 )
             }
+            WorkerPromptKind::SandboxBoundaryAcknowledgement => {
+                let mode = serde_json::from_value::<SandboxBoundaryMode>(
+                    prompt.details.get("mode").cloned().ok_or_else(|| {
+                        WorkerError::Protocol("sandbox boundary prompt omitted its mode".into())
+                    })?,
+                )
+                .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                let (placeholder_tx, _placeholder_rx) = oneshot::channel();
+                let expected = sandbox_boundary_prompt(mode, placeholder_tx);
+                if prompt.title != expected.title
+                    || prompt.choices != expected.choices
+                    || prompt.allow_free_form
+                {
+                    return Err(WorkerError::Protocol(
+                        "worker sent a noncanonical sandbox boundary prompt".into(),
+                    ));
+                }
+                (expected.kind, expected.document)
+            }
             WorkerPromptKind::UserInput => {
                 let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
                 if !prompt.details.is_null() {
@@ -193,6 +212,7 @@ pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
     themes: ThemeLibrary,
     approval_mode: ApprovalMode,
+    sandbox_boundary_acknowledgements: Mutex<BTreeMap<String, SandboxBoundaryAcknowledgement>>,
 }
 
 impl WorkerInteractiveHost {
@@ -205,7 +225,34 @@ impl WorkerInteractiveHost {
             client: Arc::new(client),
             themes,
             approval_mode,
+            sandbox_boundary_acknowledgements: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn sandbox_boundary_acknowledgement(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SandboxBoundaryAcknowledgement>, String> {
+        self.sandbox_boundary_acknowledgements
+            .lock()
+            .map_err(|_| "sandbox boundary acknowledgement lock is poisoned".to_owned())
+            .map(|acknowledgements| acknowledgements.get(session_id).cloned())
+    }
+
+    async fn pending_sandbox_boundary_acknowledgement(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SandboxBoundaryMode>, String> {
+        if self.sandbox_boundary_acknowledgement(session_id)?.is_some() {
+            return Ok(None);
+        }
+        serde_json::from_value(
+            self.value(WorkerOperation::SandboxBoundaryStatus {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())
     }
 
     async fn value(&self, operation: WorkerOperation) -> Result<Value, String> {
@@ -311,9 +358,16 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
+        let pending_sandbox_boundary_acknowledgement = self
+            .pending_sandbox_boundary_acknowledgement(&session_id)
+            .await?;
         Ok(HostCommandResult {
             document: PresentationDocument::new(),
-            session: Some((session_id.clone(), page)),
+            session: Some((
+                session_id.clone(),
+                page,
+                pending_sandbox_boundary_acknowledgement,
+            )),
             preferences: None,
             completions: None,
             sticky_skills: None,
@@ -668,6 +722,8 @@ impl WorkerInteractiveHost {
                                 session_id: session_id.into(),
                                 goal_id: goal_id.into(),
                             },
+                            sandbox_boundary_acknowledgement: self
+                                .sandbox_boundary_acknowledgement(session_id)?,
                         },
                         &mut observer,
                         &prompts,
@@ -1107,7 +1163,10 @@ impl WorkerInteractiveHost {
         let plan = match self
             .client
             .call_interactive::<PlanRecord>(
-                WorkerOperation::RunInteractive { request },
+                WorkerOperation::RunInteractive {
+                    request,
+                    sandbox_boundary_acknowledgement: None,
+                },
                 &mut observer,
                 &prompts,
                 control,
@@ -1213,7 +1272,61 @@ impl InteractiveHost for WorkerInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            pending_sandbox_boundary_acknowledgement: self
+                .pending_sandbox_boundary_acknowledgement(&session.id)
+                .await?,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AcknowledgementResult {
+            acknowledged: bool,
+            #[serde(default)]
+            sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
+        }
+
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        let control = RunControl::default();
+        let result = self
+            .client
+            .call_interactive::<AcknowledgementResult>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
+                        session_id: session_id.into(),
+                        mode,
+                    },
+                    sandbox_boundary_acknowledgement: None,
+                },
+                &mut observer,
+                &prompts,
+                &control,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        if !result.acknowledged {
+            if result.sandbox_boundary_acknowledgement.is_some() {
+                return Err("worker returned a capability for a rejected acknowledgement".into());
+            }
+            return Ok(false);
+        }
+        let acknowledgement = result
+            .sandbox_boundary_acknowledgement
+            .ok_or_else(|| "worker returned an invalid sandbox boundary capability".to_owned())?;
+        self.sandbox_boundary_acknowledgements
+            .lock()
+            .map_err(|_| "sandbox boundary acknowledgement lock is poisoned".to_owned())?
+            .insert(session_id.into(), acknowledgement);
+        Ok(true)
     }
 
     async fn execute_command(
@@ -1284,6 +1397,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                         include_provider_response_diagnostics: request
                             .include_provider_response_diagnostics,
                     },
+                    sandbox_boundary_acknowledgement: self
+                        .sandbox_boundary_acknowledgement(&request.session_id)?,
                 },
                 &mut observer,
                 &prompts,
@@ -1343,6 +1458,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                         strategy: request.strategy,
                         max_turns: None,
                     },
+                    sandbox_boundary_acknowledgement: self
+                        .sandbox_boundary_acknowledgement(&request.session_id)?,
                 },
                 &mut observer,
                 &prompts,

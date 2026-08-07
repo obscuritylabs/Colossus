@@ -561,9 +561,17 @@ impl EmbeddedInteractiveHost {
             .runtime
             .session_messages_page(&session_id, None, 100)
             .map_err(|error| error.to_string())?;
+        let pending_sandbox_boundary_acknowledgement = self
+            .runtime
+            .pending_sandbox_boundary_acknowledgement(&session_id)
+            .map_err(|error| error.to_string())?;
         Ok(HostCommandResult {
             document: PresentationDocument::new(),
-            session: Some((session_id.clone(), page)),
+            session: Some((
+                session_id.clone(),
+                page,
+                pending_sandbox_boundary_acknowledgement,
+            )),
             preferences: None,
             completions: None,
             sticky_skills: None,
@@ -1203,7 +1211,39 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            pending_sandbox_boundary_acknowledgement: self
+                .runtime
+                .pending_sandbox_boundary_acknowledgement(&session.id)
+                .map_err(|error| error.to_string())?,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String> {
+        let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
+        let (response_tx, response_rx) = oneshot::channel();
+        events
+            .send(HostEvent::Prompt(sandbox_boundary_prompt(
+                mode,
+                response_tx,
+            )))
+            .await
+            .map_err(|_| "interactive client disconnected".to_owned())?;
+        let response = tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+            .await
+            .map_err(|_| "sandbox boundary acknowledgement timed out".to_owned())?
+            .map_err(|_| "sandbox boundary acknowledgement was dropped".to_owned())?;
+        if !matches!(response, PromptResponse::Answer(answer) if answer == acknowledge) {
+            return Ok(false);
+        }
+        self.runtime
+            .acknowledge_sandbox_boundary(session_id, mode)
+            .map_err(|error| error.to_string())?;
+        Ok(true)
     }
 
     async fn execute_command(

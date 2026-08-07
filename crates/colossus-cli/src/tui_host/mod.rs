@@ -7,8 +7,8 @@ use colossus_contracts::{
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
     MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
     ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SessionMessagePage, SessionSummary,
-    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
+    SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -26,14 +26,16 @@ use colossus_tui::{
     HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractivePlanExecutionRequest,
     InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSnapshot,
     PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand,
+    sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt,
 };
 use colossus_worker::{
-    InteractiveWorkerRequest, WorkerClient, WorkerError, WorkerOperation, WorkerPrompt,
-    WorkerPromptHandler, WorkerPromptKind,
+    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerClient, WorkerError,
+    WorkerOperation, WorkerPrompt, WorkerPromptHandler, WorkerPromptKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,

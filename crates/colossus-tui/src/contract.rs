@@ -55,6 +55,8 @@ pub struct InteractiveSnapshot {
     pub completions: Vec<String>,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Direct-execution boundary that still requires this TUI session's acknowledgement.
+    pub pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
 }
 
 /// Request for one normal provider/tool turn.
@@ -347,8 +349,8 @@ pub enum PlanSelectionUpdate {
 pub struct HostCommandResult {
     /// Human presentation to append to the transcript.
     pub document: PresentationDocument,
-    /// New active session and its newest page after a session switch.
-    pub session: Option<(String, SessionMessagePage)>,
+    /// New active session, newest page, and direct-execution boundary status after a switch.
+    pub session: Option<(String, SessionMessagePage, Option<SandboxBoundaryMode>)>,
     /// Updated preferences when the command changed presentation state.
     pub preferences: Option<TerminalPreferences>,
     /// Updated completion catalog when host state changed.
@@ -454,10 +456,18 @@ pub enum PromptResponse {
 pub enum InteractivePromptKind {
     /// Policy requires a request-bound effect approval.
     Approval,
+    /// The active session requires explicit acceptance of a direct-execution boundary.
+    SandboxBoundaryAcknowledgement,
     /// A tool needs bounded operator input but grants no effect authority.
     UserInput,
     /// A local interface picker such as session or plan selection.
     Choice,
+}
+
+impl InteractivePromptKind {
+    pub(crate) const fn uses_decision_dock(self) -> bool {
+        matches!(self, Self::Approval | Self::SandboxBoundaryAcknowledgement)
+    }
 }
 
 /// Focus-taking prompt sent by the trusted runtime bridge to the TUI.
@@ -494,6 +504,8 @@ pub enum HostEvent {
     HistoryWarning(String),
     /// An asynchronously requested older transcript page completed.
     OlderPage(Result<SessionMessagePage, String>),
+    /// Active-session direct-execution acknowledgement reached a terminal result.
+    SandboxBoundaryAcknowledgement(Result<Option<SandboxBoundaryMode>, String>),
 }
 
 /// Terminal result of one serialized background operation.
@@ -511,6 +523,14 @@ pub enum OperationResult {
 pub trait InteractiveHost: Send + Sync {
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
+
+    /// Prompt for and acknowledge one direct-execution boundary for the active TUI session.
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String>;
 
     /// Execute one typed application command without writing to the terminal.
     async fn execute_command(

@@ -27,7 +27,7 @@ pub(super) struct WorkerRequest {
 pub enum WorkerApprovalMode {
     /// Deny approval obligations without prompting.
     Deny,
-    /// Ask an attached protocol-v6 interactive client.
+    /// Ask an attached protocol-v7 interactive client.
     Ask,
     /// Preserve model-assisted low-risk auto-approval and ask otherwise.
     RiskAuto,
@@ -41,6 +41,8 @@ pub enum WorkerApprovalMode {
 pub enum WorkerPromptKind {
     /// Policy approval obligation.
     Approval,
+    /// Direct-execution boundary acknowledgement for the attached client.
+    SandboxBoundaryAcknowledgement,
     /// Tool-requested operator input.
     UserInput,
 }

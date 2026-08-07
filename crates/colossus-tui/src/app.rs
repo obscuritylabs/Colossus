@@ -1,6 +1,8 @@
 use super::*;
 use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
+const KEEP_PROCESS_EXECUTION_BLOCKED: &str = "Keep process execution blocked";
+
 /// Launch the terminal UI and retain exclusive ownership of all terminal writes.
 pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Result<(), TuiError> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -15,6 +17,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         preload_native_history(&mut state, Arc::clone(&host)).await;
     }
     let (event_tx, mut event_rx) = mpsc::channel::<HostEvent>(256);
+    start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(options.screen_mode)?;
 
     loop {
@@ -22,6 +25,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
         continue_native_history_preload(
             &mut state,
             Arc::clone(&host),
@@ -61,6 +65,87 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         }
     }
     Ok(())
+}
+
+fn start_sandbox_boundary_acknowledgement(
+    state: &mut TuiState,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    if state.sandbox_boundary_acknowledgement_in_progress {
+        return;
+    }
+    let Some(mode) = state.pending_sandbox_boundary_acknowledgement.take() else {
+        return;
+    };
+    state.sandbox_boundary_acknowledgement_in_progress = true;
+    let session_id = state.session_id.clone();
+    tokio::spawn(async move {
+        let result = host
+            .acknowledge_sandbox_boundary(&session_id, mode, event_tx.clone())
+            .await
+            .map(|acknowledged| acknowledged.then_some(mode));
+        let _ = event_tx
+            .send(HostEvent::SandboxBoundaryAcknowledgement(result))
+            .await;
+    });
+}
+
+/// Build the fail-closed acknowledgement prompt for one direct-execution boundary.
+pub fn sandbox_boundary_prompt(
+    mode: SandboxBoundaryMode,
+    response: oneshot::Sender<PromptResponse>,
+) -> InteractivePrompt {
+    let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
+    let title = match mode {
+        SandboxBoundaryMode::External => "External sandbox boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Danger full access",
+    };
+    let (boundary, isolation, details) = match mode {
+        SandboxBoundaryMode::External => (
+            "Operator-asserted external boundary",
+            "Provided by Coder, Kubernetes, or another trusted host",
+            "Colossus will supervise child processes but will not isolate their filesystem or network access. Continue only when the trusted host boundary enforces the isolation you require. Policy approvals remain separate and active.",
+        ),
+        SandboxBoundaryMode::DangerFullAccess => (
+            "Ambient runtime access",
+            "No Colossus or asserted external filesystem/network isolation",
+            "Colossus will supervise child processes without a Colossus sandbox or an asserted external isolation boundary. Commands receive the ambient access of this runtime. Policy approvals remain separate and active.",
+        ),
+    };
+    InteractivePrompt {
+        id: format!("sandbox-boundary:{}", mode.as_backend()),
+        kind: InteractivePromptKind::SandboxBoundaryAcknowledgement,
+        title: title.into(),
+        document: PresentationDocument::from_block(PresentationBlock::Card {
+            title: title.into(),
+            tone: PresentationTone::Warning,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Mode".into(), mode.as_backend().into()),
+                    ("Boundary".into(), boundary.into()),
+                    ("Isolation".into(), isolation.into()),
+                    (
+                        "Acknowledgement".into(),
+                        "Current TUI session in this Colossus process".into(),
+                    ),
+                ]),
+                PresentationBlock::Markdown(details.into()),
+            ],
+        }),
+        choices: vec![acknowledge.into(), KEEP_PROCESS_EXECUTION_BLOCKED.into()],
+        initial_choice: None,
+        allow_free_form: false,
+        response,
+    }
+}
+
+/// Return the exact affirmative choice accepted for one direct-execution boundary.
+pub const fn sandbox_boundary_acknowledgement_choice(mode: SandboxBoundaryMode) -> &'static str {
+    match mode {
+        SandboxBoundaryMode::External => "Acknowledge the external boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
+    }
 }
 
 fn continue_native_history_preload(
@@ -271,7 +356,7 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             selected,
             approval_section,
             document_scroll,
-        } if request.kind == InteractivePromptKind::Approval => match key.code {
+        } if request.kind.uses_decision_dock() => match key.code {
             KeyCode::Enter => {
                 finish_prompt(state);
             }
@@ -319,8 +404,8 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
                 *approval_section = ApprovalSection::Protections;
                 *document_scroll = 0;
             }
-            KeyCode::Char('a' | 'A') => select_prompt_choice(request, selected, "Allow once"),
-            KeyCode::Char('d' | 'D') => select_prompt_choice(request, selected, "Deny"),
+            KeyCode::Char('a' | 'A') => select_decision_choice(request, selected, true),
+            KeyCode::Char('d' | 'D') => select_decision_choice(request, selected, false),
             _ => {}
         },
         Overlay::Prompt {
@@ -451,6 +536,17 @@ fn select_prompt_choice(request: &InteractivePrompt, selected: &mut Option<usize
     }
 }
 
+fn select_decision_choice(request: &InteractivePrompt, selected: &mut Option<usize>, allow: bool) {
+    if request.kind == InteractivePromptKind::SandboxBoundaryAcknowledgement {
+        let index = usize::from(!allow);
+        if index < request.choices.len() {
+            *selected = Some(index);
+        }
+    } else {
+        select_prompt_choice(request, selected, if allow { "Allow once" } else { "Deny" });
+    }
+}
+
 fn finish_prompt(state: &mut TuiState) {
     let overlay = state.overlay.take();
     let Some(Overlay::Prompt {
@@ -508,9 +604,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
     let text = sanitize_input(text);
     if let Some(overlay) = state.overlay.as_mut() {
         match overlay {
-            Overlay::Prompt { request, input, .. }
-                if request.kind != InteractivePromptKind::Approval =>
-            {
+            Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
                 input.push_str(&text);
             }
             Overlay::HistorySearch { query: input } => {
@@ -940,6 +1034,28 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 }
             }
         }
+        HostEvent::SandboxBoundaryAcknowledgement(result) => {
+            state.sandbox_boundary_acknowledgement_in_progress = false;
+            match result {
+                Ok(Some(mode)) => state.append_entry(TranscriptEntry {
+                    sequence: None,
+                    kind: TranscriptKind::Command,
+                    document: PresentationDocument::from_block(PresentationBlock::Markdown(
+                        format!(
+                            "Acknowledged `{}` for this TUI session. Process effects still require normal policy authorization and approvals.",
+                            mode.as_backend()
+                        ),
+                    )),
+                    temporary: false,
+                }),
+                Ok(None) => state.append_entry(error_entry(
+                    "Process execution remains blocked because the configured direct-execution boundary was not acknowledged.",
+                )),
+                Err(error) => state.append_entry(error_entry(&format!(
+                    "Sandbox boundary acknowledgement failed: {error}"
+                ))),
+            }
+        }
         HostEvent::OperationFinished(result) => {
             if matches!(state.overlay, Some(Overlay::Prompt { .. }))
                 && let Some(Overlay::Prompt { request, .. }) = state.overlay.take()
@@ -1194,8 +1310,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             temporary: false,
         });
     }
-    if let Some((session_id, page)) = result.session {
+    if let Some((session_id, page, pending_sandbox_boundary_acknowledgement)) = result.session {
         state.session_id = session_id;
+        state.pending_sandbox_boundary_acknowledgement = pending_sandbox_boundary_acknowledgement;
         state.selected_plan = None;
         let (transcript, transcript_sources) =
             transcript_from_messages(page.messages, &state.preferences);

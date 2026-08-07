@@ -28,13 +28,13 @@ use colossus_contracts::{
     ProviderStreamItem, ProviderTurn, PublisherTrust, QuarantinedEffectResult, RegistryPullResult,
     RegistryPushResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
     ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
-    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SessionMessage,
-    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
-    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
-    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
-    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
-    WorkflowWebhookDispatch,
+    SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
+    SessionMessage, SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate,
+    SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry,
+    SkillResourceRead, SkillScaffoldResult, SkillValidationResult, SkillWriteResult,
+    StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord,
+    TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
+    UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -64,8 +64,8 @@ use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
     MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectObserver,
-    ReleasedEffectResult, SafetyKernel, canonical_network_origin, effect_request,
-    network_destination_match, system_actor,
+    ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, canonical_network_origin,
+    effect_request, network_destination_match, system_actor,
 };
 use colossus_ports::{
     ApprovalProvider, AuditExporter, ContextError, ContextPreparer, ContextRepository,
@@ -156,6 +156,7 @@ mod repository_tools;
 mod research_gateway;
 mod research_skill_effects;
 mod runtime_helpers;
+mod sandbox_boundary;
 mod services;
 mod sessions_context;
 mod subagents;

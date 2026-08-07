@@ -1,7 +1,8 @@
 use super::*;
 use colossus_contracts::{
-    CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SessionMessage, StreamDisplayMode,
-    ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult, TranscriptDensity,
+    CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SandboxBoundaryMode,
+    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
+    ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -35,7 +36,99 @@ fn snapshot() -> InteractiveSnapshot {
             status: "ready".into(),
             approval_mode: "ask".into(),
         },
+        pending_sandbox_boundary_acknowledgement: None,
     }
+}
+
+#[test]
+fn direct_execution_acknowledgement_is_process_local_tui_state() {
+    let mut initial = snapshot();
+    initial.pending_sandbox_boundary_acknowledgement = Some(SandboxBoundaryMode::External);
+    let mut state = TuiState::from_snapshot(initial);
+    assert_eq!(
+        state.pending_sandbox_boundary_acknowledgement,
+        Some(SandboxBoundaryMode::External)
+    );
+    state.sandbox_boundary_acknowledgement_in_progress = true;
+    assert!(state.is_busy());
+
+    handle_host_event(
+        &mut state,
+        HostEvent::SandboxBoundaryAcknowledgement(Ok(Some(SandboxBoundaryMode::External))),
+    );
+    assert!(!state.sandbox_boundary_acknowledgement_in_progress);
+    assert!(matches!(
+        state
+            .transcript
+            .last()
+            .expect("acknowledgement transcript")
+            .document
+            .blocks
+            .first(),
+        Some(PresentationBlock::Markdown(text)) if text.contains("policy authorization")
+    ));
+}
+
+#[test]
+fn sandbox_boundary_acknowledgement_uses_bottom_decision_dock() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("draft stays visible");
+    let (response, mut received) = oneshot::channel();
+    let request = sandbox_boundary_prompt(SandboxBoundaryMode::External, response);
+    assert_eq!(
+        request.kind,
+        InteractivePromptKind::SandboxBoundaryAcknowledgement
+    );
+    assert_eq!(request.initial_choice, None);
+    handle_host_event(&mut state, HostEvent::Prompt(request));
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw sandbox boundary acknowledgement");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("External sandbox boundary · Summary"));
+    assert!(rendered.contains("Operator-asserted external boundary"));
+    assert!(rendered.contains("[A] Acknowledge the external boundary"));
+    assert!(rendered.contains("Esc keep blocked"));
+    assert!(rendered.contains("paused for boundary acknowledgement"));
+    assert!(rendered.contains("draft stays visible"));
+    let acknowledgement_row = rendered
+        .lines()
+        .position(|line| line.contains("External sandbox boundary · Summary"))
+        .expect("acknowledgement row");
+    let composer_row = rendered
+        .lines()
+        .position(|line| line.contains("paused for boundary acknowledgement"))
+        .expect("composer row");
+    assert!(acknowledgement_row < composer_row, "{rendered}");
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw boundary protections");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Acknowledgement does not add filesystem"));
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    assert!(received.try_recv().is_err());
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert_eq!(
+        received.try_recv(),
+        Ok(PromptResponse::Answer(
+            "Acknowledge the external boundary".into()
+        ))
+    );
 }
 
 fn custom_theme() -> CustomTheme {
@@ -288,9 +381,14 @@ fn plan_state_is_process_local_and_session_switch_clears_only_selection() {
             before_sequence: None,
             has_more: false,
         },
+        Some(SandboxBoundaryMode::External),
     ));
     assert!(apply_command_result(&mut state, switched));
     assert_eq!(state.session_id, "019f-other");
+    assert_eq!(
+        state.pending_sandbox_boundary_acknowledgement,
+        Some(SandboxBoundaryMode::External)
+    );
     assert_eq!(state.mode, InteractiveMode::Plan);
     assert!(state.selected_plan.is_none());
 
@@ -935,6 +1033,7 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
                     before_sequence: Some(1),
                     has_more: true,
                 },
+                None,
             )),
             preferences: None,
             completions: None,
@@ -1609,7 +1708,11 @@ fn approval_exact_request_repeats_the_complete_sanitized_scope() {
         )])],
     });
 
-    let exact = approval_section_document(&document, ApprovalSection::Request);
+    let exact = approval_section_document(
+        &document,
+        InteractivePromptKind::Approval,
+        ApprovalSection::Request,
+    );
     let PresentationBlock::KeyValue(scope) = &exact.blocks[0] else {
         panic!("exact request must begin with the complete approval scope");
     };
