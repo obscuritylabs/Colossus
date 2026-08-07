@@ -439,6 +439,7 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     let HostEvent::Prompt(prompt) = events.recv().await.expect("prompt") else {
         panic!("expected an approval prompt");
     };
+    assert_eq!(prompt.kind, InteractivePromptKind::Approval);
     let [PresentationBlock::Card { body, .. }] = prompt.document.blocks.as_slice() else {
         panic!("expected one approval card");
     };
@@ -448,6 +449,11 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     assert!(details.iter().any(|(label, value)| {
         label == "Risk review" && value.contains("request-bound MCP discovery metadata")
     }));
+    assert!(
+        details
+            .iter()
+            .any(|(label, value)| { label == "Requested by" && value.contains("System service") })
+    );
     prompt
         .response
         .send(PromptResponse::Answer("Deny".into()))
@@ -458,6 +464,67 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
             .expect("approval task")
             .expect("result")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn worker_tui_projects_approvals_into_the_typed_dock_document() {
+    let (sender, mut events) = mpsc::channel(1);
+    let handler = worker::TuiWorkerPromptHandler { sender };
+    let prompt = WorkerPrompt {
+        prompt_id: "worker-approval".into(),
+        kind: WorkerPromptKind::Approval,
+        title: "Approval required".into(),
+        question: "explicit operator approval required".into(),
+        choices: vec!["Allow once".into(), "Deny".into()],
+        allow_free_form: false,
+        details: json!({
+            "actor": {"actor_type": "model", "id": "primary"},
+            "action": "mcp.call",
+            "resource": "http://127.0.0.1:18000/mcp",
+            "reason": "explicit operator approval required",
+            "risk": {
+                "status": "unavailable",
+                "level": null,
+                "reason": "The configured risk evaluator was unavailable."
+            },
+            "content": {"operation": {"server": "splunk", "tool": "index_info"}}
+        }),
+    };
+    let task = tokio::spawn(async move { handler.prompt(prompt).await });
+
+    let HostEvent::Prompt(prompt) = events.recv().await.expect("approval prompt") else {
+        panic!("expected worker approval prompt");
+    };
+    assert_eq!(prompt.kind, InteractivePromptKind::Approval);
+    let [PresentationBlock::Card { body, .. }] = prompt.document.blocks.as_slice() else {
+        panic!("expected approval card");
+    };
+    let [
+        PresentationBlock::KeyValue(details),
+        PresentationBlock::Code { content, .. },
+    ] = body.as_slice()
+    else {
+        panic!("expected dock summary and exact request");
+    };
+    assert!(
+        details
+            .iter()
+            .any(|(label, value)| { label == "Requested by" && value == "model · primary" })
+    );
+    assert!(
+        details
+            .iter()
+            .any(|(label, value)| { label == "Risk review" && value.starts_with("not assessed:") })
+    );
+    assert!(content.contains("index_info"));
+    prompt
+        .response
+        .send(PromptResponse::Answer("Deny".into()))
+        .expect("deny response");
+    assert_eq!(
+        task.await.expect("prompt task").expect("prompt result"),
+        Some("Deny".into())
     );
 }
 

@@ -483,6 +483,10 @@ jobs:
           proxy=$(podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
           case "$proxy" in sha256:*) ;; *) proxy="sha256:$proxy" ;; esac
           echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
+          # Pay rootless Podman's one-time container bootstrap here instead of inside the
+          # first sandboxed process, whose runtime budget is enforced by the suite.
+          podman run --rm --pull=never --network=none --read-only --entrypoint /bin/true \
+            python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
       - name: Run live Podman OCI escape and recovery suite
         env:
           COLOSSUS_OCI_RUNTIME: /usr/bin/podman

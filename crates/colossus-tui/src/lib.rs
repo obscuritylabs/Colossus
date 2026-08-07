@@ -56,6 +56,12 @@ pub const MINIMUM_TERMINAL_HEIGHT: u16 = 12;
 const MAX_COMPLETION_MENU_ROWS: usize = 6;
 /// Transcript rows retained above completion chrome so the menu remains renderable.
 const MINIMUM_COMPLETION_TRANSCRIPT_ROWS: u16 = 3;
+/// Most rows occupied by the bottom-docked effect approval surface.
+const MAX_APPROVAL_DOCK_ROWS: u16 = 10;
+/// Fewest rows that keep approval summary, navigation, and decisions usable.
+const MIN_APPROVAL_DOCK_ROWS: u16 = 8;
+/// Transcript rows retained above a bottom-docked approval.
+const MINIMUM_APPROVAL_TRANSCRIPT_ROWS: u16 = 3;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
 /// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
@@ -79,10 +85,10 @@ pub use app::run_tui;
 pub use contract::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
     HostPlanExecutionResult, HostRunResult, InteractiveCommand, InteractiveHost, InteractiveMode,
-    InteractivePlanExecutionRequest, InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot,
-    LocalCommand, OperationResult, PlanCommand, PlanHostCommand, PlanSelectionUpdate,
-    PromptResponse, RuntimeCommand, ScreenMode, TranscriptEntry, TranscriptKind, TuiError,
-    TuiOptions, parse_interactive_command,
+    InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
+    InteractiveRunRequest, InteractiveSnapshot, LocalCommand, OperationResult, PlanCommand,
+    PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode,
+    TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
 };
 pub use state::TuiState;
 

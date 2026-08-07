@@ -5,7 +5,7 @@ pub(super) struct OwnedTerminal {
     mode: ScreenMode,
     inline_area: Option<Rect>,
     inline_screen_size: Option<Size>,
-    inline_completion_screen_size: Option<Size>,
+    inline_transient_screen_size: Option<Size>,
     committed_entries: usize,
     committed_epoch: u64,
     has_native_history: bool,
@@ -35,7 +35,7 @@ impl OwnedTerminal {
             mode,
             inline_area,
             inline_screen_size,
-            inline_completion_screen_size: None,
+            inline_transient_screen_size: None,
             committed_entries: 0,
             committed_epoch: u64::MAX,
             has_native_history: false,
@@ -51,11 +51,11 @@ impl OwnedTerminal {
         }
 
         self.synchronize_native_history_progress(state);
-        if state.structured_completion_context().is_some() {
-            self.draw_inline_completion(state)?;
+        if state.transient_inline_chrome_active() {
+            self.draw_inline_transient(state)?;
             return Ok(());
         }
-        self.leave_inline_completion_screen()?;
+        self.leave_inline_transient_screen()?;
         let transcript_start = if state.has_more || state.loading_older {
             self.committed_entries
         } else {
@@ -76,17 +76,17 @@ impl OwnedTerminal {
         Ok(())
     }
 
-    fn draw_inline_completion(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
+    fn draw_inline_transient(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
         if !self._guard.transient_alternate_screen {
             Backend::flush(self.terminal.backend_mut())?;
             self._guard.enter_transient_alternate_screen()?;
-            self.inline_completion_screen_size = None;
+            self.inline_transient_screen_size = None;
         }
         let screen_size = self.terminal.backend().size()?;
-        if self.inline_completion_screen_size != Some(screen_size) {
+        if self.inline_transient_screen_size != Some(screen_size) {
             self.terminal
                 .resize(Rect::new(0, 0, screen_size.width, screen_size.height))?;
-            self.inline_completion_screen_size = Some(screen_size);
+            self.inline_transient_screen_size = Some(screen_size);
         }
         state.transcript_width = usize::from(screen_size.width).max(20);
         self.terminal
@@ -94,18 +94,18 @@ impl OwnedTerminal {
         Ok(())
     }
 
-    fn leave_inline_completion_screen(&mut self) -> Result<(), io::Error> {
+    fn leave_inline_transient_screen(&mut self) -> Result<(), io::Error> {
         if !self._guard.transient_alternate_screen {
             return Ok(());
         }
         Backend::flush(self.terminal.backend_mut())?;
         self._guard.leave_transient_alternate_screen()?;
-        self.inline_completion_screen_size = None;
+        self.inline_transient_screen_size = None;
 
         // Leaving the alternate screen restores the main screen byte-for-byte.
         // Re-establish only the app-owned bottom viewport; the next normal draw
         // may then resize it for live transcript or activity without touching
-        // the terminal rows that completion temporarily covered.
+        // terminal rows temporarily covered by completion or approval chrome.
         let screen_size = self.terminal.backend().size()?;
         let current = self.inline_area.expect("inline viewport area");
         let previous_screen = self.inline_screen_size.expect("inline terminal size");

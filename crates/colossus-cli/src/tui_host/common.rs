@@ -42,6 +42,30 @@ pub(super) fn compact_timestamp(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
+pub(super) fn bounded_approval_content(value: &Value) -> Result<String, serde_json::Error> {
+    let content = serde_json::to_string_pretty(value)?;
+    if content.chars().count() <= APPROVAL_CONTENT_PREVIEW_CHARACTERS {
+        return Ok(content);
+    }
+    let mut preview = content
+        .chars()
+        .take(APPROVAL_CONTENT_PREVIEW_CHARACTERS)
+        .collect::<String>();
+    preview.push_str("\n… request display truncated at 65,536 characters");
+    Ok(preview)
+}
+
+fn actor_type_label(actor_type: ActorType) -> &'static str {
+    match actor_type {
+        ActorType::User => "Operator",
+        ActorType::Application => "Application",
+        ActorType::Model => "Model",
+        ActorType::Workflow => "Workflow",
+        ActorType::Subagent => "Child agent",
+        ActorType::System => "System service",
+    }
+}
+
 /// One active TUI event destination shared by trusted approval and input providers.
 #[derive(Default)]
 pub(crate) struct TuiPromptRouter {
@@ -72,6 +96,7 @@ impl TuiPromptRouter {
     async fn prompt(
         &self,
         id: String,
+        kind: InteractivePromptKind,
         title: String,
         document: PresentationDocument,
         choices: Vec<String>,
@@ -87,6 +112,7 @@ impl TuiPromptRouter {
         sender
             .send(HostEvent::Prompt(InteractivePrompt {
                 id,
+                kind,
                 title,
                 document,
                 choices,
@@ -129,15 +155,23 @@ impl ApprovalProvider for TuiApprovalProvider {
         request_hash: &str,
         decision: &PolicyDecision,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
-        let content = serde_json::to_string_pretty(&request.content)
+        let content = bounded_approval_content(&request.content)
             .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
         let mut details = vec![
+            (
+                "Requested by".into(),
+                format!(
+                    "{} · {}",
+                    actor_type_label(request.actor.actor_type),
+                    request.actor.id
+                ),
+            ),
             ("Action".into(), request.action.clone()),
             ("Resource".into(), request.resource.clone()),
             ("Reason".into(), decision.reason.clone()),
         ];
         if let Some(reason) = request.risk.reason.as_deref() {
-            let level = request.risk.level.as_deref().unwrap_or("unavailable");
+            let level = request.risk.level.as_deref().unwrap_or("not assessed");
             details.push(("Risk review".into(), format!("{level}: {reason}")));
         }
         let document = PresentationDocument::from_block(PresentationBlock::Card {
@@ -146,8 +180,8 @@ impl ApprovalProvider for TuiApprovalProvider {
             body: vec![
                 PresentationBlock::KeyValue(details),
                 PresentationBlock::Code {
-                    language: Some("proposed content".into()),
-                    content: content.chars().take(8_192).collect(),
+                    language: Some("exact prepared request".into()),
+                    content,
                 },
             ],
         });
@@ -155,6 +189,7 @@ impl ApprovalProvider for TuiApprovalProvider {
             .router
             .prompt(
                 format!("approval:{}", decision.decision_id),
+                InteractivePromptKind::Approval,
                 "Approval required".into(),
                 document,
                 vec!["Allow once".into(), "Deny".into()],
@@ -189,6 +224,7 @@ impl UserPromptProvider for TuiUserPromptProvider {
             .router
             .prompt(
                 self.router.next_prompt_id("user-ask"),
+                InteractivePromptKind::UserInput,
                 "Input needed".into(),
                 PresentationDocument::from_block(PresentationBlock::Markdown(
                     request.question.clone(),
