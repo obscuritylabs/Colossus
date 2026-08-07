@@ -50,6 +50,33 @@ fn artifact_operations_round_trip_without_artifact_bytes_or_credentials() {
 }
 
 #[test]
+fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
+    let encoded = serde_json::to_value(WorkerOperation::SandboxBoundaryAcknowledge {
+        session_id: "session-1".into(),
+        mode: SandboxBoundaryMode::External,
+    })
+    .expect("serialize sandbox boundary acknowledgement");
+    assert_eq!(encoded["operation"], "sandbox_boundary_acknowledge");
+    assert_eq!(encoded["session_id"], "session-1");
+    assert_eq!(encoded["mode"], "external");
+    let decoded: WorkerOperation =
+        serde_json::from_value(encoded).expect("deserialize sandbox boundary acknowledgement");
+    assert!(matches!(
+        decoded,
+        WorkerOperation::SandboxBoundaryAcknowledge {
+            session_id,
+            mode: SandboxBoundaryMode::External,
+        } if session_id == "session-1"
+    ));
+    assert_eq!(
+        operation_name(&WorkerOperation::SandboxBoundaryStatus {
+            session_id: "session-1".into(),
+        }),
+        "sandbox_boundary_status"
+    );
+}
+
+#[test]
 fn mcp_oauth_worker_operations_carry_only_server_and_callback_metadata() {
     let encoded = serde_json::to_value(WorkerOperation::McpAuthComplete {
         server: "splunk".into(),
@@ -1218,7 +1245,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 6);
+    assert_eq!(PROTOCOL_VERSION, 7);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

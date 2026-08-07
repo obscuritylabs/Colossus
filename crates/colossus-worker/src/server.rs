@@ -61,7 +61,7 @@ impl WorkerServer {
         })
     }
 
-    /// Open a worker whose protocol-v6 attached clients own prompts, notices, and cancellation.
+    /// Open a worker whose protocol-v7 attached clients own prompts, notices, and cancellation.
     pub fn open_with_mode(
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,

@@ -7,8 +7,8 @@ use colossus_contracts::{
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
     MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
     ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SessionMessagePage, SessionSummary,
-    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
+    SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{

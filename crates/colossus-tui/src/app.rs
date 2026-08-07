@@ -1,6 +1,8 @@
 use super::*;
 use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
+const KEEP_PROCESS_EXECUTION_BLOCKED: &str = "Keep process execution blocked";
+
 /// Launch the terminal UI and retain exclusive ownership of all terminal writes.
 pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Result<(), TuiError> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -15,6 +17,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         preload_native_history(&mut state, Arc::clone(&host)).await;
     }
     let (event_tx, mut event_rx) = mpsc::channel::<HostEvent>(256);
+    start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(options.screen_mode)?;
 
     loop {
@@ -61,6 +64,64 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         }
     }
     Ok(())
+}
+
+fn start_sandbox_boundary_acknowledgement(
+    state: &mut TuiState,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    let Some(mode) = state.pending_sandbox_boundary_acknowledgement.take() else {
+        return;
+    };
+    let acknowledge = match mode {
+        SandboxBoundaryMode::External => "Acknowledge the external boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
+    }
+    .to_owned();
+    let title = match mode {
+        SandboxBoundaryMode::External => "External sandbox boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Danger full access",
+    };
+    let details = match mode {
+        SandboxBoundaryMode::External => {
+            "Colossus will supervise child processes but will not isolate their filesystem or network access. Continue only when Coder, Kubernetes, or another trusted host boundary enforces the isolation you require. Policy approvals remain separate and active."
+        }
+        SandboxBoundaryMode::DangerFullAccess => {
+            "Colossus will supervise child processes without a Colossus sandbox or an asserted external isolation boundary. Commands receive the ambient access of this runtime. Policy approvals remain separate and active."
+        }
+    };
+    let (response_tx, response_rx) = oneshot::channel();
+    state.overlay = Some(Overlay::Prompt {
+        request: InteractivePrompt {
+            id: format!("sandbox-boundary:{}", mode.as_backend()),
+            title: title.into(),
+            document: PresentationDocument::from_block(PresentationBlock::Card {
+                title: title.into(),
+                tone: PresentationTone::Warning,
+                body: vec![PresentationBlock::Markdown(details.into())],
+            }),
+            choices: vec![acknowledge.clone(), KEEP_PROCESS_EXECUTION_BLOCKED.into()],
+            initial_choice: None,
+            allow_free_form: false,
+            response: response_tx,
+        },
+        input: String::new(),
+        selected: None,
+    });
+    let session_id = state.session_id.clone();
+    tokio::spawn(async move {
+        let result = match response_rx.await {
+            Ok(PromptResponse::Answer(answer)) if answer == acknowledge => host
+                .acknowledge_sandbox_boundary(&session_id, mode)
+                .await
+                .map(|()| Some(mode)),
+            Ok(PromptResponse::Answer(_)) | Ok(PromptResponse::Cancelled) | Err(_) => Ok(None),
+        };
+        let _ = event_tx
+            .send(HostEvent::SandboxBoundaryAcknowledgement(result))
+            .await;
+    });
 }
 
 fn continue_native_history_preload(
@@ -861,6 +922,23 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 }
             }
         }
+        HostEvent::SandboxBoundaryAcknowledgement(result) => match result {
+            Ok(Some(mode)) => state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document: PresentationDocument::from_block(PresentationBlock::Markdown(format!(
+                    "Acknowledged `{}` for this TUI session. Process effects still require normal policy authorization and approvals.",
+                    mode.as_backend()
+                ))),
+                temporary: false,
+            }),
+            Ok(None) => state.append_entry(error_entry(
+                "Process execution remains blocked because the configured direct-execution boundary was not acknowledged.",
+            )),
+            Err(error) => state.append_entry(error_entry(&format!(
+                "Sandbox boundary acknowledgement failed: {error}"
+            ))),
+        },
         HostEvent::OperationFinished(result) => {
             if matches!(state.overlay, Some(Overlay::Prompt { .. }))
                 && let Some(Overlay::Prompt { request, .. }) = state.overlay.take()

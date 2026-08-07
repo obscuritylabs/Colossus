@@ -58,6 +58,8 @@ pub struct Runtime {
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
     pub(super) sandbox_profile: String,
+    pub(super) sandbox_boundary_gate: Arc<SandboxBoundaryGate>,
+    pub(super) sandbox_boundary_acknowledgement_lock: std::sync::Mutex<()>,
     pub(super) development_sandbox: DevelopmentSandbox,
     pub(super) sandbox_filesystem: Vec<FilesystemGrant>,
     pub(super) sandbox_executables: Vec<PathBuf>,
@@ -697,11 +699,24 @@ impl Runtime {
             .iter()
             .map(|action| action.name.clone())
             .collect::<Vec<_>>();
+        let sandbox_boundary_mode = SandboxBoundaryMode::from_backend(&config.sandbox.backend);
+        let sandbox_boundary_acknowledged = match sandbox_boundary_mode {
+            Some(SandboxBoundaryMode::External) => config.sandbox.acknowledge_external_boundary,
+            Some(SandboxBoundaryMode::DangerFullAccess) => {
+                config.sandbox.acknowledge_danger_full_access
+            }
+            None => false,
+        };
+        let sandbox_boundary_gate = Arc::new(SandboxBoundaryGate::new(
+            sandbox_boundary_mode,
+            sandbox_boundary_acknowledged,
+        ));
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
             approvals,
-            SafetyKernel::new(known_capabilities),
+            SafetyKernel::new(known_capabilities)
+                .with_sandbox_boundary_gate(Arc::clone(&sandbox_boundary_gate)),
             permit_key,
         ));
         let search_provider: Arc<dyn SearchProvider> = Arc::new(GatewaySearchProvider {
@@ -981,6 +996,8 @@ impl Runtime {
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),
             sandbox_profile: config.sandbox.profile.clone(),
+            sandbox_boundary_gate,
+            sandbox_boundary_acknowledgement_lock: std::sync::Mutex::new(()),
             development_sandbox,
             sandbox_filesystem: config.sandbox.filesystem.clone(),
             sandbox_executables: config.sandbox.executables.clone(),

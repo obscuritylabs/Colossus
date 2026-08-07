@@ -235,10 +235,135 @@ pub trait ReleasedEffectObserver: Send {
     async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError>;
 }
 
+const MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS: usize = 4_096;
+
+/// Process-local acknowledgement state for backends that do not isolate processes.
+pub struct SandboxBoundaryGate {
+    mode: Option<SandboxBoundaryMode>,
+    globally_acknowledged: bool,
+    acknowledged_sessions: RwLock<BTreeSet<String>>,
+}
+
+impl SandboxBoundaryGate {
+    /// Construct the gate for the configured backend and optional headless acknowledgement.
+    pub fn new(mode: Option<SandboxBoundaryMode>, globally_acknowledged: bool) -> Self {
+        Self {
+            mode,
+            globally_acknowledged,
+            acknowledged_sessions: RwLock::new(BTreeSet::new()),
+        }
+    }
+
+    /// Direct-execution mode configured for this runtime, if any.
+    pub const fn mode(&self) -> Option<SandboxBoundaryMode> {
+        self.mode
+    }
+
+    /// Whether configuration explicitly acknowledged this boundary for headless callers.
+    pub const fn globally_acknowledged(&self) -> bool {
+        self.globally_acknowledged
+    }
+
+    /// Whether this session still needs an interactive acknowledgement.
+    pub fn pending_for_session(&self, session_id: &str) -> Option<SandboxBoundaryMode> {
+        let mode = self.mode?;
+        if self.globally_acknowledged
+            || self
+                .acknowledged_sessions
+                .read()
+                .is_ok_and(|sessions| sessions.contains(session_id))
+        {
+            None
+        } else {
+            Some(mode)
+        }
+    }
+
+    /// Acknowledge the configured direct-execution mode for one process-local session.
+    pub fn acknowledge_session(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), GatewayError> {
+        if session_id.is_empty() {
+            return Err(GatewayError::Safety(
+                "sandbox boundary acknowledgement requires a nonempty session id".into(),
+            ));
+        }
+        if self.mode != Some(mode) {
+            return Err(GatewayError::Safety(format!(
+                "cannot acknowledge {} when that sandbox backend is not configured",
+                mode.as_backend()
+            )));
+        }
+        let mut sessions = self.acknowledged_sessions.write().map_err(|_| {
+            GatewayError::Safety("sandbox boundary acknowledgement lock is poisoned".into())
+        })?;
+        if !sessions.contains(session_id)
+            && sessions.len() >= MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS
+        {
+            return Err(GatewayError::Safety(
+                "sandbox boundary acknowledgement capacity is exhausted; restart the runtime"
+                    .into(),
+            ));
+        }
+        sessions.insert(session_id.into());
+        Ok(())
+    }
+
+    /// Roll back a just-recorded acknowledgement when durable audit append fails.
+    pub fn revoke_session_acknowledgement(&self, session_id: &str) {
+        if let Ok(mut sessions) = self.acknowledged_sessions.write() {
+            sessions.remove(session_id);
+        }
+    }
+
+    fn validate(
+        &self,
+        request: &EffectRequest,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), GatewayError> {
+        if self.mode != Some(mode) {
+            return Err(GatewayError::Safety(format!(
+                "policy selected {} but the runtime was not configured for that direct-execution boundary",
+                mode.as_backend()
+            )));
+        }
+        if self.globally_acknowledged {
+            return Ok(());
+        }
+        let acknowledged = request
+            .context
+            .session_id
+            .as_deref()
+            .is_some_and(|session_id| {
+                self.acknowledged_sessions
+                    .read()
+                    .is_ok_and(|sessions| sessions.contains(session_id))
+            });
+        if acknowledged {
+            return Ok(());
+        }
+        let requirement = match mode {
+            SandboxBoundaryMode::External => {
+                "set sandbox.acknowledgeExternalBoundary: true for an operator-managed headless runtime or acknowledge the external boundary in the TUI"
+            }
+            SandboxBoundaryMode::DangerFullAccess => {
+                "set sandbox.acknowledgeDangerFullAccess: true for an operator-managed headless runtime or acknowledge danger full access in the TUI"
+            }
+        };
+        Err(GatewayError::Safety(format!(
+            "{} process execution is not acknowledged; {requirement}",
+            mode.as_backend()
+        )))
+    }
+}
+
 /// Hard safety checks policy is never allowed to override.
 pub struct SafetyKernel {
     known_capabilities: BTreeSet<String>,
     policy_input_limit: usize,
+    sandbox_boundary_gate: Option<Arc<SandboxBoundaryGate>>,
 }
 
 impl SafetyKernel {
@@ -247,12 +372,19 @@ impl SafetyKernel {
         Self {
             known_capabilities: known_capabilities.into_iter().collect(),
             policy_input_limit: DEFAULT_POLICY_INPUT_LIMIT,
+            sandbox_boundary_gate: None,
         }
     }
 
     /// Override the disclosure cap for bounded tests or stricter deployments.
     pub fn with_policy_input_limit(mut self, bytes: usize) -> Self {
         self.policy_input_limit = bytes;
+        self
+    }
+
+    /// Require runtime acknowledgement before direct-execution permits may be minted.
+    pub fn with_sandbox_boundary_gate(mut self, gate: Arc<SandboxBoundaryGate>) -> Self {
+        self.sandbox_boundary_gate = Some(gate);
         self
     }
 
@@ -309,7 +441,7 @@ impl SafetyKernel {
         }
         if !matches!(
             obligations.sandbox_backend.as_str(),
-            "broker" | "native" | "oci" | "windows_job"
+            "broker" | "native" | "oci" | "windows_job" | "external" | "danger_full_access"
         ) {
             return Err(GatewayError::Safety(format!(
                 "unknown sandbox backend {}",
@@ -324,6 +456,21 @@ impl SafetyKernel {
                 "process execution cannot downgrade to the broker without an explicit obligation"
                     .into(),
             ));
+        }
+        if request.phase == EffectPhase::PreEffect
+            && decision.outcome != DecisionOutcome::Deny
+            && is_process_effect(request)
+            && let Some(mode) = SandboxBoundaryMode::from_backend(&obligations.sandbox_backend)
+        {
+            self.sandbox_boundary_gate
+                .as_ref()
+                .ok_or_else(|| {
+                    GatewayError::Safety(format!(
+                        "{} process execution requires a runtime acknowledgement gate",
+                        mode.as_backend()
+                    ))
+                })?
+                .validate(request, mode)?;
         }
         if obligations.sandbox_backend == "windows_job"
             && is_process_effect(request)
@@ -592,14 +739,16 @@ pub(super) fn validate_process_obligations(
         .and_then(Value::as_str)
         .ok_or_else(|| GatewayError::Safety("process cwd is absent".into()))?;
     let cwd = canonical_effect_path(cwd, false)?;
-    let cwd_allowed = obligations.filesystem.iter().any(|grant| {
-        matches!(grant.mode.as_str(), "read" | "write")
-            && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
-    });
-    if !cwd_allowed {
-        return Err(GatewayError::Safety(
-            "process cwd is outside allowed filesystem roots".into(),
-        ));
+    if SandboxBoundaryMode::from_backend(&obligations.sandbox_backend).is_none() {
+        let cwd_allowed = obligations.filesystem.iter().any(|grant| {
+            matches!(grant.mode.as_str(), "read" | "write")
+                && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
+        });
+        if !cwd_allowed {
+            return Err(GatewayError::Safety(
+                "process cwd is outside allowed filesystem roots".into(),
+            ));
+        }
     }
     let environment = request
         .content

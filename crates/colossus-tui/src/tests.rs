@@ -1,7 +1,8 @@
 use super::*;
 use colossus_contracts::{
-    CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SessionMessage, StreamDisplayMode,
-    ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult, TranscriptDensity,
+    CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SandboxBoundaryMode,
+    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
+    ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -35,7 +36,34 @@ fn snapshot() -> InteractiveSnapshot {
             status: "ready".into(),
             approval_mode: "ask".into(),
         },
+        pending_sandbox_boundary_acknowledgement: None,
     }
+}
+
+#[test]
+fn direct_execution_acknowledgement_is_process_local_tui_state() {
+    let mut initial = snapshot();
+    initial.pending_sandbox_boundary_acknowledgement = Some(SandboxBoundaryMode::External);
+    let mut state = TuiState::from_snapshot(initial);
+    assert_eq!(
+        state.pending_sandbox_boundary_acknowledgement,
+        Some(SandboxBoundaryMode::External)
+    );
+
+    handle_host_event(
+        &mut state,
+        HostEvent::SandboxBoundaryAcknowledgement(Ok(Some(SandboxBoundaryMode::External))),
+    );
+    assert!(matches!(
+        state
+            .transcript
+            .last()
+            .expect("acknowledgement transcript")
+            .document
+            .blocks
+            .first(),
+        Some(PresentationBlock::Markdown(text)) if text.contains("policy authorization")
+    ));
 }
 
 fn custom_theme() -> CustomTheme {

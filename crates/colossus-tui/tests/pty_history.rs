@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunOutcome, AgentRunResult, ModelMessage, ModelMessageRole, ProviderEvent, RunEvent,
-    RunEventEnvelope, SessionMessage, SessionMessagePage, TerminalPreferences, ToolCall,
-    ToolResult,
+    RunEventEnvelope, SandboxBoundaryMode, SessionMessage, SessionMessagePage, TerminalPreferences,
+    ToolCall, ToolResult,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{PresentationBlock, PresentationDocument, PresentationTone};
@@ -66,7 +66,16 @@ impl InteractiveHost for FixtureHost {
                 status: "ready".into(),
                 approval_mode: "ask".into(),
             },
+            pending_sandbox_boundary_acknowledgement: None,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        _session_id: &str,
+        _mode: SandboxBoundaryMode,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     async fn execute_command(

@@ -82,6 +82,8 @@ sandbox:
   backend: native
   profile: workspace-development
   allowBrokerFallback: false
+  acknowledgeExternalBoundary: false
+  acknowledgeDangerFullAccess: false
   helperPath: null
   ociRuntime: null
   ociImage: null

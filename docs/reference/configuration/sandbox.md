@@ -21,6 +21,8 @@ see the [Sandbox administration guide](../../admin/sandbox.md).
 | Interactive work in one repository | `workspace-development` | `native` or `windows_job` | Derived workspace and shell grants, plus explicit additions |
 | Automation or a durable workflow | `offline-default` or a custom label | Supported isolating backend | Explicit least-privilege grants |
 | Reproducible container execution | Any nonempty profile | `oci` | Explicit mounts, image executables, and optional network origins |
+| Coder/Kubernetes with a separately managed isolation boundary | `offline-default` or a custom label | `external` | Explicit acknowledgement of the external boundary |
+| Intentionally unrestricted process execution | `offline-default` or a custom label | `danger_full_access` | Explicit danger acknowledgement |
 | Externally brokered execution | Any profile except `workspace-development` | `broker` | Explicit acknowledgement; no Colossus process isolation |
 
 Start with `workspace-development` for local interactive use. Use explicit grants for
@@ -37,6 +39,8 @@ sandbox:
   backend: native
   profile: workspace-development
   allowBrokerFallback: false
+  acknowledgeExternalBoundary: false
+  acknowledgeDangerFullAccess: false
   helperPath: null
   ociRuntime: null
   ociImage: null
@@ -54,7 +58,8 @@ sandbox:
 
 ## Profile
 
-`sandbox.profile` is a nonempty policy identity. Two names have built-in meaning:
+`sandbox.profile` is a nonempty policy identity and defaults to `offline-default` when
+omitted. Two names have built-in meaning:
 
 | Value | Behavior |
 | --- | --- |
@@ -65,7 +70,8 @@ sandbox:
 The development preset applies only to terminal users and agents without workflow
 lineage. It is rejected with `policy.kind: opa`, because OPA must return complete
 filesystem, executable, environment, network, and limit obligations. It is also rejected
-with `backend: broker`, which cannot enforce the protected workspace control paths.
+with `backend: broker`, `external`, or `danger_full_access`, which cannot enforce the
+protected workspace control paths.
 
 Explicit grants remain additive under `workspace-development`:
 
@@ -92,7 +98,52 @@ before deriving development grants. Shell processes cannot read or modify that d
 | `native` | Normal macOS and Linux execution using host-native isolation |
 | `windows_job` | Windows execution using AppContainer and Job Object isolation |
 | `oci` | A preloaded Docker or Podman image with a read-only root and exact bind mounts |
+| `external` | Supervised direct execution when Coder, Kubernetes, or another trusted host owns isolation |
+| `danger_full_access` | Supervised direct execution with no asserted isolation boundary |
 | `broker` | An explicitly accepted downgrade where another boundary owns execution |
+
+### Direct-execution acknowledgements
+
+`external` and `danger_full_access` are explicit modes; Colossus never falls back to
+them when another backend is unavailable. Both retain authenticated helper execution,
+environment filtering, exact executable validation, time/output bounds, resource
+supervision where supported, the effect gateway, audit, policy decisions, and approval
+obligations. Neither mode supplies Colossus filesystem or network isolation.
+
+For a Coder or Kubernetes workload whose pod/container boundary is managed separately,
+edit the existing sandbox block:
+
+```yaml
+sandbox:
+  backend: external
+  acknowledgeExternalBoundary: true
+```
+
+`acknowledgeExternalBoundary` defaults to `false`. An interactive TUI then requires a
+session-scoped acknowledgement before any process permit can be minted. A headless
+runtime fails process effects closed unless the field is explicitly `true`.
+
+Use unrestricted execution only when ambient runtime access is intentional:
+
+```yaml
+sandbox:
+  backend: danger_full_access
+  acknowledgeDangerFullAccess: true
+```
+
+`acknowledgeDangerFullAccess` follows the same TUI/headless behavior and defaults to
+`false`. Selecting either direct backend does not change approval mode and does not
+auto-approve any policy obligation. The two acknowledgement fields are valid only with
+their matching backend, which prevents a stale acknowledgement from silently applying
+after a backend change.
+
+In direct modes, `filesystem` and `networkDestinations` remain policy/audit declarations
+and continue to constrain Colossus-owned filesystem and HTTP adapters. They are not an
+OS-enforced allowlist for arbitrary child-process access; the external platform owns
+that enforcement for `external`, and no such enforcement is asserted for
+`danger_full_access`. Process working directories and path-like arguments therefore do
+not require matching `filesystem` entries in either direct mode. Exact executable and
+environment-name grants, approval decisions, time/output bounds, and audit still apply.
 
 ### `allowBrokerFallback`
 

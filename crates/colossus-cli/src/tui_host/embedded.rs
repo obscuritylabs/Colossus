@@ -1202,7 +1202,21 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            pending_sandbox_boundary_acknowledgement: self
+                .runtime
+                .pending_sandbox_boundary_acknowledgement(&session.id)
+                .map_err(|error| error.to_string())?,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), String> {
+        self.runtime
+            .acknowledge_sandbox_boundary(session_id, mode)
+            .map_err(|error| error.to_string())
     }
 
     async fn execute_command(

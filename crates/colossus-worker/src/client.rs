@@ -169,7 +169,7 @@ impl WorkerClient {
         }
     }
 
-    /// Execute one protocol-v6 interactive operation with authenticated prompts,
+    /// Execute one protocol-v7 interactive operation with authenticated prompts,
     /// notices, released events, and cooperative cancellation.
     pub async fn call_interactive<T>(
         &self,
@@ -220,7 +220,7 @@ impl WorkerClient {
     /// Execute an interactive model or Plan Mode run.
     ///
     /// This compatibility convenience keeps callers that expect an agent outcome
-    /// concise while all protocol-v6 operations share [`Self::call_interactive`].
+    /// concise while all protocol-v7 operations share [`Self::call_interactive`].
     pub async fn run_model_controlled(
         &self,
         operation: WorkerOperation,

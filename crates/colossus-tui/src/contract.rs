@@ -55,6 +55,8 @@ pub struct InteractiveSnapshot {
     pub completions: Vec<String>,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Direct-execution boundary that still requires this TUI session's acknowledgement.
+    pub pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
 }
 
 /// Request for one normal provider/tool turn.
@@ -481,6 +483,8 @@ pub enum HostEvent {
     HistoryWarning(String),
     /// An asynchronously requested older transcript page completed.
     OlderPage(Result<SessionMessagePage, String>),
+    /// Startup direct-execution acknowledgement reached a terminal result.
+    SandboxBoundaryAcknowledgement(Result<Option<SandboxBoundaryMode>, String>),
 }
 
 /// Terminal result of one serialized background operation.
@@ -498,6 +502,13 @@ pub enum OperationResult {
 pub trait InteractiveHost: Send + Sync {
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
+
+    /// Acknowledge one configured direct-execution boundary for the active TUI session.
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), String>;
 
     /// Execute one typed application command without writing to the terminal.
     async fn execute_command(

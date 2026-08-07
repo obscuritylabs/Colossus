@@ -177,8 +177,13 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "Windows Job Object process execution requires at least {MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS}ms"
             )));
         }
+        let direct_execution = matches!(
+            permit.obligations().sandbox_backend.as_str(),
+            "external" | "danger_full_access"
+        );
         let proxy_credential = if permit.obligations().network_destinations.is_empty()
             || permit.obligations().sandbox_backend == "oci"
+            || direct_execution
         {
             None
         } else {
@@ -189,7 +194,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             mac.update(permit.nonce().as_bytes());
             Some(hex::encode(mac.finalize().into_bytes()))
         };
-        let proxy = if permit.obligations().network_destinations.is_empty() {
+        let proxy = if permit.obligations().network_destinations.is_empty() || direct_execution {
             None
         } else if matches!(
             permit.obligations().sandbox_backend.as_str(),
@@ -373,14 +378,16 @@ pub(super) fn validate_process_spec(
     if !cwd.is_dir() {
         return Err(adapter_failure("process cwd is not a directory"));
     }
-    let cwd_allowed = obligations.filesystem.iter().any(|grant| {
-        matches!(grant.mode.as_str(), "read" | "write" | "metadata")
-            && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
-    });
-    if !cwd_allowed {
-        return Err(adapter_failure(
-            "process cwd is outside policy-authorized filesystem roots",
-        ));
+    if SandboxBoundaryMode::from_backend(&obligations.sandbox_backend).is_none() {
+        let cwd_allowed = obligations.filesystem.iter().any(|grant| {
+            matches!(grant.mode.as_str(), "read" | "write" | "metadata")
+                && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
+        });
+        if !cwd_allowed {
+            return Err(adapter_failure(
+                "process cwd is outside policy-authorized filesystem roots",
+            ));
+        }
     }
     if spec.args.len() > 256
         || spec
@@ -447,6 +454,9 @@ pub(super) fn normalize_path_arguments(
     spec: &mut ProcessSpec,
     obligations: &PolicyObligations,
 ) -> Result<(), ExecutionError> {
+    if SandboxBoundaryMode::from_backend(&obligations.sandbox_backend).is_some() {
+        return Ok(());
+    }
     for argument in &mut spec.args {
         let path = Path::new(argument);
         let path_like = path.is_absolute()

@@ -1140,7 +1140,27 @@ impl InteractiveHost for WorkerInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            pending_sandbox_boundary_acknowledgement: serde_json::from_value(
+                self.value(WorkerOperation::SandboxBoundaryStatus {
+                    session_id: session.id.clone(),
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string())?,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), String> {
+        self.value(WorkerOperation::SandboxBoundaryAcknowledge {
+            session_id: session_id.into(),
+            mode,
+        })
+        .await
+        .map(|_| ())
     }
 
     async fn execute_command(

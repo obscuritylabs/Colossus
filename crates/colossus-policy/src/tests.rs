@@ -1,14 +1,14 @@
 use super::{
     AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, NetworkDestinationMatch, QuarantinedEffectObserver, ReleasedEffectObserver,
-    ReleasedEffectResult, SafetyKernel, StreamingEffectExecutor, effect_request,
-    network_destination_match, system_actor,
+    ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, StreamingEffectExecutor,
+    effect_request, network_destination_match, system_actor,
 };
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, ApprovalReviewNotice, AutomaticApprovalNotice, DecisionOutcome,
-    QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation, RiskReviewFailure,
-    RiskReviewFallbackNotice, RiskStatus,
+    ExecutionContext, QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation,
+    RiskReviewFailure, RiskReviewFallbackNotice, RiskStatus, SandboxBoundaryMode,
 };
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
@@ -654,6 +654,111 @@ async fn process_environment_and_executable_obligations_fail_closed() {
         .await
         .expect_err("environment denied");
     assert!(matches!(error, GatewayError::Safety(_)));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn direct_process_backends_require_the_exact_session_acknowledgement() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    for mode in [
+        SandboxBoundaryMode::External,
+        SandboxBoundaryMode::DangerFullAccess,
+    ] {
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox(mode.as_backend(), "test", false)
+            .with_filesystem_root(executable.display().to_string(), "execute");
+        let gate = Arc::new(SandboxBoundaryGate::new(Some(mode), false));
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()])
+                .with_sandbox_boundary_gate(Arc::clone(&gate)),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let request = || {
+            let mut request = effect_request(
+                system_actor("test"),
+                "process.spawn",
+                executable.display().to_string(),
+                serde_json::json!({
+                    "cwd": directory.path(),
+                    "args": [],
+                    "environment": {},
+                    "stdin_base64": null,
+                }),
+            );
+            request.capabilities = vec!["process.spawn".into()];
+            request.context = ExecutionContext {
+                session_id: Some("session-1".into()),
+                ..ExecutionContext::default()
+            };
+            request
+        };
+
+        let error = gateway
+            .execute(request(), &executor)
+            .await
+            .expect_err("unacknowledged direct process execution");
+        assert!(error.to_string().contains("is not acknowledged"));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+        gate.acknowledge_session("another-session", mode)
+            .expect("other session acknowledgement");
+        assert!(gateway.execute(request(), &executor).await.is_err());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+        gate.acknowledge_session("session-1", mode)
+            .expect("active session acknowledgement");
+        gateway
+            .execute(request(), &executor)
+            .await
+            .expect("direct process cwd does not require an unenforced filesystem declaration");
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    }
+}
+
+#[tokio::test]
+async fn denied_direct_process_effects_do_not_request_a_boundary_acknowledgement() {
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("process.spawn", DecisionOutcome::Deny)
+        .with_sandbox("external", "test", false);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(AllowApproval {
+            approved_by: "user".into(),
+        }),
+        SafetyKernel::new(["process.spawn".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::External), false),
+        )),
+        [9_u8; 32],
+    );
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let mut request = effect_request(
+        system_actor("test"),
+        "process.spawn",
+        "/unavailable",
+        serde_json::json!({}),
+    );
+    request.capabilities = vec!["process.spawn".into()];
+    let error = gateway
+        .execute(request, &executor)
+        .await
+        .expect_err("policy denial");
+    assert!(matches!(error, GatewayError::Denied(_)));
     assert_eq!(executor.calls.load(Ordering::Acquire), 0);
 }
 

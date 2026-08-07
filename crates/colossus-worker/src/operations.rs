@@ -70,7 +70,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v6 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v7 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -179,6 +179,18 @@ pub enum WorkerOperation {
     StateDoctor,
     /// Inspect sandbox readiness.
     SandboxDoctor,
+    /// Return the direct-execution boundary acknowledgement pending for one session.
+    SandboxBoundaryStatus {
+        /// Exact durable session.
+        session_id: String,
+    },
+    /// Acknowledge one direct-execution boundary for one TUI session.
+    SandboxBoundaryAcknowledge {
+        /// Exact durable session.
+        session_id: String,
+        /// Exact configured boundary being acknowledged.
+        mode: SandboxBoundaryMode,
+    },
     /// List provider profile readiness without network access.
     ProviderProfiles,
     /// Exercise one provider diagnostic path.
@@ -267,7 +279,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v6 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v7 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,

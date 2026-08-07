@@ -10,8 +10,8 @@ use colossus_contracts::{
     AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
     IntegrationAuth, MemoryScope, MemoryStatus, PlanExecutionStrategy, PlanStatus, PlanStep,
     PolicyDecision, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope,
-    SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
-    WorkflowScheduleMisfirePolicy,
+    SandboxBoundaryMode, SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest,
+    UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -37,7 +37,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 6;
+const PROTOCOL_VERSION: u16 = 7;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;

@@ -138,6 +138,7 @@ pub struct TuiState {
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
+    pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
     pub(super) activity: Option<String>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
@@ -178,6 +179,8 @@ impl TuiState {
             control: None,
             overlay: None,
             pending_plan_execution: None,
+            pending_sandbox_boundary_acknowledgement: snapshot
+                .pending_sandbox_boundary_acknowledgement,
             activity: None,
             started_at: None,
             scroll_from_bottom: 0,

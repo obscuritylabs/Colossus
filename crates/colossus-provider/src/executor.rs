@@ -83,6 +83,112 @@ struct ProviderStreamMetadata<'a> {
     include_response_diagnostics: bool,
 }
 
+enum CollectedProviderOutput {
+    Turn(ProviderTurn),
+    Diagnostic(ProviderResponseDiagnostic),
+}
+
+struct CollectedProviderStream {
+    events: Vec<ProviderEvent>,
+    output: Option<CollectedProviderOutput>,
+    last: Option<QuarantinedEffectResult>,
+    total_bytes: usize,
+    max_output_bytes: usize,
+}
+
+impl CollectedProviderStream {
+    fn new(max_output_bytes: u64) -> Result<Self, ExecutionError> {
+        Ok(Self {
+            events: Vec::new(),
+            output: None,
+            last: None,
+            total_bytes: 0,
+            max_output_bytes: usize::try_from(max_output_bytes)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+        })
+    }
+
+    fn finish(
+        self,
+        terminal: QuarantinedEffectResult,
+        permit: &ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if self.last.as_ref() != Some(&terminal) {
+            return Err(ExecutionError::Failed(
+                "collected provider stream terminal result did not match its last chunk".into(),
+            ));
+        }
+        match self.output {
+            Some(CollectedProviderOutput::Turn(turn)) => {
+                bounded_result(&turn, permit).map_err(provider_execution_error)
+            }
+            Some(CollectedProviderOutput::Diagnostic(diagnostic)) => {
+                bounded_result(&diagnostic, permit).map_err(provider_execution_error)
+            }
+            None => Err(ExecutionError::Failed(
+                "collected provider stream has no terminal output".into(),
+            )),
+        }
+    }
+}
+
+#[async_trait]
+impl QuarantinedEffectObserver for CollectedProviderStream {
+    async fn observe(&mut self, result: QuarantinedEffectResult) -> Result<(), ExecutionError> {
+        if self.output.is_some() {
+            return Err(ExecutionError::Failed(
+                "collected provider stream emitted data after its terminal chunk".into(),
+            ));
+        }
+        if !result.effect_succeeded
+            || result.media_type != "application/vnd.colossus.provider-stream+json"
+        {
+            return Err(ExecutionError::Failed(
+                "collected provider stream emitted an invalid chunk".into(),
+            ));
+        }
+        self.total_bytes = self.total_bytes.saturating_add(result.bytes.len());
+        if self.total_bytes > self.max_output_bytes {
+            return Err(ExecutionError::OutcomeUnknown(
+                "collected provider stream exceeds the cumulative permitted bound".into(),
+            ));
+        }
+        let item = serde_json::from_slice::<ProviderStreamItem>(&result.bytes)
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        match item {
+            ProviderStreamItem::Event { event } => self.events.push(event),
+            ProviderStreamItem::Diagnostic { diagnostic } => {
+                if !self.events.is_empty() {
+                    return Err(ExecutionError::Failed(
+                        "collected provider stream emitted a diagnostic after model events".into(),
+                    ));
+                }
+                self.output = Some(CollectedProviderOutput::Diagnostic(diagnostic));
+            }
+            ProviderStreamItem::Completed {
+                profile,
+                model_profile,
+                provider_profile,
+                provider,
+                model,
+                response_id,
+            } => {
+                self.output = Some(CollectedProviderOutput::Turn(ProviderTurn {
+                    profile,
+                    model_profile,
+                    provider_profile,
+                    provider,
+                    model,
+                    response_id,
+                    events: std::mem::take(&mut self.events),
+                }));
+            }
+        }
+        self.last = Some(result);
+        Ok(())
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -287,6 +393,16 @@ impl EffectExecutor for ProviderExecutor {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if self.profile.kind == ProviderKind::OpenAiCodex
+            && request.action == self.profile.kind.generation_action()
+        {
+            let mut collector =
+                CollectedProviderStream::new(permit.obligations().max_output_bytes)?;
+            let terminal = self
+                .execute_stream_permitted(request, &permit, &mut collector)
+                .await?;
+            return collector.finish(terminal, &permit);
+        }
         self.execute_permitted(request, &permit)
             .await
             .map_err(provider_execution_error)
@@ -330,6 +446,18 @@ impl StreamingEffectExecutor for ProviderExecutor {
         &self,
         effect: &EffectRequest,
         permit: ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        self.execute_stream_permitted(effect, &permit, observer)
+            .await
+    }
+}
+
+impl ProviderExecutor {
+    async fn execute_stream_permitted(
+        &self,
+        effect: &EffectRequest,
+        permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let input: ProviderEffectInput =
@@ -381,7 +509,7 @@ impl StreamingEffectExecutor for ProviderExecutor {
                 ProviderStreamItem::Event {
                     event: ProviderEvent::ModelDelta { text: text.clone() },
                 },
-                &permit,
+                permit,
                 observer,
             )
             .await?;
@@ -389,7 +517,7 @@ impl StreamingEffectExecutor for ProviderExecutor {
                 ProviderStreamItem::Event {
                     event: ProviderEvent::FinalOutput { text },
                 },
-                &permit,
+                permit,
                 observer,
             )
             .await?;
@@ -402,12 +530,12 @@ impl StreamingEffectExecutor for ProviderExecutor {
                     model,
                     response_id: None,
                 },
-                &permit,
+                permit,
                 observer,
             )
             .await;
         }
-        self.validate_resource(effect, &endpoint, &permit)
+        self.validate_resource(effect, &endpoint, permit)
             .map_err(provider_execution_error)?;
         let tool_names =
             ProviderToolNames::from_request(&model_request).map_err(provider_execution_error)?;
@@ -441,7 +569,7 @@ impl StreamingEffectExecutor for ProviderExecutor {
                 include_response_diagnostics,
             },
             tool_names,
-            &permit,
+            permit,
             observer,
         )
         .await

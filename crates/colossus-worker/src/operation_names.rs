@@ -14,6 +14,8 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProjectionRebuild { .. } => "projection_rebuild",
         WorkerOperation::StateDoctor => "state_doctor",
         WorkerOperation::SandboxDoctor => "sandbox_doctor",
+        WorkerOperation::SandboxBoundaryStatus { .. } => "sandbox_boundary_status",
+        WorkerOperation::SandboxBoundaryAcknowledge { .. } => "sandbox_boundary_acknowledge",
         WorkerOperation::ProviderProfiles => "provider_profiles",
         WorkerOperation::ProviderDoctor { .. } => "provider_doctor",
         WorkerOperation::ProviderModels { .. } => "provider_models",

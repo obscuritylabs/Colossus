@@ -160,6 +160,13 @@ impl Runtime {
     pub fn sandbox_doctor(&self) -> SandboxDoctorReport {
         let mut report = sandbox_doctor(&self.sandbox_executor_config);
         report.canonical_workspace = Some(self.workspace.clone());
+        report.selected_backend = self.sandbox_backend.clone();
+        report.colossus_process_isolation = matches!(
+            self.sandbox_backend.as_str(),
+            "native" | "windows_job" | "oci"
+        );
+        report.direct_execution_globally_acknowledged =
+            self.sandbox_boundary_gate.globally_acknowledged();
         report.sandbox_profile = self.sandbox_profile.clone();
         report.protected_path_exclusions_supported = match self.sandbox_backend.as_str() {
             "native" => report.protected_path_exclusions_supported,
