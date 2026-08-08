@@ -67,13 +67,17 @@ flowchart LR
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
-Hosted jobs run on Blacksmith runners: `blacksmith-4vcpu-ubuntu-2404` for every Linux
-lane, `blacksmith-6vcpu-macos-15` for macOS ARM acceptance and Desktop packaging, and
+Most hosted jobs run on Blacksmith runners: `blacksmith-4vcpu-ubuntu-2404` for Linux
+lanes, `blacksmith-6vcpu-macos-15` for macOS ARM acceptance and Desktop packaging, and
 `blacksmith-8vcpu-windows-2025` for Windows acceptance and the Windows Developer
-Preview. The six-target release artifact matrix keeps the GitHub-hosted images that
-match each published target, so cross-compilation stays out of the release path. The
-repository's `.github/actionlint.yaml` registers every non-standard runner label so
-local workflow linting recognizes it.
+Preview. Two Linux lanes stay on the GitHub-hosted `ubuntu-latest-m` larger runner:
+complete PR validation and release readiness both install an exact-path AppArmor
+profile, and that requires a kernel exposing the AppArmor securityfs interface, which
+the Blacksmith microVM kernel does not provide. The six-target release artifact matrix
+also keeps the GitHub-hosted images that match each published target, so
+cross-compilation stays out of the release path. The repository's
+`.github/actionlint.yaml` registers every non-standard runner label so local workflow
+linting recognizes it.
 
 ## Steps
 

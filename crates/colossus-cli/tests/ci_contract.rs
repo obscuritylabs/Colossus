@@ -89,7 +89,9 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("blacksmith-4vcpu-ubuntu-2404")
+        Some("ubuntu-latest-m"),
+        "the AppArmor-dependent workspace suite needs a kernel with the AppArmor \
+         securityfs interface"
     );
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
@@ -315,7 +317,8 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("blacksmith-4vcpu-ubuntu-2404")
+        Some("ubuntu-latest-m"),
+        "release readiness installs an exact-path AppArmor profile"
     );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");

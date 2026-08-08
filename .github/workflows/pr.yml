@@ -97,7 +97,10 @@ jobs:
     name: Rust PR validation
     if: needs.classify.outputs.rust_required == 'true'
     needs: classify
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # The workspace suite installs an exact-path AppArmor profile, which needs a kernel
+    # that exposes the AppArmor securityfs interface. Blacksmith's microVM kernel does
+    # not, so this lane stays on the GitHub-hosted larger runner.
+    runs-on: ubuntu-latest-m
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"

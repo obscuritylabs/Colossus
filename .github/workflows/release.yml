@@ -20,7 +20,10 @@ concurrency:
 jobs:
   validate:
     name: Validate release request
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Release readiness installs an exact-path AppArmor profile, which needs a kernel
+    # that exposes the AppArmor securityfs interface. Blacksmith's microVM kernel does
+    # not, so this lane stays on the GitHub-hosted larger runner.
+    runs-on: ubuntu-latest-m
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
