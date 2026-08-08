@@ -204,6 +204,36 @@ esac
         fs::set_permissions(&fake_uname, fs::Permissions::from_mode(0o755))
             .expect("fake uname permissions");
 
+        // GNU stat can emit filesystem output for the valid path operand before
+        // returning failure for the BSD-style format operand. Model that behavior so
+        // the fallback cannot accidentally combine partial output with the GNU value.
+        let fake_stat = bin.join("stat");
+        fs::write(
+            &fake_stat,
+            r#"#!/bin/sh
+set -eu
+[ "$#" -eq 4 ] && [ "$3" = -- ] || exit 64
+case "$1:$2" in
+    -f:%u|-f:%Lp)
+        printf 'partial GNU filesystem status\n'
+        exit 1
+        ;;
+    -c:%u)
+        id -u
+        ;;
+    -c:%a)
+        printf '700\n'
+        ;;
+    *)
+        exit 64
+        ;;
+esac
+"#,
+        )
+        .expect("fake stat");
+        fs::set_permissions(&fake_stat, fs::Permissions::from_mode(0o755))
+            .expect("fake stat permissions");
+
         Self {
             _directory: directory,
             root,

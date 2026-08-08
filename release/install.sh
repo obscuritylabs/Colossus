@@ -64,11 +64,19 @@ ensure_no_link_components() {
 }
 
 directory_mode() {
-    stat -f '%Lp' -- "$1" 2>/dev/null || stat -c '%a' -- "$1"
+    if resolved_mode=$(stat -f '%Lp' -- "$1" 2>/dev/null); then
+        printf '%s\n' "$resolved_mode"
+    else
+        stat -c '%a' -- "$1"
+    fi
 }
 
 file_owner() {
-    stat -f '%u' -- "$1" 2>/dev/null || stat -c '%u' -- "$1"
+    if resolved_owner=$(stat -f '%u' -- "$1" 2>/dev/null); then
+        printf '%s\n' "$resolved_owner"
+    else
+        stat -c '%u' -- "$1"
+    fi
 }
 
 require_private_write_directory() {
