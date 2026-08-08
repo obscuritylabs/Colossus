@@ -288,18 +288,50 @@ fn session(
 }
 
 #[test]
-fn session_picker_choice_prioritizes_human_context_over_full_ids() {
-    let choice = session_picker_choice(&session(
-        "019f72e2-c116-7fa3-b668-5778378e114f",
-        12,
-        Some("How can we\nget   sccache working locally?"),
-        Some("Build speed"),
-    ));
-    assert_eq!(
-        choice,
-        "Build speed · 12 msgs · 019f72e2 · 2026-07-18 01:41Z\nHow can we get sccache working locally?"
+fn session_browser_entry_keeps_the_latest_visible_conversation_bounded() {
+    let messages = (0..10)
+        .map(|sequence| SessionMessage {
+            session_id: "019f72e2-c116-7fa3-b668-5778378e114f".into(),
+            run_id: "run".into(),
+            sequence,
+            message: colossus_contracts::ModelMessage {
+                role: if sequence % 2 == 0 {
+                    ModelMessageRole::User
+                } else {
+                    ModelMessageRole::Assistant
+                },
+                content: format!("Message {sequence}\nwith   normalized spacing"),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            },
+            created_at: "2026-07-18T01:41:50Z".into(),
+        })
+        .collect();
+    let entry = session_browser_entry(
+        session(
+            "019f72e2-c116-7fa3-b668-5778378e114f",
+            12,
+            Some("How can we get sccache working locally?"),
+            Some("Build speed"),
+        ),
+        messages,
     );
-    assert!(!choice.contains("c116-7fa3"));
+    assert_eq!(entry.recent_messages.len(), 8);
+    assert_eq!(
+        entry
+            .recent_messages
+            .first()
+            .map(|message| message.content.as_str()),
+        Some("Message 2 with normalized spacing")
+    );
+    assert_eq!(
+        entry
+            .recent_messages
+            .last()
+            .map(|message| message.content.as_str()),
+        Some("Message 9 with normalized spacing")
+    );
+    assert_eq!(compact_text("Safe\n text\u{200b}\u{1b}", 100), "Safe text");
 }
 
 #[test]
@@ -314,6 +346,35 @@ fn resume_picker_excludes_empty_sessions_before_applying_the_limit() {
     );
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "first");
+}
+
+#[tokio::test]
+async fn theme_browser_releases_exact_reversible_preview_preferences() {
+    let themes = ThemeLibrary::default();
+    let preferences = TerminalPreferences::default();
+    let (sender, mut events) = mpsc::channel(1);
+    let browser = tokio::spawn(async move {
+        browse_themes(&sender, &themes, &preferences)
+            .await
+            .expect("browse themes")
+    });
+
+    let HostEvent::ThemePicker(request) = events.recv().await.expect("theme picker") else {
+        panic!("expected a theme picker event");
+    };
+    assert_eq!(request.current_theme, "default");
+    assert_eq!(request.themes.len(), 5);
+    let hacker = request
+        .themes
+        .iter()
+        .find(|theme| theme.name == "hacker")
+        .expect("hacker preview");
+    assert_eq!(hacker.preferences.theme_name(), "hacker");
+    request
+        .response
+        .send(PromptResponse::Answer("hacker".into()))
+        .expect("select hacker");
+    assert_eq!(browser.await.expect("browser task"), Some("hacker".into()));
 }
 
 #[tokio::test]

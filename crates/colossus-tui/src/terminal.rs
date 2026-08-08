@@ -51,7 +51,7 @@ impl OwnedTerminal {
         }
 
         self.synchronize_native_history_progress(state);
-        if state.transient_inline_chrome_active() {
+        if state.transient_inline_screen_active() {
             self.draw_inline_transient(state)?;
             return Ok(());
         }
@@ -105,7 +105,8 @@ impl OwnedTerminal {
         // Leaving the alternate screen restores the main screen byte-for-byte.
         // Re-establish only the app-owned bottom viewport; the next normal draw
         // may then resize it for live transcript or activity without touching
-        // terminal rows temporarily covered by completion or approval chrome.
+        // terminal rows temporarily covered by completion, approval, or a
+        // full-screen browser.
         let screen_size = self.terminal.backend().size()?;
         let current = self.inline_area.expect("inline viewport area");
         let previous_screen = self.inline_screen_size.expect("inline terminal size");

@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy,
     PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode,
-    SecurityPostureReport, SessionMessage, SessionMessagePage, TerminalPreferences, ThemeTextStyle,
+    SecurityPostureReport, SessionMessage, SessionMessagePage, SessionSummary, TerminalPreferences,
+    ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{
@@ -62,6 +63,10 @@ const MAX_APPROVAL_DOCK_ROWS: u16 = 10;
 const MIN_APPROVAL_DOCK_ROWS: u16 = 8;
 /// Transcript rows retained above a bottom-docked approval.
 const MINIMUM_APPROVAL_TRANSCRIPT_ROWS: u16 = 3;
+/// Most rows occupied by the contextual plan-execution decision dock.
+const MAX_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
+/// Fewest rows that keep plan context, choices, and confirmation usable.
+const MIN_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
 /// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
@@ -77,9 +82,12 @@ const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 mod app;
 pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
 mod contract;
+mod plan_execution;
 mod render;
+mod session_browser;
 mod state;
 mod terminal;
+mod theme_picker;
 mod transcript;
 
 pub use app::run_tui;
@@ -87,11 +95,17 @@ pub use contract::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
     HostPlanExecutionResult, HostRunResult, InteractiveCommand, InteractiveHost, InteractiveMode,
     InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
-    InteractiveRunRequest, InteractiveSnapshot, LocalCommand, OperationResult, PlanCommand,
-    PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode,
-    TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
+    InteractiveRunRequest, InteractiveSessionBrowser, InteractiveSessionBrowserEntry,
+    InteractiveSessionBrowserMessage, InteractiveSnapshot, InteractiveThemePicker,
+    InteractiveThemePickerEntry, LocalCommand, OperationResult, PlanCommand, PlanHostCommand,
+    PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode, TranscriptEntry,
+    TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
 };
 pub use state::TuiState;
+
+use plan_execution::*;
+use session_browser::*;
+use theme_picker::*;
 
 #[cfg(test)]
 use app::*;

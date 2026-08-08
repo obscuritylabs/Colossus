@@ -273,37 +273,6 @@ impl WorkerInteractiveHost {
         )))
     }
 
-    async fn choose(
-        &self,
-        events: &mpsc::Sender<HostEvent>,
-        id: &str,
-        title: &str,
-        choices: Vec<String>,
-    ) -> Result<Option<String>, String> {
-        let (response_tx, response_rx) = oneshot::channel();
-        events
-            .send(HostEvent::Prompt(InteractivePrompt {
-                id: id.into(),
-                kind: InteractivePromptKind::Choice,
-                title: title.into(),
-                document: PresentationDocument::new(),
-                choices,
-                initial_choice: Some(0),
-                allow_free_form: false,
-                response: response_tx,
-            }))
-            .await
-            .map_err(|_| "terminal event loop disconnected".to_owned())?;
-        match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
-            .await
-            .map_err(|_| "interactive choice timed out".to_owned())?
-            .map_err(|_| "interactive choice was dropped".to_owned())?
-        {
-            PromptResponse::Answer(answer) => Ok(Some(answer)),
-            PromptResponse::Cancelled => Ok(None),
-        }
-    }
-
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
         let route: ProviderRoute = serde_json::from_value(
             self.value(WorkerOperation::ProviderRoute {
@@ -381,6 +350,7 @@ impl WorkerInteractiveHost {
     async fn resume_session(
         &self,
         arguments: &str,
+        current_session_id: &str,
         events: &mpsc::Sender<HostEvent>,
     ) -> Result<HostCommandResult, String> {
         let argument = arguments.trim();
@@ -403,28 +373,34 @@ impl WorkerInteractiveHost {
                 )),
             ));
         }
-        let choices = sessions
-            .iter()
-            .map(session_picker_choice)
-            .collect::<Vec<_>>();
-        let Some(selected) = self
-            .choose(events, "session-picker", "Resume session", choices.clone())
-            .await?
-        else {
+        let mut entries = Vec::with_capacity(sessions.len());
+        for summary in sessions {
+            let messages = match self
+                .value(WorkerOperation::SessionMessagesPage {
+                    session_id: summary.id.clone(),
+                    before_sequence: None,
+                    limit: 16,
+                })
+                .await
+            {
+                Ok(value) => serde_json::from_value::<SessionMessagePage>(value)
+                    .map(|page| page.messages)
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            entries.push(session_browser_entry(summary, messages));
+        }
+        let Some(selected) = browse_sessions(events, current_session_id, entries).await? else {
             return Ok(HostCommandResult::document(PresentationDocument::new()));
         };
-        let selected = choices
-            .iter()
-            .position(|choice| choice == &selected)
-            .and_then(|index| sessions.get(index))
-            .ok_or_else(|| "selected session is not available".to_owned())?;
-        self.switch_session(selected.id.clone()).await
+        self.switch_session(selected).await
     }
 
     async fn presentation_command(
         &self,
         name: &str,
         arguments: &str,
+        events: &mpsc::Sender<HostEvent>,
     ) -> Result<Option<HostCommandResult>, String> {
         let mut preferences = serde_json::from_value::<TerminalPreferences>(
             self.value(WorkerOperation::PresentationGet).await?,
@@ -433,12 +409,21 @@ impl WorkerInteractiveHost {
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
-                if argument.is_empty() || argument == "list" {
+                if argument.is_empty() {
+                    let selected = browse_themes(events, &self.themes, &preferences).await?;
+                    let Some(selected) = selected else {
+                        return Ok(Some(HostCommandResult::document(
+                            PresentationDocument::new(),
+                        )));
+                    };
+                    self.themes
+                        .select(&selected, &mut preferences)
+                        .map_err(|error| error.to_string())?;
+                } else if argument == "list" {
                     return Ok(Some(HostCommandResult::document(
                         self.themes.status_document(preferences.theme_name()),
                     )));
-                }
-                if argument == "reset" {
+                } else if argument == "reset" {
                     preferences.select_builtin_theme(ThemeName::Default);
                 } else if let Some(theme) = argument.strip_prefix("preview ") {
                     return Ok(Some(HostCommandResult::document(
@@ -512,11 +497,16 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
-        Ok(Some(HostCommandResult {
-            document: document_from_json(
+        let document = if name == "theme" {
+            self.themes.selection_document(preferences.theme_name())
+        } else {
+            document_from_json(
                 &serde_json::to_value(&preferences).map_err(|error| error.to_string())?,
                 Some("Terminal preferences"),
-            ),
+            )
+        };
+        Ok(Some(HostCommandResult {
+            document,
             session: None,
             preferences: Some(preferences),
             completions: None,
@@ -537,7 +527,7 @@ impl WorkerInteractiveHost {
         events: &mpsc::Sender<HostEvent>,
         control: &RunControl,
     ) -> Result<HostCommandResult, String> {
-        if let Some(result) = self.presentation_command(name, arguments).await? {
+        if let Some(result) = self.presentation_command(name, arguments, events).await? {
             return Ok(result);
         }
         match name {
@@ -624,14 +614,14 @@ impl WorkerInteractiveHost {
                     .map_err(|error| error.to_string())?;
                     self.switch_session(session.id).await
                 }
-                "resume" => self.resume_session("", events).await,
+                "resume" => self.resume_session("", session_id, events).await,
                 value if value.starts_with("resume ") => {
                     self.switch_session(value.trim_start_matches("resume ").trim().into())
                         .await
                 }
                 _ => Err("/session expects show, new, resume, or resume SESSION_ID".into()),
             },
-            "resume" => self.resume_session(arguments, events).await,
+            "resume" => self.resume_session(arguments, session_id, events).await,
             "work" => {
                 let state = serde_json::from_value::<WorkStateSnapshot>(
                     self.value(WorkerOperation::WorkState {

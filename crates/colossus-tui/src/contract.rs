@@ -453,6 +453,53 @@ pub enum PromptResponse {
     Cancelled,
 }
 
+/// One recent visible message rendered in a session-browser preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveSessionBrowserMessage {
+    /// Human or assistant provenance used for the preview label and style.
+    pub role: ModelMessageRole,
+    /// Bounded, presentation-safe message text.
+    pub content: String,
+}
+
+/// One resumable session plus its bounded recent-conversation preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveSessionBrowserEntry {
+    /// Canonical durable session metadata.
+    pub summary: SessionSummary,
+    /// Recent user and assistant messages in chronological order.
+    pub recent_messages: Vec<InteractiveSessionBrowserMessage>,
+}
+
+/// Focus-taking master-detail browser used by `/resume`.
+pub struct InteractiveSessionBrowser {
+    /// Exact session attached to the current TUI.
+    pub current_session_id: String,
+    /// Recent non-empty sessions, newest first, including the active session.
+    pub sessions: Vec<InteractiveSessionBrowserEntry>,
+    /// One-use channel returning the selected durable session ID.
+    pub response: oneshot::Sender<PromptResponse>,
+}
+
+/// One selectable terminal theme and the exact preferences used for its preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveThemePickerEntry {
+    /// Stable built-in or custom theme identity.
+    pub name: String,
+    /// Process-local preview preferences; no durable write has occurred yet.
+    pub preferences: TerminalPreferences,
+}
+
+/// Focus-taking theme browser with reversible live previews.
+pub struct InteractiveThemePicker {
+    /// Theme active when the picker opened.
+    pub current_theme: String,
+    /// Bounded built-in and custom themes in display order.
+    pub themes: Vec<InteractiveThemePickerEntry>,
+    /// One-use channel returning the selected theme identity.
+    pub response: oneshot::Sender<PromptResponse>,
+}
+
 /// Presentation and interaction class for one focus-taking prompt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InteractivePromptKind {
@@ -500,6 +547,10 @@ pub enum HostEvent {
     Notice(PresentationDocument),
     /// A trusted bridge needs focused operator input.
     Prompt(InteractivePrompt),
+    /// The host prepared a searchable master-detail session browser.
+    SessionBrowser(InteractiveSessionBrowser),
+    /// The host prepared a searchable theme browser with exact live previews.
+    ThemePicker(InteractiveThemePicker),
     /// The current operation reached a terminal result.
     OperationFinished(Box<Result<OperationResult, String>>),
     /// Non-fatal history persistence failed after the requested operation began.

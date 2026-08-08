@@ -9,37 +9,119 @@ pub(super) fn resumable_sessions(
     sessions
 }
 
-pub(super) fn session_picker_choice(session: &SessionSummary) -> String {
-    let title = compact_text(session.title.as_deref().unwrap_or("Untitled"), 36);
-    let preview = session
-        .last_user_preview
-        .as_deref()
-        .map(|preview| compact_text(preview, 120))
-        .filter(|preview| !preview.is_empty())
-        .unwrap_or_else(|| "No user message preview".into());
-    let short_id = session.id.chars().take(8).collect::<String>();
-    let updated_at = compact_timestamp(&session.updated_at);
-    format!(
-        "{title} · {} msgs · {short_id} · {updated_at}\n{preview}",
-        session.message_count
-    )
+pub(super) fn session_browser_entry(
+    summary: SessionSummary,
+    messages: Vec<SessionMessage>,
+) -> InteractiveSessionBrowserEntry {
+    let mut recent_messages = messages
+        .into_iter()
+        .rev()
+        .filter(|message| {
+            matches!(
+                message.message.role,
+                ModelMessageRole::User | ModelMessageRole::Assistant
+            ) && !message.message.content.trim().is_empty()
+        })
+        .take(8)
+        .map(|message| InteractiveSessionBrowserMessage {
+            role: message.message.role,
+            content: compact_text(&message.message.content, 2_000),
+        })
+        .collect::<Vec<_>>();
+    recent_messages.reverse();
+    InteractiveSessionBrowserEntry {
+        summary,
+        recent_messages,
+    }
+}
+
+pub(super) async fn browse_sessions(
+    events: &mpsc::Sender<HostEvent>,
+    current_session_id: &str,
+    sessions: Vec<InteractiveSessionBrowserEntry>,
+) -> Result<Option<String>, String> {
+    let (response_tx, response_rx) = oneshot::channel();
+    events
+        .send(HostEvent::SessionBrowser(InteractiveSessionBrowser {
+            current_session_id: current_session_id.into(),
+            sessions,
+            response: response_tx,
+        }))
+        .await
+        .map_err(|_| "terminal event loop disconnected".to_owned())?;
+    match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+        .await
+        .map_err(|_| "interactive session browser timed out".to_owned())?
+        .map_err(|_| "interactive session browser was dropped".to_owned())?
+    {
+        PromptResponse::Answer(session_id) => Ok(Some(session_id)),
+        PromptResponse::Cancelled => Ok(None),
+    }
+}
+
+pub(super) async fn browse_themes(
+    events: &mpsc::Sender<HostEvent>,
+    themes: &ThemeLibrary,
+    preferences: &TerminalPreferences,
+) -> Result<Option<String>, String> {
+    let entries = themes
+        .names()
+        .into_iter()
+        .map(|name| {
+            themes
+                .preview_preferences(&name, preferences)
+                .map(|preferences| InteractiveThemePickerEntry { name, preferences })
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let (response_tx, response_rx) = oneshot::channel();
+    events
+        .send(HostEvent::ThemePicker(InteractiveThemePicker {
+            current_theme: preferences.theme_name().into(),
+            themes: entries,
+            response: response_tx,
+        }))
+        .await
+        .map_err(|_| "terminal event loop disconnected".to_owned())?;
+    match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+        .await
+        .map_err(|_| "interactive theme picker timed out".to_owned())?
+        .map_err(|_| "interactive theme picker was dropped".to_owned())?
+    {
+        PromptResponse::Answer(theme) => Ok(Some(theme)),
+        PromptResponse::Cancelled => Ok(None),
+    }
 }
 
 pub(super) fn compact_text(value: &str, maximum_characters: usize) -> String {
     value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '\u{200b}'
+                        | '\u{200c}'
+                        | '\u{200d}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2060}'..='\u{206f}'
+                        | '\u{feff}'
+                )
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
         .take(maximum_characters)
         .collect()
-}
-
-pub(super) fn compact_timestamp(value: &str) -> String {
-    value
-        .get(..16)
-        .map(|timestamp| format!("{}Z", timestamp.replace('T', " ")))
-        .unwrap_or_else(|| value.to_owned())
 }
 
 pub(super) fn bounded_approval_content(value: &Value) -> Result<String, serde_json::Error> {

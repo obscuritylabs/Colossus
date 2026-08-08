@@ -1,5 +1,4 @@
 use super::*;
-use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
 pub(super) fn render(
     frame: &mut Frame<'_>,
@@ -28,6 +27,9 @@ pub(super) fn render(
     let activity_height = u16::from(state.operation.is_some());
     let approval_height =
         approval_dock_height(state, area.height, composer_height, activity_height);
+    let plan_execution_height =
+        plan_execution_dock_height(state, area.height, composer_height, activity_height);
+    let decision_height = approval_height.max(plan_execution_height);
     let completion_height = if state.docked_decision_active() {
         0
     } else {
@@ -43,7 +45,7 @@ pub(super) fn render(
             }),
             Constraint::Length(activity_height),
             Constraint::Length(completion_height),
-            Constraint::Length(approval_height),
+            Constraint::Length(decision_height),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
@@ -61,12 +63,16 @@ pub(super) fn render(
     if completion_height > 0 {
         render_completion_menu(frame, state, rows[2]);
     }
-    if approval_height > 0 {
-        render_approval_dock(frame, state, rows[3]);
+    if decision_height > 0 {
+        if approval_height > 0 {
+            render_approval_dock(frame, state, rows[3]);
+        } else {
+            render_plan_execution_dock(frame, state, rows[3]);
+        }
     }
     render_composer(frame, state, rows[4]);
     render_footer(frame, state, rows[5]);
-    if state.overlay.is_some() && approval_height == 0 {
+    if state.overlay.is_some() && decision_height == 0 {
         render_overlay(frame, state, area);
     }
 }
@@ -358,7 +364,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         "Enter sends"
     };
-    let title = if let Some(kind) = state.docked_decision_kind() {
+    let title = if state.plan_execution_decision_active() {
+        " Message · paused for plan execution · draft preserved ".into()
+    } else if let Some(kind) = state.docked_decision_kind() {
         let decision = match kind {
             InteractivePromptKind::Approval => "approval",
             InteractivePromptKind::SandboxBoundaryAcknowledgement => "boundary acknowledgement",
@@ -467,8 +475,20 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
 }
 
 pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
-    if state.docked_decision_active() {
+    if state.docked_decision_kind().is_some() {
         render_approval_dock(frame, state, area);
+        return;
+    }
+    if state.plan_execution_decision_active() {
+        render_plan_execution_dock(frame, state, area);
+        return;
+    }
+    if let Some(Overlay::SessionBrowser(browser)) = state.overlay.as_ref() {
+        render_session_browser(frame, state, browser, area);
+        return;
+    }
+    if let Some(Overlay::ThemePicker(picker)) = state.overlay.as_ref() {
+        render_theme_picker(frame, state, picker, area);
         return;
     }
     let overlay_area = match state.overlay.as_ref() {
@@ -477,7 +497,6 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         {
             picker_rect(area, &request.choices)
         }
-        Some(Overlay::PlanExecutionChoice { .. }) => picker_rect(area, &plan_execution_choices()),
         _ => centered_rect(80, 60, area),
     };
     frame.render_widget(Clear, overlay_area);
@@ -527,35 +546,6 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
                 ),
             ],
         ),
-        Some(Overlay::PlanExecutionChoice { plan, selected }) => {
-            let choices = plan_execution_choices();
-            let palette = TerminalPalette::for_preferences(&state.preferences);
-            let lines = choices
-                .iter()
-                .enumerate()
-                .map(|(index, choice)| {
-                    let marker = if index == *selected { "›" } else { " " };
-                    let style = if index == *selected {
-                        palette.user_style()
-                    } else {
-                        palette.meta_style()
-                    };
-                    Line::from(Span::styled(
-                        format!("{marker} {}. {choice}", index + 1),
-                        ratatui_style(style),
-                    ))
-                })
-                .collect();
-            (
-                format!(
-                    "Execute plan {} · {}/{}",
-                    short_plan_id(&plan.id),
-                    selected + 1,
-                    choices.len()
-                ),
-                lines,
-            )
-        }
         Some(Overlay::QueuePaused) => (
             "Queued turns paused".into(),
             vec![
@@ -565,6 +555,11 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
                 Line::from("Enter/R: resume queue · C: clear queue · Esc: keep paused"),
             ],
         ),
+        Some(
+            Overlay::SessionBrowser(_)
+            | Overlay::ThemePicker(_)
+            | Overlay::PlanExecutionChoice { .. },
+        ) => return,
         None => return,
     };
     if lines.is_empty() {
@@ -589,7 +584,7 @@ pub(super) fn approval_dock_height(
     composer_height: u16,
     activity_height: u16,
 ) -> u16 {
-    if !state.docked_decision_active() {
+    if state.docked_decision_kind().is_none() {
         return 0;
     }
     let available = total_height
@@ -795,7 +790,7 @@ pub(super) fn compact_approval_summary_lines(
 /// Wraps a sanitized approval value to `width` display columns without
 /// discarding any character, so authorization-relevant detail stays legible and
 /// scrollable instead of being replaced by an ellipsis.
-fn wrap_approval_value(value: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap_approval_value(value: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut lines = Vec::new();
     let mut current = String::new();
@@ -843,7 +838,7 @@ pub(super) fn sanitize_approval_field(value: &str) -> String {
         .collect()
 }
 
-fn truncate_width_with_ellipsis(value: &str, maximum: usize) -> String {
+pub(super) fn truncate_width_with_ellipsis(value: &str, maximum: usize) -> String {
     if UnicodeWidthStr::width(value) <= maximum {
         return value.to_owned();
     }
@@ -1088,7 +1083,7 @@ fn approval_choice_line(
     Line::from(spans)
 }
 
-fn filled_approval_control_style(base: ThemeTextStyle, selected: bool) -> Style {
+pub(super) fn filled_approval_control_style(base: ThemeTextStyle, selected: bool) -> Style {
     let mut style = ratatui_style(base);
     let Some(accent) = base.foreground else {
         style = style.add_modifier(Modifier::REVERSED);
@@ -1126,14 +1121,6 @@ fn contrasting_terminal_color(background: colossus_contracts::ThemeColor) -> Col
     } else {
         Color::White
     }
-}
-
-fn plan_execution_choices() -> Vec<String> {
-    vec![
-        "Direct — run once with normal execution authority".into(),
-        format!("Goal Mode — up to {DEFAULT_GOAL_ITERATIONS} autonomous iterations"),
-        "Cancel — keep Plan mode and the current selection".into(),
-    ]
 }
 
 pub(super) fn picker_rect(area: Rect, choices: &[String]) -> Rect {

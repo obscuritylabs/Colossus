@@ -3,15 +3,17 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunOutcome, AgentRunResult, ModelMessage, ModelMessageRole, ProviderEvent, RunEvent,
-    RunEventEnvelope, SandboxBoundaryMode, SessionMessage, SessionMessagePage, TerminalPreferences,
-    ToolCall, ToolResult,
+    RunEventEnvelope, SandboxBoundaryMode, SessionMessage, SessionMessagePage, SessionSummary,
+    TerminalPreferences, ToolCall, ToolResult,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{PresentationBlock, PresentationDocument, PresentationTone};
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionResult,
     HostRunResult, InteractiveHost, InteractivePlanExecutionRequest, InteractiveRunRequest,
-    InteractiveSnapshot, PlanSelectionUpdate, RuntimeCommand, ScreenMode, TuiOptions, run_tui,
+    InteractiveSessionBrowser, InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage,
+    InteractiveSnapshot, InteractiveThemePicker, InteractiveThemePickerEntry, PlanSelectionUpdate,
+    PromptResponse, RuntimeCommand, ScreenMode, TuiOptions, run_tui,
 };
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{
@@ -20,7 +22,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 struct FixtureHost;
 
@@ -85,9 +87,76 @@ impl InteractiveHost for FixtureHost {
         command: RuntimeCommand,
         _session_id: &str,
         _sticky_skills: &[String],
-        _events: mpsc::Sender<HostEvent>,
+        events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostCommandResult, String> {
+        if matches!(
+            command,
+            RuntimeCommand::Known { ref name, .. } if name == "resume"
+        ) {
+            let (response, answer) = oneshot::channel();
+            events
+                .send(HostEvent::SessionBrowser(InteractiveSessionBrowser {
+                    current_session_id: "019f-pty".into(),
+                    sessions: vec![
+                        fixture_session_browser_entry(
+                            "019f-pty",
+                            "Current PTY session",
+                            5,
+                            "Current session content",
+                        ),
+                        fixture_session_browser_entry(
+                            "019f-resume",
+                            "Resume target session",
+                            13,
+                            "Recent conversation preview",
+                        ),
+                    ],
+                    response,
+                }))
+                .await
+                .map_err(|_| "session browser receiver closed")?;
+            let result = match answer.await.map_err(|_| "session browser dropped")? {
+                PromptResponse::Answer(session_id) => format!("resumed {session_id}"),
+                PromptResponse::Cancelled => "resume cancelled".into(),
+            };
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text(result)),
+            ));
+        }
+        if matches!(
+            command,
+            RuntimeCommand::Known { ref name, .. } if name == "theme"
+        ) {
+            let default = TerminalPreferences::default();
+            let mut hacker = default.clone();
+            hacker.select_builtin_theme(colossus_contracts::ThemeName::Hacker);
+            let (response, answer) = oneshot::channel();
+            events
+                .send(HostEvent::ThemePicker(InteractiveThemePicker {
+                    current_theme: "default".into(),
+                    themes: vec![
+                        InteractiveThemePickerEntry {
+                            name: "default".into(),
+                            preferences: default,
+                        },
+                        InteractiveThemePickerEntry {
+                            name: "hacker".into(),
+                            preferences: hacker,
+                        },
+                    ],
+                    response,
+                }))
+                .await
+                .map_err(|_| "theme picker receiver closed")?;
+            let result = match answer.await.map_err(|_| "theme picker dropped")? {
+                PromptResponse::Answer(theme) => format!("theme selected {theme}"),
+                PromptResponse::Cancelled => "theme cancelled".into(),
+            };
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text(result)),
+            ));
+        }
         if matches!(
             command,
             RuntimeCommand::Known { ref name, .. } if name == "missing"
@@ -268,6 +337,29 @@ impl InteractiveHost for FixtureHost {
             before_sequence: None,
             has_more: false,
         })
+    }
+}
+
+fn fixture_session_browser_entry(
+    id: &str,
+    title: &str,
+    message_count: u64,
+    preview: &str,
+) -> InteractiveSessionBrowserEntry {
+    InteractiveSessionBrowserEntry {
+        summary: SessionSummary {
+            id: id.into(),
+            title: Some(title.into()),
+            created_at: "2026-08-08T01:00:00Z".into(),
+            updated_at: "2026-08-08T02:05:00Z".into(),
+            message_count,
+            last_run_id: None,
+            last_user_preview: Some(preview.into()),
+        },
+        recent_messages: vec![InteractiveSessionBrowserMessage {
+            role: ModelMessageRole::User,
+            content: preview.into(),
+        }],
     }
 }
 
@@ -681,6 +773,226 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
         assert!(
             !resized_history_text.contains(transient),
             "resize leaked transient {transient:?} into native history: {resized_history_text}"
+        );
+    }
+
+    writer.write_all(&[3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    assert!(status.success());
+    drop(writer);
+    reader_thread.join().expect("reader thread");
+}
+
+#[test]
+fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "inline");
+    command.env("COLOSSUS_TUI_LONG_HISTORY", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_raw(&output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    thread::sleep(Duration::from_millis(150));
+
+    let history_before = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let history_before_text = history_before.join("\n");
+    for sequence in 1..=30 {
+        let row = format!("durable-row-{sequence:02}");
+        assert_eq!(
+            history_before_text.matches(&row).count(),
+            1,
+            "{row} was not present exactly once before opening the browser: {history_before_text}"
+        );
+    }
+    let browser_output_offset = output.lock().expect("output").len();
+    writer
+        .write_all(b"/resume\r")
+        .expect("open session browser");
+    writer.flush().expect("flush session browser command");
+    wait_for_screen(&output, 24, 80, "Resume session");
+    wait_for_screen(&output, 24, 80, "Resume target session");
+    writer.write_all(&[27]).expect("dismiss session browser");
+    writer.flush().expect("flush session browser dismissal");
+    wait_for_screen(&output, 24, 80, "resume cancelled");
+    thread::sleep(Duration::from_millis(150));
+
+    let bytes = output.lock().expect("output").clone();
+    let browser_output = &bytes[browser_output_offset..];
+    assert!(
+        browser_output
+            .windows(b"\x1b[?1049h".len())
+            .any(|window| window == b"\x1b[?1049h"),
+        "session browser did not enter its transient screen"
+    );
+    assert!(
+        browser_output
+            .windows(b"\x1b[?1049l".len())
+            .any(|window| window == b"\x1b[?1049l"),
+        "session browser did not restore the main screen"
+    );
+    drop(bytes);
+
+    let history_after = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let history_after_text = history_after.join("\n");
+    for transient in [
+        "Resume session",
+        "Current PTY session",
+        "Resume target session",
+    ] {
+        assert!(
+            !history_after_text.contains(transient),
+            "session browser leaked {transient:?} into native history: {history_after_text}"
+        );
+    }
+    for sequence in 1..=30 {
+        let row = format!("durable-row-{sequence:02}");
+        assert_eq!(
+            history_after_text.matches(&row).count(),
+            1,
+            "restored history changed row {row:?}: {history_after_text}"
+        );
+    }
+
+    writer.write_all(&[3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    assert!(status.success());
+    drop(writer);
+    reader_thread.join().expect("reader thread");
+}
+
+#[test]
+fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "inline");
+    command.env("COLOSSUS_TUI_LONG_HISTORY", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_raw(&output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    thread::sleep(Duration::from_millis(150));
+
+    let history_before = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let history_before_text = history_before.join("\n");
+    for sequence in 1..=30 {
+        let row = format!("durable-row-{sequence:02}");
+        assert_eq!(
+            history_before_text.matches(&row).count(),
+            1,
+            "{row} was not present exactly once before opening the theme picker: {history_before_text}"
+        );
+    }
+    let picker_output_offset = output.lock().expect("output").len();
+    writer.write_all(b"/theme\r").expect("open theme picker");
+    writer.flush().expect("flush theme picker command");
+    wait_for_screen(&output, 24, 80, "Choose theme");
+    writer.write_all(b"\x1b[B").expect("preview hacker theme");
+    writer.flush().expect("flush hacker theme preview");
+    wait_for_screen(&output, 24, 80, "hacker preview");
+    writer.write_all(&[27]).expect("dismiss theme picker");
+    writer.flush().expect("flush theme picker dismissal");
+    wait_for_screen(&output, 24, 80, "theme cancelled");
+    thread::sleep(Duration::from_millis(150));
+
+    let bytes = output.lock().expect("output").clone();
+    let picker_output = &bytes[picker_output_offset..];
+    assert!(
+        picker_output
+            .windows(b"\x1b[?1049h".len())
+            .any(|window| window == b"\x1b[?1049h"),
+        "theme picker did not enter its transient screen"
+    );
+    assert!(
+        picker_output
+            .windows(b"\x1b[?1049l".len())
+            .any(|window| window == b"\x1b[?1049l"),
+        "theme picker did not restore the main screen"
+    );
+    drop(bytes);
+
+    let history_after = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let history_after_text = history_after.join("\n");
+    for transient in ["Choose theme", "default preview", "hacker preview"] {
+        assert!(
+            !history_after_text.contains(transient),
+            "theme picker leaked {transient:?} into native history: {history_after_text}"
+        );
+    }
+    for sequence in 1..=30 {
+        let row = format!("durable-row-{sequence:02}");
+        assert_eq!(
+            history_after_text.matches(&row).count(),
+            1,
+            "restored history changed row {row:?}: {history_after_text}"
         );
     }
 
