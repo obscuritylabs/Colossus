@@ -345,6 +345,8 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
     for required in [
         "maximum_metadata_bytes=1048576",
         "maximum_archive_bytes=268435456",
+        "maximum_expanded_bytes=268435456",
+        "expanded archive is larger than its fixed limit",
         "archive contains a link or special file",
         "archive checksum mismatch",
         "package metadata version mismatch",

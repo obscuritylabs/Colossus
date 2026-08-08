@@ -181,9 +181,16 @@ endpoint with DNS pinning, ambient proxies disabled, redirects disabled, an eigh
 timeout, and a 1 MiB response limit. Metadata must identify a non-draft,
 non-prerelease exact semantic version, the fixed public release page, and exactly one
 native archive plus its adjacent checksum asset before Colossus reports an update.
+Direct ownership is claimed only when a receipt matches the running version, target, and
+fixed origin *and* names the canonical path of the running executable, so a receipt left
+behind by a removed direct install never speaks for a Homebrew, Nix, or source binary.
 
 Successful metadata, ETags, and bounded failure categories use strict owner-local cache
-records with same-directory atomic replacement. Unsafe, linked, malformed, oversized,
+records with same-directory atomic replacement. Receipt and cache records are read only
+from a current-user-owned directory that grants no group or other access, and only when
+the record itself carries the same owner-private permissions or Windows DACL; a shared
+directory cannot supply a forged latest version or a forged failure that suppresses
+checks. Unsafe, linked, foreign-owned, group- or world-accessible, malformed, oversized,
 or unavailable cache state is ignored with a warning. The cache contains no workspace,
 session, credential, header, or response-body data. Checks are throttled for 24 hours,
 including failures. DNS, connection, timeout, rate-limit, service, and validation

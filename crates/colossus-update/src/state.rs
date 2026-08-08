@@ -174,7 +174,8 @@ fn read_optional_bounded(path: &Path) -> Result<Option<Vec<u8>>, UpdateStateErro
     if !path.is_absolute() {
         return Err(UpdateStateError::Unavailable);
     }
-    reject_linked_components(path.parent().ok_or(UpdateStateError::Unavailable)?)?;
+    let parent = path.parent().ok_or(UpdateStateError::Unavailable)?;
+    reject_linked_components(parent)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -183,6 +184,8 @@ fn read_optional_bounded(path: &Path) -> Result<Option<Vec<u8>>, UpdateStateErro
     if !metadata.file_type().is_file() || metadata.len() > MAX_STATE_BYTES {
         return Err(UpdateStateError::Unavailable);
     }
+    reject_shared_directory(parent)?;
+    reject_shared_file(path, &metadata)?;
     let file = File::open(path).map_err(|_| UpdateStateError::Unavailable)?;
     let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
     file.take(MAX_STATE_BYTES + 1)
@@ -264,6 +267,71 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), UpdateStateErro
 #[cfg(not(windows))]
 fn replace_file(source: &Path, destination: &Path) -> Result<(), UpdateStateError> {
     fs::rename(source, destination).map_err(|_| UpdateStateError::Unavailable)
+}
+
+/// Reject a containing directory any other local account could write into.
+///
+/// A shared or foreign-owned directory lets another account plant a receipt or cache
+/// record: a forged success cache can advertise an attacker-chosen "latest" version, and
+/// a forged failure cache can suppress checks for the whole throttle window.
+#[cfg(unix)]
+fn reject_shared_directory(path: &Path) -> Result<(), UpdateStateError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| UpdateStateError::Unavailable)?;
+    if !metadata.file_type().is_dir() {
+        return Err(UpdateStateError::Unavailable);
+    }
+    reject_shared_mode(&metadata)
+}
+
+#[cfg(unix)]
+fn reject_shared_file(_path: &Path, metadata: &fs::Metadata) -> Result<(), UpdateStateError> {
+    reject_shared_mode(metadata)
+}
+
+/// Require current-user ownership and no group or other access.
+#[cfg(unix)]
+fn reject_shared_mode(metadata: &fs::Metadata) -> Result<(), UpdateStateError> {
+    use std::os::unix::fs::MetadataExt as _;
+    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+        return Err(UpdateStateError::Unavailable);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn reject_shared_directory(path: &Path) -> Result<(), UpdateStateError> {
+    let bound = colossus_windows_native::BoundPath::open_directory(path)
+        .map_err(|_| UpdateStateError::Unavailable)?;
+    reject_shared_descriptor(&bound)
+}
+
+#[cfg(windows)]
+fn reject_shared_file(path: &Path, _metadata: &fs::Metadata) -> Result<(), UpdateStateError> {
+    let bound = colossus_windows_native::BoundPath::open_file(path)
+        .map_err(|_| UpdateStateError::Unavailable)?;
+    reject_shared_descriptor(&bound)
+}
+
+/// Require an owner-private DACL naming only the current user or trusted system
+/// principals.
+#[cfg(windows)]
+fn reject_shared_descriptor(
+    bound: &colossus_windows_native::BoundPath,
+) -> Result<(), UpdateStateError> {
+    bound
+        .validate_private_owner_dacl()
+        .and_then(|()| bound.revalidate())
+        .map_err(|_| UpdateStateError::Unavailable)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn reject_shared_directory(_path: &Path) -> Result<(), UpdateStateError> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn reject_shared_file(_path: &Path, _metadata: &fs::Metadata) -> Result<(), UpdateStateError> {
+    Ok(())
 }
 
 fn reject_linked_components(path: &Path) -> Result<(), UpdateStateError> {

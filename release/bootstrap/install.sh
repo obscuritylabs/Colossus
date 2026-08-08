@@ -8,6 +8,7 @@ release_origin=https://github.com/obscuritylabs/Colossus/releases
 maximum_metadata_bytes=1048576
 maximum_checksum_bytes=512
 maximum_archive_bytes=268435456
+maximum_expanded_bytes=268435456
 
 fail() {
     printf 'colossus installer: %s\n' "$*" >&2
@@ -101,7 +102,7 @@ if [ -n "$requested_version" ]; then
         fail "version must be vX.Y.Z or vX.Y.Z-preview.N"
 fi
 
-for command_name in curl tar sed grep sort uniq cmp wc mktemp; do
+for command_name in curl tar sed grep sort uniq cmp head wc mktemp; do
     command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
 done
 
@@ -281,6 +282,19 @@ else
     fail "sha256sum or shasum is required to verify the release"
 fi
 [ "$actual_digest" = "$expected_digest" ] || fail "archive checksum mismatch"
+
+# A compressed archive below the download limit can still expand to many gigabytes, so
+# the expanded stream is measured, never stored, before any listing or extraction writes
+# to the filesystem. `head` closes the pipe once the limit is exceeded, so a hostile
+# archive is abandoned instead of being decompressed in full.
+# Decode diagnostics are suppressed here because the table-of-contents pass below is the
+# authoritative report for a malformed archive.
+expanded_bytes=$(
+    tar -xzOf "$archive_path" 2>/dev/null | head -c "$((maximum_expanded_bytes + 1))" | wc -c
+)
+expanded_bytes=$(printf '%s' "$expanded_bytes" | tr -d ' ')
+[ "$expanded_bytes" -le "$maximum_expanded_bytes" ] ||
+    fail "expanded archive is larger than its fixed limit"
 
 package=colossus-$version-$target
 entries=$temporary_root/archive-entries.txt

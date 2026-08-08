@@ -3,6 +3,7 @@ use crate::version::SemanticVersion;
 use async_trait::async_trait;
 use std::{
     fs,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -123,6 +124,38 @@ fn release(version: &str) -> ReleaseMetadata {
     }
 }
 
+#[cfg(unix)]
+fn make_owner_private(path: &std::path::Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("owner-private mode");
+}
+
+#[cfg(not(unix))]
+fn make_owner_private(_path: &std::path::Path, _mode: u32) {}
+
+fn installed_executable(root: &std::path::Path) -> PathBuf {
+    let directory = fs::canonicalize(root).expect("canonical installation root");
+    let binary = directory.join("colossus");
+    fs::write(&binary, b"executable").expect("installed executable");
+    binary
+}
+
+fn direct_receipt(binary_path: &std::path::Path) -> InstallationReceipt {
+    InstallationReceipt {
+        channel: "stable".into(),
+        version: "0.10.4".into(),
+        target: TARGET.into(),
+        prefix: binary_path
+            .parent()
+            .expect("prefix")
+            .to_string_lossy()
+            .into_owned(),
+        binary_path: binary_path.to_string_lossy().into_owned(),
+        distribution_origin: "https://github.com/obscuritylabs/Colossus/releases".into(),
+        installer_kind: InstallerKind::Direct,
+    }
+}
+
 fn cache(version: &str, checked_at: u64) -> UpdateCache {
     UpdateCache {
         schema_version: 1,
@@ -139,9 +172,19 @@ fn service(
     source: Arc<dyn ReleaseSource>,
     state: Arc<dyn UpdateState>,
 ) -> UpdateService {
+    installed_service(current, None, source, state)
+}
+
+fn installed_service(
+    current: &str,
+    executable_path: Option<PathBuf>,
+    source: Arc<dyn ReleaseSource>,
+    state: Arc<dyn UpdateState>,
+) -> UpdateService {
     UpdateService::new(
         current,
         Some(TARGET.into()),
+        executable_path,
         source,
         state,
         Arc::new(FixedClock(NOW)),
@@ -195,21 +238,21 @@ async fn offline_and_rate_limited_checks_are_nonfatal_typed_results() {
 
 #[tokio::test]
 async fn live_and_not_modified_results_refresh_cache_without_downgrading() {
-    let direct_receipt = InstallationReceipt {
-        channel: "stable".into(),
-        version: "0.10.4".into(),
-        target: TARGET.into(),
-        prefix: "/tmp/colossus".into(),
-        binary_path: "/tmp/colossus/bin/colossus".into(),
-        distribution_origin: "https://github.com/obscuritylabs/Colossus/releases".into(),
-        installer_kind: InstallerKind::Direct,
-    };
+    let installation = tempdir().expect("installation directory");
+    let installed_binary = installed_executable(installation.path());
     let state = Arc::new(MemoryState::default());
-    *state.receipt.lock().expect("receipt lock") = Some(direct_receipt);
+    *state.receipt.lock().expect("receipt lock") = Some(direct_receipt(&installed_binary));
     let source = Arc::new(FakeSource::new(Ok(ReleaseFetch::Modified(release(
         "0.10.4",
     )))));
-    let report = service("0.10.4", source, state.clone()).check().await;
+    let report = installed_service(
+        "0.10.4",
+        Some(installed_binary),
+        source,
+        state.clone() as Arc<dyn UpdateState>,
+    )
+    .check()
+    .await;
     assert_eq!(report.status, UpdateCheckStatus::UpToDate);
     assert_eq!(report.installer_kind, InstallerKind::Direct);
     assert_eq!(report.source, UpdateCheckSource::Live);
@@ -233,6 +276,34 @@ async fn live_and_not_modified_results_refresh_cache_without_downgrading() {
         source.etag.lock().expect("etag lock").as_deref(),
         Some("\"cached-etag\"")
     );
+}
+
+#[tokio::test]
+async fn direct_ownership_requires_a_receipt_naming_the_running_executable() {
+    let installation = tempdir().expect("installation directory");
+    let direct_binary = installed_executable(installation.path());
+    let other_channel = tempdir().expect("package manager directory");
+    let other_binary = installed_executable(other_channel.path());
+
+    for (executable, expected) in [
+        (Some(direct_binary.clone()), InstallerKind::Direct),
+        (Some(other_binary), InstallerKind::Unknown),
+        (
+            Some(installation.path().join("missing")),
+            InstallerKind::Unknown,
+        ),
+        (None, InstallerKind::Unknown),
+    ] {
+        let state = Arc::new(MemoryState::default());
+        *state.receipt.lock().expect("receipt lock") = Some(direct_receipt(&direct_binary));
+        let source = Arc::new(FakeSource::new(Ok(ReleaseFetch::Modified(release(
+            "0.10.4",
+        )))));
+        let report = installed_service("0.10.4", executable, source, state)
+            .check()
+            .await;
+        assert_eq!(report.installer_kind, expected);
+    }
 }
 
 #[tokio::test]
@@ -281,6 +352,8 @@ fn filesystem_state_is_bounded_strict_and_atomic() {
         ),
     )
     .expect("receipt");
+    make_owner_private(receipt.parent().expect("receipt directory"), 0o700);
+    make_owner_private(&receipt, 0o600);
     let state = FilesystemUpdateState::new(receipt, cache_path.clone());
     assert_eq!(
         state
@@ -309,6 +382,27 @@ fn filesystem_state_is_bounded_strict_and_atomic() {
     state.clear_failure_cache().expect("clear failure cache");
     assert_eq!(state.load_failure_cache().unwrap(), None);
     fs::write(&cache_path, vec![b'x'; 16 * 1024 + 1]).expect("oversized cache");
+    assert_eq!(state.load_cache(), Err(UpdateStateError::Unavailable));
+}
+
+#[cfg(unix)]
+#[test]
+fn filesystem_state_rejects_shared_cache_files_and_directories() {
+    let directory = tempdir().expect("state directory");
+    let root = fs::canonicalize(directory.path()).expect("canonical state directory");
+    let cache_directory = root.join("cache");
+    let cache_path = cache_directory.join("update-check.json");
+    let state = FilesystemUpdateState::new(root.join("missing.json"), cache_path.clone());
+    state
+        .store_cache(&cache("0.10.5", NOW))
+        .expect("store cache");
+    assert!(state.load_cache().expect("private cache").is_some());
+
+    make_owner_private(&cache_path, 0o644);
+    assert_eq!(state.load_cache(), Err(UpdateStateError::Unavailable));
+
+    make_owner_private(&cache_path, 0o600);
+    make_owner_private(&cache_directory, 0o777);
     assert_eq!(state.load_cache(), Err(UpdateStateError::Unavailable));
 }
 

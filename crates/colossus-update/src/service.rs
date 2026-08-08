@@ -8,6 +8,8 @@ use crate::{
 use async_trait::async_trait;
 use std::{
     cmp::Ordering,
+    fs,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -37,6 +39,7 @@ impl UpdateClock for SystemClock {
 pub struct UpdateService {
     current_version: String,
     target: Option<String>,
+    executable_path: Option<PathBuf>,
     source: Arc<dyn ReleaseSource>,
     state: Arc<dyn UpdateState>,
     clock: Arc<dyn UpdateClock>,
@@ -49,6 +52,7 @@ impl UpdateService {
         Self {
             current_version: env!("CARGO_PKG_VERSION").to_owned(),
             target: current_release_target().map(str::to_owned),
+            executable_path: current_executable_path(),
             source: Arc::new(GitHubReleaseSource::new()),
             state: Arc::new(crate::FilesystemUpdateState::for_current_user()),
             clock: Arc::new(SystemClock),
@@ -57,9 +61,13 @@ impl UpdateService {
     }
 
     /// Construct a service from application ports.
+    ///
+    /// `executable_path` is the canonical path of the running executable; receipt
+    /// ownership is only accepted when it names that exact file.
     pub fn new(
         current_version: impl Into<String>,
         target: Option<String>,
+        executable_path: Option<PathBuf>,
         source: Arc<dyn ReleaseSource>,
         state: Arc<dyn UpdateState>,
         clock: Arc<dyn UpdateClock>,
@@ -68,6 +76,7 @@ impl UpdateService {
         Self {
             current_version: current_version.into(),
             target,
+            executable_path,
             source,
             state,
             clock,
@@ -250,6 +259,21 @@ impl UpdateService {
             && self.target.as_deref() == Some(receipt.target.as_str())
             && receipt.distribution_origin == DISTRIBUTION_ORIGIN
             && receipt.installer_kind == InstallerKind::Direct
+            && self.owns_running_executable(receipt)
+    }
+
+    /// Accept a receipt only when it describes the executable running right now.
+    ///
+    /// A direct-install receipt outlives the binary it recorded: removing that binary
+    /// and reinstalling the same version through Homebrew, Nix, or a source build leaves
+    /// the stale receipt behind. Version, target, origin, and kind all still match, so
+    /// without comparing the canonical executable path Colossus would advise rerunning
+    /// the direct installer for a binary another channel owns.
+    fn owns_running_executable(&self, receipt: &InstallationReceipt) -> bool {
+        let Some(executable) = self.executable_path.as_deref() else {
+            return false;
+        };
+        fs::canonicalize(Path::new(&receipt.binary_path)).is_ok_and(|path| path == executable)
     }
 
     fn report_from_cache(
@@ -337,6 +361,13 @@ impl UpdateChecker for UpdateService {
     async fn check(&self) -> UpdateCheckReport {
         self.check_inner().await
     }
+}
+
+/// Canonical path of the running executable, when the host can resolve it.
+fn current_executable_path() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| fs::canonicalize(path).ok())
 }
 
 /// Map the running host to one of the six published CLI targets.
