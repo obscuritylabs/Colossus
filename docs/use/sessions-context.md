@@ -41,7 +41,13 @@ colossus --config .colossus/config.yaml run --session SESSION_ID \
 ```
 
 `run --resume` uses the most recently updated session. In the terminal UI, `/resume`
-opens a picker and `/resume SESSION_ID` chooses an exact record.
+opens a full-width session browser with the current session marked, searchable recent
+sessions on the left, and the selected session's recent conversation on the right.
+The preview shows the last eight user and assistant messages; tool-heavy sessions are
+paged backward past tool records so the preview stays populated. Use `/` to search, Up/Down to select, PageUp/PageDown to scroll the preview, and Enter
+to resume. In the default inline TUI, the browser uses a temporary full-screen viewport
+and restores the original terminal history when it closes. `/resume SESSION_ID` still
+chooses an exact record directly.
 
 ### 3. Inspect the context budget
 

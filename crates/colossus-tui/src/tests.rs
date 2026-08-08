@@ -212,6 +212,26 @@ fn custom_theme() -> CustomTheme {
     }
 }
 
+fn theme_picker(response: oneshot::Sender<PromptResponse>) -> InteractiveThemePicker {
+    let default = TerminalPreferences::default();
+    let mut hacker = default.clone();
+    hacker.select_builtin_theme(colossus_contracts::ThemeName::Hacker);
+    InteractiveThemePicker {
+        current_theme: "default".into(),
+        themes: vec![
+            InteractiveThemePickerEntry {
+                name: "default".into(),
+                preferences: default,
+            },
+            InteractiveThemePickerEntry {
+                name: "hacker".into(),
+                preferences: hacker,
+            },
+        ],
+        response,
+    }
+}
+
 fn plan_record(status: PlanStatus, revision: u64) -> PlanRecord {
     PlanRecord {
         id: "plan-019fabcdef".into(),
@@ -265,6 +285,36 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
             arguments: String::new(),
         })
     );
+}
+
+#[test]
+fn help_is_generated_from_the_available_command_catalog() {
+    let commands = vec![
+        "/resume".into(),
+        "/workflow schedule list".into(),
+        "/theme hacker".into(),
+        "/mcp tools".into(),
+        "@repo-review".into(),
+    ];
+    let rendered = StyledDocumentRenderer::new(TerminalPreferences::default(), 100)
+        .render(&help_document(&commands))
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized.contains("Conversation"), "{rendered}");
+    assert!(normalized.contains("/resume"), "{rendered}");
+    assert!(normalized.contains("/workflow"), "{rendered}");
+    assert!(normalized.contains("schedule list"), "{rendered}");
+    assert!(normalized.contains("/theme hacker"), "{rendered}");
+    assert!(normalized.contains("/mcp tools"), "{rendered}");
+    assert!(!normalized.contains("@repo-review"), "{rendered}");
 }
 
 #[test]
@@ -462,9 +512,18 @@ fn execution_choice_builds_a_bounded_goal_request_or_cancels_without_state_chang
     state.selected_plan = Some(approved.clone());
     state.overlay = Some(Overlay::PlanExecutionChoice {
         plan: approved,
-        selected: 0,
+        selected: None,
     });
-    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.overlay.is_some());
+    assert!(state.pending_plan_execution.is_none());
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
     handle_overlay_key(
         &mut state,
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -484,15 +543,67 @@ fn execution_choice_builds_a_bounded_goal_request_or_cancels_without_state_chang
     let approved = state.selected_plan.clone().expect("selected plan");
     state.overlay = Some(Overlay::PlanExecutionChoice {
         plan: approved,
-        selected: 2,
+        selected: Some(0),
     });
-    handle_overlay_key(
-        &mut state,
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-    );
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(state.overlay.is_none());
     assert!(state.pending_plan_execution.is_none());
     assert_eq!(state.mode, InteractiveMode::Plan);
     assert!(state.selected_plan.is_some());
+}
+
+#[test]
+fn plan_execution_is_contextual_and_requires_explicit_confirmation() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.composer.insert("draft stays visible");
+    let approved = plan_record(PlanStatus::Approved, 4);
+    state.selected_plan = Some(approved.clone());
+    state.overlay = Some(Overlay::PlanExecutionChoice {
+        plan: approved,
+        selected: None,
+    });
+
+    let composer_height = composer_height(&state, 120);
+    assert_eq!(
+        plan_execution_dock_height(&state, 32, composer_height, 0),
+        MAX_PLAN_EXECUTION_DOCK_ROWS
+    );
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw plan execution dock");
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Plan the terminal workflow"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("Revision r4 · 1 step · 1 mutating"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("No strategy selected"), "{rendered}");
+    assert!(
+        rendered.contains("No strategy is preselected"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("D/G select · Enter confirm"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("paused for plan execution"), "{rendered}");
+    assert!(rendered.contains("draft stays visible"), "{rendered}");
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw selected direct strategy");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Selected: Direct"), "{rendered}");
 }
 
 #[test]
@@ -1315,7 +1426,7 @@ fn approval_uses_transient_inline_chrome_and_adapts_at_minimum_height() {
         }),
     );
 
-    assert!(state.transient_inline_chrome_active());
+    assert!(state.transient_inline_screen_active());
     let composer_height = composer_height(&state, 80);
     assert_eq!(
         approval_dock_height(&state, 24, composer_height, 1),
@@ -1791,6 +1902,67 @@ fn prompt_keyboard_selection_returns_the_highlighted_choice() {
 }
 
 #[test]
+fn theme_picker_previews_reversibly_and_applies_only_after_enter() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let (response, mut received) = oneshot::channel();
+    handle_host_event(&mut state, HostEvent::ThemePicker(theme_picker(response)));
+    assert!(state.transient_inline_screen_active());
+    assert_eq!(state.preferences.theme_name(), "default");
+
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(state.preferences.theme_name(), "hacker");
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
+    assert_eq!(state.preferences.theme_name(), "default");
+
+    let (response, mut received) = oneshot::channel();
+    handle_host_event(&mut state, HostEvent::ThemePicker(theme_picker(response)));
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert_eq!(
+        received.try_recv(),
+        Ok(PromptResponse::Answer("hacker".into()))
+    );
+    assert_eq!(state.preferences.theme_name(), "default");
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn theme_picker_is_master_detail_without_false_saved_state() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("draft remains visible");
+    let (response, _received) = oneshot::channel();
+    handle_host_event(&mut state, HostEvent::ThemePicker(theme_picker(response)));
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw theme picker");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Choose theme"), "{rendered}");
+    assert!(rendered.contains("hacker preview"), "{rendered}");
+    assert!(rendered.contains("preview only until Enter"), "{rendered}");
+    assert!(rendered.contains("Cancel and restore"), "{rendered}");
+    assert!(rendered.contains("draft remains visible"), "{rendered}");
+    assert!(!rendered.contains("Theme applied"), "{rendered}");
+    assert!(!rendered.contains("Saved"), "{rendered}");
+
+    let backend = TestBackend::new(40, 12);
+    let mut terminal = Terminal::new(backend).expect("compact terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw compact theme picker");
+    let compact = terminal.backend().to_string();
+    assert!(compact.contains("Choose theme"), "{compact}");
+    assert!(compact.contains("Enter apply"), "{compact}");
+}
+
+#[test]
 fn blank_approval_submission_still_fails_closed() {
     let mut state = TuiState::from_snapshot(snapshot());
     let (response, mut received) = oneshot::channel();
@@ -1814,53 +1986,228 @@ fn blank_approval_submission_still_fails_closed() {
     assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
 }
 
+fn session_browser_entry(
+    id: &str,
+    title: &str,
+    message_count: u64,
+    messages: &[(&str, ModelMessageRole)],
+) -> InteractiveSessionBrowserEntry {
+    InteractiveSessionBrowserEntry {
+        summary: SessionSummary {
+            id: id.into(),
+            title: Some(title.into()),
+            created_at: "2026-08-08T01:00:00Z".into(),
+            updated_at: "2026-08-08T02:05:00Z".into(),
+            message_count,
+            last_run_id: None,
+            last_user_preview: messages.first().map(|(content, _)| (*content).into()),
+        },
+        recent_messages: messages
+            .iter()
+            .map(|(content, role)| InteractiveSessionBrowserMessage {
+                role: *role,
+                content: (*content).into(),
+            })
+            .collect(),
+    }
+}
+
+fn session_browser(response: oneshot::Sender<PromptResponse>) -> InteractiveSessionBrowser {
+    InteractiveSessionBrowser {
+        current_session_id: "019f-test".into(),
+        sessions: vec![
+            session_browser_entry(
+                "019f-test",
+                "Dangerous full access resources",
+                2,
+                &[(
+                    "Configure executables in the sandbox",
+                    ModelMessageRole::User,
+                )],
+            ),
+            session_browser_entry(
+                "019f-cache",
+                "Rust PR compiler cache",
+                13,
+                &[
+                    (
+                        "Our Rust CI runs show no cache found in the logs. Why is that happening?",
+                        ModelMessageRole::User,
+                    ),
+                    (
+                        "That message typically comes from your CI's higher-level cache layer, such as GitHub Actions cache, not having a hit for the key. sccache is a separate compiler cache.",
+                        ModelMessageRole::Assistant,
+                    ),
+                    (
+                        "Are we at least getting any sccache hits?",
+                        ModelMessageRole::User,
+                    ),
+                    (
+                        "Yes. sccache reports an 81.59% hit rate for Rust. Cache hits: 81.59% (12,345 hits / 15,129 requests). Cache misses: 18.41% (2,784 misses).",
+                        ModelMessageRole::Assistant,
+                    ),
+                    (
+                        "Got it. So the build is using sccache effectively, while the outer CI cache just cold-started.",
+                        ModelMessageRole::User,
+                    ),
+                    (
+                        "Exactly. Subsequent runs should warm that outer cache as well.",
+                        ModelMessageRole::Assistant,
+                    ),
+                ],
+            ),
+            session_browser_entry(
+                "019f-shell",
+                "Run PowerShell in workspace",
+                4,
+                &[("Run the command PS", ModelMessageRole::User)],
+            ),
+            session_browser_entry(
+                "019f-hello",
+                "Quick hello",
+                1,
+                &[("hi", ModelMessageRole::User)],
+            ),
+        ],
+        response,
+    }
+}
+
 #[test]
-fn resume_picker_is_responsive_and_keeps_the_selected_preview_visible() {
-    for (width, height) in [(40, 12), (80, 24)] {
+fn session_browser_searches_skips_current_and_resumes_the_selected_id() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let (response, mut received) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::SessionBrowser(session_browser(response)),
+    );
+    let Some(Overlay::SessionBrowser(browser)) = state.overlay.as_ref() else {
+        panic!("session browser overlay");
+    };
+    assert_eq!(browser.selected, Some(1));
+    assert!(state.transient_inline_screen_active());
+
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+    );
+    for character in "rust".chars() {
+        handle_overlay_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+        );
+    }
+    let Some(Overlay::SessionBrowser(browser)) = state.overlay.as_ref() else {
+        panic!("session browser overlay");
+    };
+    assert_eq!(browser.selected, Some(1));
+    assert!(browser.search_active);
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    );
+    assert!(matches!(
+        state.overlay.as_ref(),
+        Some(Overlay::SessionBrowser(SessionBrowserState {
+            preview_scroll: 5,
+            ..
+        }))
+    ));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    );
+
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::SessionBrowser(SessionBrowserState {
+            search_active: false,
+            ..
+        }))
+    ));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert_eq!(
+        received.try_recv(),
+        Ok(PromptResponse::Answer("019f-cache".into()))
+    );
+    assert!(!state.transient_inline_screen_active());
+}
+
+#[test]
+fn terminal_operation_releases_an_open_session_browser() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let (response, mut received) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::SessionBrowser(session_browser(response)),
+    );
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Err("worker disconnected".into()))),
+    );
+
+    assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn session_browser_matches_the_master_detail_reference_and_remains_responsive() {
+    for (width, height) in [(40, 12), (120, 32)] {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         let mut state = TuiState::from_snapshot(snapshot());
-        let choices = (0..10)
-                .map(|index| {
-                    let message_count = index + 1;
-                    format!(
-                        "Session {index} · {message_count} msgs · 2026-07-18 01:4{index} · 019f72e{index}\nPrior user message {index}"
-                    )
-                })
-                .collect::<Vec<_>>();
+        state.operation = Some(OperationKind::Command);
+        state.activity = Some("/resume".into());
+        state.composer.insert("draft stays visible");
         let (response, _received) = oneshot::channel();
         handle_host_event(
             &mut state,
-            HostEvent::Prompt(InteractivePrompt {
-                id: "session-picker".into(),
-                kind: InteractivePromptKind::Choice,
-                title: "Resume session".into(),
-                document: PresentationDocument::new(),
-                choices,
-                initial_choice: Some(7),
-                allow_free_form: false,
-                response,
-            }),
+            HostEvent::SessionBrowser(session_browser(response)),
         );
         terminal
             .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
-            .expect("draw resume picker");
+            .expect("draw session browser");
         let rendered = terminal.backend().to_string();
         assert!(
-            rendered.contains("Resume session · 8/10"),
+            rendered.contains("Resume session"),
             "{width}x{height}: {rendered}"
         );
         assert!(
-            rendered.contains("Prior user message 7"),
+            rendered.contains("Rust PR compiler"),
             "{width}x{height}: {rendered}"
         );
         assert!(
-            rendered.contains("Enter select"),
+            rendered.contains("draft stays visible"),
             "{width}x{height}: {rendered}"
         );
-        assert!(!rendered.contains("Message count"), "{rendered}");
-        assert!(!rendered.contains("Created at"), "{rendered}");
-        assert!(!rendered.contains("Prior user message 0"), "{rendered}");
+        if width >= 72 {
+            assert!(rendered.contains("CURRENT"), "{rendered}");
+            assert!(rendered.contains("Recent conversation"), "{rendered}");
+            assert!(rendered.contains("higher-level cache layer"), "{rendered}");
+            assert!(rendered.contains("Enter Resume"), "{rendered}");
+            let lines = rendered.lines().collect::<Vec<_>>();
+            let current_row = lines
+                .iter()
+                .position(|line| line.contains("Dangerous full access"))
+                .expect("current session row");
+            let selected_row = lines
+                .iter()
+                .position(|line| line.contains("│ › Rust PR compiler"))
+                .expect("selected session row");
+            let shell_row = lines
+                .iter()
+                .position(|line| line.contains("Run PowerShell"))
+                .expect("following session row");
+            assert_eq!(selected_row, current_row + 2, "{rendered}");
+            assert_eq!(shell_row, selected_row + 2, "{rendered}");
+        }
     }
 }
 
@@ -2078,10 +2425,11 @@ fn every_theme_keeps_transcript_and_composer_at_all_required_sizes() {
 fn transcript_is_borderless_and_uses_distinct_speaker_and_semantic_cues() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.append_entry(user_entry("question", TranscriptKind::User));
+    let help = help_document(&state.completions);
     state.append_entry(TranscriptEntry {
         sequence: None,
         kind: TranscriptKind::Command,
-        document: help_document(),
+        document: help,
         temporary: false,
     });
     let lines = transcript_lines(&state, 80);

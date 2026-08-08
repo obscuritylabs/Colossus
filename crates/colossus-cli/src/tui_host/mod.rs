@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use colossus_contracts::{
     ActorType, AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
-    MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
+    MemoryStatus, ModelMessageRole, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
     ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
     RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
     SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
@@ -24,9 +24,11 @@ use colossus_runtime::{Runtime, RuntimeError, format_provider_response_diagnosti
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
     HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractivePlanExecutionRequest,
-    InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSnapshot,
-    PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand,
-    sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt,
+    InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
+    InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
+    InteractiveThemePicker, InteractiveThemePickerEntry, PlanHostCommand, PlanSelectionUpdate,
+    PromptResponse, RuntimeCommand, sandbox_boundary_acknowledgement_choice,
+    sandbox_boundary_prompt,
 };
 use colossus_worker::{
     InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerClient, WorkerError,

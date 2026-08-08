@@ -9,37 +9,177 @@ pub(super) fn resumable_sessions(
     sessions
 }
 
-pub(super) fn session_picker_choice(session: &SessionSummary) -> String {
-    let title = compact_text(session.title.as_deref().unwrap_or("Untitled"), 36);
-    let preview = session
-        .last_user_preview
-        .as_deref()
-        .map(|preview| compact_text(preview, 120))
-        .filter(|preview| !preview.is_empty())
-        .unwrap_or_else(|| "No user message preview".into());
-    let short_id = session.id.chars().take(8).collect::<String>();
-    let updated_at = compact_timestamp(&session.updated_at);
-    format!(
-        "{title} · {} msgs · {short_id} · {updated_at}\n{preview}",
-        session.message_count
-    )
+/// Displayable user and assistant messages shown in one session preview.
+pub(super) const SESSION_BROWSER_PREVIEW_MESSAGES: usize = 8;
+/// Canonical records requested per backward page while building one preview.
+pub(super) const SESSION_BROWSER_PAGE_LIMIT: usize = 32;
+/// Backward pages read per session so tool-heavy history stays bounded.
+pub(super) const SESSION_BROWSER_PREVIEW_PAGES: usize = 8;
+
+/// Newest-first preview accumulator that pages backward past tool records.
+///
+/// Tool-heavy runs can fill an entire canonical page with tool results and
+/// empty assistant tool-call messages, so a single fixed page can hide every
+/// displayable message. The collector keeps requesting older pages until the
+/// bounded preview is complete, the session is exhausted, or the page budget
+/// is spent.
+#[derive(Debug, Default)]
+pub(super) struct SessionPreviewCollector {
+    messages: Vec<InteractiveSessionBrowserMessage>,
+    before_sequence: Option<u64>,
+    pages: usize,
+    exhausted: bool,
+}
+
+impl SessionPreviewCollector {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether another older page is still needed to fill the preview.
+    pub(super) fn wants_older_page(&self) -> bool {
+        !self.exhausted
+            && self.pages < SESSION_BROWSER_PREVIEW_PAGES
+            && self.messages.len() < SESSION_BROWSER_PREVIEW_MESSAGES
+    }
+
+    /// Exclusive upper-bound cursor for the next backward page.
+    pub(super) fn before_sequence(&self) -> Option<u64> {
+        self.before_sequence
+    }
+
+    /// Absorb one chronological page, newest displayable messages first.
+    pub(super) fn absorb(&mut self, page: SessionMessagePage) {
+        self.pages = self.pages.saturating_add(1);
+        self.exhausted = !page.has_more || page.before_sequence.is_none();
+        self.before_sequence = page.before_sequence;
+        for message in page.messages.into_iter().rev() {
+            if self.messages.len() == SESSION_BROWSER_PREVIEW_MESSAGES {
+                break;
+            }
+            if !matches!(
+                message.message.role,
+                ModelMessageRole::User | ModelMessageRole::Assistant
+            ) || message.message.content.trim().is_empty()
+            {
+                continue;
+            }
+            self.messages.push(InteractiveSessionBrowserMessage {
+                role: message.message.role,
+                content: compact_text(&message.message.content, 2_000),
+            });
+        }
+    }
+
+    /// Stop paging when a page cannot be loaded, keeping what was collected.
+    pub(super) fn stop(&mut self) {
+        self.exhausted = true;
+    }
+
+    /// Release the preview in chronological order.
+    pub(super) fn finish(mut self) -> Vec<InteractiveSessionBrowserMessage> {
+        self.messages.reverse();
+        self.messages
+    }
+}
+
+pub(super) fn session_browser_entry(
+    summary: SessionSummary,
+    recent_messages: Vec<InteractiveSessionBrowserMessage>,
+) -> InteractiveSessionBrowserEntry {
+    InteractiveSessionBrowserEntry {
+        summary,
+        recent_messages,
+    }
+}
+
+pub(super) async fn browse_sessions(
+    events: &mpsc::Sender<HostEvent>,
+    current_session_id: &str,
+    sessions: Vec<InteractiveSessionBrowserEntry>,
+) -> Result<Option<String>, String> {
+    let (response_tx, response_rx) = oneshot::channel();
+    events
+        .send(HostEvent::SessionBrowser(InteractiveSessionBrowser {
+            current_session_id: current_session_id.into(),
+            sessions,
+            response: response_tx,
+        }))
+        .await
+        .map_err(|_| "terminal event loop disconnected".to_owned())?;
+    match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+        .await
+        .map_err(|_| "interactive session browser timed out".to_owned())?
+        .map_err(|_| "interactive session browser was dropped".to_owned())?
+    {
+        PromptResponse::Answer(session_id) => Ok(Some(session_id)),
+        PromptResponse::Cancelled => Ok(None),
+    }
+}
+
+pub(super) async fn browse_themes(
+    events: &mpsc::Sender<HostEvent>,
+    themes: &ThemeLibrary,
+    preferences: &TerminalPreferences,
+) -> Result<Option<String>, String> {
+    let entries = themes
+        .names()
+        .into_iter()
+        .map(|name| {
+            themes
+                .preview_preferences(&name, preferences)
+                .map(|preferences| InteractiveThemePickerEntry { name, preferences })
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let (response_tx, response_rx) = oneshot::channel();
+    events
+        .send(HostEvent::ThemePicker(InteractiveThemePicker {
+            current_theme: preferences.theme_name().into(),
+            themes: entries,
+            response: response_tx,
+        }))
+        .await
+        .map_err(|_| "terminal event loop disconnected".to_owned())?;
+    match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+        .await
+        .map_err(|_| "interactive theme picker timed out".to_owned())?
+        .map_err(|_| "interactive theme picker was dropped".to_owned())?
+    {
+        PromptResponse::Answer(theme) => Ok(Some(theme)),
+        PromptResponse::Cancelled => Ok(None),
+    }
 }
 
 pub(super) fn compact_text(value: &str, maximum_characters: usize) -> String {
     value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '\u{200b}'
+                        | '\u{200c}'
+                        | '\u{200d}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2060}'..='\u{206f}'
+                        | '\u{feff}'
+                )
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
         .take(maximum_characters)
         .collect()
-}
-
-pub(super) fn compact_timestamp(value: &str) -> String {
-    value
-        .get(..16)
-        .map(|timestamp| format!("{}Z", timestamp.replace('T', " ")))
-        .unwrap_or_else(|| value.to_owned())
 }
 
 pub(super) fn bounded_approval_content(value: &Value) -> Result<String, serde_json::Error> {

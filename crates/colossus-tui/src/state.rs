@@ -127,12 +127,14 @@ pub(super) enum Overlay {
         approval_section: ApprovalSection,
         document_scroll: usize,
     },
+    SessionBrowser(SessionBrowserState),
+    ThemePicker(ThemePickerState),
     HistorySearch {
         query: String,
     },
     PlanExecutionChoice {
         plan: PlanRecord,
-        selected: usize,
+        selected: Option<usize>,
     },
     QueuePaused,
 }
@@ -279,11 +281,19 @@ impl TuiState {
     }
 
     pub(super) fn docked_decision_active(&self) -> bool {
-        self.docked_decision_kind().is_some()
+        self.docked_decision_kind().is_some() || self.plan_execution_decision_active()
     }
 
-    pub(super) fn transient_inline_chrome_active(&self) -> bool {
-        self.docked_decision_active() || self.structured_completion_context().is_some()
+    pub(super) fn plan_execution_decision_active(&self) -> bool {
+        matches!(self.overlay, Some(Overlay::PlanExecutionChoice { .. }))
+    }
+
+    pub(super) fn transient_inline_screen_active(&self) -> bool {
+        matches!(
+            self.overlay,
+            Some(Overlay::SessionBrowser(_) | Overlay::ThemePicker(_))
+        ) || self.docked_decision_active()
+            || self.structured_completion_context().is_some()
     }
 
     pub(super) fn run_request(&self, prompt: String) -> Result<InteractiveRunRequest, String> {
@@ -666,12 +676,22 @@ impl TuiState {
         self.should_exit = true;
     }
 
-    fn cancel_overlay(&mut self) -> bool {
+    pub(super) fn cancel_overlay(&mut self) -> bool {
         let Some(overlay) = self.overlay.take() else {
             return false;
         };
-        if let Overlay::Prompt { request, .. } = overlay {
-            let _ = request.response.send(PromptResponse::Cancelled);
+        match overlay {
+            Overlay::Prompt { request, .. } => {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            }
+            Overlay::SessionBrowser(browser) => {
+                let _ = browser.request.response.send(PromptResponse::Cancelled);
+            }
+            Overlay::ThemePicker(picker) => {
+                self.preferences = picker.original_preferences;
+                let _ = picker.request.response.send(PromptResponse::Cancelled);
+            }
+            _ => {}
         }
         true
     }

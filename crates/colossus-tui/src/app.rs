@@ -342,6 +342,14 @@ fn handle_key(
 }
 
 pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
+    if matches!(state.overlay, Some(Overlay::SessionBrowser(_))) {
+        handle_session_browser_key(state, key);
+        return;
+    }
+    if matches!(state.overlay, Some(Overlay::ThemePicker(_))) {
+        handle_theme_picker_key(state, key);
+        return;
+    }
     if key.code == KeyCode::Esc {
         state.cancel_focus();
         return;
@@ -483,32 +491,39 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
         },
         Overlay::PlanExecutionChoice { plan, selected } => match key.code {
             KeyCode::Enter => {
+                let Some(selected) = *selected else {
+                    return;
+                };
                 let plan = plan.clone();
-                let strategy = match *selected {
-                    0 => Some(PlanExecutionStrategy::Direct),
-                    1 => Some(PlanExecutionStrategy::Goal {
+                let strategy = match selected {
+                    0 => PlanExecutionStrategy::Direct,
+                    1 => PlanExecutionStrategy::Goal {
                         max_iterations: DEFAULT_GOAL_ITERATIONS,
-                    }),
-                    _ => None,
+                    },
+                    _ => return,
                 };
                 state.overlay = None;
-                if let Some(strategy) = strategy {
-                    state.pending_plan_execution = Some(InteractivePlanExecutionRequest {
-                        session_id: state.session_id.clone(),
-                        plan_id: plan.id,
-                        revision: plan.revision,
-                        strategy,
-                    });
-                }
+                state.pending_plan_execution = Some(InteractivePlanExecutionRequest {
+                    session_id: state.session_id.clone(),
+                    plan_id: plan.id,
+                    revision: plan.revision,
+                    strategy,
+                });
             }
             KeyCode::Up | KeyCode::BackTab => {
-                *selected = if *selected == 0 { 2 } else { *selected - 1 };
+                *selected = Some(match *selected {
+                    Some(0) | None => 1,
+                    Some(_) => 0,
+                });
             }
             KeyCode::Down | KeyCode::Tab => {
-                *selected = (*selected + 1) % 3;
+                *selected = Some(match *selected {
+                    Some(0) => 1,
+                    Some(_) | None => 0,
+                });
             }
-            KeyCode::Home => *selected = 0,
-            KeyCode::End => *selected = 2,
+            KeyCode::Home | KeyCode::Char('d' | 'D') => *selected = Some(0),
+            KeyCode::End | KeyCode::Char('g' | 'G') => *selected = Some(1),
             _ => {}
         },
         Overlay::QueuePaused => match key.code {
@@ -523,6 +538,131 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
+        Overlay::SessionBrowser(_) | Overlay::ThemePicker(_) => {}
+    }
+}
+
+fn handle_session_browser_key(state: &mut TuiState, key: KeyEvent) {
+    let mut resume = None;
+    let mut cancel = false;
+    let Some(Overlay::SessionBrowser(browser)) = state.overlay.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc if browser.search_active => browser.search_active = false,
+        KeyCode::Esc => cancel = true,
+        KeyCode::Char('/') if !browser.search_active => browser.search_active = true,
+        KeyCode::Backspace if browser.search_active => {
+            browser.query.pop();
+            browser.reconcile_selection();
+        }
+        KeyCode::Char(character)
+            if browser.search_active
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            browser.query.push(character);
+            browser.reconcile_selection();
+        }
+        KeyCode::Up | KeyCode::BackTab => browser.move_selection(-1),
+        KeyCode::Down | KeyCode::Tab => browser.move_selection(1),
+        KeyCode::Home => browser.select_boundary(false),
+        KeyCode::End => browser.select_boundary(true),
+        KeyCode::PageUp => {
+            browser.preview_scroll = browser.preview_scroll.saturating_sub(5);
+        }
+        KeyCode::PageDown => {
+            browser.preview_scroll = browser.preview_scroll.saturating_add(5);
+        }
+        KeyCode::Enter => {
+            resume = browser
+                .selected_entry()
+                .map(|entry| entry.summary.id.clone());
+        }
+        _ => {}
+    }
+    if cancel {
+        state.cancel_overlay();
+    } else if let Some(session_id) = resume
+        && let Some(Overlay::SessionBrowser(browser)) = state.overlay.take()
+    {
+        let _ = browser
+            .request
+            .response
+            .send(PromptResponse::Answer(session_id));
+    }
+}
+
+fn handle_theme_picker_key(state: &mut TuiState, key: KeyEvent) {
+    let mut apply = None;
+    let mut cancel = false;
+    let mut preview = None;
+    let Some(Overlay::ThemePicker(picker)) = state.overlay.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc if picker.search_active => picker.search_active = false,
+        KeyCode::Esc => cancel = true,
+        KeyCode::Char('/') if !picker.search_active => picker.search_active = true,
+        KeyCode::Backspace if picker.search_active => {
+            picker.query.pop();
+            picker.reconcile_selection();
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Char(character)
+            if picker.search_active
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            picker.query.push(character);
+            picker.reconcile_selection();
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Up | KeyCode::BackTab => {
+            picker.move_selection(-1);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            picker.move_selection(1);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Home => {
+            picker.select_boundary(false);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::End => {
+            picker.select_boundary(true);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Enter => {
+            apply = picker.selected_entry().map(|entry| entry.name.clone());
+        }
+        _ => {}
+    }
+    if let Some(preview) = preview {
+        state.preferences = preview;
+    }
+    if cancel {
+        state.cancel_overlay();
+    } else if let Some(theme) = apply
+        && let Some(Overlay::ThemePicker(picker)) = state.overlay.take()
+    {
+        state.preferences = picker.original_preferences;
+        let _ = picker.request.response.send(PromptResponse::Answer(theme));
     }
 }
 
@@ -602,6 +742,7 @@ pub(super) fn request_older_page(
 
 pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
     let text = sanitize_input(text);
+    let mut theme_preview = None;
     if let Some(overlay) = state.overlay.as_mut() {
         match overlay {
             Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
@@ -610,11 +751,28 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::HistorySearch { query: input } => {
                 input.push_str(&text);
             }
-            Overlay::Prompt { .. } | Overlay::PlanExecutionChoice { .. } | Overlay::QueuePaused => {
+            Overlay::SessionBrowser(browser) if browser.search_active => {
+                browser.query.push_str(&text);
+                browser.reconcile_selection();
             }
+            Overlay::ThemePicker(picker) if picker.search_active => {
+                picker.query.push_str(&text);
+                picker.reconcile_selection();
+                theme_preview = picker
+                    .selected_entry()
+                    .map(|entry| entry.preferences.clone());
+            }
+            Overlay::Prompt { .. }
+            | Overlay::SessionBrowser(_)
+            | Overlay::ThemePicker(_)
+            | Overlay::PlanExecutionChoice { .. }
+            | Overlay::QueuePaused => {}
         }
     } else {
         state.composer.insert(&text);
+    }
+    if let Some(preview) = theme_preview {
+        state.preferences = preview;
     }
 }
 
@@ -832,7 +990,10 @@ fn handle_plan_command(
                     event_tx,
                 );
             } else {
-                state.overlay = Some(Overlay::PlanExecutionChoice { plan, selected: 0 });
+                state.overlay = Some(Overlay::PlanExecutionChoice {
+                    plan,
+                    selected: None,
+                });
             }
         }
     }
@@ -937,12 +1098,15 @@ pub(super) fn handle_local_command(
 ) {
     match command {
         LocalCommand::Exit => state.should_exit = true,
-        LocalCommand::Help => state.append_entry(TranscriptEntry {
-            sequence: None,
-            kind: TranscriptKind::Command,
-            document: help_document(),
-            temporary: false,
-        }),
+        LocalCommand::Help => {
+            let document = help_document(&state.completions);
+            state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document,
+                temporary: false,
+            });
+        }
         LocalCommand::Preferences => state.append_entry(TranscriptEntry {
             sequence: None,
             kind: TranscriptKind::Command,
@@ -1016,6 +1180,24 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 });
             }
         }
+        HostEvent::SessionBrowser(request) => {
+            if state.overlay.is_some() {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            } else {
+                state.overlay = Some(Overlay::SessionBrowser(SessionBrowserState::new(request)));
+            }
+        }
+        HostEvent::ThemePicker(request) => {
+            if state.overlay.is_some() {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            } else {
+                let picker = ThemePickerState::new(request, state.preferences.clone());
+                if let Some(entry) = picker.selected_entry() {
+                    state.preferences = entry.preferences.clone();
+                }
+                state.overlay = Some(Overlay::ThemePicker(picker));
+            }
+        }
         HostEvent::HistoryWarning(error) => {
             state.append_entry(error_entry(&format!("History was not persisted: {error}")))
         }
@@ -1057,10 +1239,11 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             }
         }
         HostEvent::OperationFinished(result) => {
-            if matches!(state.overlay, Some(Overlay::Prompt { .. }))
-                && let Some(Overlay::Prompt { request, .. }) = state.overlay.take()
-            {
-                let _ = request.response.send(PromptResponse::Cancelled);
+            if matches!(
+                state.overlay,
+                Some(Overlay::Prompt { .. } | Overlay::SessionBrowser(_) | Overlay::ThemePicker(_))
+            ) {
+                state.cancel_overlay();
             }
             let result = *result;
             state.operation = None;

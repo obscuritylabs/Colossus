@@ -124,13 +124,61 @@ pub(super) fn error_entry(message: &str) -> TranscriptEntry {
     }
 }
 
-pub(super) fn help_document() -> PresentationDocument {
+pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
+    let mut grouped = BTreeMap::<&'static str, Vec<&str>>::new();
+    for command in completions
+        .iter()
+        .map(String::as_str)
+        .filter(|command| command.starts_with('/'))
+    {
+        let commands = grouped.entry(command_help_category(command)).or_default();
+        if !commands.contains(&command) {
+            commands.push(command);
+        }
+    }
+    let mut command_groups = Vec::new();
+    for (category, purpose) in [
+        ("Conversation", "Resume and manage durable sessions"),
+        ("Work", "Inspect and drive plans, goals, tasks, and agents"),
+        (
+            "Memory & context",
+            "Recall memory and manage context snapshots",
+        ),
+        ("Agent resources", "Discover tools and activate skills"),
+        (
+            "Research & connections",
+            "Use research, integrations, and MCP",
+        ),
+        (
+            "Extensions",
+            "Inspect and manage packs, collections, and bundles",
+        ),
+        (
+            "Runtime",
+            "Inspect workflows, telemetry, audit, and projections",
+        ),
+        (
+            "Provider diagnostics",
+            "Inspect model and provider readiness",
+        ),
+        ("Appearance", "Tune themes and terminal presentation"),
+        ("Terminal", "Get help or exit safely"),
+        ("Other", "Additional host commands"),
+    ] {
+        let Some(commands) = grouped.remove(category) else {
+            continue;
+        };
+        command_groups.push((
+            category.into(),
+            format!("{purpose}: {}", commands.join(" · ")),
+        ));
+    }
     PresentationDocument::from_block(PresentationBlock::Card {
         title: "Colossus terminal".into(),
         tone: PresentationTone::Neutral,
         body: vec![
             PresentationBlock::Text(
-                "Type a message to run the agent. Slash commands operate durable state.".into(),
+                "Type a message to run the agent. Slash commands operate durable state. This list is generated from the commands available in the current terminal.".into(),
             ),
             PresentationBlock::KeyValue(vec![
                 (
@@ -153,26 +201,77 @@ pub(super) fn help_document() -> PresentationDocument {
                     "Cancel".into(),
                     "Ctrl-C cancels an active run; press again to exit".into(),
                 ),
-                (
-                    "Provider diagnostics".into(),
-                    "/models doctor [PROFILE]; /provider doctor [PROFILE]; /provider diagnostics on|off".into(),
-                ),
-                (
-                    "Plan mode".into(),
-                    "/plan toggles; on|off|status|new|list; use/show; approve|discard; execute [direct|goal [1-50]]".into(),
-                ),
-                (
-                    "Resume goal".into(),
-                    "/goal resume GOAL_ID continues the remaining iteration budget".into(),
-                ),
-                ("Preferences".into(), "/tui prefs|save|reset".into()),
-                (
-                    "Exit".into(),
-                    "Ctrl-C while idle; Ctrl-D or /exit also work".into(),
-                ),
             ]),
+            PresentationBlock::Markdown("## Command families".into()),
+            PresentationBlock::KeyValue(command_groups),
         ],
     })
+}
+
+fn command_help_category(command: &str) -> &'static str {
+    match command {
+        command if command == "/resume" || command.starts_with("/session") => "Conversation",
+        command
+            if command == "/work"
+                || command == "/tasks"
+                || command == "/decisions"
+                || command.starts_with("/plan")
+                || command.starts_with("/goal")
+                || command.starts_with("/agents") =>
+        {
+            "Work"
+        }
+        command if command.starts_with("/memor") || command.starts_with("/context") => {
+            "Memory & context"
+        }
+        command
+            if command == "/tools"
+                || command.starts_with("/skill")
+                || command.starts_with("/skills") =>
+        {
+            "Agent resources"
+        }
+        command
+            if command.starts_with("/research")
+                || command.starts_with("/integration")
+                || command.starts_with("/mcp") =>
+        {
+            "Research & connections"
+        }
+        command
+            if command.starts_with("/packs")
+                || command.starts_with("/collections")
+                || command.starts_with("/registry")
+                || command.starts_with("/bundle") =>
+        {
+            "Extensions"
+        }
+        command
+            if command.starts_with("/workflow")
+                || command.starts_with("/telemetry")
+                || command.starts_with("/audit")
+                || command.starts_with("/projection")
+                || command == "/trace" =>
+        {
+            "Runtime"
+        }
+        command if command.starts_with("/models") || command.starts_with("/provider") => {
+            "Provider diagnostics"
+        }
+        command
+            if command.starts_with("/theme")
+                || command.starts_with("/stream")
+                || command.starts_with("/events")
+                || command.starts_with("/reasoning")
+                || command.starts_with("/transcript")
+                || command.starts_with("/multiline")
+                || command.starts_with("/tui") =>
+        {
+            "Appearance"
+        }
+        "/help" | "/exit" | "/quit" => "Terminal",
+        _ => "Other",
+    }
 }
 
 pub(super) fn plan_status_document(
