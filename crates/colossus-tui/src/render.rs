@@ -334,6 +334,7 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
         .max(UnicodeWidthStr::width(controls) + 2);
     let menu_width = u16::try_from(desired_width)
         .unwrap_or(u16::MAX)
+        .max(MIN_COMPLETION_MENU_WIDTH.min(area.width))
         .min(area.width);
     let menu_area = Rect::new(area.x, area.y, menu_width, area.height);
     let content_width = usize::from(menu_width.saturating_sub(2)).max(1);

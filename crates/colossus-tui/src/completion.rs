@@ -1,6 +1,7 @@
 pub(super) const MAX_COMMAND_COLUMN_WIDTH: usize = 32;
 pub(super) const MAX_DESCRIPTION_COLUMN_WIDTH: usize = 42;
 pub(super) const MIN_DESCRIPTION_COLUMN_WIDTH: usize = 12;
+pub(super) const MIN_COMPLETION_MENU_WIDTH: u16 = 64;
 
 pub(super) fn command_description(command: &str) -> Option<&'static str> {
     let description = match command {

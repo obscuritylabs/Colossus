@@ -815,11 +815,11 @@ fn completion_selection_moves_in_both_directions_and_can_be_dismissed() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.composer.insert("/");
     state.advance_completion();
-    assert_eq!(state.composer.completion_index, Some(0));
-    state.advance_completion();
     assert_eq!(state.composer.completion_index, Some(1));
+    state.advance_completion();
+    assert_eq!(state.composer.completion_index, Some(2));
     state.previous_completion();
-    assert_eq!(state.composer.completion_index, Some(0));
+    assert_eq!(state.composer.completion_index, Some(1));
     assert!(state.hide_completion());
     assert!(state.completion_menu_candidates().is_empty());
     state.composer.insert("to");
@@ -925,6 +925,31 @@ fn command_descriptions_cover_static_and_dynamic_completions() {
         Some("Preview this terminal theme")
     );
     assert_eq!(command_description("@coding"), None);
+}
+
+#[test]
+fn command_completion_keeps_a_stable_minimum_width_while_filtering() {
+    let backend = TestBackend::new(120, 16);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.completions = vec!["/help".into(), "/provider diagnostics on".into()];
+    state.composer.insert("/he");
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw filtered command completion");
+    let rendered = terminal.backend().to_string();
+    let title_line = rendered
+        .lines()
+        .find(|line| line.contains("Commands · 1"))
+        .expect("filtered completion title")
+        .trim_start_matches('"');
+    let width = title_line
+        .chars()
+        .position(|character| character == '┐')
+        .expect("completion right border")
+        + 1;
+    assert_eq!(width, usize::from(MIN_COMPLETION_MENU_WIDTH), "{rendered}");
 }
 
 #[test]
