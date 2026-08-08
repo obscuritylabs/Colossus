@@ -239,7 +239,7 @@ impl TuiState {
             selected_plan: None,
             composer: Composer::default(),
             history: snapshot.history,
-            completions: with_plan_completions(snapshot.completions),
+            completions: with_mode_completions(snapshot.completions),
             sticky_skills: Vec::new(),
             provider_response_diagnostics: false,
             active_calls: BTreeMap::new(),
@@ -318,6 +318,11 @@ impl TuiState {
                     ));
                 }
             }),
+            InteractiveMode::Research => {
+                return Err(
+                    "Research mode questions must run through the research service.".into(),
+                );
+            }
         };
         Ok(InteractiveRunRequest {
             session_id: self.session_id.clone(),
@@ -329,8 +334,15 @@ impl TuiState {
         })
     }
 
+    pub(super) fn research_turn_command(&self, question: String) -> Option<RuntimeCommand> {
+        (self.mode == InteractiveMode::Research).then_some(RuntimeCommand::Known {
+            name: "research".into(),
+            arguments: question,
+        })
+    }
+
     pub(super) fn set_completions(&mut self, completions: Vec<String>) {
-        self.completions = with_plan_completions(completions);
+        self.completions = with_mode_completions(completions);
     }
 
     pub(super) fn apply_plan_selection(
@@ -715,8 +727,16 @@ const PLAN_COMPLETIONS: &[&str] = &[
     "/goal resume",
 ];
 
-fn with_plan_completions(mut completions: Vec<String>) -> Vec<String> {
-    for completion in PLAN_COMPLETIONS {
+const RESEARCH_COMPLETIONS: &[&str] = &[
+    "/research",
+    "/research on",
+    "/research off",
+    "/research status",
+    "/research list",
+];
+
+fn with_mode_completions(mut completions: Vec<String>) -> Vec<String> {
+    for completion in PLAN_COMPLETIONS.iter().chain(RESEARCH_COMPLETIONS.iter()) {
         if !completions.iter().any(|candidate| candidate == completion) {
             completions.push((*completion).into());
         }
