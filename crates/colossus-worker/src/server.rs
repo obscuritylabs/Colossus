@@ -36,8 +36,9 @@ impl WorkerServer {
     ) -> Result<Self, WorkerError> {
         let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let authentication_key =
-            WorkerAuthenticationKey::new(config.worker_ipc_auth_key_at(&options.workspace)?);
+        let authentication_key = WorkerAuthenticationKey::load_or_create(
+            &config.worker_ipc_auth_path_at(&options.workspace),
+        )?;
         let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
             approvals, None,
         ));
@@ -61,7 +62,7 @@ impl WorkerServer {
         })
     }
 
-    /// Open a worker whose protocol-v7 attached clients own prompts, notices, and cancellation.
+    /// Open a worker whose protocol-v8 attached clients own prompts, notices, and cancellation.
     pub fn open_with_mode(
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,
@@ -96,8 +97,9 @@ impl WorkerServer {
         provider_credentials: Arc<dyn CredentialResolver>,
     ) -> Result<Self, WorkerError> {
         let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
-        let authentication_key =
-            WorkerAuthenticationKey::new(config.worker_ipc_auth_key_at(&options.workspace)?);
+        let authentication_key = WorkerAuthenticationKey::load_or_create(
+            &config.worker_ipc_auth_path_at(&options.workspace),
+        )?;
         Self::open_with_mode_at_workspace_provider_credentials_and_authentication(
             config,
             approval_mode,

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy,
     PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode,
-    SessionMessage, SessionMessagePage, TerminalPreferences, ThemeTextStyle,
+    SecurityPostureReport, SessionMessage, SessionMessagePage, TerminalPreferences, ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{

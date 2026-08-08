@@ -8,8 +8,8 @@ use redb::{Database, ReadableDatabase as _, TableDefinition};
 use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::{path::Path, sync::Arc};
-use zeroize::Zeroize as _;
+use std::{fs, path::Path, sync::Arc};
+use zeroize::{Zeroize as _, Zeroizing};
 
 pub(super) const OAUTH_RECORDS: TableDefinition<&str, &[u8]> =
     TableDefinition::new("mcp_oauth_credentials");
@@ -24,6 +24,10 @@ pub(super) enum OAuthStoreFactory {
     EncryptedState {
         database: Arc<Database>,
         keys: Arc<dyn KeyProvider>,
+        repository_id: String,
+    },
+    PlaintextState {
+        database: Arc<Database>,
         repository_id: String,
     },
 }
@@ -59,11 +63,32 @@ impl OAuthStoreFactory {
         })
     }
 
+    pub(super) fn plaintext_state(path: &Path, repository_id: String) -> Result<Self, AuthError> {
+        prepare_owner_private_state(path)?;
+        let database =
+            Database::create(path).map_err(|error| AuthError::InternalError(error.to_string()))?;
+        validate_owner_private_state(path)?;
+        let write = database
+            .begin_write()
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        write
+            .open_table(OAUTH_RECORDS)
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        write
+            .commit()
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        Ok(Self::PlaintextState {
+            database: Arc::new(database),
+            repository_id,
+        })
+    }
+
     pub(super) fn store(&self, server: &str, endpoint: &str) -> OAuthCredentialStore {
         let identity = identity(
             match self {
                 Self::Platform { repository_id, .. }
-                | Self::EncryptedState { repository_id, .. } => repository_id,
+                | Self::EncryptedState { repository_id, .. }
+                | Self::PlaintextState { repository_id, .. } => repository_id,
             },
             server,
             endpoint,
@@ -76,6 +101,10 @@ impl OAuthStoreFactory {
             Self::EncryptedState { database, keys, .. } => OAuthCredentialStore::EncryptedState {
                 database: Arc::clone(database),
                 keys: Arc::clone(keys),
+                identity,
+            },
+            Self::PlaintextState { database, .. } => OAuthCredentialStore::PlaintextState {
+                database: Arc::clone(database),
                 identity,
             },
         }
@@ -93,6 +122,10 @@ pub(super) enum OAuthCredentialStore {
         keys: Arc<dyn KeyProvider>,
         identity: String,
     },
+    PlaintextState {
+        database: Arc<Database>,
+        identity: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -102,6 +135,13 @@ struct EncryptedOAuthRecord {
     key_id: String,
     nonce: String,
     ciphertext: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlaintextOAuthRecord {
+    schema_version: u16,
+    credentials: StoredCredentials,
 }
 
 #[async_trait]
@@ -181,6 +221,30 @@ impl CredentialStore for OAuthCredentialStore {
                 }
                 Ok(Some(credentials))
             }
+            Self::PlaintextState { database, identity } => {
+                let record: PlaintextOAuthRecord = {
+                    let read = database
+                        .begin_read()
+                        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+                    let table = read
+                        .open_table(OAUTH_RECORDS)
+                        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+                    let Some(record) = table
+                        .get(identity.as_str())
+                        .map_err(|error| AuthError::InternalError(error.to_string()))?
+                    else {
+                        return Ok(None);
+                    };
+                    serde_json::from_slice(record.value())
+                        .map_err(|error| AuthError::InternalError(error.to_string()))?
+                };
+                if record.schema_version != 1 {
+                    return Err(AuthError::InternalError(
+                        "unsupported plaintext OAuth record".into(),
+                    ));
+                }
+                Ok(Some(record.credentials))
+            }
         }
     }
 
@@ -247,6 +311,30 @@ impl CredentialStore for OAuthCredentialStore {
                     .commit()
                     .map_err(|error| AuthError::InternalError(error.to_string()))
             }
+            Self::PlaintextState { database, identity } => {
+                let record = Zeroizing::new(
+                    serde_json::to_vec(&PlaintextOAuthRecord {
+                        schema_version: 1,
+                        credentials,
+                    })
+                    .map_err(|error| AuthError::InternalError(error.to_string()))?,
+                );
+                plaintext.zeroize();
+                let write = database
+                    .begin_write()
+                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
+                {
+                    let mut table = write
+                        .open_table(OAUTH_RECORDS)
+                        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+                    table
+                        .insert(identity.as_str(), record.as_slice())
+                        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+                }
+                write
+                    .commit()
+                    .map_err(|error| AuthError::InternalError(error.to_string()))
+            }
         }
     }
 
@@ -262,7 +350,8 @@ impl CredentialStore for OAuthCredentialStore {
             }
             Self::EncryptedState {
                 database, identity, ..
-            } => {
+            }
+            | Self::PlaintextState { database, identity } => {
                 let write = database
                     .begin_write()
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
@@ -280,6 +369,63 @@ impl CredentialStore for OAuthCredentialStore {
             }
         }
     }
+}
+
+fn prepare_owner_private_state(path: &Path) -> Result<(), AuthError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| AuthError::InternalError(error.to_string()))?;
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => validate_owner_private_state(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .mode(0o600)
+                    .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+                    .open(path)
+                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
+            }
+            #[cfg(not(unix))]
+            {
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
+            }
+            validate_owner_private_state(path)
+        }
+        Err(error) => Err(AuthError::InternalError(error.to_string())),
+    }
+}
+
+fn validate_owner_private_state(path: &Path) -> Result<(), AuthError> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| AuthError::InternalError(error.to_string()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(AuthError::InternalError(
+            "plaintext OAuth state must be a regular non-symlink file".into(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.mode() & 0o777 != 0o600
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+        {
+            return Err(AuthError::InternalError(
+                "plaintext OAuth state must be a current-user owner-only single-link file".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn identity(repository_id: &str, server: &str, endpoint: &str) -> String {

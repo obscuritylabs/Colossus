@@ -1,16 +1,17 @@
 use super::{
-    EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX, PROJECTION_POSITIONS,
-    PersistedEventEnvelope, RedbEventJournal, RedbWriterLease, STREAM_EVENTS,
-    STREAM_EVENTS_INDEX_KEY, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
-    cached_platform_secret, persisted_associated_data, persisted_record_hash,
+    DisabledCheckpointSigner, EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX,
+    PAYLOAD_PROTECTION_KEY, PROJECTION_POSITIONS, PersistedEventEnvelope, PlaintextKeyProvider,
+    RedbEventJournal, RedbWriterLease, STREAM_EVENTS, STREAM_EVENTS_INDEX_KEY, STREAM_VERSIONS,
+    StaticKeyProvider, adapter_error, cached_platform_secret, persisted_associated_data,
+    persisted_record_hash,
 };
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
     aead::{Aead, Payload},
 };
 use colossus_contracts::{
-    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, SecureAnchor,
-    SecureAnchorStatus, StartupVerificationMode,
+    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, PLAINTEXT_PAYLOAD_ALGORITHM,
+    SecureAnchor, SecureAnchorStatus, StartupVerificationMode,
 };
 use colossus_memory::EventSourcedMemoryRepository;
 use colossus_ports::{EventJournal, ExternalWorkQueue, KeyProvider, ProjectionStore, StoreError};
@@ -70,6 +71,151 @@ fn journal_with_keys(path: &std::path::Path, keys: Arc<StaticKeyProvider>) -> Re
         Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
     )
     .expect("open journal")
+}
+
+fn plaintext_journal(path: &std::path::Path) -> RedbEventJournal {
+    RedbEventJournal::open(
+        path,
+        Arc::new(PlaintextKeyProvider),
+        Arc::new(DisabledCheckpointSigner),
+    )
+    .expect("open plaintext journal")
+}
+
+#[test]
+fn plaintext_journal_preserves_integrity_without_keys_or_checkpoints() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("plaintext.redb");
+    {
+        let journal = plaintext_journal(&path);
+        let stored = journal.append(event("stream-1", 0, 7)).expect("append");
+        assert_eq!(stored.payload.algorithm, PLAINTEXT_PAYLOAD_ALGORITHM);
+        assert_eq!(stored.payload.key_id, "none");
+        assert!(stored.payload.nonce.is_empty());
+        assert_eq!(
+            journal.decrypt_payload(&stored).expect("decode payload"),
+            json!({"value": 7})
+        );
+        assert!(journal.checkpoint().expect("disabled checkpoint").is_none());
+        let report = journal.verify().expect("full audit");
+        assert_eq!(report.event_count, 1);
+        assert!(report.checkpoint.is_none());
+    }
+
+    let reopened = plaintext_journal(&path);
+    let startup = reopened
+        .startup_verification_report()
+        .expect("startup report");
+    assert_eq!(startup.path, "local_integrity");
+    assert_eq!(startup.verified_event_count, 1);
+    assert_eq!(startup.anchor_format_version, None);
+}
+
+#[test]
+fn plaintext_explicit_audit_replays_and_detects_historical_tampering() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("plaintext.redb");
+    {
+        let journal = plaintext_journal(&path);
+        journal
+            .append_batch(vec![event("stream-1", 0, 1), event("stream-1", 1, 2)])
+            .expect("append plaintext history");
+    }
+
+    let database = Database::create(&path).expect("database");
+    let read = database.begin_read().expect("read");
+    let table = read.open_table(EVENTS).expect("events");
+    let bytes = table.get(1).expect("get").expect("event").value().to_vec();
+    drop(table);
+    drop(read);
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    value["event_type"] = json!("tampered.v1");
+    let bytes = serde_json::to_vec(&value).expect("encode");
+    let write = database.begin_write().expect("write");
+    {
+        let mut table = write.open_table(EVENTS).expect("events");
+        table.insert(1, bytes.as_slice()).expect("tamper event");
+    }
+    write.commit().expect("commit tamper");
+    drop(database);
+
+    let reopened = plaintext_journal(&path);
+    assert!(!reopened.is_recovery_mode());
+    assert!(matches!(
+        reopened.verify(),
+        Err(StoreError::Verification(_))
+    ));
+    assert!(reopened.is_recovery_mode());
+    drop(reopened);
+
+    let full = RedbEventJournal::open_with_startup_verification(
+        &path,
+        Arc::new(PlaintextKeyProvider),
+        Arc::new(DisabledCheckpointSigner),
+        StartupVerificationMode::Full,
+    )
+    .expect("open plaintext journal for full verification");
+    assert!(full.is_recovery_mode());
+}
+
+#[test]
+fn journal_protection_mode_cannot_change_in_place() {
+    let directory = tempdir().expect("tempdir");
+    let encrypted_path = directory.path().join("encrypted.redb");
+    journal(&encrypted_path)
+        .append(event("stream-1", 0, 1))
+        .expect("encrypted append");
+    let error = RedbEventJournal::open(
+        &encrypted_path,
+        Arc::new(PlaintextKeyProvider),
+        Arc::new(DisabledCheckpointSigner),
+    )
+    .err()
+    .expect("encrypted to plaintext must fail");
+    assert!(error.to_string().contains("in-place protection changes"));
+
+    let plaintext_path = directory.path().join("plaintext.redb");
+    plaintext_journal(&plaintext_path)
+        .append(event("stream-1", 0, 1))
+        .expect("plaintext append");
+    let error = RedbEventJournal::open(
+        &plaintext_path,
+        Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32])),
+        Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
+    )
+    .err()
+    .expect("plaintext to encrypted must fail");
+    assert!(error.to_string().contains("in-place protection changes"));
+}
+
+#[test]
+fn markerless_nonempty_journal_is_classified_as_encrypted() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("legacy.redb");
+    journal(&path)
+        .append(event("stream-1", 0, 1))
+        .expect("encrypted append");
+    let database = Database::create(&path).expect("database");
+    let write = database.begin_write().expect("write");
+    {
+        let mut metadata = write.open_table(METADATA).expect("metadata");
+        metadata
+            .remove(PAYLOAD_PROTECTION_KEY)
+            .expect("remove protection marker");
+    }
+    write.commit().expect("commit");
+    drop(database);
+
+    assert!(
+        RedbEventJournal::open(
+            &path,
+            Arc::new(PlaintextKeyProvider),
+            Arc::new(DisabledCheckpointSigner),
+        )
+        .is_err()
+    );
+    let reopened = journal(&path);
+    assert!(!reopened.is_recovery_mode());
 }
 
 struct FileAnchorKeyProvider {

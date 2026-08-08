@@ -51,8 +51,11 @@ pub(super) async fn dispatch_to_worker_if_active(
     match command {
         Command::Audit(command) => {
             match &command.command {
-                AuditAction::Verify | AuditAction::AnchorStatus => {
+                AuditAction::Verify => {
                     print_json(&client.call(WorkerOperation::AuditVerify).await?)?;
+                }
+                AuditAction::AnchorStatus => {
+                    print_json(&client.call(WorkerOperation::AuditAnchorStatus).await?)?;
                 }
                 AuditAction::Show { from, limit } => {
                     print_json(

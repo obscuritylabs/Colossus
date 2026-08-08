@@ -3,6 +3,7 @@ use super::*;
 /// Canonical redb journal adapter.
 pub struct RedbEventJournal {
     database: Database,
+    payload_protection: JournalPayloadProtection,
     keys: Arc<dyn KeyProvider>,
     signer: Arc<dyn CheckpointSigner>,
     writer: Mutex<()>,
@@ -48,8 +49,11 @@ impl RedbEventJournal {
             .open_table(PROJECTION_RECORDS)
             .map_err(adapter_error)?;
         write.commit().map_err(adapter_error)?;
+        let payload_protection = keys.payload_protection();
+        Self::initialize_payload_protection(&database, payload_protection)?;
         let journal = Self {
             database,
+            payload_protection,
             keys,
             signer,
             writer: Mutex::new(()),
@@ -83,8 +87,66 @@ impl RedbEventJournal {
         Ok(self.startup_report.lock().map_err(adapter_error)?.clone())
     }
 
+    fn initialize_payload_protection(
+        database: &Database,
+        configured: JournalPayloadProtection,
+    ) -> Result<(), StoreError> {
+        let read = database.begin_read().map_err(adapter_error)?;
+        let events = read.open_table(EVENTS).map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        let marker = metadata
+            .get(PAYLOAD_PROTECTION_KEY)
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice::<String>(value.value()).map_err(adapter_error))
+            .transpose()?;
+        let head_sequence = metadata
+            .get("last_sequence")
+            .map_err(adapter_error)?
+            .map_or(Ok(0_u64), |value| {
+                serde_json::from_slice(value.value()).map_err(adapter_error)
+            })?;
+        let nonempty = head_sequence > 0 || !events.is_empty().map_err(adapter_error)?;
+        let effective = match marker.as_deref() {
+            Some("encrypted") => JournalPayloadProtection::Encrypted,
+            Some("plaintext") => JournalPayloadProtection::Plaintext,
+            Some(_) => {
+                return Err(StoreError::Verification(
+                    "journal payload-protection marker is unsupported".into(),
+                ));
+            }
+            None if nonempty => JournalPayloadProtection::Encrypted,
+            None => configured,
+        };
+        drop(metadata);
+        drop(events);
+        drop(read);
+        if effective != configured {
+            return Err(StoreError::Verification(format!(
+                "journal payload protection is {}, but configuration requests {}; use a fresh storage path because in-place protection changes are unsupported",
+                effective.as_str(),
+                configured.as_str()
+            )));
+        }
+        if marker.is_none() {
+            let bytes = serde_json::to_vec(configured.as_str()).map_err(adapter_error)?;
+            let write = database.begin_write().map_err(adapter_error)?;
+            {
+                let mut metadata = write.open_table(METADATA).map_err(adapter_error)?;
+                metadata
+                    .insert(PAYLOAD_PROTECTION_KEY, bytes.as_slice())
+                    .map_err(adapter_error)?;
+            }
+            write.commit().map_err(adapter_error)?;
+        }
+        Ok(())
+    }
+
     fn verify_startup(&self, mode: StartupVerificationMode) -> Result<(), StoreError> {
-        let anchor = self.keys.load_anchor()?;
+        let anchor = if self.payload_protection == JournalPayloadProtection::Encrypted {
+            self.keys.load_anchor()?
+        } else {
+            None
+        };
         let (head_sequence, _) = self.head()?;
         if head_sequence == 0 {
             if anchor.as_ref().is_some_and(|anchor| anchor.sequence != 0) {
@@ -101,6 +163,14 @@ impl RedbEventJournal {
                 verified_event_count: 0,
                 anchor_format_version: anchor.map(|anchor| anchor.format_version),
             };
+            return Ok(());
+        }
+
+        if self.payload_protection == JournalPayloadProtection::Plaintext
+            && mode == StartupVerificationMode::Incremental
+        {
+            let report = self.verify_plaintext_incremental()?;
+            *self.startup_report.lock().map_err(adapter_error)? = report;
             return Ok(());
         }
 
@@ -127,7 +197,9 @@ impl RedbEventJournal {
 
         let report = self.verify_inner()?;
         self.ensure_stream_events_index()?;
-        if report.last_sequence > 0 {
+        if report.last_sequence > 0
+            && self.payload_protection == JournalPayloadProtection::Encrypted
+        {
             self.checkpoint()?;
         }
         *self.startup_report.lock().map_err(adapter_error)? = StartupVerificationReport {
@@ -140,10 +212,143 @@ impl RedbEventJournal {
             verified_from_sequence: Some(1),
             verified_through_sequence: report.last_sequence,
             verified_event_count: report.event_count,
-            anchor_format_version: (report.last_sequence > 0)
+            anchor_format_version: (report.last_sequence > 0
+                && self.payload_protection == JournalPayloadProtection::Encrypted)
                 .then_some(SECURE_ANCHOR_FORMAT_VERSION),
         };
         Ok(())
+    }
+
+    fn verify_plaintext_incremental(&self) -> Result<StartupVerificationReport, StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let events = read.open_table(EVENTS).map_err(adapter_error)?;
+        let stream_events = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
+        let stream_versions = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        let outbox = read.open_table(OUTBOX).map_err(adapter_error)?;
+        let projection_positions = read
+            .open_table(PROJECTION_POSITIONS)
+            .map_err(adapter_error)?;
+        let head_sequence = metadata
+            .get("last_sequence")
+            .map_err(adapter_error)?
+            .map_or(Ok(0_u64), |value| {
+                serde_json::from_slice(value.value()).map_err(adapter_error)
+            })?;
+        let head_hash = metadata
+            .get("last_hash")
+            .map_err(adapter_error)?
+            .map_or_else(
+                || Ok::<String, StoreError>(ZERO_HASH.into()),
+                |value| serde_json::from_slice(value.value()).map_err(adapter_error),
+            )?;
+        if metadata
+            .get("latest_checkpoint")
+            .map_err(adapter_error)?
+            .is_some()
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal contains a signed checkpoint".into(),
+            ));
+        }
+        if metadata
+            .get(STREAM_EVENTS_INDEX_KEY)
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()?
+            != Some(STREAM_EVENTS_INDEX_VERSION)
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal stream index is unavailable".into(),
+            ));
+        }
+        if events.len().map_err(adapter_error)? != head_sequence
+            || outbox.len().map_err(adapter_error)? != head_sequence
+            || stream_events.len().map_err(adapter_error)? != head_sequence
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal local indexes do not match its head".into(),
+            ));
+        }
+        if events.get(0).map_err(adapter_error)?.is_some()
+            || outbox.get(0).map_err(adapter_error)?.is_some()
+            || events
+                .range(head_sequence.saturating_add(1)..)
+                .map_err(adapter_error)?
+                .next()
+                .transpose()
+                .map_err(adapter_error)?
+                .is_some()
+            || outbox
+                .range(head_sequence.saturating_add(1)..)
+                .map_err(adapter_error)?
+                .next()
+                .transpose()
+                .map_err(adapter_error)?
+                .is_some()
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal contains records outside its declared sequence range".into(),
+            ));
+        }
+        let bytes = events
+            .get(head_sequence)
+            .map_err(adapter_error)?
+            .ok_or_else(|| StoreError::Verification("plaintext journal head is absent".into()))?;
+        let persisted: PersistedEventEnvelope =
+            serde_json::from_slice(bytes.value()).map_err(adapter_error)?;
+        let envelope: EventEnvelope =
+            serde_json::from_slice(bytes.value()).map_err(adapter_error)?;
+        if envelope.global_sequence != head_sequence || envelope.record_hash != head_hash {
+            return Err(StoreError::Verification(
+                "plaintext journal head metadata does not match its record".into(),
+            ));
+        }
+        self.verify_persisted_event(&envelope, &persisted)?;
+        if stream_events
+            .get(&(envelope.stream_id.as_str(), envelope.stream_version))
+            .map_err(adapter_error)?
+            .map(|value| value.value())
+            != Some(head_sequence)
+            || stream_versions
+                .get(envelope.stream_id.as_str())
+                .map_err(adapter_error)?
+                .map(|value| value.value())
+                != Some(envelope.stream_version)
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal head stream index is inconsistent".into(),
+            ));
+        }
+        let queued = outbox
+            .get(head_sequence)
+            .map_err(adapter_error)?
+            .ok_or_else(|| {
+                StoreError::Verification("plaintext journal head outbox is absent".into())
+            })?;
+        let queued: Value = serde_json::from_slice(queued.value()).map_err(adapter_error)?;
+        if queued.get("event_id").and_then(Value::as_str) != Some(&envelope.event_id) {
+            return Err(StoreError::Verification(
+                "plaintext journal head outbox targets a different event".into(),
+            ));
+        }
+        for entry in projection_positions.iter().map_err(adapter_error)? {
+            let (projection, position) = entry.map_err(adapter_error)?;
+            if position.value() > head_sequence {
+                return Err(StoreError::Verification(format!(
+                    "projection {} is ahead of plaintext journal head",
+                    projection.value()
+                )));
+            }
+        }
+        Ok(StartupVerificationReport {
+            configured_mode: StartupVerificationMode::Incremental,
+            path: "local_integrity".into(),
+            verified_from_sequence: Some(head_sequence),
+            verified_through_sequence: head_sequence,
+            verified_event_count: 1,
+            anchor_format_version: None,
+        })
     }
 
     fn verify_incremental(
@@ -586,6 +791,15 @@ impl RedbEventJournal {
         envelope: &EventEnvelope,
         plaintext: &[u8],
     ) -> Result<EncryptedPayload, StoreError> {
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            return Ok(EncryptedPayload {
+                key_id: "none".into(),
+                algorithm: PLAINTEXT_PAYLOAD_ALGORITHM.into(),
+                nonce: String::new(),
+                ciphertext: hex::encode(plaintext),
+                plaintext_hash: sha256_hex(plaintext),
+            });
+        }
         let (key_id, key) = self.keys.active_key()?;
         let mut nonce = [0_u8; 24];
         getrandom::fill(&mut nonce).map_err(adapter_error)?;
@@ -602,7 +816,7 @@ impl RedbEventJournal {
             .map_err(adapter_error)?;
         Ok(EncryptedPayload {
             key_id,
-            algorithm: "XChaCha20-Poly1305".into(),
+            algorithm: ENCRYPTED_PAYLOAD_ALGORITHM.into(),
             nonce: hex::encode(nonce),
             ciphertext: hex::encode(ciphertext),
             plaintext_hash: sha256_hex(plaintext),
@@ -735,7 +949,24 @@ impl RedbEventJournal {
         event: &EventEnvelope,
         persisted: &PersistedEventEnvelope,
     ) -> Result<Vec<u8>, StoreError> {
-        if event.payload.algorithm != "XChaCha20-Poly1305" {
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            if event.payload.algorithm != PLAINTEXT_PAYLOAD_ALGORITHM
+                || event.payload.key_id != "none"
+                || !event.payload.nonce.is_empty()
+            {
+                return Err(StoreError::Verification(format!(
+                    "event {} payload does not match plaintext journal protection",
+                    event.event_id
+                )));
+            }
+            return hex::decode(&event.payload.ciphertext).map_err(|_| {
+                StoreError::Verification(format!(
+                    "event {} plaintext payload encoding is invalid",
+                    event.event_id
+                ))
+            });
+        }
+        if event.payload.algorithm != ENCRYPTED_PAYLOAD_ALGORITHM {
             return Err(StoreError::Verification(format!(
                 "unsupported payload algorithm {}",
                 event.payload.algorithm
@@ -1032,6 +1263,11 @@ impl RedbEventJournal {
             .map_err(adapter_error)?
             .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
             .transpose()?;
+        if self.payload_protection == JournalPayloadProtection::Plaintext && checkpoint.is_some() {
+            return Err(StoreError::Verification(
+                "plaintext journal contains a signed checkpoint".into(),
+            ));
+        }
         if let Some(checkpoint) = &checkpoint {
             self.verify_checkpoint(checkpoint, &event_hashes)?;
         }
@@ -1070,6 +1306,9 @@ impl EventJournal for RedbEventJournal {
             let _guard = self.writer.lock().map_err(adapter_error)?;
             self.append_locked(events)?
         };
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            return Ok(persisted);
+        }
         let checkpoint_sequence = if persisted.is_empty() {
             0
         } else {
@@ -1298,6 +1537,9 @@ impl EventJournal for RedbEventJournal {
     }
 
     fn checkpoint(&self) -> Result<Option<SignedCheckpoint>, StoreError> {
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            return Ok(None);
+        }
         if self.is_recovery_mode() {
             return Err(StoreError::RecoveryMode);
         }

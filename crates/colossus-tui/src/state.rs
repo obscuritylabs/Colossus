@@ -158,6 +158,8 @@ pub struct TuiState {
     pub preferences: TerminalPreferences,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Effective non-durable security posture for persistent terminal chrome.
+    pub security_posture: SecurityPostureReport,
     /// Process-local terminal behavior; never loaded from or saved to preferences.
     pub mode: InteractiveMode,
     /// Process-local canonical selected plan; cleared on session switches and restart.
@@ -192,8 +194,36 @@ pub struct TuiState {
 impl TuiState {
     /// Build reducer state from one bounded host snapshot.
     pub fn from_snapshot(snapshot: InteractiveSnapshot) -> Self {
-        let (transcript, transcript_sources) =
+        let (mut transcript, mut transcript_sources) =
             transcript_from_messages(snapshot.transcript.messages, &snapshot.preferences);
+        if !snapshot.security_posture.is_hardened() {
+            let mut body = Vec::new();
+            for finding in &snapshot.security_posture.findings {
+                body.push(PresentationBlock::Markdown(format!(
+                    "**{}**\n\n{}",
+                    finding.summary, finding.remediation
+                )));
+            }
+            transcript.push(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document: PresentationDocument::from_block(PresentationBlock::Card {
+                    title: format!(
+                        "Security posture · {} warning{}",
+                        snapshot.security_posture.finding_count(),
+                        if snapshot.security_posture.finding_count() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    ),
+                    tone: PresentationTone::Warning,
+                    body,
+                }),
+                temporary: false,
+            });
+            transcript_sources.push(None);
+        }
         Self {
             session_id: snapshot.session_id,
             transcript,
@@ -202,6 +232,7 @@ impl TuiState {
             before_sequence: snapshot.transcript.before_sequence,
             preferences: snapshot.preferences,
             footer: snapshot.footer,
+            security_posture: snapshot.security_posture,
             mode: InteractiveMode::Execute,
             selected_plan: None,
             composer: Composer::default(),

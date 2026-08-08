@@ -1,8 +1,9 @@
 use super::*;
 use colossus_contracts::{
     CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SandboxBoundaryMode,
-    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
-    ToolResult, TranscriptDensity,
+    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
+    StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult,
+    TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -36,8 +37,43 @@ fn snapshot() -> InteractiveSnapshot {
             status: "ready".into(),
             approval_mode: "ask".into(),
         },
+        security_posture: Default::default(),
         pending_sandbox_boundary_acknowledgement: None,
     }
+}
+
+#[test]
+fn plaintext_posture_adds_a_non_durable_card_and_persistent_footer_badge() {
+    let mut source = snapshot();
+    source.security_posture = SecurityPostureReport {
+        findings: vec![SecurityPostureFinding {
+            code: "storage.plaintext".into(),
+            severity: SecurityPostureSeverity::Warning,
+            summary: "Journal payloads are plaintext.".into(),
+            remediation: "Use fresh protected storage.".into(),
+        }],
+    };
+    let state = TuiState::from_snapshot(source);
+    let card = state.transcript.last().expect("security card");
+    assert_eq!(card.sequence, None);
+    assert!(matches!(
+        card.document.blocks.first(),
+        Some(PresentationBlock::Card {
+            tone: PresentationTone::Warning,
+            ..
+        })
+    ));
+
+    let backend = TestBackend::new(80, 1);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render_footer(frame, &state, frame.area()))
+        .expect("draw footer");
+    let footer = (0..80)
+        .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(footer.contains("Security: 1"));
 }
 
 #[test]

@@ -12,9 +12,9 @@ use colossus_contracts::{
     DecisionPriority, DecisionStatus, EffectRequest, GoalRunOutcome, GoalStatus, IntegrationAuth,
     MemoryScope, MemoryStatus, PlanDraftTarget, PlanExecutionOutcome, PlanExecutionStrategy,
     PlanRecord, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, SessionSummary,
-    SubagentStatus, TaskStatus, ToolCall, UserPromptRequest, UserPromptResponse,
-    WorkflowScheduleMisfirePolicy,
+    ResearchSourceKind, RiskReviewFallbackNotice, RunEvent, RunEventEnvelope,
+    SecurityPostureReport, SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest,
+    UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{

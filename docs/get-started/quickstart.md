@@ -10,16 +10,13 @@ type: tutorial
 ## Goal
 
 Create a fresh configuration, run the deterministic `echo` provider, and verify the
-encrypted audit journal. No model credential or network connection is required.
+hash-chained audit journal. No storage key, model credential, or network connection is
+required.
 
 ## Prerequisites
 
 - The installed `colossus` executable. See [Install Colossus](install.md).
-- An empty directory where Colossus may create `.colossus/config.yaml` and encrypted
-  state.
-- A supported platform credential store. Headless environments can use environment key
-  references through the
-  [headless key recipe](../admin/configuration.md#headless-environment-backed-keys).
+- An empty directory where Colossus may create `.colossus/config.yaml` and local state.
 
 ## Steps
 
@@ -51,6 +48,12 @@ colossus -w . --config .colossus/config.yaml config effective
 the local deterministic `echo` provider, the `development` access profile, and the
 `workspace-development` sandbox preset. The selected workspace is canonicalized once;
 relative configuration and runtime paths resolve from it.
+
+The generated `storage.keys.kind: none` keeps setup dependency-free. Journal payloads
+are plaintext, while record hashes, the append-only chain, projections, and full audit
+verification remain active. Interactive commands show a security warning. To start a
+fresh protected journal instead, pass `--storage-keys platform` or
+`--storage-keys environment` during initialization.
 
 ### 3. Run the offline smoke
 
@@ -88,8 +91,8 @@ Open `result.json` and confirm that it contains `"profile": "echo"` and
 
 - **Configuration already exists:** choose another directory or inspect the existing
   file; initialization never overwrites it.
-- **Credential-store error:** use the environment-key recipe for a headless host rather
-  than storing raw keys in YAML.
+- **Protected-storage credential error:** create a fresh environment-key configuration
+  for a headless host rather than storing raw keys in YAML.
 - **Audit verification fails:** stop before running effects and follow
   [Troubleshooting](../admin/troubleshooting.md). Verification failure puts the runtime
   into read-only recovery mode.

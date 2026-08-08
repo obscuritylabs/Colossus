@@ -67,6 +67,7 @@ impl InteractiveHost for FixtureHost {
                 approval_mode: "ask".into(),
             },
             pending_sandbox_boundary_acknowledgement: None,
+            security_posture: Default::default(),
         })
     }
 

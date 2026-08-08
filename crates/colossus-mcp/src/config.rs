@@ -25,11 +25,13 @@ pub struct McpConfig {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpOAuthCredentialStoreKind {
-    /// Select platform storage for platform-key deployments and encrypted state otherwise.
+    /// Select plaintext state for keyless deployments and protected storage otherwise.
     #[default]
     Auto,
     /// Store OAuth credentials in the operating-system credential store.
     Platform,
+    /// Store OAuth credentials in an owner-private plaintext redb sidecar.
+    PlaintextState,
     /// Store OAuth credentials in a separately encrypted redb database.
     EncryptedState,
 }

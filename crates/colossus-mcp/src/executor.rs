@@ -142,6 +142,19 @@ impl McpExecutor {
         Ok(self)
     }
 
+    /// Persist OAuth records in a dedicated owner-private plaintext redb sidecar.
+    pub fn with_plaintext_oauth_storage(
+        mut self,
+        path: &Path,
+        repository_id: impl Into<String>,
+    ) -> Result<Self, McpError> {
+        self.oauth_store = Some(
+            OAuthStoreFactory::plaintext_state(path, repository_id.into())
+                .map_err(safe_oauth_error)?,
+        );
+        Ok(self)
+    }
+
     /// Return the exact configured loopback callback port.
     pub fn oauth_callback_port(&self, server: &str) -> Result<u16, McpError> {
         self.oauth_server(server)

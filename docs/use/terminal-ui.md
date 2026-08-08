@@ -183,9 +183,11 @@ and `/audit verify` to confirm the active session and journal.
   revision. Reload it with `/plan use PLAN_ID`, inspect it, and deliberately retry.
 - **An Approved plan will not refine:** Approved plans are immutable. Execute, discard,
   start a new plan, or return to Execute mode.
-- **A worker protocol mismatch appears:** protocol v7 is not compatible with an older
-  resident worker. Restart the worker and client with the same Colossus version, inspect
-  `/plans`, and do not assume an interrupted request was retried.
+- **A worker protocol mismatch appears:** protocol v8 is not compatible with an older
+  resident worker, including one that predates the `<storage.path>.worker-auth` secret
+  and is reported as listening without it. Restart the worker and client with the same
+  Colossus version, inspect `/plans`, and do not assume an interrupted request was
+  retried.
 - **Terminal state looks damaged after a crash:** reset the terminal, then use durable
   session and audit commands to inspect application state.
 

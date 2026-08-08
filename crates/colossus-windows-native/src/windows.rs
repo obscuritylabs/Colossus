@@ -15,7 +15,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{ERROR_CANCELLED, GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR},
     Security::{
-        ACCESS_ALLOWED_ACE, ACE_HEADER,
+        ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER,
         Authorization::{
             EXPLICIT_ACCESS_W, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
             SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
@@ -27,16 +27,17 @@ use windows_sys::Win32::{
             CREDUI_FLAGS_KEEP_USERNAME, CREDUI_INFOW, CredUIPromptForCredentialsW,
         },
         DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetTokenInformation,
-        InitializeSecurityDescriptor, IsValidSid, OWNER_SECURITY_INFORMATION, PSID,
+        InitializeSecurityDescriptor, IsValidSid, NO_INHERITANCE, OWNER_SECURITY_INFORMATION, PSID,
         SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl,
         SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
         WinBuiltinAdministratorsSid, WinLocalSystemSid,
     },
     Storage::FileSystem::{
-        CreateDirectoryW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_INFO,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
         FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
         MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL,
     },
@@ -67,79 +68,21 @@ pub(super) fn configure_suspended_process(command: &mut std::process::Command) {
 }
 
 pub(super) fn create_private_directory(path: &Path) -> Result<(), WindowsNativeError> {
-    if !path.is_absolute()
-        || path.parent().is_none()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::CurDir | std::path::Component::ParentDir
-            )
-        })
-    {
-        return Err(WindowsNativeError::InvalidInput);
-    }
+    let encoded = nul_terminated_path(path)?;
     let parent_path = path.parent().ok_or(WindowsNativeError::InvalidInput)?;
     let parent = open_bound(parent_path, BoundKind::Directory)?;
 
-    let current_user_storage = current_user_sid()?;
-    let local_system_storage = well_known_sid(WinLocalSystemSid)?;
-    let administrators_storage = well_known_sid(WinBuiltinAdministratorsSid)?;
-    let current_user = current_user_storage.as_ptr().cast_mut().cast();
-    let local_system = local_system_storage.as_ptr().cast_mut().cast();
-    let administrators = administrators_storage.as_ptr().cast_mut().cast();
-    let mut entries = [
-        private_access_entry(current_user),
-        private_access_entry(local_system),
-        private_access_entry(administrators),
-    ];
-    let mut acl = null_mut();
-    // SAFETY: all three trustee SIDs remain valid until the allocated ACL is built.
-    let result = unsafe {
-        SetEntriesInAclW(
-            u32::try_from(entries.len()).expect("private ACL entry count fits u32"),
-            entries.as_mut_ptr(),
-            null(),
-            &raw mut acl,
-        )
-    };
-    if result != NO_ERROR || acl.is_null() {
-        return Err(WindowsNativeError::Io {
-            operation: "build private directory DACL",
-            source: std::io::Error::from_raw_os_error(i32::try_from(result).unwrap_or(i32::MAX)),
-        });
-    }
-    let _acl = LocalAcl(acl);
-
-    let mut descriptor = SECURITY_DESCRIPTOR::default();
-    // SAFETY: descriptor is writable and all borrowed ACL/SID storage outlives creation.
-    if !unsafe {
-        InitializeSecurityDescriptor((&raw mut descriptor).cast(), SECURITY_DESCRIPTOR_REVISION)
-            != 0
-            && SetSecurityDescriptorOwner((&raw mut descriptor).cast(), current_user, 0) != 0
-            && SetSecurityDescriptorDacl((&raw mut descriptor).cast(), 1, acl, 0) != 0
-            && SetSecurityDescriptorControl(
-                (&raw mut descriptor).cast(),
-                SE_DACL_PROTECTED,
-                SE_DACL_PROTECTED,
-            ) != 0
-    } {
-        return Err(last_error("build private directory security descriptor"));
-    }
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
-            .expect("security attributes size fits u32"),
-        lpSecurityDescriptor: (&raw mut descriptor).cast(),
-        bInheritHandle: 0,
-    };
-    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
-    if encoded.contains(&0) {
-        return Err(WindowsNativeError::InvalidInput);
-    }
-    encoded.push(0);
-    // SAFETY: the path and security descriptor are NUL-terminated/live for the call.
-    if unsafe { CreateDirectoryW(encoded.as_ptr(), &raw const attributes) } == 0 {
-        return Err(last_error("create private directory"));
-    }
+    with_private_security_attributes(
+        PRIVATE_DIRECTORY_LABELS,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        |attributes| {
+            // SAFETY: the path and security descriptor are NUL-terminated/live for the call.
+            if unsafe { CreateDirectoryW(encoded.as_ptr(), attributes) } == 0 {
+                return Err(last_error("create private directory"));
+            }
+            Ok(())
+        },
+    )?;
 
     let created = match open_bound(path, BoundKind::Directory) {
         Ok(created) => created,
@@ -157,6 +100,143 @@ pub(super) fn create_private_directory(path: &Path) -> Result<(), WindowsNativeE
         return Err(error);
     }
     Ok(())
+}
+
+pub(super) fn create_private_file(path: &Path, contents: &[u8]) -> Result<(), WindowsNativeError> {
+    let encoded = nul_terminated_path(path)?;
+    let parent_path = path.parent().ok_or(WindowsNativeError::InvalidInput)?;
+    let parent = open_bound(parent_path, BoundKind::Directory)?;
+
+    let handle =
+        with_private_security_attributes(PRIVATE_FILE_LABELS, NO_INHERITANCE, |attributes| {
+            // SAFETY: the path and security descriptor are NUL-terminated/live for the call.
+            // CREATE_NEW plus FILE_FLAG_OPEN_REPARSE_POINT never follows an existing name.
+            let handle = unsafe {
+                CreateFileW(
+                    encoded.as_ptr(),
+                    FILE_GENERIC_WRITE,
+                    0,
+                    attributes,
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                    null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+                return Err(last_error("create private file"));
+            }
+            // SAFETY: CreateFileW returned one newly owned valid handle.
+            Ok(unsafe { OwnedHandle::from_raw_handle(handle.cast()) })
+        })?;
+
+    let mut file = File::from(handle);
+    if let Err(source) =
+        std::io::Write::write_all(&mut file, contents).and_then(|()| file.sync_all())
+    {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(WindowsNativeError::Io {
+            operation: "write private file",
+            source,
+        });
+    }
+    drop(file);
+
+    let created = match open_bound(path, BoundKind::File) {
+        Ok(created) => created,
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            return Err(error);
+        }
+    };
+    if let Err(error) = created
+        .validate_private_owner_dacl()
+        .and_then(|()| created.revalidate())
+        .and_then(|()| parent.revalidate())
+    {
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Stable operation labels reported when private security construction fails.
+#[derive(Clone, Copy)]
+struct PrivateSecurityLabels {
+    dacl: &'static str,
+    descriptor: &'static str,
+}
+
+const PRIVATE_DIRECTORY_LABELS: PrivateSecurityLabels = PrivateSecurityLabels {
+    dacl: "build private directory DACL",
+    descriptor: "build private directory security descriptor",
+};
+
+const PRIVATE_FILE_LABELS: PrivateSecurityLabels = PrivateSecurityLabels {
+    dacl: "build private file DACL",
+    descriptor: "build private file security descriptor",
+};
+
+/// Build one protected owner-only security descriptor and lend it to `action`.
+///
+/// The DACL grants the current user, `LocalSystem`, and `BUILTIN\Administrators`
+/// only, and `SE_DACL_PROTECTED` blocks every inherited parent entry.
+fn with_private_security_attributes<T>(
+    labels: PrivateSecurityLabels,
+    inheritance: ACE_FLAGS,
+    action: impl FnOnce(&SECURITY_ATTRIBUTES) -> Result<T, WindowsNativeError>,
+) -> Result<T, WindowsNativeError> {
+    let current_user_storage = current_user_sid()?;
+    let local_system_storage = well_known_sid(WinLocalSystemSid)?;
+    let administrators_storage = well_known_sid(WinBuiltinAdministratorsSid)?;
+    let current_user = current_user_storage.as_ptr().cast_mut().cast();
+    let local_system = local_system_storage.as_ptr().cast_mut().cast();
+    let administrators = administrators_storage.as_ptr().cast_mut().cast();
+    let mut entries = [
+        private_access_entry(current_user, inheritance),
+        private_access_entry(local_system, inheritance),
+        private_access_entry(administrators, inheritance),
+    ];
+    let mut acl = null_mut();
+    // SAFETY: all three trustee SIDs remain valid until the allocated ACL is built.
+    let result = unsafe {
+        SetEntriesInAclW(
+            u32::try_from(entries.len()).expect("private ACL entry count fits u32"),
+            entries.as_mut_ptr(),
+            null(),
+            &raw mut acl,
+        )
+    };
+    if result != NO_ERROR || acl.is_null() {
+        return Err(WindowsNativeError::Io {
+            operation: labels.dacl,
+            source: std::io::Error::from_raw_os_error(i32::try_from(result).unwrap_or(i32::MAX)),
+        });
+    }
+    let _acl = LocalAcl(acl);
+
+    let mut descriptor = SECURITY_DESCRIPTOR::default();
+    // SAFETY: descriptor is writable and all borrowed ACL/SID storage outlives the call.
+    if !unsafe {
+        InitializeSecurityDescriptor((&raw mut descriptor).cast(), SECURITY_DESCRIPTOR_REVISION)
+            != 0
+            && SetSecurityDescriptorOwner((&raw mut descriptor).cast(), current_user, 0) != 0
+            && SetSecurityDescriptorDacl((&raw mut descriptor).cast(), 1, acl, 0) != 0
+            && SetSecurityDescriptorControl(
+                (&raw mut descriptor).cast(),
+                SE_DACL_PROTECTED,
+                SE_DACL_PROTECTED,
+            ) != 0
+    } {
+        return Err(last_error(labels.descriptor));
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
+            .expect("security attributes size fits u32"),
+        lpSecurityDescriptor: (&raw mut descriptor).cast(),
+        bInheritHandle: 0,
+    };
+    action(&attributes)
 }
 
 pub(super) fn replace_private_file(
@@ -226,11 +306,11 @@ fn nul_terminated_path(path: &Path) -> Result<Vec<u16>, WindowsNativeError> {
     Ok(encoded)
 }
 
-fn private_access_entry(sid: PSID) -> EXPLICIT_ACCESS_W {
+fn private_access_entry(sid: PSID, inheritance: ACE_FLAGS) -> EXPLICIT_ACCESS_W {
     EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ALL_ACCESS,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
             pMultipleTrustee: null_mut(),
             MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,

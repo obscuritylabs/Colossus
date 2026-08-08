@@ -134,17 +134,6 @@ pub(super) fn recover_interrupted_subagents(
     u64::try_from(running.len()).map_err(|error| StoreError::Adapter(error.to_string()))
 }
 
-pub(super) fn sha2_compat(secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    // The journal signing secret is already random. This local KDF only domain-separates
-    // the permit MAC key without persisting another environment credential.
-    Sha256::new()
-        .chain_update(label)
-        .chain_update(secret)
-        .finalize()
-        .into()
-}
-
 pub(super) fn repository_identity(workspace: &Path) -> String {
     use sha2::{Digest, Sha256};
     format!(
