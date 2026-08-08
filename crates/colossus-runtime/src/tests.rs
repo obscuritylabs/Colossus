@@ -2,10 +2,11 @@ use super::extensions::extension_path;
 use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
-    InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor, MemoryEmbeddingConfig,
-    MemoryOperation, ModelCapabilities, ModelProfileConfig, PackProcessDeclaration,
-    PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
-    ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
+    InteractiveToolExecutor, JournalExternalWorkQueue, LOOPBACK_PROVIDER_TIMEOUT_MS,
+    MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation, ModelCapabilities,
+    ModelProfileConfig, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
+    PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
+    REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
     configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
@@ -1080,7 +1081,7 @@ fn public_wildcard_config_allows_public_origins_but_not_loopback_routes() {
             kind: ProviderKind::OpenAiCompatible,
             base_url: Some("https://api.example.com/v1".into()),
             credential_reference: None,
-            timeout_ms: 30_000,
+            timeout_ms: Some(30_000),
         },
     );
     configure_primary_model(&mut config, "public", "public", "test");
@@ -1615,7 +1616,7 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
             kind: ProviderKind::OpenAiCompatible,
             base_url: Some("http://127.0.0.1:12434/v1".into()),
             credential_reference: None,
-            timeout_ms: 5_000,
+            timeout_ms: Some(5_000),
         },
     );
     configure_primary_model(&mut config, "local", "local", "local-model");
@@ -1644,6 +1645,37 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
 }
 
 #[test]
+fn provider_timeout_defaults_are_host_aware_and_explicit_values_win() {
+    let remote = ProviderProfileConfig {
+        kind: ProviderKind::OpenAiCompatible,
+        base_url: Some("https://models.example.test/v1".into()),
+        credential_reference: None,
+        timeout_ms: None,
+    };
+    let loopback = ProviderProfileConfig {
+        base_url: Some("http://[::1]:11434/v1".into()),
+        ..remote.clone()
+    };
+    let explicit = ProviderProfileConfig {
+        timeout_ms: Some(42_000),
+        ..loopback.clone()
+    };
+
+    assert_eq!(remote.effective_timeout_ms(), REMOTE_PROVIDER_TIMEOUT_MS);
+    assert_eq!(
+        loopback.effective_timeout_ms(),
+        LOOPBACK_PROVIDER_TIMEOUT_MS
+    );
+    assert_eq!(explicit.effective_timeout_ms(), 42_000);
+    assert!(
+        !serde_json::to_string(&remote)
+            .expect("provider YAML")
+            .contains("timeoutMs"),
+        "automatic timeout should remain omitted from canonical YAML"
+    );
+}
+
+#[test]
 fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.providers.profiles.insert(
@@ -1652,7 +1684,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             kind: ProviderKind::OpenAiCompatible,
             base_url: Some("http://example.com/v1".into()),
             credential_reference: None,
-            timeout_ms: 5_000,
+            timeout_ms: Some(5_000),
         },
     );
     configure_primary_model(&mut config, "remote", "remote", "remote-model");
@@ -1671,7 +1703,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             kind: ProviderKind::OpenAiResponses,
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
-            timeout_ms: 5_000,
+            timeout_ms: Some(5_000),
         },
     );
     config.sandbox.network_destinations = vec!["https://api.openai.com".into()];
@@ -1687,7 +1719,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             kind: ProviderKind::OpenAiCodex,
             base_url: None,
             credential_reference: Some("codex:default".into()),
-            timeout_ms: 5_000,
+            timeout_ms: Some(5_000),
         },
     );
     config.sandbox.network_destinations = vec![
@@ -1711,7 +1743,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             kind: ProviderKind::OpenAiResponses,
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
-            timeout_ms: 5_000,
+            timeout_ms: Some(5_000),
         },
     );
     config.sandbox.network_destinations = vec!["https://api.openai.com".into()];

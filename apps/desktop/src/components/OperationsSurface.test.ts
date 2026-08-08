@@ -187,6 +187,7 @@ describe("OperationsSurface runtime targets", () => {
               baseUrl: "https://models.example.test/v1",
               hasCredential: true,
               timeoutMs: 45_000,
+              effectiveTimeoutMs: 45_000,
             },
           ],
           models: [

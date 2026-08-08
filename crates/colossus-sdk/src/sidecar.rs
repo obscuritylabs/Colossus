@@ -15,8 +15,9 @@ use zeroize::Zeroizing;
 
 pub use colossus_sidecar_protocol::{
     ManagedAccessProfile, ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig,
-    ManagedProviderKind, ManagedRuntimeConfig, WorkspaceIdentity,
-    validate_managed_model_identifier, validate_managed_provider_base_url,
+    ManagedProviderKind, ManagedRuntimeConfig, REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity,
+    default_managed_provider_timeout_ms, validate_managed_model_identifier,
+    validate_managed_provider_base_url,
 };
 
 /// Fixed secret-free runtime configuration filename written inside the instance directory.

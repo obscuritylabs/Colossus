@@ -94,7 +94,6 @@ block.
         codex-provider:
           kind: open_ai_codex
           credentialReference: codex:default
-          timeoutMs: 120000
     models:
       profiles:
         codex:
@@ -132,7 +131,6 @@ block.
           kind: open_ai_responses
           baseUrl: https://api.openai.com/v1
           credentialReference: env:COLOSSUS_PROVIDER_API_KEY
-          timeoutMs: 120000
     models:
       profiles:
         openai:
@@ -160,7 +158,6 @@ block.
           kind: open_ai_compatible
           baseUrl: https://openrouter.ai/api/v1
           credentialReference: env:COLOSSUS_PROVIDER_API_KEY
-          timeoutMs: 120000
     models:
       profiles:
         openrouter:

@@ -35,6 +35,10 @@ pub const MAX_HOST_CREDENTIALS: usize = 64;
 pub const MAX_MANAGED_PROVIDERS: usize = 16;
 /// Maximum explicit model profiles in one app-managed runtime.
 pub const MAX_MANAGED_MODELS: usize = 64;
+/// Default request timeout for remote model providers.
+pub const REMOTE_PROVIDER_TIMEOUT_MS: u64 = 300_000;
+/// Default request timeout for providers hosted on the local loopback interface.
+pub const LOOPBACK_PROVIDER_TIMEOUT_MS: u64 = 900_000;
 const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 256;
 const MAX_PRIVATE_PATH_BYTES: usize = 4_096;
@@ -484,6 +488,22 @@ pub fn validate_managed_provider_base_url(value: &str) -> Result<(), ProtocolErr
         return Err(ProtocolError::InvalidFrame);
     }
     Ok(())
+}
+
+/// Resolve the automatic provider timeout after validating the provider URL.
+pub fn default_managed_provider_timeout_ms(value: &str) -> Result<u64, ProtocolError> {
+    validate_managed_provider_base_url(value)?;
+    let url = Url::parse(value).map_err(|_| ProtocolError::InvalidFrame)?;
+    let loopback = match url.host().ok_or(ProtocolError::InvalidFrame)? {
+        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => address.is_loopback(),
+    };
+    Ok(if loopback {
+        LOOPBACK_PROVIDER_TIMEOUT_MS
+    } else {
+        REMOTE_PROVIDER_TIMEOUT_MS
+    })
 }
 
 /// Compact secret-free runtime settings generated into canonical sidecar YAML.
@@ -1430,6 +1450,31 @@ mod tests {
             validate_managed_provider_base_url(valid)
                 .unwrap_or_else(|error| panic!("rejected {valid}: {error}"));
         }
+    }
+
+    #[test]
+    fn automatic_provider_timeouts_distinguish_loopback_from_remote_hosts() {
+        for loopback in [
+            "http://localhost:8080/v1",
+            "http://127.1:8080/v1",
+            "http://[::1]:8080/v1",
+            "https://127.0.0.1/v1",
+        ] {
+            assert_eq!(
+                default_managed_provider_timeout_ms(loopback),
+                Ok(LOOPBACK_PROVIDER_TIMEOUT_MS),
+                "wrong loopback default for {loopback}"
+            );
+        }
+        assert_eq!(
+            default_managed_provider_timeout_ms("https://provider.example/v1"),
+            Ok(REMOTE_PROVIDER_TIMEOUT_MS)
+        );
+        assert_eq!(
+            default_managed_provider_timeout_ms("https://192.168.1.10/v1"),
+            Ok(REMOTE_PROVIDER_TIMEOUT_MS),
+            "private network hosts must retain the remote default"
+        );
     }
 
     #[test]

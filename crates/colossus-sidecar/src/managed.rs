@@ -408,7 +408,7 @@ fn managed_runtime_config(
                             .credential_id
                             .as_ref()
                             .map(|identifier| format!("host:{identifier}")),
-                        timeout_ms: provider.timeout_ms,
+                        timeout_ms: Some(provider.timeout_ms),
                     },
                 )
             })

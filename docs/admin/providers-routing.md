@@ -37,7 +37,6 @@ operator workflow for routing, deployment policy, and diagnostics.
           kind: open_ai_compatible
           baseUrl: https://models.example.com/v1
           credentialReference: env:COLOSSUS_MODEL_TOKEN
-          timeoutMs: 120000
     models:
       profiles:
         primary-model:
@@ -67,7 +66,6 @@ operator workflow for routing, deployment policy, and diagnostics.
         codex-provider:
           kind: open_ai_codex
           credentialReference: codex:default
-          timeoutMs: 120000
     sandbox:
       networkDestinations:
         - https://chatgpt.com
@@ -88,10 +86,25 @@ operator workflow for routing, deployment policy, and diagnostics.
     The roots are added to the public trust roots used by every Colossus-owned
     outbound client. Relative paths resolve from the selected workspace.
 
-    `providers.profiles.NAME.timeoutMs` is the transport ceiling for that connection's
-    catalog and generation requests. With the built-in policy it remains effective even
-    when `sandbox.timeoutMs` is lower; the sandbox timeout continues to bound ordinary
-    sandboxed effects. An external OPA decision may impose a stricter timeout obligation.
+    `providers.profiles.NAME.timeoutMs` is an optional transport ceiling for that
+    connection's catalog and generation requests. Omission selects 5 minutes for remote
+    hosts and 15 minutes for `localhost`, IPv4 loopback, or IPv6 loopback. A positive
+    explicit value always wins. With the built-in policy the resolved provider timeout
+    remains effective even when `sandbox.timeoutMs` is lower; the sandbox timeout
+    continues to bound ordinary sandboxed effects. An external OPA decision may impose a
+    stricter timeout obligation.
+
+    To override the automatic value for one connection:
+
+    ```yaml
+    providers:
+      profiles:
+        slow-remote:
+          kind: open_ai_compatible
+          baseUrl: https://models.example.com/v1
+          credentialReference: env:COLOSSUS_MODEL_TOKEN
+          timeoutMs: 1200000
+    ```
 
 2. Export the named API credential in the process environment, or run
    `colossus codex login` for a subscription profile. The YAML stores only a reference.

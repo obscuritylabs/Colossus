@@ -178,7 +178,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://models.internal.example/v1
       credentialReference: env:INTERNAL_MODEL_TOKEN
-      timeoutMs: 120000
 sandbox:
   networkDestinations:
     - https://models.internal.example
@@ -200,12 +199,10 @@ providers:
       kind: open_ai_responses
       baseUrl: https://api.openai.com/v1
       credentialReference: env:PUBLIC_PROVIDER_TOKEN
-      timeoutMs: 120000
     internal-provider:
       kind: open_ai_compatible
       baseUrl: https://models.internal.example/v1
       credentialReference: env:INTERNAL_PROVIDER_TOKEN
-      timeoutMs: 120000
 sandbox:
   networkDestinations:
     - https://api.openai.com

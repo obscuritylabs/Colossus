@@ -46,7 +46,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: http://127.0.0.1:11434/v1
       credentialReference: null
-      timeoutMs: 120000
 models:
   profiles:
     local:

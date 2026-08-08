@@ -96,7 +96,8 @@ export interface ManagedProviderConfiguration {
   providerKind: ProviderKind;
   baseUrl: string;
   hasCredential: boolean;
-  timeoutMs: number;
+  timeoutMs: number | null;
+  effectiveTimeoutMs: number;
 }
 
 export interface ManagedModelCapabilities {
@@ -187,7 +188,7 @@ export interface ManagedProviderConfigurationInput {
   profile: string;
   providerKind: ProviderKind;
   baseUrl: string;
-  timeoutMs: number;
+  timeoutMs: number | null;
   credentialAction: CredentialAction;
 }
 

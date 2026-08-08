@@ -57,7 +57,6 @@ providers:
       kind: echo
       baseUrl: null
       credentialReference: null
-      timeoutMs: 120000
 models:
   profiles:
     echo:

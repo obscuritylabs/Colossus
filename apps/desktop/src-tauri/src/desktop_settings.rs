@@ -1,5 +1,6 @@
 use colossus_sdk::{
-    WorkspaceIdentity, validate_managed_model_identifier, validate_managed_provider_base_url,
+    REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity, default_managed_provider_timeout_ms,
+    validate_managed_model_identifier, validate_managed_provider_base_url,
 };
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,7 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 2;
+const SETTINGS_SCHEMA_VERSION: u16 = 3;
 const SETTINGS_FILE: &str = "desktop-settings.json";
 const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
@@ -99,7 +100,17 @@ pub(crate) struct ProviderSetting {
     pub(crate) kind: ProviderKindSetting,
     pub(crate) base_url: String,
     pub(crate) credential_id: Option<String>,
-    pub(crate) timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) timeout_ms: Option<u64>,
+}
+
+impl ProviderSetting {
+    pub(crate) fn effective_timeout_ms(&self) -> u64 {
+        self.timeout_ms.unwrap_or_else(|| {
+            default_managed_provider_timeout_ms(&self.base_url)
+                .unwrap_or(REMOTE_PROVIDER_TIMEOUT_MS)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -338,6 +349,8 @@ impl SettingsStore {
             let legacy: LegacyDesktopSettingsV1 =
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?;
             (migrate_v1_settings(legacy)?, true)
+        } else if schema_version == 2 {
+            (migrate_v2_settings(&bytes)?, true)
         } else {
             (
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
@@ -655,6 +668,24 @@ fn migrate_v1_settings(
     })
 }
 
+fn migrate_v2_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    let object = value.as_object_mut().ok_or_else(storage_error)?;
+    if object
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(2)
+    {
+        return Err(storage_error());
+    }
+    object.insert(
+        "schemaVersion".into(),
+        serde_json::Value::from(SETTINGS_SCHEMA_VERSION),
+    );
+    serde_json::from_value(value).map_err(|_| storage_error())
+}
+
 fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
     if settings.schema_version != SETTINGS_SCHEMA_VERSION
         || settings.local_terminal_consent_version > LOCAL_TERMINAL_CONSENT_VERSION
@@ -750,7 +781,7 @@ fn validate_managed_configuration(
     for provider in &settings.providers {
         if !valid_profile_name(&provider.profile)
             || !provider_profiles.insert(provider.profile.as_str())
-            || provider.timeout_ms == 0
+            || provider.timeout_ms == Some(0)
             || validate_managed_provider_base_url(&provider.base_url).is_err()
             || provider
                 .credential_id
@@ -1293,7 +1324,7 @@ mod tests {
                 kind,
                 base_url: base_url.into(),
                 credential_id,
-                timeout_ms: 120_000,
+                timeout_ms: Some(120_000),
             }],
             models: vec![ModelSetting {
                 profile: "primary".into(),
@@ -1495,7 +1526,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
 
         let migrated = store.load().expect("migrate settings");
-        assert_eq!(migrated.schema_version, 2);
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
         assert!(migrated.providers.is_empty());
         assert!(migrated.models.is_empty());
         assert!(migrated.model_roles.is_empty());
@@ -1504,6 +1535,47 @@ mod tests {
         assert!(migrated.terminal_enabled);
         assert!(migrated.selected_target_id.is_none());
         assert!(migrated.legacy_connection_migrated);
+    }
+
+    #[test]
+    fn v2_provider_timeout_is_preserved_as_an_explicit_override() {
+        let (_root_guard, canonical_root, store) = test_store();
+        let settings = configured_settings(
+            ProviderKindSetting::OpenAiCompatible,
+            OPENROUTER_BASE_URL,
+            None,
+        );
+        let mut encoded = serde_json::to_value(settings).expect("settings");
+        encoded["schemaVersion"] = serde_json::Value::from(2);
+        let path = canonical_root.join(SETTINGS_FILE);
+        fs::write(&path, serde_json::to_vec(&encoded).expect("v2 settings")).expect("settings");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
+
+        let migrated = store.load().expect("migrate v2 settings");
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated.providers[0].timeout_ms, Some(120_000));
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("rewritten settings"))
+                .expect("rewritten JSON");
+        assert_eq!(
+            rewritten["providers"][0]["timeoutMs"],
+            serde_json::Value::from(120_000)
+        );
+    }
+
+    #[test]
+    fn automatic_desktop_timeout_uses_the_resolved_host_default() {
+        let mut settings = configured_settings(
+            ProviderKindSetting::OpenAiCompatible,
+            OPENROUTER_BASE_URL,
+            None,
+        );
+        settings.providers[0].timeout_ms = None;
+        assert_eq!(settings.providers[0].effective_timeout_ms(), 300_000);
+
+        settings.providers[0].base_url = "http://127.0.0.1:11434/v1".into();
+        assert_eq!(settings.providers[0].effective_timeout_ms(), 900_000);
     }
 
     #[cfg(any(target_os = "macos", windows))]
