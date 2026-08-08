@@ -81,6 +81,7 @@ const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
 mod app;
 pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
+mod completion;
 mod contract;
 mod plan_execution;
 mod render;
@@ -103,6 +104,7 @@ pub use contract::{
 };
 pub use state::TuiState;
 
+use completion::*;
 use plan_execution::*;
 use session_browser::*;
 use theme_picker::*;
