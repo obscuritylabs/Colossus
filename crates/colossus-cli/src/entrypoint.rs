@@ -12,6 +12,15 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if matches!(
+        cli.command,
+        Command::Update(UpdateCommand {
+            command: UpdateAction::Check
+        })
+    ) {
+        run_update_check().await?;
+        return Ok(());
+    }
     if (cli.worker_required || cli.desktop_worker_auth)
         && !matches!(cli.command, Command::Tui { .. })
     {
@@ -263,6 +272,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             .map_err(runtime_open_error)?,
     );
     match cli.command {
+        Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
         }) => print_json(&runtime.effective_access())?,
@@ -1235,6 +1245,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     } else {
                         ScreenMode::Inline
                     },
+                    background_notice: Some(default_update_notice_provider()),
                 },
             )
             .await?;

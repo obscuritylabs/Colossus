@@ -380,6 +380,7 @@ fn fixture_process() {
             TuiOptions {
                 bootstrap: BootstrapRequest::default(),
                 screen_mode,
+                background_notice: None,
             },
         ))
         .expect("fixture TUI");

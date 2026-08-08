@@ -1,6 +1,6 @@
 ---
 title: Install Colossus
-description: Install and verify the native Colossus release archive without a runtime package manager.
+description: Install and verify the native Colossus CLI from public GitHub Releases.
 audience: user
 type: how-to
 ---
@@ -8,57 +8,170 @@ type: how-to
 # Install Colossus
 
 For the macOS folder-first application, use [Colossus Desktop](desktop.md). It ships the
-CLI and managed runtime inside the signed app and does not require this separate native
-installation. Continue here for CLI, TUI, installed-daemon, and server deployments.
+CLI and managed runtime inside the signed app. Continue here for standalone CLI, TUI,
+installed-daemon, and server deployments.
 
 ## Goal
 
-Install the native `colossus` executable into your user-local binary directory and
-verify that your shell can find it.
+Install the latest stable native `colossus` executable without Rust, Git, Homebrew,
+Nix, administrator access, or a language runtime.
 
 ## Prerequisites
 
-- Access to the official
-  [Colossus Releases](https://github.com/obscuritylabs/Colossus/releases) page.
-- A terminal with permission to write to your chosen installation prefix.
+- macOS, Linux, or Windows on a [supported architecture](#supported-targets).
+- `curl` and `tar` on macOS or Linux, or Windows PowerShell on Windows.
+- Permission to write to the chosen installation prefix.
+- Anonymous HTTPS access to the public
+  [Colossus Releases](https://github.com/obscuritylabs/Colossus/releases) origin.
 
-The archive installer does not require a language runtime or make a network request.
+Public, immutable GitHub Release assets are the authoritative direct-install origin.
+The bootstrap refuses draft releases, channel/version disagreements, missing target
+assets, unexpected redirect hosts, oversized responses, unsafe archive layouts, and
+checksum mismatches.
 
 ## Steps
 
-### 1. Choose and download the release asset
+### 1. Install the latest stable release
 
-Open the current release or Developer Preview and download both the archive and its
-adjacent `.sha256` sidecar. Asset names follow `colossus-VERSION-TARGET.EXT`:
+=== "macOS and Linux"
 
-| Host | Target | Extension |
+    ```bash
+    curl -fsSL https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.sh | sh
+    ```
+
+=== "Windows PowerShell"
+
+    ```powershell
+    irm https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.ps1 | iex
+    ```
+
+The installer defaults to `$HOME/.local`. It never uses `sudo` and never changes a
+shell or PowerShell profile. If the prefix's `bin` directory is absent from `PATH`, the
+installer prints the exact process-local command to use.
+
+### 2. Review the bootstrap before running it
+
+Use the two-step form when your policy does not permit piping a network response into a
+shell.
+
+=== "macOS and Linux"
+
+    ```bash
+    curl -fSLo colossus-install.sh \
+      https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.sh
+    less colossus-install.sh
+    sh colossus-install.sh --dry-run
+    sh colossus-install.sh --yes
+    ```
+
+=== "Windows PowerShell"
+
+    ```powershell
+    Invoke-WebRequest `
+      https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.ps1 `
+      -OutFile colossus-install.ps1
+    Get-Content .\colossus-install.ps1
+    .\colossus-install.ps1 -DryRun
+    .\colossus-install.ps1 -Yes
+    ```
+
+The versioned source for each published bootstrap is also retained in the corresponding
+Git tag under `release/bootstrap/`. Release assets include adjacent SHA-256 sidecars for
+offline comparison of the bootstrap bytes.
+
+### 3. Select a version, channel, or prefix
+
+| Behavior | macOS and Linux | Windows PowerShell |
 | --- | --- | --- |
-| macOS, Apple silicon | `aarch64-apple-darwin` | `tar.gz` |
-| macOS, Intel | `x86_64-apple-darwin` | `tar.gz` |
-| Linux, ARM64 | `aarch64-unknown-linux-musl` | `tar.gz` |
-| Linux, x86-64 | `x86_64-unknown-linux-musl` | `tar.gz` |
-| Windows, ARM64 | `aarch64-pc-windows-msvc` | `zip` |
-| Windows, x86-64 | `x86_64-pc-windows-msvc` | `zip` |
+| Exact stable version | `--version vX.Y.Z` | `-Version vX.Y.Z` |
+| Latest preview | `--channel preview` | `-Channel preview` |
+| Exact preview | `--channel preview --version vX.Y.Z-preview.N` | `-Channel preview -Version vX.Y.Z-preview.N` |
+| Custom absolute prefix | `--prefix PATH` | `-Prefix PATH` |
+| Resolve without installing | `--dry-run` | `-DryRun` |
+| Explicitly forbid profile changes | `--no-modify-path` | `-NoModifyPath` |
+| Intentional noninteractive use | `--yes` | `-Yes` |
 
-For Apple silicon, substitute the release's value for `VERSION` in
-`colossus-VERSION-aarch64-apple-darwin.tar.gz` and its `.sha256` sidecar. Keep both
-files in the same directory.
+Stable is always the default channel. The current scripts do not prompt or modify
+profiles, so `--yes` marks intentional unattended use and `--no-modify-path` preserves
+that contract explicitly.
 
-### 2. Verify the download
+### Supported targets
 
-Set `VERSION` and `TARGET` in the examples to the names on the release. The check must
-report success before extraction:
+| Host | Release target | Archive |
+| --- | --- | --- |
+| macOS, Apple silicon | `aarch64-apple-darwin` | `.tar.gz` |
+| macOS, Intel | `x86_64-apple-darwin` | `.tar.gz` |
+| Linux, ARM64 | `aarch64-unknown-linux-musl` | `.tar.gz` |
+| Linux, x86-64 | `x86_64-unknown-linux-musl` | `.tar.gz` |
+| Windows, ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
+| Windows, x86-64 | `x86_64-pc-windows-msvc` | `.zip` |
+
+The host detector maps only these exact operating-system and architecture pairs. An
+unsupported host fails before any archive download.
+
+### Installation receipt
+
+A successful direct installation writes a bounded, credential-free ownership receipt:
+
+- Unix: `$XDG_DATA_HOME/colossus/install.json`, falling back to
+  `$HOME/.local/share/colossus/install.json`.
+- Windows: `%LOCALAPPDATA%\Colossus\install.json`.
+
+The receipt records only its schema version, release channel and version, target,
+prefix, binary path, fixed distribution origin, and `direct` installer kind. The
+installer rejects linked or unsafe destination directories and commits the binary and
+receipt with same-directory temporary files. If receipt commit fails, it restores the
+previous executable.
+
+### Check for a newer stable release
+
+Run update discovery independently of any workspace or configuration:
+
+```bash
+colossus update check
+```
+
+On a terminal, the command shows the running version and latest validated stable
+version. When redirected, or with `--output json`, it emits the versioned structured
+report. Discovery is read-only in this release: it does not replace the executable.
+
+The check contacts only the fixed public GitHub latest-stable metadata endpoint. It
+rejects redirects, proxies, preview releases, malformed semantic versions, unexpected
+release pages, and releases missing the exact target archive or checksum. Successful
+metadata and conditional request state are cached for 24 hours. Offline, timed-out,
+rate-limited, and malformed responses return a successful `unavailable` report instead
+of interrupting Colossus; failed checks are also throttled for 24 hours.
+
+The interactive TUI performs the same check once in the background after startup. It
+shows a version-only notice when a newer stable release is available. No notice is
+shown when discovery is offline or otherwise unavailable, and startup never waits for
+the request.
+
+Update cache locations are:
+
+- Unix: `$XDG_CACHE_HOME/colossus/`, falling back to
+  `$HOME/.cache/colossus/`.
+- Windows: `%LOCALAPPDATA%\Colossus\`.
+
+### Manual archive installation
+
+Every release retains the offline archive flow. Download the exact archive and its
+adjacent `.sha256` file from the release page, then verify before extraction:
 
 === "macOS"
 
     ```bash
     shasum -a 256 -c colossus-VERSION-TARGET.tar.gz.sha256
+    tar -xzf colossus-VERSION-TARGET.tar.gz
+    ./colossus-VERSION-TARGET/install.sh
     ```
 
 === "Linux"
 
     ```bash
     sha256sum --check colossus-VERSION-TARGET.tar.gz.sha256
+    tar -xzf colossus-VERSION-TARGET.tar.gz
+    ./colossus-VERSION-TARGET/install.sh
     ```
 
 === "Windows PowerShell"
@@ -68,35 +181,12 @@ report success before extraction:
     $expected = (Get-Content "$archive.sha256").Split()[0].ToLowerInvariant()
     $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "Colossus checksum mismatch" }
-    ```
-
-A checksum detects a damaged or substituted download. When publisher authenticity is
-required, verify a signed offline bundle as described in
-[Offline operation](../admin/offline-airgap.md).
-
-### 3. Run the included installer
-
-=== "macOS and Linux"
-
-    ```bash
-    tar -xzf colossus-VERSION-TARGET.tar.gz
-    ./colossus-VERSION-TARGET/install.sh
-    export PATH="$HOME/.local/bin:$PATH"
-    ```
-
-=== "Windows PowerShell"
-
-    ```powershell
-    Expand-Archive .\colossus-VERSION-TARGET.zip
+    Expand-Archive $archive
     .\colossus-VERSION-TARGET\install.ps1
-    $env:PATH = "$HOME\.local\bin;$env:PATH"
     ```
 
-Use `--prefix PATH` on macOS or Linux, or `-Prefix PATH` on Windows, to choose another
-installation root.
-
-For `sandbox.profile: workspace-development` on Ubuntu 24.04 or later, first install the
-Linux binary at a root-owned, non-replaceable path and then load the archive's narrowly
+For `sandbox.profile: workspace-development` on Ubuntu 24.04 or later, install the
+Linux binary at a root-owned, non-replaceable path and load the archive's narrowly
 attached AppArmor profile:
 
 ```bash
@@ -104,44 +194,64 @@ sudo ./install.sh --prefix /usr/local
 sudo ./install-apparmor.sh /usr/local/bin/colossus
 ```
 
-This is not required for the offline quickstart or on hosts where `sandbox doctor`
-already reports protected-path exclusions as supported. Do not disable Ubuntu's
-host-wide unprivileged-user-namespace restriction; use the exact-path profile or the OCI
-backend.
+This is not required where `sandbox doctor` already reports protected-path exclusions
+as supported. Do not disable Ubuntu's host-wide unprivileged-user-namespace
+restriction; use the exact-path profile or the OCI backend.
 
-### 4. Confirm the executable
+## Expected result
+
+The selected release is installed at the requested prefix, its direct ownership is
+recorded in the platform data directory, and any required `PATH` change is printed
+without modifying a profile.
+
+## Verification
+
+Open a new terminal after applying the printed `PATH` guidance and run:
+
+```bash
+colossus --version
+```
+
+The command prints the exact Colossus release identifier and exits successfully.
+
+## Uninstall a direct installation
+
+Inspect the receipt before removing anything. Confirm that `installerKind` is `direct`
+and that `binaryPath` is the executable you intend to remove. Delete that one binary
+and the receipt; remove the parent directories only when they are empty.
 
 === "macOS and Linux"
 
     ```bash
-    colossus --version
+    receipt="${XDG_DATA_HOME:-$HOME/.local/share}/colossus/install.json"
+    less "$receipt"
+    # After checking binaryPath, remove that exact file and then:
+    rm -- "$receipt"
     ```
 
 === "Windows PowerShell"
 
     ```powershell
-    colossus.exe --version
+    $receipt = Join-Path $env:LOCALAPPDATA "Colossus\install.json"
+    Get-Content $receipt | ConvertFrom-Json | Format-List
+    # After checking binaryPath, remove that exact file and then:
+    Remove-Item -LiteralPath $receipt
     ```
 
-## Expected result
-
-The command prints the Colossus release identifier and exits successfully.
-
-## Verification
-
-Open a new terminal and run `colossus --version` again. If it succeeds without an
-absolute path, the installation directory is present in your persistent `PATH`.
+Homebrew, Nix, source builds, Desktop, and unknown installations are not direct
+installer ownership and must be removed through their owning installation method.
 
 ## Failure path
 
-- **Command not found:** add the installer prefix's `bin` directory to your shell profile,
-  then open a new terminal.
-- **Checksum mismatch:** do not install the archive. Download it again from the official
-  release and recheck.
-- **Permission denied:** install to a user-owned prefix rather than elevating the
-  installer.
-- **Platform blocks execution:** confirm that the archive matches your operating system
-  and architecture, then follow your organization's software verification process.
+- **Offline or rate limited:** retry later or use a previously downloaded archive and
+  checksum.
+- **Checksum or archive rejection:** do not bypass verification. Download the release
+  again and report a reproducible mismatch.
+- **Unsafe prefix:** choose an absolute, current-user-owned prefix without linked,
+  group-writable, or world-writable installation directories.
+- **Command not found:** apply the printed `PATH` command, then open a new terminal.
+- **Platform blocked execution:** confirm that the detected target matches the host and
+  follow your organization's software-verification process.
 
 ## Next step
 

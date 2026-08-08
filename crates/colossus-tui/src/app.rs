@@ -8,17 +8,27 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(TuiError::NotInteractive);
     }
-    let snapshot = host
-        .bootstrap(options.bootstrap)
-        .await
-        .map_err(TuiError::Host)?;
+    let TuiOptions {
+        bootstrap,
+        screen_mode,
+        background_notice,
+    } = options;
+    let snapshot = host.bootstrap(bootstrap).await.map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
-    if options.screen_mode == ScreenMode::Inline {
+    if screen_mode == ScreenMode::Inline {
         preload_native_history(&mut state, Arc::clone(&host)).await;
     }
     let (event_tx, mut event_rx) = mpsc::channel::<HostEvent>(256);
+    if let Some(provider) = background_notice {
+        let notices = event_tx.clone();
+        tokio::spawn(async move {
+            if let Some(document) = provider.notice().await {
+                let _ = notices.try_send(HostEvent::Notice(document));
+            }
+        });
+    }
     start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
-    let mut terminal = OwnedTerminal::new(options.screen_mode)?;
+    let mut terminal = OwnedTerminal::new(screen_mode)?;
 
     loop {
         terminal.draw(&mut state)?;
@@ -30,7 +40,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             &mut state,
             Arc::clone(&host),
             event_tx.clone(),
-            options.screen_mode,
+            screen_mode,
         );
         if !state.is_busy() && state.overlay.is_none() {
             if let Some(command) = state.pending_plan_command.take() {
@@ -54,7 +64,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                         key,
                         Arc::clone(&host),
                         event_tx.clone(),
-                        options.screen_mode,
+                        screen_mode,
                     );
                 }
                 Event::Mouse(mouse) => {

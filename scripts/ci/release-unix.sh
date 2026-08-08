@@ -11,6 +11,10 @@ target=$1
 binary="$GITHUB_WORKSPACE/target/$target/release/colossus"
 version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
 package="colossus-$version-$target"
+case "$version" in
+    *-preview.*) channel=preview ;;
+    *) channel=stable ;;
+esac
 
 smoke="$RUNNER_TEMP/colossus-release-smoke-$target"
 rm -rf "$smoke"
@@ -31,6 +35,15 @@ rm -rf "$stage"
 mkdir -p "$stage" dist
 install -m 0755 "$binary" "$stage/colossus"
 install -m 0755 release/install.sh "$stage/install.sh"
+cat > "$stage/install-metadata" <<EOF
+schema_version=1
+version=$version
+target=$target
+channel=$channel
+distribution_origin=https://github.com/obscuritylabs/Colossus/releases
+installer_kind=direct
+EOF
+chmod 0644 "$stage/install-metadata"
 case "$target" in
     *-linux-*)
         install -m 0755 release/install-apparmor.sh "$stage/install-apparmor.sh"
@@ -51,7 +64,9 @@ installed_smoke="$RUNNER_TEMP/colossus-install-smoke-$target"
 rm -rf "$extract" "$prefix" "$installed_smoke"
 mkdir -p "$extract" "$installed_smoke/workflows"
 tar -xzf "dist/$package.tar.gz" -C "$extract"
-"$extract/$package/install.sh" --prefix "$prefix"
+XDG_DATA_HOME="$installed_smoke/data" \
+    "$extract/$package/install.sh" --prefix "$prefix"
+test -f "$installed_smoke/data/colossus/install.json"
 cp release/smoke-config.yaml "$installed_smoke/config.yaml"
 (
     cd "$installed_smoke"

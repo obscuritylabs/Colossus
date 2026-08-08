@@ -611,6 +611,13 @@ pub enum HostEvent {
     SandboxBoundaryAcknowledgement(Result<Option<SandboxBoundaryMode>, String>),
 }
 
+/// Optional one-shot source of a policy-released startup notice.
+#[async_trait]
+pub trait BackgroundNoticeProvider: Send + Sync {
+    /// Resolve one informational notice without delaying interactive startup.
+    async fn notice(&self) -> Option<PresentationDocument>;
+}
+
 /// Terminal result of one serialized background operation.
 pub enum OperationResult {
     /// Application command completed.
@@ -689,12 +696,25 @@ pub enum ScreenMode {
 }
 
 /// User-visible TUI startup options.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default)]
 pub struct TuiOptions {
     /// Durable session selection.
     pub bootstrap: BootstrapRequest,
     /// Explicit screen mode.
     pub screen_mode: ScreenMode,
+    /// Optional one-shot notice resolved after terminal startup.
+    pub background_notice: Option<Arc<dyn BackgroundNoticeProvider>>,
+}
+
+impl std::fmt::Debug for TuiOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TuiOptions")
+            .field("bootstrap", &self.bootstrap)
+            .field("screen_mode", &self.screen_mode)
+            .field("background_notice", &self.background_notice.is_some())
+            .finish()
+    }
 }
 
 /// Semantic transcript provenance used for layout and color selection.
