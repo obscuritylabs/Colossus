@@ -21,7 +21,7 @@ fn workflows_are_split_and_the_catch_all_is_removed() {
 }
 
 #[test]
-fn actionlint_recognizes_the_provisioned_larger_runner() {
+fn actionlint_recognizes_the_provisioned_runners() {
     let path = repository_root().join(".github/actionlint.yaml");
     let source = fs::read_to_string(&path).expect("read actionlint configuration");
     let config: serde_json::Value =
@@ -41,9 +41,15 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
     );
     assert_eq!(
         labels,
-        ["ubuntu-latest-m".to_owned(), "windows-latest-l".to_owned(),]
-            .into_iter()
-            .collect()
+        [
+            "blacksmith-4vcpu-ubuntu-2404".to_owned(),
+            "blacksmith-6vcpu-macos-15".to_owned(),
+            "blacksmith-8vcpu-windows-2025".to_owned(),
+            "ubuntu-latest-m".to_owned(),
+            "windows-latest-l".to_owned(),
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -83,7 +89,7 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
@@ -189,15 +195,15 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let jobs = jobs(&workflow);
     assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("blacksmith-6vcpu-macos-15")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
-        Some("windows-latest-l")
+        Some("blacksmith-8vcpu-windows-2025")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
@@ -281,7 +287,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     assert_eq!(
         field(job(jobs, "live-security"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
@@ -309,24 +315,33 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("blacksmith-4vcpu-ubuntu-2404")
     );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     let sdk = job(release_jobs, "sdk_release");
-    assert_eq!(field(sdk, "runs-on").as_str(), Some("ubuntu-latest-m"));
+    assert_eq!(
+        field(sdk, "runs-on").as_str(),
+        Some("blacksmith-4vcpu-ubuntu-2404")
+    );
     assert_eq!(field(sdk, "needs").as_str(), Some("validate"));
     assert_eq!(
         field(sdk, "if").as_str(),
         Some("needs.validate.outputs.target_channel == 'stable'")
     );
-    assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        field(desktop_build, "runs-on").as_str(),
+        Some("blacksmith-6vcpu-macos-15")
+    );
     assert_eq!(field(desktop_build, "needs").as_str(), Some("validate"));
     assert_eq!(
         field(desktop_build, "if").as_str(),
         Some("needs.validate.outputs.target_channel != 'stable'")
     );
-    assert_eq!(field(desktop, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        field(desktop, "runs-on").as_str(),
+        Some("blacksmith-6vcpu-macos-15")
+    );
     assert_eq!(
         field(desktop, "if").as_str(),
         Some("needs.validate.outputs.target_channel != 'stable'")
@@ -401,7 +416,7 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
         "Upload non-runnable ADHOC validation archive and checksum",
         "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
-        "runs-on: windows-latest-l",
+        "runs-on: blacksmith-8vcpu-windows-2025",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_developer_preview\"",
         "smartScreenWarningExpected = $true",
@@ -497,7 +512,7 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         "sdk_base_tag: ${{ steps.release.outputs.sdk_base_tag }}",
         "source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}",
         "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
-        "runs-on: ubuntu-latest-m",
+        "runs-on: blacksmith-4vcpu-ubuntu-2404",
         "timeout-minutes: 45",
         "npm install --global npm@11.5.1",
         "--output dist/sdk-rebuilt",
