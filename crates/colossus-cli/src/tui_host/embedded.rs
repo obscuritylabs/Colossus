@@ -488,18 +488,30 @@ impl EmbeddedInteractiveHost {
         let sessions = sessions
             .into_iter()
             .map(|summary| {
-                let messages = self
-                    .runtime
-                    .session_messages_page(&summary.id, None, 16)
-                    .map(|page| page.messages)
-                    .unwrap_or_default();
-                session_browser_entry(summary, messages)
+                let preview = self.session_preview(&summary.id);
+                session_browser_entry(summary, preview)
             })
             .collect();
         let Some(selected) = browse_sessions(events, _session_id, sessions).await? else {
             return Ok(HostCommandResult::document(PresentationDocument::new()));
         };
         self.switch_session(selected).await
+    }
+
+    /// Page backward past tool records until the bounded preview is complete.
+    fn session_preview(&self, session_id: &str) -> Vec<InteractiveSessionBrowserMessage> {
+        let mut collector = SessionPreviewCollector::new();
+        while collector.wants_older_page() {
+            match self.runtime.session_messages_page(
+                session_id,
+                collector.before_sequence(),
+                SESSION_BROWSER_PAGE_LIMIT,
+            ) {
+                Ok(page) => collector.absorb(page),
+                Err(_) => collector.stop(),
+            }
+        }
+        collector.finish()
     }
 
     async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {

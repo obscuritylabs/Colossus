@@ -375,25 +375,34 @@ impl WorkerInteractiveHost {
         }
         let mut entries = Vec::with_capacity(sessions.len());
         for summary in sessions {
-            let messages = match self
-                .value(WorkerOperation::SessionMessagesPage {
-                    session_id: summary.id.clone(),
-                    before_sequence: None,
-                    limit: 16,
-                })
-                .await
-            {
-                Ok(value) => serde_json::from_value::<SessionMessagePage>(value)
-                    .map(|page| page.messages)
-                    .unwrap_or_default(),
-                Err(_) => Vec::new(),
-            };
-            entries.push(session_browser_entry(summary, messages));
+            let preview = self.session_preview(&summary.id).await;
+            entries.push(session_browser_entry(summary, preview));
         }
         let Some(selected) = browse_sessions(events, current_session_id, entries).await? else {
             return Ok(HostCommandResult::document(PresentationDocument::new()));
         };
         self.switch_session(selected).await
+    }
+
+    /// Page backward past tool records until the bounded preview is complete.
+    async fn session_preview(&self, session_id: &str) -> Vec<InteractiveSessionBrowserMessage> {
+        let mut collector = SessionPreviewCollector::new();
+        while collector.wants_older_page() {
+            let page = self
+                .value(WorkerOperation::SessionMessagesPage {
+                    session_id: session_id.into(),
+                    before_sequence: collector.before_sequence(),
+                    limit: SESSION_BROWSER_PAGE_LIMIT,
+                })
+                .await
+                .ok()
+                .and_then(|value| serde_json::from_value::<SessionMessagePage>(value).ok());
+            match page {
+                Some(page) => collector.absorb(page),
+                None => collector.stop(),
+            }
+        }
+        collector.finish()
     }
 
     async fn presentation_command(

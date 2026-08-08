@@ -9,26 +9,84 @@ pub(super) fn resumable_sessions(
     sessions
 }
 
-pub(super) fn session_browser_entry(
-    summary: SessionSummary,
-    messages: Vec<SessionMessage>,
-) -> InteractiveSessionBrowserEntry {
-    let mut recent_messages = messages
-        .into_iter()
-        .rev()
-        .filter(|message| {
-            matches!(
+/// Displayable user and assistant messages shown in one session preview.
+pub(super) const SESSION_BROWSER_PREVIEW_MESSAGES: usize = 8;
+/// Canonical records requested per backward page while building one preview.
+pub(super) const SESSION_BROWSER_PAGE_LIMIT: usize = 32;
+/// Backward pages read per session so tool-heavy history stays bounded.
+pub(super) const SESSION_BROWSER_PREVIEW_PAGES: usize = 8;
+
+/// Newest-first preview accumulator that pages backward past tool records.
+///
+/// Tool-heavy runs can fill an entire canonical page with tool results and
+/// empty assistant tool-call messages, so a single fixed page can hide every
+/// displayable message. The collector keeps requesting older pages until the
+/// bounded preview is complete, the session is exhausted, or the page budget
+/// is spent.
+#[derive(Debug, Default)]
+pub(super) struct SessionPreviewCollector {
+    messages: Vec<InteractiveSessionBrowserMessage>,
+    before_sequence: Option<u64>,
+    pages: usize,
+    exhausted: bool,
+}
+
+impl SessionPreviewCollector {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether another older page is still needed to fill the preview.
+    pub(super) fn wants_older_page(&self) -> bool {
+        !self.exhausted
+            && self.pages < SESSION_BROWSER_PREVIEW_PAGES
+            && self.messages.len() < SESSION_BROWSER_PREVIEW_MESSAGES
+    }
+
+    /// Exclusive upper-bound cursor for the next backward page.
+    pub(super) fn before_sequence(&self) -> Option<u64> {
+        self.before_sequence
+    }
+
+    /// Absorb one chronological page, newest displayable messages first.
+    pub(super) fn absorb(&mut self, page: SessionMessagePage) {
+        self.pages = self.pages.saturating_add(1);
+        self.exhausted = !page.has_more || page.before_sequence.is_none();
+        self.before_sequence = page.before_sequence;
+        for message in page.messages.into_iter().rev() {
+            if self.messages.len() == SESSION_BROWSER_PREVIEW_MESSAGES {
+                break;
+            }
+            if !matches!(
                 message.message.role,
                 ModelMessageRole::User | ModelMessageRole::Assistant
-            ) && !message.message.content.trim().is_empty()
-        })
-        .take(8)
-        .map(|message| InteractiveSessionBrowserMessage {
-            role: message.message.role,
-            content: compact_text(&message.message.content, 2_000),
-        })
-        .collect::<Vec<_>>();
-    recent_messages.reverse();
+            ) || message.message.content.trim().is_empty()
+            {
+                continue;
+            }
+            self.messages.push(InteractiveSessionBrowserMessage {
+                role: message.message.role,
+                content: compact_text(&message.message.content, 2_000),
+            });
+        }
+    }
+
+    /// Stop paging when a page cannot be loaded, keeping what was collected.
+    pub(super) fn stop(&mut self) {
+        self.exhausted = true;
+    }
+
+    /// Release the preview in chronological order.
+    pub(super) fn finish(mut self) -> Vec<InteractiveSessionBrowserMessage> {
+        self.messages.reverse();
+        self.messages
+    }
+}
+
+pub(super) fn session_browser_entry(
+    summary: SessionSummary,
+    recent_messages: Vec<InteractiveSessionBrowserMessage>,
+) -> InteractiveSessionBrowserEntry {
     InteractiveSessionBrowserEntry {
         summary,
         recent_messages,

@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::SessionMessage;
 
 fn plan(id: &str, session_id: &str, status: PlanStatus, revision: u64) -> PlanRecord {
     PlanRecord {
@@ -287,26 +288,75 @@ fn session(
     }
 }
 
+fn conversation_message(sequence: u64) -> SessionMessage {
+    SessionMessage {
+        session_id: "019f72e2-c116-7fa3-b668-5778378e114f".into(),
+        run_id: "run".into(),
+        sequence,
+        message: colossus_contracts::ModelMessage {
+            role: if sequence.is_multiple_of(2) {
+                ModelMessageRole::User
+            } else {
+                ModelMessageRole::Assistant
+            },
+            content: format!("Message {sequence}\nwith   normalized spacing"),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+        created_at: "2026-07-18T01:41:50Z".into(),
+    }
+}
+
+fn tool_message(sequence: u64) -> SessionMessage {
+    SessionMessage {
+        session_id: "019f72e2-c116-7fa3-b668-5778378e114f".into(),
+        run_id: "run".into(),
+        sequence,
+        message: colossus_contracts::ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: format!("tool result {sequence}"),
+            tool_call_id: Some(format!("call-{sequence}")),
+            tool_calls: Vec::new(),
+        },
+        created_at: "2026-07-18T01:41:50Z".into(),
+    }
+}
+
+/// Page `messages` (chronological) backward the way the runtime store does.
+fn message_page(messages: &[SessionMessage], before_sequence: Option<u64>) -> SessionMessagePage {
+    let upper = before_sequence.unwrap_or(u64::MAX);
+    let mut page = messages
+        .iter()
+        .rev()
+        .filter(|message| message.sequence < upper)
+        .take(SESSION_BROWSER_PAGE_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    page.reverse();
+    let before_sequence = page.first().map(|message| message.sequence);
+    let has_more = before_sequence.is_some_and(|first| {
+        messages
+            .iter()
+            .any(|message| message.sequence < first && message.sequence < upper)
+    });
+    SessionMessagePage {
+        messages: page,
+        before_sequence,
+        has_more,
+    }
+}
+
+fn collected_preview(messages: &[SessionMessage]) -> Vec<InteractiveSessionBrowserMessage> {
+    let mut collector = SessionPreviewCollector::new();
+    while collector.wants_older_page() {
+        collector.absorb(message_page(messages, collector.before_sequence()));
+    }
+    collector.finish()
+}
+
 #[test]
 fn session_browser_entry_keeps_the_latest_visible_conversation_bounded() {
-    let messages = (0..10)
-        .map(|sequence| SessionMessage {
-            session_id: "019f72e2-c116-7fa3-b668-5778378e114f".into(),
-            run_id: "run".into(),
-            sequence,
-            message: colossus_contracts::ModelMessage {
-                role: if sequence % 2 == 0 {
-                    ModelMessageRole::User
-                } else {
-                    ModelMessageRole::Assistant
-                },
-                content: format!("Message {sequence}\nwith   normalized spacing"),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            created_at: "2026-07-18T01:41:50Z".into(),
-        })
-        .collect();
+    let messages = (0..10).map(conversation_message).collect::<Vec<_>>();
     let entry = session_browser_entry(
         session(
             "019f72e2-c116-7fa3-b668-5778378e114f",
@@ -314,7 +364,7 @@ fn session_browser_entry_keeps_the_latest_visible_conversation_bounded() {
             Some("How can we get sccache working locally?"),
             Some("Build speed"),
         ),
-        messages,
+        collected_preview(&messages),
     );
     assert_eq!(entry.recent_messages.len(), 8);
     assert_eq!(
@@ -332,6 +382,40 @@ fn session_browser_entry_keeps_the_latest_visible_conversation_bounded() {
         Some("Message 9 with normalized spacing")
     );
     assert_eq!(compact_text("Safe\n text\u{200b}\u{1b}", 100), "Safe text");
+}
+
+#[test]
+fn session_preview_pages_backward_past_tool_heavy_history() {
+    // Two prompts trailed by far more tool records than one page can hold.
+    let mut messages = vec![conversation_message(0), conversation_message(1)];
+    messages.extend((2..(2 + (SESSION_BROWSER_PAGE_LIMIT as u64 * 3))).map(tool_message));
+    let preview = collected_preview(&messages);
+    assert_eq!(
+        preview
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Message 0 with normalized spacing",
+            "Message 1 with normalized spacing",
+        ]
+    );
+}
+
+#[test]
+fn session_preview_stops_after_the_bounded_backward_page_budget() {
+    let messages = (0..(SESSION_BROWSER_PAGE_LIMIT as u64
+        * (SESSION_BROWSER_PREVIEW_PAGES as u64 + 2)))
+        .map(tool_message)
+        .collect::<Vec<_>>();
+    let mut collector = SessionPreviewCollector::new();
+    let mut pages = 0_usize;
+    while collector.wants_older_page() {
+        collector.absorb(message_page(&messages, collector.before_sequence()));
+        pages += 1;
+    }
+    assert_eq!(pages, SESSION_BROWSER_PREVIEW_PAGES);
+    assert!(collector.finish().is_empty());
 }
 
 #[test]
