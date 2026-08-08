@@ -708,6 +708,11 @@ impl TuiState {
         let Some(overlay) = self.overlay.take() else {
             return false;
         };
+        let restore_queue_pause = matches!(
+            overlay,
+            Overlay::PlanReviewChoice { .. } | Overlay::PlanExecutionChoice { .. }
+        ) && self.queue_paused
+            && !self.queue.is_empty();
         match overlay {
             Overlay::Prompt { request, .. } => {
                 let _ = request.response.send(PromptResponse::Cancelled);
@@ -720,6 +725,9 @@ impl TuiState {
                 let _ = picker.request.response.send(PromptResponse::Cancelled);
             }
             _ => {}
+        }
+        if restore_queue_pause {
+            self.overlay = Some(Overlay::QueuePaused);
         }
         true
     }

@@ -814,12 +814,12 @@ fn interrupted_approval_keeps_the_execution_dock_above_a_paused_queue() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.mode = InteractiveMode::Plan;
     state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
-    state.open_plan_execution_after_approval = true;
     state.queue.push_back("queued prompt".into());
+    state.open_plan_execution_after_approval = true;
     let approved = plan_record(PlanStatus::Approved, 5);
     let mut result = HostCommandResult::document(PresentationDocument::new());
-    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved.clone()));
     result.continue_queue = false;
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved.clone()));
 
     handle_host_event(
         &mut state,
@@ -844,8 +844,28 @@ fn interrupted_approval_keeps_the_execution_dock_above_a_paused_queue() {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
     );
     assert!(state.pending_plan_execution.is_some());
+    assert!(state.overlay.is_none());
+    assert!(state.queue_paused);
+}
 
-    reconcile_queue_pause_overlay(&mut state);
+#[test]
+fn cancelling_plan_execution_choice_surfaces_the_paused_queue() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    state.queue.push_back("queued after approval".into());
+    state.open_plan_execution_after_approval = true;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    let mut result = HostCommandResult::document(PresentationDocument::new());
+    result.continue_queue = false;
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved));
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(result)))),
+    );
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
     assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
 }
 

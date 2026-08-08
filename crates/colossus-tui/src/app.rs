@@ -21,7 +21,6 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     let mut terminal = OwnedTerminal::new(options.screen_mode)?;
 
     loop {
-        reconcile_queue_pause_overlay(&mut state);
         terminal.draw(&mut state)?;
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
@@ -33,12 +32,14 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             event_tx.clone(),
             options.screen_mode,
         );
-        if !state.is_busy() && !state.queue_paused && state.overlay.is_none() {
+        if !state.is_busy() && state.overlay.is_none() {
             if let Some(command) = state.pending_plan_command.take() {
                 handle_plan_command(&mut state, command, Arc::clone(&host), event_tx.clone());
             } else if let Some(request) = state.pending_plan_execution.take() {
                 start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
-            } else if let Some(line) = state.queue.pop_front() {
+            } else if !state.queue_paused
+                && let Some(line) = state.queue.pop_front()
+            {
                 start_line(&mut state, line, Arc::clone(&host), event_tx.clone());
             }
         }
@@ -504,6 +505,12 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
                     2 => Some(PlanCommand::Discard),
                     _ => return,
                 };
+                if state.pending_plan_command.is_none()
+                    && state.queue_paused
+                    && !state.queue.is_empty()
+                {
+                    state.overlay = Some(Overlay::QueuePaused);
+                }
             }
             KeyCode::Up | KeyCode::BackTab => {
                 *selected = Some(match *selected {
@@ -1504,22 +1511,13 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 // synthetic queue drain in `draw`; this avoids re-entrant host spawning.
             } else if !state.queue.is_empty() {
                 state.queue_paused = true;
-                // A guided plan decision must survive the pause: replacing it here would
-                // drop the operator's next-step choice and let the resumed queue run
-                // against the immutable plan instead. `reconcile_queue_pause_overlay`
-                // surfaces the pause once the decision dock closes.
-                if !state.plan_decision_active() {
+                // A guided plan decision must survive the pause. Plan lifecycle work
+                // remains eligible to start while ordinary queued prompts stay paused.
+                if state.overlay.is_none() {
                     state.overlay = Some(Overlay::QueuePaused);
                 }
             }
         }
-    }
-}
-
-/// Surfaces a deferred queue pause once no other overlay owns the decision dock.
-pub(super) fn reconcile_queue_pause_overlay(state: &mut TuiState) {
-    if state.queue_paused && state.overlay.is_none() && !state.queue.is_empty() {
-        state.overlay = Some(Overlay::QueuePaused);
     }
 }
 
