@@ -86,6 +86,8 @@ pub enum InteractiveMode {
     Execute,
     /// Create or refine durable plans with the structurally restricted Plan Mode.
     Plan,
+    /// Run submitted questions through bounded, source-backed durable research.
+    Research,
 }
 
 impl InteractiveMode {
@@ -94,8 +96,29 @@ impl InteractiveMode {
         match self {
             Self::Execute => "execute",
             Self::Plan => "plan",
+            Self::Research => "research",
         }
     }
+}
+
+/// Exact user-facing `/research` command grammar.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResearchCommand {
+    /// Toggle between Research and Execute modes.
+    Toggle,
+    /// Enter Research mode.
+    On,
+    /// Return to Execute mode.
+    Off,
+    /// Show process-local Research mode state.
+    Status,
+    /// List current-session durable research runs.
+    List,
+    /// Run one explicit research question without changing the active mode.
+    Run {
+        /// Bounded question text passed to the application host.
+        question: String,
+    },
 }
 
 /// Exact user-facing `/plan` command grammar.
@@ -207,6 +230,8 @@ pub enum InteractiveCommand {
     Runtime(RuntimeCommand),
     /// Typed terminal plan workflow command.
     Plan(PlanCommand),
+    /// Typed terminal research workflow command.
+    Research(ResearchCommand),
     /// Known command with invalid bounded syntax.
     Invalid(String),
     /// Normal model turn.
@@ -238,6 +263,13 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
         {
             parse_plan_command(command)
         }
+        command
+            if command.strip_prefix("/research").is_some_and(|rest| {
+                rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace)
+            }) =>
+        {
+            parse_research_command(command)
+        }
         command if command.starts_with('/') => {
             let command = command.trim_start_matches('/');
             let (name, arguments) = command.split_once(' ').unwrap_or((command, ""));
@@ -248,6 +280,24 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
         }
         prompt => InteractiveCommand::Turn(prompt.to_owned()),
     }
+}
+
+fn parse_research_command(input: &str) -> InteractiveCommand {
+    let arguments = input
+        .strip_prefix("/research")
+        .expect("research prefix checked")
+        .trim();
+    let command = match arguments {
+        "" => ResearchCommand::Toggle,
+        "on" => ResearchCommand::On,
+        "off" => ResearchCommand::Off,
+        "status" => ResearchCommand::Status,
+        "list" => ResearchCommand::List,
+        question => ResearchCommand::Run {
+            question: question.to_owned(),
+        },
+    };
+    InteractiveCommand::Research(command)
 }
 
 pub(crate) const DEFAULT_GOAL_ITERATIONS: u16 = 5;

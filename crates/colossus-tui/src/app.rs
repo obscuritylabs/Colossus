@@ -839,8 +839,16 @@ pub(super) fn start_line(
         InteractiveCommand::Plan(command) => {
             handle_plan_command(state, command, host, event_tx);
         }
+        InteractiveCommand::Research(command) => {
+            handle_research_command(state, command, host, event_tx);
+        }
         InteractiveCommand::Invalid(message) => state.append_entry(error_entry(&message)),
         InteractiveCommand::Turn(prompt) => {
+            if let Some(command) = state.research_turn_command(prompt.clone()) {
+                state.append_entry(user_entry(&prompt, TranscriptKind::User));
+                start_host_command(state, command, host, event_tx);
+                return;
+            }
             let request = match state.run_request(prompt.clone()) {
                 Ok(request) => request,
                 Err(error) => {
@@ -907,9 +915,10 @@ fn handle_plan_command(
 ) {
     match command {
         PlanCommand::Toggle => {
-            state.mode = match state.mode {
-                InteractiveMode::Execute => InteractiveMode::Plan,
-                InteractiveMode::Plan => InteractiveMode::Execute,
+            state.mode = if state.mode == InteractiveMode::Plan {
+                InteractiveMode::Execute
+            } else {
+                InteractiveMode::Plan
             };
             append_plan_status(state);
         }
@@ -1009,6 +1018,51 @@ fn handle_plan_command(
     }
 }
 
+fn handle_research_command(
+    state: &mut TuiState,
+    command: ResearchCommand,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    match command {
+        ResearchCommand::Toggle => {
+            state.mode = if state.mode == InteractiveMode::Research {
+                InteractiveMode::Execute
+            } else {
+                InteractiveMode::Research
+            };
+            append_research_status(state);
+        }
+        ResearchCommand::On => {
+            state.mode = InteractiveMode::Research;
+            append_research_status(state);
+        }
+        ResearchCommand::Off => {
+            state.mode = InteractiveMode::Execute;
+            append_research_status(state);
+        }
+        ResearchCommand::Status => append_research_status(state),
+        ResearchCommand::List => start_host_command(
+            state,
+            RuntimeCommand::Known {
+                name: "research".into(),
+                arguments: "list".into(),
+            },
+            host,
+            event_tx,
+        ),
+        ResearchCommand::Run { question } => start_host_command(
+            state,
+            RuntimeCommand::Known {
+                name: "research".into(),
+                arguments: question,
+            },
+            host,
+            event_tx,
+        ),
+    }
+}
+
 fn selected_draft(state: &mut TuiState, action: &str) -> Option<PlanRecord> {
     let Some(plan) = state.selected_plan.clone() else {
         state.append_entry(error_entry(&format!(
@@ -1096,6 +1150,15 @@ fn append_plan_status(state: &mut TuiState) {
         sequence: None,
         kind: TranscriptKind::Command,
         document: plan_status_document(state.mode, state.selected_plan.as_ref()),
+        temporary: false,
+    });
+}
+
+fn append_research_status(state: &mut TuiState) {
+    state.append_entry(TranscriptEntry {
+        sequence: None,
+        kind: TranscriptKind::Command,
+        document: research_status_document(state.mode),
         temporary: false,
     });
 }

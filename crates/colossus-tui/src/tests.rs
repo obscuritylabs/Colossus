@@ -374,6 +374,43 @@ fn parser_enforces_the_exact_plan_command_grammar() {
 }
 
 #[test]
+fn parser_treats_research_as_a_mode_with_explicit_runs() {
+    assert_eq!(
+        parse_interactive_command("/research"),
+        InteractiveCommand::Research(ResearchCommand::Toggle)
+    );
+    assert_eq!(
+        parse_interactive_command("/research on"),
+        InteractiveCommand::Research(ResearchCommand::On)
+    );
+    assert_eq!(
+        parse_interactive_command("/research off"),
+        InteractiveCommand::Research(ResearchCommand::Off)
+    );
+    assert_eq!(
+        parse_interactive_command("/research status"),
+        InteractiveCommand::Research(ResearchCommand::Status)
+    );
+    assert_eq!(
+        parse_interactive_command("/research list"),
+        InteractiveCommand::Research(ResearchCommand::List)
+    );
+    assert_eq!(
+        parse_interactive_command("/research why is the cache cold?"),
+        InteractiveCommand::Research(ResearchCommand::Run {
+            question: "why is the cache cold?".into(),
+        })
+    );
+    assert_eq!(
+        parse_interactive_command("/researcher"),
+        InteractiveCommand::Runtime(RuntimeCommand::Known {
+            name: "researcher".into(),
+            arguments: String::new(),
+        })
+    );
+}
+
+#[test]
 fn run_request_carries_only_process_local_provider_diagnostic_state() {
     let mut state = TuiState::from_snapshot(snapshot());
     assert!(
@@ -441,6 +478,28 @@ fn plan_mode_derives_create_or_revision_bound_update_targets() {
 }
 
 #[test]
+fn research_mode_routes_messages_to_the_durable_research_command() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    assert_eq!(state.research_turn_command("normal".into()), None);
+
+    state.mode = InteractiveMode::Research;
+    assert_eq!(state.mode.as_str(), "research");
+    assert_eq!(
+        state.research_turn_command("why is the cache cold?".into()),
+        Some(RuntimeCommand::Known {
+            name: "research".into(),
+            arguments: "why is the cache cold?".into(),
+        })
+    );
+    assert!(
+        state
+            .run_request("must use research".into())
+            .expect_err("research is not a normal agent turn")
+            .contains("research service")
+    );
+}
+
+#[test]
 fn plan_state_is_process_local_and_session_switch_clears_only_selection() {
     let mut state = TuiState::from_snapshot(snapshot());
     assert!(
@@ -493,6 +552,26 @@ fn plan_commands_are_always_available_for_completion() {
         "/plan execute direct",
         "/plan execute goal",
         "/plans",
+    ] {
+        assert!(
+            state
+                .completions
+                .iter()
+                .any(|candidate| candidate == command),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn research_mode_commands_are_always_available_for_completion() {
+    let state = TuiState::from_snapshot(snapshot());
+    for command in [
+        "/research",
+        "/research on",
+        "/research off",
+        "/research status",
+        "/research list",
     ] {
         assert!(
             state
@@ -730,6 +809,23 @@ fn plan_mode_and_selection_are_visible_in_composer_and_footer() {
     assert!(rendered.contains("Plan plan-019"), "{rendered}");
     assert!(rendered.contains("mode=plan"), "{rendered}");
     assert!(rendered.contains("plan=plan-019:r7:draft"), "{rendered}");
+}
+
+#[test]
+fn research_mode_is_visible_in_composer_and_footer() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Research;
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw research mode");
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Research · sourced question"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("mode=research"), "{rendered}");
 }
 
 #[test]

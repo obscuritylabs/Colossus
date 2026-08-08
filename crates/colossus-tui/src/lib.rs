@@ -99,8 +99,9 @@ pub use contract::{
     InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
     InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
     InteractiveThemePicker, InteractiveThemePickerEntry, LocalCommand, OperationResult,
-    PlanCommand, PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode,
-    TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
+    PlanCommand, PlanHostCommand, PlanSelectionUpdate, PromptResponse, ResearchCommand,
+    RuntimeCommand, ScreenMode, TranscriptEntry, TranscriptKind, TuiError, TuiOptions,
+    parse_interactive_command,
 };
 pub use state::TuiState;
 

@@ -430,6 +430,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         match state.mode {
             InteractiveMode::Execute => format!(" Message · {action} "),
+            InteractiveMode::Research => format!(" Research · sourced question · {action} "),
             InteractiveMode::Plan if state.selected_plan.is_none() => {
                 format!(" Plan · new draft · {action} ")
             }
