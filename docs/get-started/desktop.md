@@ -92,6 +92,16 @@ that selection. Approval responses use a separate native-only, tool-less credent
 operating-system confirmation. Neither credential grants administrative,
 delegated-agent, or unrestricted skill authority.
 
+The permission selector beside the Work composer changes how Managed Local handles
+approval-required effects for subsequent work without restarting the runtime. **Deny**
+fails those effects closed, **Ask** pauses for the app's approval card, **Risk auto**
+allows eligible low-risk effects after evaluator review, and **Full access** satisfies
+approval obligations without asking. Moving to Risk auto or Full access requires an
+operating-system confirmation, and the mode cannot change while a managed run is
+active. This runtime-local selection returns to Ask when Managed Local restarts. It
+does not change policy decisions, tool authority, access profile, or sandbox boundaries,
+and it is unavailable for independently administered External targets.
+
 Settings shows the runtime as `Starting`, `Ready`, `Restarting`, `Stopping`, or
 `Failed`. Workspace and provider changes drain and restart the sidecar. Unexpected
 exits receive at most three bounded restart attempts; in-flight mutations are not
@@ -221,8 +231,12 @@ binds its live code identity to the signed bundle manifest before resuming it, a
 requires the CLI to open and attest the exact selected workspace before delivering
 worker authentication through bounded one-use inherited anonymous pipes that never
 traverse the PTY. It requires the existing managed worker and fails instead of opening
-a second writer. TUI actions remain inside normal Colossus policy and audit. External
-targets never offer a TUI action.
+a second writer. Inside that TUI, `/permissions` shows the active approval mode and
+`/permissions deny`, `/permissions ask`, `/permissions risk-auto`, or
+`/permissions full-access` changes it for subsequent interactive operations from that
+TUI. The selection is client-scoped: it does not change the managed worker default for
+Desktop or other clients. TUI actions remain inside normal Colossus policy and audit.
+External targets never offer a TUI action.
 
 ## Expected result
 

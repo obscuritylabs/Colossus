@@ -1297,11 +1297,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                 if output_mode() == OutputMode::Json {
                     return Err("interactive --output json is not supported; omit it for the TUI or redirect line-mode input".into());
                 }
-                let host = Arc::new(tui_host::WorkerInteractiveHost::new(
-                    client,
-                    themes,
-                    ApprovalMode::Ask,
-                ));
+                let host = Arc::new(tui_host::WorkerInteractiveHost::new(client, themes, None));
                 run_tui(
                     host,
                     TuiOptions {

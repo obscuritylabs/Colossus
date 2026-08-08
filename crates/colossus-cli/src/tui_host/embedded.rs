@@ -5,7 +5,7 @@ pub(crate) struct EmbeddedInteractiveHost {
     runtime: Arc<Runtime>,
     themes: ThemeLibrary,
     router: Arc<TuiPromptRouter>,
-    approval_mode: ApprovalMode,
+    approvals: Arc<TuiApprovalProvider>,
 }
 
 impl EmbeddedInteractiveHost {
@@ -13,13 +13,13 @@ impl EmbeddedInteractiveHost {
         runtime: Arc<Runtime>,
         themes: ThemeLibrary,
         router: Arc<TuiPromptRouter>,
-        approval_mode: ApprovalMode,
+        approvals: Arc<TuiApprovalProvider>,
     ) -> Self {
         Self {
             runtime,
             themes,
             router,
-            approval_mode,
+            approvals,
         }
     }
 
@@ -45,7 +45,7 @@ impl EmbeddedInteractiveHost {
                 .map(|context| (context.token_estimate, context.input_budget_tokens)),
             message_count: summary.message_count,
             status: status.into(),
-            approval_mode: self.approval_mode.as_str().into(),
+            approval_mode: self.approvals.mode().as_str().into(),
         })
     }
 
@@ -1229,6 +1229,17 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                     &control,
                 )
                 .await
+            }
+            RuntimeCommand::Permissions(mode) => {
+                let changed = mode.is_some();
+                if let Some(mode) = mode {
+                    self.approvals.set_mode(mode.into());
+                }
+                let mode = self.approvals.mode();
+                Ok(HostCommandResult {
+                    footer: Some(self.footer(session_id, "ready").await?),
+                    ..HostCommandResult::document(approval_mode_document(Some(mode), changed))
+                })
             }
             RuntimeCommand::Plan(command) => self.plan_command(command, session_id).await,
         };

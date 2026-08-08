@@ -35,6 +35,7 @@ pub(super) struct Cli {
     pub(super) command: Command,
 }
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(super) enum ApprovalMode {
     /// Fail closed without prompting (default outside the interactive TUI).
@@ -69,6 +70,11 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/tui reset",
     "/provider diagnostics on",
     "/provider diagnostics off",
+    "/permissions",
+    "/permissions deny",
+    "/permissions ask",
+    "/permissions risk-auto",
+    "/permissions full-access",
     "/theme",
     "/theme list",
     "/theme preview",

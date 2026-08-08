@@ -37,6 +37,7 @@ import {
   respondInteraction,
   runManagedSelfTest,
   selectTarget,
+  setApprovalMode,
   setTerminalEnabled,
   showTerminalWindow,
   signalTerminal,
@@ -140,6 +141,7 @@ describe("desktop API target routing", () => {
     await configureManagedRuntime(request);
     await runManagedSelfTest();
     await selectTarget("managed-local");
+    await setApprovalMode("risk_auto");
     await setTerminalEnabled(true);
     await showTerminalWindow("colossus_tui");
     await showTerminalWindow("shell");
@@ -152,6 +154,7 @@ describe("desktop API target routing", () => {
       ["configure_managed_runtime", { request }],
       ["run_managed_self_test", undefined],
       ["select_target", { targetId: "managed-local" }],
+      ["set_approval_mode", { approvalMode: "risk_auto" }],
       ["set_terminal_enabled", { enabled: true }],
       ["show_terminal_window", { request: { kind: "colossus_tui" } }],
       ["show_terminal_window", { request: { kind: "shell" } }],

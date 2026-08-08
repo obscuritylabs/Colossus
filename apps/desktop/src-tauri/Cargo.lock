@@ -706,6 +706,7 @@ dependencies = [
  "colossus-sdk",
  "colossus-sidecar-protocol",
  "colossus-windows-native",
+ "colossus-worker-protocol",
  "directories",
  "futures-util",
  "getrandom 0.4.3",
@@ -847,6 +848,25 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-worker-protocol"
+version = "0.10.5"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "hex",
+ "hmac",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
  "zeroize",
 ]
 

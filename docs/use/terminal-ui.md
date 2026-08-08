@@ -52,6 +52,12 @@ colossus -w /absolute/path/to/repository \
 Automatic low-risk grants appear inline as warning-toned **Automatic approval review**
 cards. The notice is informational and never opens a modal or interrupts typing.
 
+Inside the TUI, `/permissions` shows the active approval mode. Change the mode for
+subsequent interactive agent and plan operations from that TUI with `/permissions deny`,
+`/permissions ask`, `/permissions risk-auto`, or `/permissions full-access`. This changes
+only how an existing approval obligation is satisfied; it does not override policy
+denials, add tool authority, or change the sandbox boundary.
+
 If the evaluator is unavailable or returns an invalid assessment, an **Automatic
 approval review failed** card explains that Colossus is falling back to manual approval
 before the bottom approval dock opens.
@@ -69,8 +75,10 @@ policy and approval obligation still applies.
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never
 falls back to a second local writer. This TUI retains normal Colossus policy and
-audit behavior. Desktop rejects arbitrary Shell PTYs at the native boundary; only the
-authenticated bundled TUI contract is available. See
+audit behavior, and `/permissions` uses an authenticated client-scoped override without
+changing the worker default used by Desktop or other clients. Desktop rejects arbitrary
+Shell PTYs at the native boundary; only the authenticated bundled TUI contract is
+available. See
 [Colossus Desktop](../get-started/desktop.md#7-opt-into-the-local-tui).
 
 ### 2. Inspect the session before acting
@@ -188,7 +196,7 @@ and `/audit verify` to confirm the active session and journal.
   revision. Reload it with `/plan use PLAN_ID`, inspect it, and deliberately retry.
 - **An Approved plan will not refine:** Approved plans are immutable. Execute, discard,
   start a new plan, or return to Execute mode.
-- **A worker protocol mismatch appears:** protocol v8 is not compatible with an older
+- **A worker protocol mismatch appears:** protocol v10 is not compatible with an older
   resident worker, including one that predates the `<storage.path>.worker-auth` secret
   and is reported as listening without it. Restart the worker and client with the same
   Colossus version, inspect `/plans`, and do not assume an interrupted request was

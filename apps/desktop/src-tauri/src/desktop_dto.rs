@@ -64,6 +64,44 @@ pub(crate) enum ManagedRuntimeStateDto {
     Failed,
 }
 
+/// Renderer-safe approval behavior for the app-owned Managed Local worker.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u8)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DesktopApprovalModeDto {
+    Deny = 0,
+    #[default]
+    Ask = 1,
+    RiskAuto = 2,
+    FullAccess = 3,
+}
+
+impl DesktopApprovalModeDto {
+    pub(crate) const fn requires_native_confirmation_from(self, current: Self) -> bool {
+        self as u8 > current as u8 && matches!(self, Self::RiskAuto | Self::FullAccess)
+    }
+
+    pub(crate) const fn worker_mode(self) -> colossus_worker_protocol::WorkerApprovalMode {
+        match self {
+            Self::Deny => colossus_worker_protocol::WorkerApprovalMode::Deny,
+            Self::Ask => colossus_worker_protocol::WorkerApprovalMode::Ask,
+            Self::RiskAuto => colossus_worker_protocol::WorkerApprovalMode::RiskAuto,
+            Self::FullAccess => colossus_worker_protocol::WorkerApprovalMode::FullAccess,
+        }
+    }
+
+    pub(crate) const fn from_worker_mode(
+        mode: colossus_worker_protocol::WorkerApprovalMode,
+    ) -> Self {
+        match mode {
+            colossus_worker_protocol::WorkerApprovalMode::Deny => Self::Deny,
+            colossus_worker_protocol::WorkerApprovalMode::Ask => Self::Ask,
+            colossus_worker_protocol::WorkerApprovalMode::RiskAuto => Self::RiskAuto,
+            colossus_worker_protocol::WorkerApprovalMode::FullAccess => Self::FullAccess,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RuntimeFailureCodeDto {
@@ -150,6 +188,7 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) provider: ProviderSummaryDto,
     pub(crate) managed_model_configuration: ManagedModelConfigurationDto,
     pub(crate) access_profile: AccessProfileSetting,
+    pub(crate) approval_mode: DesktopApprovalModeDto,
     pub(crate) terminal_enabled: bool,
     pub(crate) additional_ca_bundle: CaBundleStatusDto,
     pub(crate) capabilities: DesktopCapabilitiesDto,
@@ -510,6 +549,57 @@ mod tests {
         assert!(!debug.contains("api_key"));
         assert!(!debug.contains("base_url"));
         assert!(input.validate().is_ok());
+    }
+
+    #[test]
+    fn approval_modes_round_trip_and_confirm_only_elevation() {
+        for (mode, wire, worker) in [
+            (
+                DesktopApprovalModeDto::Deny,
+                "\"deny\"",
+                colossus_worker_protocol::WorkerApprovalMode::Deny,
+            ),
+            (
+                DesktopApprovalModeDto::Ask,
+                "\"ask\"",
+                colossus_worker_protocol::WorkerApprovalMode::Ask,
+            ),
+            (
+                DesktopApprovalModeDto::RiskAuto,
+                "\"risk_auto\"",
+                colossus_worker_protocol::WorkerApprovalMode::RiskAuto,
+            ),
+            (
+                DesktopApprovalModeDto::FullAccess,
+                "\"full_access\"",
+                colossus_worker_protocol::WorkerApprovalMode::FullAccess,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&mode).expect("serialize"), wire);
+            assert_eq!(
+                serde_json::from_str::<DesktopApprovalModeDto>(wire).expect("deserialize"),
+                mode
+            );
+            assert_eq!(mode.worker_mode(), worker);
+            assert_eq!(DesktopApprovalModeDto::from_worker_mode(worker), mode);
+        }
+
+        assert!(
+            DesktopApprovalModeDto::RiskAuto
+                .requires_native_confirmation_from(DesktopApprovalModeDto::Ask)
+        );
+        assert!(
+            DesktopApprovalModeDto::FullAccess
+                .requires_native_confirmation_from(DesktopApprovalModeDto::RiskAuto)
+        );
+        assert!(
+            !DesktopApprovalModeDto::Ask
+                .requires_native_confirmation_from(DesktopApprovalModeDto::FullAccess)
+        );
+        assert!(
+            !DesktopApprovalModeDto::RiskAuto
+                .requires_native_confirmation_from(DesktopApprovalModeDto::FullAccess)
+        );
     }
 
     #[test]

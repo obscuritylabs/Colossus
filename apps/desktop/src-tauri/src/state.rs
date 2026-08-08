@@ -1,16 +1,19 @@
 use colossus_sdk::{Colossus, NativeSidecarFailure, NativeSidecarStatus};
+use colossus_worker_protocol::WorkerControlClient;
 use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore, watch};
+use tokio::sync::{
+    Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore, watch,
+};
 
 use crate::{
-    desktop_dto::{ManagedRuntimeStateDto, RuntimeFailureCodeDto},
+    desktop_dto::{DesktopApprovalModeDto, ManagedRuntimeStateDto, RuntimeFailureCodeDto},
     terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
 
@@ -242,10 +245,13 @@ pub(crate) struct AppState {
     managed_health: RwLock<ManagedHealth>,
     managed_lifecycle_generation: AtomicU64,
     managed_lifecycle: StdMutex<Option<ManagedLifecycleObservation>>,
+    managed_worker: RwLock<Option<WorkerControlClient>>,
+    approval_mode: AtomicU8,
     external_health: RwLock<HashMap<String, ExternalHealth>>,
     external_health_generation: AtomicU64,
     external_probe_slots: Arc<Semaphore>,
     connect_guard: Mutex<()>,
+    approval_mode_run_guard: RwLock<()>,
     approval_guard: Mutex<()>,
     terminal_context_guard: Mutex<()>,
     terminal_window_guard: Mutex<()>,
@@ -279,10 +285,13 @@ impl Default for AppState {
             managed_health: RwLock::new(ManagedHealth::default()),
             managed_lifecycle_generation: AtomicU64::new(0),
             managed_lifecycle: StdMutex::new(None),
+            managed_worker: RwLock::new(None),
+            approval_mode: AtomicU8::new(DesktopApprovalModeDto::Ask as u8),
             external_health: RwLock::new(HashMap::new()),
             external_health_generation: AtomicU64::new(0),
             external_probe_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXTERNAL_PROBES)),
             connect_guard: Mutex::new(()),
+            approval_mode_run_guard: RwLock::new(()),
             approval_guard: Mutex::new(()),
             terminal_context_guard: Mutex::new(()),
             terminal_window_guard: Mutex::new(()),
@@ -447,6 +456,7 @@ impl AppState {
     }
 
     pub(crate) fn begin_managed_lifecycle(&self) -> u64 {
+        self.set_approval_mode(DesktopApprovalModeDto::Ask);
         let generation = self
             .managed_lifecycle_generation
             .fetch_add(1, Ordering::AcqRel)
@@ -552,6 +562,46 @@ impl AppState {
             })
     }
 
+    pub(crate) async fn configure_managed_worker(&self, client: WorkerControlClient) {
+        self.managed_worker.write().await.replace(client);
+        self.set_approval_mode(DesktopApprovalModeDto::Ask);
+    }
+
+    pub(crate) async fn clear_managed_worker(&self) {
+        self.managed_worker.write().await.take();
+        self.set_approval_mode(DesktopApprovalModeDto::Ask);
+    }
+
+    pub(crate) async fn managed_worker(&self) -> Option<WorkerControlClient> {
+        self.managed_worker.read().await.clone()
+    }
+
+    pub(crate) fn approval_mode(&self) -> DesktopApprovalModeDto {
+        match self.approval_mode.load(Ordering::Acquire) {
+            0 => DesktopApprovalModeDto::Deny,
+            2 => DesktopApprovalModeDto::RiskAuto,
+            3 => DesktopApprovalModeDto::FullAccess,
+            _ => DesktopApprovalModeDto::Ask,
+        }
+    }
+
+    pub(crate) fn set_approval_mode(&self, mode: DesktopApprovalModeDto) {
+        self.approval_mode.store(mode as u8, Ordering::Release);
+    }
+
+    pub(crate) async fn refresh_approval_mode(&self) {
+        let Some(worker) = self.managed_worker().await else {
+            self.set_approval_mode(DesktopApprovalModeDto::Ask);
+            return;
+        };
+        let Ok(mode) = worker.approval_mode().await else {
+            return;
+        };
+        if let Some(mode) = mode {
+            self.set_approval_mode(DesktopApprovalModeDto::from_worker_mode(mode));
+        }
+    }
+
     pub(crate) async fn begin_external_probe(&self, target_id: &str) -> u64 {
         let generation = self
             .external_health_generation
@@ -654,6 +704,14 @@ impl AppState {
         self.connect_guard.try_lock().ok()
     }
 
+    pub(crate) async fn run_creation_guard(&self) -> RwLockReadGuard<'_, ()> {
+        self.approval_mode_run_guard.read().await
+    }
+
+    pub(crate) async fn approval_mode_change_guard(&self) -> RwLockWriteGuard<'_, ()> {
+        self.approval_mode_run_guard.write().await
+    }
+
     pub(crate) fn try_approval_guard(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
         self.approval_guard.try_lock().ok()
     }
@@ -685,6 +743,7 @@ impl AppState {
             failure_code: None,
         })
         .await;
+        self.clear_managed_worker().await;
         let clients = self
             .targets
             .write()
@@ -993,6 +1052,46 @@ mod tests {
         assert!(state.try_connect_guard().is_none());
         drop(guard);
         assert!(state.try_connect_guard().is_some());
+    }
+
+    #[tokio::test]
+    async fn approval_mode_change_waits_for_run_creation_and_blocks_new_runs() {
+        let state = AppState::default();
+        let run_creation = state.run_creation_guard().await;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                state.approval_mode_change_guard()
+            )
+            .await
+            .is_err()
+        );
+        drop(run_creation);
+
+        let mode_change = state.approval_mode_change_guard().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), state.run_creation_guard())
+                .await
+                .is_err()
+        );
+        drop(mode_change);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), state.run_creation_guard())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn managed_lifecycle_resets_the_runtime_local_approval_mode() {
+        let state = AppState::default();
+        assert_eq!(state.approval_mode(), DesktopApprovalModeDto::Ask);
+
+        state.set_approval_mode(DesktopApprovalModeDto::FullAccess);
+        assert_eq!(state.approval_mode(), DesktopApprovalModeDto::FullAccess);
+
+        state.begin_managed_lifecycle();
+        assert_eq!(state.approval_mode(), DesktopApprovalModeDto::Ask);
     }
 
     #[tokio::test]

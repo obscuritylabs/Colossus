@@ -76,6 +76,21 @@ satisfied:
 
 Approval modes do not convert policy denials into allows and do not add authority.
 
+An active TUI can inspect its mode with `/permissions` and select one of the same four
+values with `/permissions MODE`. The selection is process-local and applies to subsequent
+interactive agent and plan operations from that TUI. A worker-backed TUI sends the
+selection as a client-scoped override for each authenticated interactive operation; it
+does not rewrite the worker default used by other clients or background work.
+
+Colossus Desktop exposes the same four choices beside the Work composer when its
+app-owned **Managed Local** target is selected. That native control updates the running
+worker's default for subsequent Desktop and background work; client-scoped TUI choices
+still take precedence for requests from that TUI. Desktop requires an operating-system
+confirmation before elevation to `risk-auto` or `full-access`, rejects changes while a
+managed run is active, and resets the worker default to `ask` on runtime restart. The
+control is intentionally unavailable for External targets, whose approval behavior is
+administered by their owner.
+
 ## Development shell
 
 `development` keeps `shell.run` approval-required. It becomes visible when an executable

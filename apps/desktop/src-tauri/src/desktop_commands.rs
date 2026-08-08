@@ -14,7 +14,7 @@ use crate::{
     connection,
     desktop_dto::{
         ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
-        DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
+        DesktopApprovalModeDto, DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
         ManagedModelConfigurationDto, ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto,
         RuntimeTargetKindDto, WorkspaceSummaryDto,
     },
@@ -772,7 +772,7 @@ async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandError
         Ok(())
     } else {
         Err(CommandErrorDto::busy(
-            "Finish or cancel active Managed Local runs before changing model configuration.",
+            "Finish or cancel active Managed Local runs before changing runtime settings.",
         ))
     }
 }
@@ -1083,6 +1083,105 @@ pub(crate) async fn restart_managed_runtime(
     let settings = store.load()?;
     managed_runtime::start(&state, &store, &settings, true).await?;
     desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn set_approval_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    approval_mode: DesktopApprovalModeDto,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let settings = settings_store()?.load()?;
+    if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
+        || !state.managed_lifecycle_ready()
+    {
+        return Err(CommandErrorDto::invalid(
+            "approvalMode",
+            "Permission mode can be changed only while Managed Local is selected and ready.",
+        ));
+    }
+    let _run_admission = state.approval_mode_change_guard().await;
+    state.refresh_approval_mode().await;
+    let current = state.approval_mode();
+    if current == approval_mode {
+        return desktop_status_from(&state, &settings).await;
+    }
+    reject_active_managed_runs(&state).await?;
+    if approval_mode.requires_native_confirmation_from(current) {
+        let _approval_guard = state.try_approval_guard().ok_or_else(|| {
+            CommandErrorDto::busy("Another native approval confirmation is already open.")
+        })?;
+        if !confirm_approval_mode(&app, approval_mode).await? {
+            return desktop_status_from(&state, &settings).await;
+        }
+    }
+    let worker = state.managed_worker().await.ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "approval_mode_unavailable",
+            "Managed Local permission mode is unavailable. Restart Managed Local and retry.",
+            true,
+        )
+    })?;
+    let confirmed = worker
+        .set_approval_mode(approval_mode.worker_mode())
+        .await
+        .map_err(|_| {
+            CommandErrorDto::local_sanitized(
+                "approval_mode_unavailable",
+                "Managed Local permission mode could not be changed. Restart Managed Local and retry.",
+                true,
+            )
+        })?;
+    if DesktopApprovalModeDto::from_worker_mode(confirmed) != approval_mode {
+        state.refresh_approval_mode().await;
+        return Err(CommandErrorDto::local_sanitized(
+            "approval_mode_invalid",
+            "Managed Local returned an invalid permission mode response.",
+            false,
+        ));
+    }
+    state.set_approval_mode(approval_mode);
+    desktop_status_from(&state, &settings).await
+}
+
+async fn confirm_approval_mode(
+    app: &AppHandle,
+    approval_mode: DesktopApprovalModeDto,
+) -> Result<bool, CommandErrorDto> {
+    let (title, message, allow_label) = match approval_mode {
+        DesktopApprovalModeDto::RiskAuto => (
+            "Enable automatic low-risk approvals?",
+            "Risk auto lets the configured risk evaluator satisfy eligible low-risk approval obligations without asking. Other approval obligations still pause for confirmation. Policy denials, tool authority, and sandbox boundaries do not change.",
+            "Enable risk auto",
+        ),
+        DesktopApprovalModeDto::FullAccess => (
+            "Enable full approval access?",
+            "Full access satisfies approval obligations without asking. Allowed tools may change or delete workspace data and perform configured network actions. Policy denials, tool authority, and sandbox boundaries do not change.",
+            "Enable full access",
+        ),
+        DesktopApprovalModeDto::Deny | DesktopApprovalModeDto::Ask => return Ok(true),
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(message)
+            .title(title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                allow_label.into(),
+                "Cancel".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "approval_mode_confirmation",
+            "The native permission-mode confirmation could not be opened.",
+            true,
+        )
+    })
 }
 
 #[tauri::command]
@@ -1547,6 +1646,9 @@ async fn desktop_status_from(
         _ => ConnectionStatusDto::not_configured(),
     };
     let selected_managed = selected.as_deref() == Some(MANAGED_TARGET_ID) && managed_ready;
+    if managed_ready {
+        state.refresh_approval_mode().await;
+    }
     let advertised = if connection.state == ConnectionStateDto::Connected {
         match selected.as_deref() {
             Some(target_id) => state
@@ -1576,6 +1678,7 @@ async fn desktop_status_from(
         provider: ProviderSummaryDto::from_settings(settings),
         managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
+        approval_mode: state.approval_mode(),
         terminal_enabled: settings.local_terminal_enabled(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
         capabilities,

@@ -466,10 +466,7 @@ async fn embedded_tui_receives_automatic_approval_as_a_non_blocking_notice() {
     let router = Arc::new(TuiPromptRouter::default());
     let (sender, mut events) = mpsc::channel(1);
     router.install(Some(sender));
-    let provider = TuiApprovalProvider {
-        router,
-        risk_auto: true,
-    };
+    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
 
     provider
         .automatic_approval_granted(AutomaticApprovalNotice {
@@ -497,10 +494,7 @@ async fn embedded_tui_drops_automatic_approval_when_notice_queue_is_full() {
         .try_send(HostEvent::Notice(PresentationDocument::new()))
         .expect("fill notice queue");
     router.install(Some(sender));
-    let provider = TuiApprovalProvider {
-        router,
-        risk_auto: true,
-    };
+    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
 
     tokio::time::timeout(
         Duration::from_millis(100),
@@ -526,10 +520,7 @@ async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
     let router = Arc::new(TuiPromptRouter::default());
     let (sender, mut events) = mpsc::channel(1);
     router.install(Some(sender));
-    let provider = TuiApprovalProvider {
-        router,
-        risk_auto: true,
-    };
+    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
 
     provider
         .risk_review_fallback(RiskReviewFallbackNotice {
@@ -556,10 +547,7 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     let router = Arc::new(TuiPromptRouter::default());
     let (sender, mut events) = mpsc::channel(1);
     router.install(Some(sender));
-    let provider = TuiApprovalProvider {
-        router,
-        risk_auto: true,
-    };
+    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
     let mut request = colossus_policy::effect_request(
         colossus_policy::system_actor("tui-test"),
         "mcp.call",
@@ -609,6 +597,49 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
             .expect("approval task")
             .expect("result")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn embedded_tui_permission_mode_changes_apply_to_the_live_provider() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let provider = TuiApprovalProvider::new(router, ApprovalMode::Ask);
+    let request = colossus_policy::effect_request(
+        colossus_policy::system_actor("tui-mode-test"),
+        "shell.run",
+        "workspace",
+        json!({"command": "cargo test"}),
+    );
+    let decision = PolicyDecision {
+        decision_id: "decision-mode-test".into(),
+        policy_revision: "test-v1".into(),
+        outcome: colossus_contracts::DecisionOutcome::RequireApproval,
+        reason: "explicit operator approval required".into(),
+        obligations: colossus_contracts::PolicyObligations::default(),
+    };
+
+    assert_eq!(provider.mode(), ApprovalMode::Ask);
+    assert!(!provider.risk_auto_enabled());
+
+    provider.set_mode(ApprovalMode::Deny);
+    assert!(
+        provider
+            .request_approval(&request, "deny-hash", &decision)
+            .await
+            .expect("deny mode")
+            .is_none()
+    );
+
+    provider.set_mode(ApprovalMode::RiskAuto);
+    assert!(provider.risk_auto_enabled());
+
+    provider.set_mode(ApprovalMode::FullAccess);
+    assert!(
+        provider
+            .request_approval(&request, "allow-hash", &decision)
+            .await
+            .expect("full-access mode")
+            .is_some()
     );
 }
 

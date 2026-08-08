@@ -1,7 +1,7 @@
 use crate::{
-    PublicInteractionRouter, RunAdmissionConfig, RuntimeAgentRunApi,
-    interactions::PublicInteractionRouter as InteractionRouter, service::ExecutionTestFault,
-    writer::RunWriter,
+    PublicApprovalMode, PublicApprovalModeProvider, PublicInteractionRouter, RunAdmissionConfig,
+    RuntimeAgentRunApi, interactions::PublicInteractionRouter as InteractionRouter,
+    service::ExecutionTestFault, writer::RunWriter,
 };
 use colossus_api::{
     AgentRunApi, ApiScope, ApplicationKind, ApplicationPrincipal, CallerContext, CancelRunRequest,
@@ -28,7 +28,7 @@ use std::{
     process::Command,
     sync::{
         Arc, Barrier,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -38,6 +38,42 @@ use uuid::Uuid;
 struct RuntimeFixture {
     runtime: Arc<Runtime>,
     _directory: TempDir,
+}
+
+struct TestPublicApprovalMode {
+    mode: AtomicU8,
+}
+
+impl TestPublicApprovalMode {
+    fn new(mode: PublicApprovalMode) -> Self {
+        Self {
+            mode: AtomicU8::new(Self::encode(mode)),
+        }
+    }
+
+    fn set(&self, mode: PublicApprovalMode) {
+        self.mode.store(Self::encode(mode), Ordering::Release);
+    }
+
+    const fn encode(mode: PublicApprovalMode) -> u8 {
+        match mode {
+            PublicApprovalMode::Deny => 0,
+            PublicApprovalMode::Ask => 1,
+            PublicApprovalMode::RiskAuto => 2,
+            PublicApprovalMode::FullAccess => 3,
+        }
+    }
+}
+
+impl PublicApprovalModeProvider for TestPublicApprovalMode {
+    fn public_approval_mode(&self) -> PublicApprovalMode {
+        match self.mode.load(Ordering::Acquire) {
+            0 => PublicApprovalMode::Deny,
+            2 => PublicApprovalMode::RiskAuto,
+            3 => PublicApprovalMode::FullAccess,
+            _ => PublicApprovalMode::Ask,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1181,5 +1217,110 @@ async fn public_approval_interactions_persist_without_prompt_choices() {
             .expect_err("cancelled approval")
             .to_string()
             .contains("public approval")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_public_approval_mode_changes_apply_without_persisting_false_prompts() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn RunRepository> =
+        Arc::new(EventSourcedRunRepository::new(Arc::clone(&journal)));
+    let owner = caller(
+        &format!("app:native-mode-{}", Uuid::now_v7().simple()),
+        "native-mode-owner",
+    );
+    let create = request(
+        &format!("native-mode-{}", Uuid::now_v7().simple()),
+        "native approval mode fixture",
+    );
+    let new_run =
+        NewRun::from_request("native-mode-run", "native-mode-session", "primary", &create)
+            .expect("new run");
+    let run = repository
+        .create_run(&owner, &create, &new_run)
+        .expect("create")
+        .value;
+    let writer = Arc::new(RunWriter::new(
+        Arc::clone(&repository),
+        Arc::new(crate::feed::RunFeeds::default()),
+        owner.clone(),
+        &run,
+    ));
+    writer
+        .append(RunUpdateKind::State {
+            status: RunStatus::Running,
+        })
+        .expect("start");
+    let mode = Arc::new(TestPublicApprovalMode::new(PublicApprovalMode::Deny));
+    let router = Arc::new(
+        InteractionRouter::new(Arc::new(DenyApproval), None)
+            .with_public_approval_mode(mode.clone()),
+    );
+    let effect = effect_request(
+        owner.actor(),
+        "filesystem.write",
+        "/private/customer-secret.txt",
+        serde_json::json!({"private": true}),
+    );
+    let decision = PolicyDecision {
+        decision_id: "native-mode-decision".into(),
+        policy_revision: "native-mode-test-v1".into(),
+        outcome: DecisionOutcome::RequireApproval,
+        reason: "explicit approval required".into(),
+        obligations: PolicyObligations::default(),
+    };
+
+    let denied = router
+        .scope(Arc::clone(&writer), async {
+            assert!(!router.risk_auto_enabled());
+            router
+                .request_approval(
+                    &effect,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    &decision,
+                )
+                .await
+        })
+        .await
+        .expect("deny mode");
+    assert!(denied.is_none());
+
+    mode.set(PublicApprovalMode::FullAccess);
+    let approved = router
+        .scope(Arc::clone(&writer), async {
+            router
+                .request_approval(
+                    &effect,
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    &decision,
+                )
+                .await
+        })
+        .await
+        .expect("full access mode")
+        .expect("approval proof");
+    assert_eq!(approved.request_hash, "b".repeat(64));
+
+    mode.set(PublicApprovalMode::RiskAuto);
+    router
+        .scope(Arc::clone(&writer), async {
+            assert!(router.risk_auto_enabled());
+        })
+        .await;
+    mode.set(PublicApprovalMode::Ask);
+    router
+        .scope(writer, async {
+            assert!(!router.risk_auto_enabled());
+        })
+        .await;
+
+    assert!(
+        repository
+            .get_run(&owner, "native-mode-run")
+            .expect("read run")
+            .expect("run")
+            .pending_interaction
+            .is_none(),
+        "deny and full access must not create a misleading approval prompt"
     );
 }

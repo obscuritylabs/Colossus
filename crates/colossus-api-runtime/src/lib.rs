@@ -15,5 +15,5 @@ mod service_tests;
 mod writer;
 
 pub use admission::{RunAdmissionConfig, RunAdmissionConfigError};
-pub use interactions::PublicInteractionRouter;
+pub use interactions::{PublicApprovalMode, PublicApprovalModeProvider, PublicInteractionRouter};
 pub use service::RuntimeAgentRunApi;

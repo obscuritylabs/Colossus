@@ -211,7 +211,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
 pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
     themes: ThemeLibrary,
-    approval_mode: ApprovalMode,
+    approval_mode: Mutex<Option<ApprovalMode>>,
     sandbox_boundary_acknowledgements: Mutex<BTreeMap<String, SandboxBoundaryAcknowledgement>>,
 }
 
@@ -219,14 +219,34 @@ impl WorkerInteractiveHost {
     pub(crate) fn new(
         client: WorkerClient,
         themes: ThemeLibrary,
-        approval_mode: ApprovalMode,
+        approval_mode: Option<ApprovalMode>,
     ) -> Self {
         Self {
             client: Arc::new(client),
             themes,
-            approval_mode,
+            approval_mode: Mutex::new(approval_mode),
             sandbox_boundary_acknowledgements: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn approval_mode(&self) -> Result<Option<ApprovalMode>, String> {
+        self.approval_mode
+            .lock()
+            .map(|mode| *mode)
+            .map_err(|_| "TUI approval mode lock is poisoned".to_owned())
+    }
+
+    fn set_approval_mode(&self, mode: ApprovalMode) -> Result<(), String> {
+        *self
+            .approval_mode
+            .lock()
+            .map_err(|_| "TUI approval mode lock is poisoned".to_owned())? = Some(mode);
+        Ok(())
+    }
+
+    fn interactive_approval_mode(&self) -> Result<Option<WorkerApprovalMode>, String> {
+        self.approval_mode()
+            .map(|mode| mode.map(ApprovalMode::worker_mode))
     }
 
     fn sandbox_boundary_acknowledgement(
@@ -305,7 +325,11 @@ impl WorkerInteractiveHost {
             context: context.map(|context| (context.token_estimate, context.input_budget_tokens)),
             message_count: session.message_count,
             status: status.into(),
-            approval_mode: self.approval_mode.as_str().into(),
+            approval_mode: self
+                .approval_mode()?
+                .map(ApprovalMode::as_str)
+                .unwrap_or("worker-default")
+                .into(),
         })
     }
 
@@ -721,6 +745,7 @@ impl WorkerInteractiveHost {
                                 session_id: session_id.into(),
                                 goal_id: goal_id.into(),
                             },
+                            approval_mode: self.interactive_approval_mode()?,
                             sandbox_boundary_acknowledgement: self
                                 .sandbox_boundary_acknowledgement(session_id)?,
                         },
@@ -1164,6 +1189,7 @@ impl WorkerInteractiveHost {
             .call_interactive::<PlanRecord>(
                 WorkerOperation::RunInteractive {
                     request,
+                    approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: None,
                 },
                 &mut observer,
@@ -1265,6 +1291,16 @@ impl InteractiveHost for WorkerInteractiveHost {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         let status = self.value(WorkerOperation::Ping).await?;
+        if self.approval_mode()?.is_none() {
+            match status.get("approval_mode") {
+                Some(Value::String(value)) => self.set_approval_mode(
+                    ApprovalMode::from_worker_value(value)
+                        .ok_or_else(|| "worker returned an invalid approval mode".to_owned())?,
+                )?,
+                None | Some(Value::Null) => {}
+                Some(_) => return Err("worker returned an invalid approval mode".into()),
+            }
+        }
         let security_posture = serde_json::from_value(
             status
                 .get("security_posture")
@@ -1313,6 +1349,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                         session_id: session_id.into(),
                         mode,
                     },
+                    approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: None,
                 },
                 &mut observer,
@@ -1356,6 +1393,17 @@ impl InteractiveHost for WorkerInteractiveHost {
                     &control,
                 )
                 .await
+            }
+            RuntimeCommand::Permissions(mode) => {
+                let changed = mode.is_some();
+                if let Some(mode) = mode {
+                    self.set_approval_mode(mode.into())?;
+                }
+                let mode = self.approval_mode()?;
+                Ok(HostCommandResult {
+                    footer: Some(self.footer(session_id, "ready").await?),
+                    ..HostCommandResult::document(approval_mode_document(mode, changed))
+                })
             }
             RuntimeCommand::Plan(command) => {
                 self.plan_command(command, session_id, events, &control)
@@ -1405,6 +1453,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                         include_provider_response_diagnostics: request
                             .include_provider_response_diagnostics,
                     },
+                    approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: self
                         .sandbox_boundary_acknowledgement(&request.session_id)?,
                 },
@@ -1466,6 +1515,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                         strategy: request.strategy,
                         max_turns: None,
                     },
+                    approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: self
                         .sandbox_boundary_acknowledgement(&request.session_id)?,
                 },

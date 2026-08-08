@@ -75,7 +75,7 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-packs`, `colossus-search` | External systems, authentication, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
-| Composition and interfaces | `colossus-runtime`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Wire services, host application contracts, and render released data |
+| Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
 ## Boundary rules
 
@@ -90,6 +90,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - Desktop workspace browsing remains an interface-only, read-only view. Its native
   commands accept one opaque selected-workspace identity plus a validated relative
   path; they do not add model, tool, policy, state, or mutation logic to the renderer.
+- Desktop's native Managed Local permission selector uses the narrow authenticated
+  `colossus-worker-protocol` control client. The Desktop process does not link runtime,
+  model, tool, policy, or worker-host implementation crates.
 - External applications enter through the authenticated public worker API or a
   caller-bound embedded SDK backend; they never depend on agent internals.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in

@@ -125,7 +125,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v8 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v10 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -211,6 +211,11 @@ pub enum InteractiveWorkerRequest {
 pub enum WorkerOperation {
     /// Authenticate the endpoint and return bounded readiness metadata.
     Ping,
+    /// Change the worker-wide approval mode used outside client-scoped overrides.
+    SetApprovalMode {
+        /// New mode for subsequent approval obligations.
+        approval_mode: WorkerApprovalMode,
+    },
     /// Verify the authoritative journal chain and anchors.
     AuditVerify,
     /// Verify the journal and report whether secure anchors are enabled.
@@ -336,10 +341,13 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v8 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v10 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,
+        /// Optional client-scoped approval handling for this one interactive operation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_mode: Option<WorkerApprovalMode>,
         /// Opaque capability issued by an earlier acknowledgement prompt on this client.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
