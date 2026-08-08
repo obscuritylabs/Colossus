@@ -42,10 +42,11 @@ gh workflow run release.yml --ref main -f version=vX.Y.Z
 ```
 
 Manual dispatch is artifact-only. It cannot create or update a GitHub Release. Inspect
-the `Colossus release gate` result. A stable target builds the six CLI archives plus
-sidecars and the immutable npm/Python/Go SDK candidate while skipping Desktop. A preview
-target builds the CLI and validation-only Desktop artifacts while skipping stable SDK
-publication candidates.
+the `Colossus release gate` result. Every target builds the six CLI archives, sidecars,
+and repository-owned Unix and PowerShell bootstrap installers. A stable target also
+builds the immutable npm/Python/Go SDK candidate while skipping Desktop. A preview
+target builds validation-only Desktop artifacts while skipping stable SDK publication
+candidates.
 
 ## Tag and validate
 
@@ -103,15 +104,16 @@ stapling, and Gatekeeper assessment. It is not part of a stable core tag.
 ## Review and publish the draft
 
 Only after `Colossus release gate` succeeds does the final job receive `contents: write`.
-It verifies the exact channel-specific asset set: 17 files for stable releases or 18 for
-Developer Previews. Stable drafts contain six CLI archives and checksums plus five
-immutable SDK candidate files; preview drafts contain the CLI files plus visibly
-unsigned Desktop packages and Windows provenance. It then
+It verifies the exact channel-specific asset set: 21 files for stable releases or 22 for
+Developer Previews. Both contain six CLI archives and checksums plus the two bootstrap
+installers and their checksums. Stable drafts add five immutable SDK candidate files;
+preview drafts add visibly unsigned Desktop packages and Windows provenance. It then
 creates or idempotently updates a draft release. It never publishes automatically.
 
 Before publishing the draft:
 
-1. Confirm all six CLI targets and every checksum sidecar are present. For stable drafts,
+1. Confirm all six CLI targets, both bootstrap installers, and every checksum sidecar
+   are present. For stable drafts,
    confirm the npm tarball, Python wheel/source distribution, SDK manifest, and SDK
    checksum set. For preview drafts, confirm the correctly named unsigned Desktop assets.
 2. Test installation on a clean representative host where practical.

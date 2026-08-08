@@ -153,6 +153,51 @@ pin DNS results, validate TLS authority, reject ambient proxies and redirects, b
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
 
+Standalone CLI distribution is a separate operator-initiated network boundary, not an
+agent effect. Repository-owned Unix and PowerShell bootstrap installers contact only
+`api.github.com` for bounded published-release metadata and `github.com` for exact
+versioned assets; release downloads may follow HTTPS redirects only to
+`release-assets.githubusercontent.com`. The origin is compiled into the reviewed
+scripts and has no environment or command-line override. Metadata, checksum sidecars,
+archives, redirect counts, and expanded archive bytes have fixed limits. Stable and
+preview release identity, exact target asset names, version metadata, and SHA-256 must
+agree before any downloaded executable or packaged installer runs.
+
+Bootstrap extraction accepts one exact version-and-target package root containing only
+the reviewed release members. It rejects traversal, duplicate paths, links, reparse
+points, device or special files, unexpected entries, and version mismatches. Packaged
+installers reject linked destination components and unsafe ownership or permission
+boundaries, stage replacements in the destination directory, and write a bounded
+credential-free direct-install receipt. Binary replacement is rolled back if the
+receipt cannot commit. The bootstrap never elevates, mutates shell profiles, logs
+headers or home-directory contents, or treats a package-manager installation as direct
+ownership.
+
+Runtime update discovery is a second application-owned distribution boundary. The
+standalone `update check` command runs before workspace, configuration, worker, or model
+initialization, while the TUI starts it only as a detached one-shot notice task after
+terminal startup. Both use the same fixed, credential-free GitHub latest-stable
+endpoint with DNS pinning, ambient proxies disabled, redirects disabled, an eight-second
+timeout, and a 1 MiB response limit. Metadata must identify a non-draft,
+non-prerelease exact semantic version, the fixed public release page, and exactly one
+native archive plus its adjacent checksum asset before Colossus reports an update.
+Direct ownership is claimed only when a receipt matches the running version, target, and
+fixed origin *and* names the canonical path of the running executable, so a receipt left
+behind by a removed direct install never speaks for a Homebrew, Nix, or source binary.
+
+Successful metadata, ETags, and bounded failure categories use strict owner-local cache
+records with same-directory atomic replacement. Receipt and cache records are read only
+from a current-user-owned directory that grants no group or other access, and only when
+the record itself carries the same owner-private permissions or Windows DACL; a shared
+directory cannot supply a forged latest version or a forged failure that suppresses
+checks. Unsafe, linked, foreign-owned, group- or world-accessible, malformed, oversized,
+or unavailable cache state is ignored with a warning. The cache contains no workspace,
+session, credential, header, or response-body data. Checks are throttled for 24 hours,
+including failures. DNS, connection, timeout, rate-limit, service, and validation
+failures become typed `unavailable` results: they cannot stop normal CLI or TUI use,
+and the TUI remains silent unless a newer stable version was validated. Discovery does
+not download or replace an executable; installation remains operator-owned.
+
 Configured stdio MCP remains a process effect. Streamable HTTP MCP is a network effect
 and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and redirect
 rejection, CA roots, permit timeouts, and bounded response path. Remote

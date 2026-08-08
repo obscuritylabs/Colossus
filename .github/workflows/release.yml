@@ -274,6 +274,63 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  bootstrap_installers:
+    name: Package repository-owned bootstrap installers
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository bootstrap sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate bootstrap installer syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n release/bootstrap/install.sh release/install.sh
+          shellcheck release/bootstrap/install.sh release/install.sh
+          # The PowerShell program is intentionally literal to Bash.
+          # shellcheck disable=SC2016
+          pwsh -NoProfile -NonInteractive -Command '
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path "release/bootstrap/install.ps1"),
+              [ref]$null,
+              [ref]$errors
+            ) | Out-Null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path "release/install.ps1"),
+              [ref]$null,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_ }
+              exit 1
+            }
+          '
+
+      - name: Stage immutable bootstrap installer assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 dist
+          install -m 0755 release/bootstrap/install.sh dist/colossus-install.sh
+          install -m 0644 release/bootstrap/install.ps1 dist/colossus-install.ps1
+          (
+            cd dist
+            sha256sum colossus-install.sh > colossus-install.sh.sha256
+            sha256sum colossus-install.ps1 > colossus-install.ps1.sha256
+          )
+
+      - name: Upload bootstrap installers and checksums
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-bootstrap-installers
+          path: dist/colossus-install.*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   sdk_release:
     name: Build immutable stable SDK candidate
     if: needs.validate.outputs.target_channel == 'stable'
@@ -787,6 +844,7 @@ jobs:
       [
         validate,
         artifacts,
+        bootstrap_installers,
         sdk_release,
         desktop_macos_build,
         desktop_macos,
@@ -809,7 +867,8 @@ jobs:
           set -euo pipefail
           ./scripts/ci/require-success.sh \
             validate=${{ needs.validate.result }} \
-            artifacts=${{ needs.artifacts.result }}
+            artifacts=${{ needs.artifacts.result }} \
+            bootstrap_installers=${{ needs.bootstrap_installers.result }}
           if [ "$TARGET_CHANNEL" = stable ]; then
             ./scripts/ci/require-success.sh sdk_release="$SDK_RELEASE_RESULT"
             test "$MACOS_DESKTOP_BUILD_RESULT" = skipped
@@ -856,7 +915,7 @@ jobs:
           set -euo pipefail
           case "$RELEASE_CHANNEL" in
             stable)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 17
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 21
               sdk_dir="$RUNNER_TEMP/sdk-release"
               install -d -m 0700 "$sdk_dir"
               for sdk_asset in \
@@ -872,7 +931,7 @@ jobs:
                 "$sdk_dir" "$RELEASE_VERSION" "$SOURCE_COMMIT"
               ;;
             developer_preview)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 18
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 22
               desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
               windows="Colossus-Desktop-UNSIGNED-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
               test -f "dist/$windows"
@@ -888,6 +947,13 @@ jobs:
               exit 1
               ;;
           esac
+          for bootstrap_asset in \
+            colossus-install.sh \
+            colossus-install.sh.sha256 \
+            colossus-install.ps1 \
+            colossus-install.ps1.sha256; do
+            test -f "dist/$bootstrap_asset"
+          done
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
           done

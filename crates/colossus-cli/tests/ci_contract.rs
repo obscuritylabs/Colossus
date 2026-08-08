@@ -345,6 +345,7 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
         ),
         [
             "artifacts",
+            "bootstrap_installers",
             "desktop_macos",
             "desktop_macos_build",
             "desktop_windows_preview",
@@ -405,8 +406,8 @@ fn release_separates_the_stable_core_from_the_desktop_preview() {
         "codeSigning = \"unsigned_developer_preview\"",
         "smartScreenWarningExpected = $true",
         "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe",
-        "-eq 17",
-        "-eq 18",
+        "-eq 21",
+        "-eq 22",
     ] {
         assert!(
             source.contains(required),

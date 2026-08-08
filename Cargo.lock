@@ -937,6 +937,7 @@ dependencies = [
  "colossus-sidecar-protocol",
  "colossus-tools",
  "colossus-tui",
+ "colossus-update",
  "colossus-windows-native",
  "colossus-worker",
  "colossus-workflow",
@@ -1625,6 +1626,24 @@ dependencies = [
  "tokio",
  "unicode-width",
  "vt100",
+]
+
+[[package]]
+name = "colossus-update"
+version = "0.10.5"
+dependencies = [
+ "async-trait",
+ "colossus-network",
+ "colossus-windows-native",
+ "futures",
+ "reqwest 0.12.28",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
 ]
 
 [[package]]
