@@ -48,7 +48,7 @@ pub(super) fn command_description(command: &str) -> Option<&'static str> {
         "/plan list" => "List current-session plans",
         "/plan use" => "Select a plan by ID",
         "/plan show" => "Show the selected plan",
-        "/plan approve" => "Approve the selected draft plan",
+        "/plan approve" => "Approve the draft, then choose execution",
         "/plan discard" => "Discard the selected plan",
         "/plan execute" => "Choose how to execute the plan",
         "/plan execute direct" => "Execute the plan in this task",

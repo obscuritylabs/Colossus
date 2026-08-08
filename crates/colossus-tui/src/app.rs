@@ -32,10 +32,14 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             event_tx.clone(),
             options.screen_mode,
         );
-        if !state.is_busy() && !state.queue_paused && state.overlay.is_none() {
-            if let Some(request) = state.pending_plan_execution.take() {
+        if !state.is_busy() && state.overlay.is_none() {
+            if let Some(command) = state.pending_plan_command.take() {
+                handle_plan_command(&mut state, command, Arc::clone(&host), event_tx.clone());
+            } else if let Some(request) = state.pending_plan_execution.take() {
                 start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
-            } else if let Some(line) = state.queue.pop_front() {
+            } else if !state.queue_paused
+                && let Some(line) = state.queue.pop_front()
+            {
                 start_line(&mut state, line, Arc::clone(&host), event_tx.clone());
             }
         }
@@ -489,6 +493,43 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
+        Overlay::PlanReviewChoice { selected, .. } => match key.code {
+            KeyCode::Enter => {
+                let Some(selected) = *selected else {
+                    return;
+                };
+                state.overlay = None;
+                state.pending_plan_command = match selected {
+                    0 => None,
+                    1 => Some(PlanCommand::Approve),
+                    2 => Some(PlanCommand::Discard),
+                    _ => return,
+                };
+                if state.pending_plan_command.is_none()
+                    && state.queue_paused
+                    && !state.queue.is_empty()
+                {
+                    state.overlay = Some(Overlay::QueuePaused);
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                *selected = Some(match *selected {
+                    Some(0) | None => 2,
+                    Some(current) => current - 1,
+                });
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                *selected = Some(match *selected {
+                    Some(2) => 0,
+                    Some(current) => current + 1,
+                    None => 0,
+                });
+            }
+            KeyCode::Home | KeyCode::Char('r' | 'R') => *selected = Some(0),
+            KeyCode::Char('a' | 'A') => *selected = Some(1),
+            KeyCode::End | KeyCode::Char('x' | 'X') => *selected = Some(2),
+            _ => {}
+        },
         Overlay::PlanExecutionChoice { plan, selected } => match key.code {
             KeyCode::Enter => {
                 let Some(selected) = *selected else {
@@ -765,6 +806,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::Prompt { .. }
             | Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
+            | Overlay::PlanReviewChoice { .. }
             | Overlay::PlanExecutionChoice { .. }
             | Overlay::QueuePaused => {}
         }
@@ -958,6 +1000,7 @@ fn handle_plan_command(
             let Some(plan) = selected_draft(state, "approve") else {
                 return;
             };
+            state.open_plan_execution_after_approval = true;
             start_host_command(
                 state,
                 RuntimeCommand::Plan(PlanHostCommand::Approve {
@@ -1135,11 +1178,19 @@ fn start_plan_execution(
     });
 }
 
-fn append_plan_status(state: &mut TuiState) {
+pub(super) fn append_plan_status(state: &mut TuiState) {
+    let document = plan_status_document(state.mode, state.selected_plan.as_ref());
+    if state
+        .transcript
+        .last()
+        .is_some_and(|entry| entry.kind == TranscriptKind::Command && entry.document == document)
+    {
+        return;
+    }
     state.append_entry(TranscriptEntry {
         sequence: None,
         kind: TranscriptKind::Command,
-        document: plan_status_document(state.mode, state.selected_plan.as_ref()),
+        document,
         temporary: false,
     });
 }
@@ -1314,7 +1365,15 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             state.activity = None;
             state.started_at = None;
             let successful = match result {
-                Ok(OperationResult::Command(result)) => apply_command_result(state, result),
+                Ok(OperationResult::Command(result)) => {
+                    let open_execution =
+                        std::mem::take(&mut state.open_plan_execution_after_approval);
+                    let continue_queue = apply_command_result(state, result);
+                    if open_execution {
+                        offer_plan_execution_choice(state);
+                    }
+                    continue_queue
+                }
                 Ok(OperationResult::Run(HostRunResult {
                     outcome: AgentRunOutcome::Completed { result },
                     footer,
@@ -1323,6 +1382,9 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     let selection_valid = apply_plan_selection(state, plan_selection);
                     finalize_assistant(state, &result.output);
                     state.footer = footer;
+                    if selection_valid {
+                        offer_plan_review(state);
+                    }
                     selection_valid
                 }
                 Ok(OperationResult::Run(HostRunResult {
@@ -1438,6 +1500,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     }
                 }
                 Err(error) => {
+                    state.open_plan_execution_after_approval = false;
                     state.footer.status = "error".into();
                     state.append_entry(error_entry(&format!("Operation failed: {error}")));
                     false
@@ -1448,10 +1511,50 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 // synthetic queue drain in `draw`; this avoids re-entrant host spawning.
             } else if !state.queue.is_empty() {
                 state.queue_paused = true;
-                state.overlay = Some(Overlay::QueuePaused);
+                // A guided plan decision must survive the pause. Plan lifecycle work
+                // remains eligible to start while ordinary queued prompts stay paused.
+                if state.overlay.is_none() {
+                    state.overlay = Some(Overlay::QueuePaused);
+                }
             }
         }
     }
+}
+
+fn offer_plan_review(state: &mut TuiState) {
+    if state.mode != InteractiveMode::Plan || state.overlay.is_some() {
+        return;
+    }
+    let Some(plan) = state
+        .selected_plan
+        .as_ref()
+        .filter(|plan| plan.status == PlanStatus::Draft)
+        .cloned()
+    else {
+        return;
+    };
+    state.overlay = Some(Overlay::PlanReviewChoice {
+        plan,
+        selected: None,
+    });
+}
+
+fn offer_plan_execution_choice(state: &mut TuiState) {
+    if state.mode != InteractiveMode::Plan || state.overlay.is_some() {
+        return;
+    }
+    let Some(plan) = state
+        .selected_plan
+        .as_ref()
+        .filter(|plan| plan.status == PlanStatus::Approved)
+        .cloned()
+    else {
+        return;
+    };
+    state.overlay = Some(Overlay::PlanExecutionChoice {
+        plan,
+        selected: None,
+    });
 }
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {

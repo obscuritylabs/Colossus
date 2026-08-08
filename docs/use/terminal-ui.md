@@ -96,8 +96,11 @@ Enter Plan mode without selecting an older draft:
 Plan the requested change, including focused verification.
 ```
 
-A completed planning turn durably creates one Draft and selects it. Further prompts
-refine that selected Draft at its current revision. Inspect and approve it with:
+A completed planning turn durably creates one Draft, selects it, and opens a review
+dock. The dock shows the ordered Plan steps and offers **Keep refining**, **Approve**,
+or **Discard**. Plan steps are execution guidance; they are not separate durable
+`/tasks` records. Further prompts refine the selected Draft at its current revision.
+The equivalent explicit commands remain available:
 
 ```text
 /plan status
@@ -106,8 +109,10 @@ refine that selected Draft at its current revision. Inspect and approve it with:
 /plan execute
 ```
 
-The last command opens Direct, Goal Mode, and Cancel choices. Direct consumes the
-Approved plan into one ordinary run. Goal Mode defaults to five iterations; use
+Approving in the review dock, or running `/plan approve`, immediately opens the Direct
+versus Goal Mode execution chooser. `/plan execute` reopens that chooser for an already
+Approved plan. Direct consumes the Approved plan into one ordinary run. Goal Mode
+defaults to five iterations; use
 `/plan execute goal ITERATIONS` for an explicit value from 1 through 50. In non-TTY
 line mode, the same unspecified-strategy choice is numbered on stdin. Use
 `/goal resume GOAL_ID` to continue the remaining budget of an Active goal after a
