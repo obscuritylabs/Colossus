@@ -295,6 +295,22 @@ pub(super) fn plan_status_document(
     })
 }
 
+pub(super) fn research_status_document(mode: InteractiveMode) -> PresentationDocument {
+    let messages = match mode {
+        InteractiveMode::Research => "Run bounded source-backed research",
+        InteractiveMode::Execute => "Run normal agent turns",
+        InteractiveMode::Plan => "Create or refine the selected plan",
+    };
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Research mode".into(),
+        tone: PresentationTone::Neutral,
+        body: vec![PresentationBlock::KeyValue(vec![
+            ("Mode".into(), mode.as_str().into()),
+            ("Messages".into(), messages.into()),
+        ])],
+    })
+}
+
 pub(super) fn provider_diagnostics_document(enabled: bool) -> PresentationDocument {
     PresentationDocument::from_block(PresentationBlock::Card {
         title: "Provider response diagnostics".into(),
