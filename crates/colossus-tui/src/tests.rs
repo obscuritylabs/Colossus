@@ -810,6 +810,46 @@ fn successful_plan_approval_opens_the_execution_strategy_dock() {
 }
 
 #[test]
+fn interrupted_approval_keeps_the_execution_dock_above_a_paused_queue() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    state.open_plan_execution_after_approval = true;
+    state.queue.push_back("queued prompt".into());
+    let approved = plan_record(PlanStatus::Approved, 5);
+    let mut result = HostCommandResult::document(PresentationDocument::new());
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved.clone()));
+    result.continue_queue = false;
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(result)))),
+    );
+
+    assert!(state.queue_paused);
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::PlanExecutionChoice {
+            plan: ref selected,
+            selected: None,
+        }) if selected == &approved
+    ));
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.pending_plan_execution.is_some());
+
+    reconcile_queue_pause_overlay(&mut state);
+    assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
+}
+
+#[test]
 fn plan_review_dock_previews_steps_and_explains_tasks_are_separate() {
     let backend = TestBackend::new(120, 32);
     let mut terminal = Terminal::new(backend).expect("test terminal");

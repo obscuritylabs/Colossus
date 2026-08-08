@@ -21,6 +21,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     let mut terminal = OwnedTerminal::new(options.screen_mode)?;
 
     loop {
+        reconcile_queue_pause_overlay(&mut state);
         terminal.draw(&mut state)?;
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
@@ -1503,9 +1504,22 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 // synthetic queue drain in `draw`; this avoids re-entrant host spawning.
             } else if !state.queue.is_empty() {
                 state.queue_paused = true;
-                state.overlay = Some(Overlay::QueuePaused);
+                // A guided plan decision must survive the pause: replacing it here would
+                // drop the operator's next-step choice and let the resumed queue run
+                // against the immutable plan instead. `reconcile_queue_pause_overlay`
+                // surfaces the pause once the decision dock closes.
+                if !state.plan_decision_active() {
+                    state.overlay = Some(Overlay::QueuePaused);
+                }
             }
         }
+    }
+}
+
+/// Surfaces a deferred queue pause once no other overlay owns the decision dock.
+pub(super) fn reconcile_queue_pause_overlay(state: &mut TuiState) {
+    if state.queue_paused && state.overlay.is_none() && !state.queue.is_empty() {
+        state.overlay = Some(Overlay::QueuePaused);
     }
 }
 
