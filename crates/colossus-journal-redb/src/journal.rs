@@ -66,26 +66,13 @@ impl RedbEventJournal {
     }
 
     pub(super) fn ensure_schema(database: &Database) -> Result<bool, StoreError> {
-        const REQUIRED_TABLES: [&str; 7] = [
-            "events",
-            "stream_events",
-            "stream_versions",
-            "metadata",
-            "projection_outbox",
-            "projection_positions",
-            "projection_records",
-        ];
         let read = database.begin_read().map_err(adapter_error)?;
-        let tables = read
-            .list_tables()
-            .map_err(adapter_error)?
-            .map(|table| table.name().to_owned())
-            .collect::<BTreeSet<_>>();
-        if REQUIRED_TABLES.iter().all(|name| tables.contains(*name)) {
+        let established = Self::established_schema(&read)?;
+        drop(read);
+        if established {
             return Ok(false);
         }
 
-        drop(read);
         let write = database.begin_write().map_err(adapter_error)?;
         write.open_table(EVENTS).map_err(adapter_error)?;
         write.open_table(STREAM_EVENTS).map_err(adapter_error)?;
@@ -99,6 +86,31 @@ impl RedbEventJournal {
             .open_table(PROJECTION_RECORDS)
             .map_err(adapter_error)?;
         write.commit().map_err(adapter_error)?;
+        Ok(true)
+    }
+
+    /// Report whether every required table already exists with its expected typed definition.
+    ///
+    /// A missing table means the schema still has to be created, while an incompatible
+    /// key/value definition is rejected here instead of surfacing during a later operation.
+    fn established_schema(read: &ReadTransaction) -> Result<bool, StoreError> {
+        macro_rules! established_table {
+            ($definition:expr) => {
+                match read.open_table($definition) {
+                    Ok(_) => {}
+                    Err(TableError::TableDoesNotExist(_)) => return Ok(false),
+                    Err(error) => return Err(adapter_error(error)),
+                }
+            };
+        }
+
+        established_table!(EVENTS);
+        established_table!(STREAM_EVENTS);
+        established_table!(STREAM_VERSIONS);
+        established_table!(METADATA);
+        established_table!(OUTBOX);
+        established_table!(PROJECTION_POSITIONS);
+        established_table!(PROJECTION_RECORDS);
         Ok(true)
     }
 

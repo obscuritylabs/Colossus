@@ -25,7 +25,7 @@ use colossus_testkit::{
 };
 use colossus_work::EventSourcedWorkRepository;
 use colossus_workflow::EventSourcedWorkflowRepository;
-use redb::{Database, ReadableDatabase};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde_json::json;
 use std::{
     process::Command,
@@ -89,6 +89,37 @@ fn established_schema_uses_read_only_fast_path() {
 
     assert!(RedbEventJournal::ensure_schema(&database).expect("create schema"));
     assert!(!RedbEventJournal::ensure_schema(&database).expect("reuse schema"));
+}
+
+#[test]
+fn established_schema_rejects_incompatible_table_definition() {
+    const MISMATCHED_PROJECTION_RECORDS: TableDefinition<&str, u64> =
+        TableDefinition::new("projection_records");
+
+    let directory = tempdir().expect("tempdir");
+    let database = Database::create(directory.path().join("mismatch.redb")).expect("database");
+    {
+        let write = database.begin_write().expect("write transaction");
+        write.open_table(EVENTS).expect("events");
+        write.open_table(STREAM_EVENTS).expect("stream events");
+        write.open_table(STREAM_VERSIONS).expect("stream versions");
+        write.open_table(METADATA).expect("metadata");
+        write.open_table(OUTBOX).expect("outbox");
+        write
+            .open_table(PROJECTION_POSITIONS)
+            .expect("projection positions");
+        write
+            .open_table(MISMATCHED_PROJECTION_RECORDS)
+            .expect("mismatched projection records");
+        write.commit().expect("commit");
+    }
+
+    let error =
+        RedbEventJournal::ensure_schema(&database).expect_err("reject incompatible definition");
+    assert!(
+        matches!(error, StoreError::Adapter(ref message) if message.contains("projection_records")),
+        "unexpected schema error: {error}"
+    );
 }
 
 #[test]
