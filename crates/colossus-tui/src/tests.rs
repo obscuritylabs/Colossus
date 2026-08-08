@@ -815,11 +815,11 @@ fn completion_selection_moves_in_both_directions_and_can_be_dismissed() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.composer.insert("/");
     state.advance_completion();
-    assert_eq!(state.composer.completion_index, Some(0));
-    state.advance_completion();
     assert_eq!(state.composer.completion_index, Some(1));
+    state.advance_completion();
+    assert_eq!(state.composer.completion_index, Some(2));
     state.previous_completion();
-    assert_eq!(state.composer.completion_index, Some(0));
+    assert_eq!(state.composer.completion_index, Some(1));
     assert!(state.hide_completion());
     assert!(state.completion_menu_candidates().is_empty());
     state.composer.insert("to");
@@ -859,6 +859,97 @@ fn visible_completion_menu_is_adaptive_at_minimum_size() {
             "{width}x{height}: {rendered}"
         );
     }
+}
+
+#[test]
+fn command_completion_is_left_aligned_compact_and_described() {
+    let backend = TestBackend::new(120, 20);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.completions = vec![
+        "/help".into(),
+        "/tui prefs".into(),
+        "/tui save".into(),
+        "/tui reset".into(),
+        "/provider diagnostics on".into(),
+        "/provider diagnostics off".into(),
+    ];
+    state.composer.insert("/");
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw described command completion");
+    let rendered = terminal.backend().to_string();
+    let title_line = rendered
+        .lines()
+        .find(|line| line.contains("Commands · 6"))
+        .expect("completion title");
+    assert!(
+        title_line.trim_start_matches('"').starts_with('┌'),
+        "{rendered}"
+    );
+    let right_border = title_line
+        .chars()
+        .position(|character| character == '┐')
+        .expect("compact right border");
+    assert!(
+        right_border < 80,
+        "palette width={right_border}: {rendered}"
+    );
+
+    let help_line = rendered
+        .lines()
+        .find(|line| line.contains("/help"))
+        .expect("help row");
+    let prefs_line = rendered
+        .lines()
+        .find(|line| line.contains("/tui prefs"))
+        .expect("preferences row");
+    assert!(help_line.contains("Show commands and keyboard shortcuts"));
+    assert!(prefs_line.contains("Show terminal preferences"));
+    assert_eq!(
+        help_line.chars().position(|character| character == 'S'),
+        prefs_line.chars().position(|character| character == 'S'),
+        "description columns should align: {rendered}"
+    );
+}
+
+#[test]
+fn command_descriptions_cover_static_and_dynamic_completions() {
+    assert_eq!(
+        command_description("/resume"),
+        Some("Browse and resume prior sessions")
+    );
+    assert_eq!(
+        command_description("/theme preview mono"),
+        Some("Preview this terminal theme")
+    );
+    assert_eq!(command_description("@coding"), None);
+}
+
+#[test]
+fn command_completion_keeps_a_stable_minimum_width_while_filtering() {
+    let backend = TestBackend::new(120, 16);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.completions = vec!["/help".into(), "/provider diagnostics on".into()];
+    state.composer.insert("/he");
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw filtered command completion");
+    let rendered = terminal.backend().to_string();
+    let title_line = rendered
+        .lines()
+        .find(|line| line.contains("Commands · 1"))
+        .expect("filtered completion title")
+        .trim_start_matches('"');
+    let width = title_line
+        .chars()
+        .position(|character| character == '┐')
+        .expect("completion right border")
+        + 1;
+    assert_eq!(width, usize::from(MIN_COMPLETION_MENU_WIDTH), "{rendered}");
 }
 
 #[test]

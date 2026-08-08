@@ -555,7 +555,7 @@ impl TuiState {
             self.composer.completion_index = Some(
                 self.composer
                     .completion_index
-                    .map_or(0, |index| (index + 1) % count),
+                    .map_or(1 % count, |index| (index + 1) % count),
             );
         }
     }
