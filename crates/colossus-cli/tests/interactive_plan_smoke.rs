@@ -627,10 +627,17 @@ fn run_full_screen_lifecycle(
     let short_id = plan_id.chars().take(8).collect::<String>();
     let approved_marker = format!("plan={short_id}:r2:approved");
     let approved = booted && wait_for_screen(&output, ROWS, COLS, &approved_marker);
+    let execution_choice_visible =
+        approved && wait_for_screen(&output, ROWS, COLS, "choose strategy");
     let approved_screen = screen_contents(&output, ROWS, COLS);
     // A startup or command failure can close the slave before cleanup. Preserve
     // the captured screen as the primary diagnostic instead of masking it with
     // the PTY's expected EIO after the child has already exited.
+    if execution_choice_visible {
+        let _ = writer.write_all(b"\x1b");
+        let _ = writer.flush();
+        let _ = wait_for_screen(&output, ROWS, COLS, "use /plan execute");
+    }
     let _ = writer.write_all(b"/exit\r");
     let _ = writer.flush();
 
@@ -664,6 +671,12 @@ fn run_full_screen_lifecycle(
     assert!(
         approved_screen.contains("Approved plan"),
         "{}",
+        approved_screen
+    );
+    assert!(
+        execution_choice_visible,
+        "{} TUI did not open the execution strategy dock after approval: {}",
+        host.label(),
         approved_screen
     );
     assert!(

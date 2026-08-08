@@ -1,9 +1,9 @@
 use super::*;
 use colossus_contracts::{
-    CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SandboxBoundaryMode,
-    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
-    StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult,
-    TranscriptDensity,
+    AgentRunResult, CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall,
+    SandboxBoundaryMode, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
+    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
+    ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -700,6 +700,144 @@ fn plan_write_events_select_the_exact_canonical_revision() {
         },
     );
     assert_eq!(state.selected_plan, Some(plan));
+}
+
+#[test]
+fn completed_plan_turn_opens_an_explicit_review_dock() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let plan = plan_record(PlanStatus::Draft, 9);
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Run(HostRunResult {
+            outcome: AgentRunOutcome::Completed {
+                result: AgentRunResult {
+                    run_id: "run-plan".into(),
+                    session_id: Some("019f-test".into()),
+                    role: "primary".into(),
+                    profile: "test".into(),
+                    model_profile: "test".into(),
+                    provider_profile: "test".into(),
+                    model: "test".into(),
+                    plan: Some(plan.clone()),
+                    output: "Draft saved.".into(),
+                    event_count: 1,
+                    elapsed_seconds: 0.1,
+                },
+            },
+            footer: FooterState::default(),
+            plan_selection: PlanSelectionUpdate::Set(Box::new(plan.clone())),
+        })))),
+    );
+    assert_eq!(state.selected_plan, Some(plan.clone()));
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::PlanReviewChoice {
+            plan: ref reviewed,
+            selected: None,
+        }) if reviewed == &plan
+    ));
+}
+
+#[test]
+fn identical_consecutive_plan_status_cards_are_not_duplicated() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    let before = state.transcript.len();
+
+    append_plan_status(&mut state);
+    append_plan_status(&mut state);
+
+    assert_eq!(state.transcript.len(), before + 1);
+}
+
+#[test]
+fn plan_review_requires_confirmation_and_queues_the_selected_lifecycle_action() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let plan = plan_record(PlanStatus::Draft, 4);
+    state.selected_plan = Some(plan.clone());
+    state.overlay = Some(Overlay::PlanReviewChoice {
+        plan,
+        selected: None,
+    });
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.overlay.is_some());
+    assert!(state.pending_plan_command.is_none());
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    assert!(state.pending_plan_command.is_none());
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.overlay.is_none());
+    assert_eq!(state.pending_plan_command, Some(PlanCommand::Approve));
+}
+
+#[test]
+fn successful_plan_approval_opens_the_execution_strategy_dock() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    state.open_plan_execution_after_approval = true;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    let mut result = HostCommandResult::document(PresentationDocument::new());
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved.clone()));
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(result)))),
+    );
+
+    assert_eq!(state.selected_plan, Some(approved.clone()));
+    assert!(!state.open_plan_execution_after_approval);
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::PlanExecutionChoice {
+            plan: ref selected,
+            selected: None,
+        }) if selected == &approved
+    ));
+}
+
+#[test]
+fn plan_review_dock_previews_steps_and_explains_tasks_are_separate() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.composer.insert("refinement stays visible");
+    let plan = plan_record(PlanStatus::Draft, 4);
+    state.selected_plan = Some(plan.clone());
+    state.overlay = Some(Overlay::PlanReviewChoice {
+        plan,
+        selected: None,
+    });
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw plan review dock");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Review plan plan-019"), "{rendered}");
+    assert!(rendered.contains("1. Implement"), "{rendered}");
+    assert!(
+        rendered.contains("durable /tasks records are a separate"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("[R] Keep refining"), "{rendered}");
+    assert!(rendered.contains("[A] Approve"), "{rendered}");
+    assert!(rendered.contains("[X] Discard"), "{rendered}");
+    assert!(rendered.contains("paused for plan review"), "{rendered}");
+    assert!(rendered.contains("refinement stays visible"), "{rendered}");
 }
 
 #[test]

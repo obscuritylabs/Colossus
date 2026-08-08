@@ -136,6 +136,10 @@ pub(super) enum Overlay {
         plan: PlanRecord,
         selected: Option<usize>,
     },
+    PlanReviewChoice {
+        plan: PlanRecord,
+        selected: Option<usize>,
+    },
     QueuePaused,
 }
 
@@ -177,7 +181,9 @@ pub struct TuiState {
     pub(super) operation: Option<OperationKind>,
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
+    pub(super) pending_plan_command: Option<PlanCommand>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
+    pub(super) open_plan_execution_after_approval: bool,
     pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
     pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
@@ -248,7 +254,9 @@ impl TuiState {
             operation: None,
             control: None,
             overlay: None,
+            pending_plan_command: None,
             pending_plan_execution: None,
+            open_plan_execution_after_approval: false,
             pending_sandbox_boundary_acknowledgement: snapshot
                 .pending_sandbox_boundary_acknowledgement,
             sandbox_boundary_acknowledgement_in_progress: false,
@@ -281,7 +289,15 @@ impl TuiState {
     }
 
     pub(super) fn docked_decision_active(&self) -> bool {
-        self.docked_decision_kind().is_some() || self.plan_execution_decision_active()
+        self.docked_decision_kind().is_some() || self.plan_decision_active()
+    }
+
+    pub(super) fn plan_decision_active(&self) -> bool {
+        self.plan_review_decision_active() || self.plan_execution_decision_active()
+    }
+
+    pub(super) fn plan_review_decision_active(&self) -> bool {
+        matches!(self.overlay, Some(Overlay::PlanReviewChoice { .. }))
     }
 
     pub(super) fn plan_execution_decision_active(&self) -> bool {

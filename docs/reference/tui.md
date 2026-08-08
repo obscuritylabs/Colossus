@@ -132,7 +132,7 @@ selected plan, status, and revision when space permits.
 | `/plans` | Canonical current-session listing alias |
 | `/plan use PLAN_ID` | Select a same-session Draft or Approved plan and enter Plan mode |
 | `/plan show [PLAN_ID]` | Show the named plan, or the selected plan when the ID is omitted; showing a named plan does not select it |
-| `/plan approve` | Approve the selected Draft at its displayed revision |
+| `/plan approve` | Approve the selected Draft at its displayed revision, then open the Direct/Goal execution dock |
 | `/plan discard` | Discard the selected Draft or Approved plan at its displayed revision |
 | `/plan execute direct` | Atomically consume the selected Approved plan, then run it once |
 | `/plan execute goal [ITERATIONS]` | Atomically consume the selected Approved plan into Goal Mode; the default is 5 and the accepted range is 1–50 |
@@ -140,10 +140,13 @@ selected plan, status, and revision when space permits.
 | `/goal resume GOAL_ID` | Continue the remaining budget of an Active goal in the current session |
 
 Submitting a prompt in Plan mode creates a new Draft when nothing is selected. With a
-selected Draft, the prompt refines that exact revision. An Approved plan cannot be
-refined; use `/plan execute`, `/plan new`, `/plan discard`, or `/plan off`. Concurrent
-changes reject the stale revision. Reload the current record explicitly with
-`/plan use PLAN_ID` before retrying.
+selected Draft, the prompt refines that exact revision. Each completed planning turn
+opens a review dock with Keep refining, Approve, and Discard choices. The dock previews
+the structured Plan steps and clarifies that durable Tasks are separate records.
+Approving flows directly into the existing Direct/Goal execution dock. An Approved plan
+cannot be refined; use `/plan execute`, `/plan new`, `/plan discard`, or `/plan off`.
+Concurrent changes reject the stale revision. Reload the current record explicitly
+with `/plan use PLAN_ID` before retrying.
 
 Canceling the execution decision dock, or cancellation/failure before plan consumption,
 keeps the mode and selection. The dock preserves the composer draft and requires an
