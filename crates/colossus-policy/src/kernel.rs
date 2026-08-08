@@ -403,6 +403,24 @@ impl SandboxBoundaryGate {
         }
     }
 
+    /// Configured boundary when this session already accepted it, otherwise `None`.
+    pub fn acknowledged_mode(&self, session_id: Option<&str>) -> Option<SandboxBoundaryMode> {
+        let mode = self.mode?;
+        self.acknowledged(session_id, mode).then_some(mode)
+    }
+
+    fn acknowledged(&self, session_id: Option<&str>, mode: SandboxBoundaryMode) -> bool {
+        if self.globally_acknowledged {
+            return true;
+        }
+        session_id.is_some_and(|session_id| {
+            self.acknowledged_sessions
+                .read()
+                .is_ok_and(|sessions| sessions.contains(session_id))
+                || self.active_scoped_acknowledgement_matches(session_id, mode)
+        })
+    }
+
     fn active_scoped_acknowledgement_matches(
         &self,
         session_id: &str,
@@ -434,20 +452,7 @@ impl SandboxBoundaryGate {
                 mode.as_backend()
             )));
         }
-        if self.globally_acknowledged {
-            return Ok(());
-        }
-        let acknowledged = request
-            .context
-            .session_id
-            .as_deref()
-            .is_some_and(|session_id| {
-                self.acknowledged_sessions
-                    .read()
-                    .is_ok_and(|sessions| sessions.contains(session_id))
-                    || self.active_scoped_acknowledgement_matches(session_id, mode)
-            });
-        if acknowledged {
+        if self.acknowledged(request.context.session_id.as_deref(), mode) {
             return Ok(());
         }
         let requirement = match mode {
@@ -492,6 +497,23 @@ impl SafetyKernel {
     pub fn with_sandbox_boundary_gate(mut self, gate: Arc<SandboxBoundaryGate>) -> Self {
         self.sandbox_boundary_gate = Some(gate);
         self
+    }
+
+    /// Direct-execution boundary configured for this kernel, when one is active.
+    pub fn sandbox_boundary_mode(&self) -> Option<SandboxBoundaryMode> {
+        self.sandbox_boundary_gate
+            .as_deref()
+            .and_then(SandboxBoundaryGate::mode)
+    }
+
+    /// Direct-execution boundary already acknowledged for one session, when one is active.
+    pub fn acknowledged_sandbox_boundary_mode(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<SandboxBoundaryMode> {
+        self.sandbox_boundary_gate
+            .as_deref()
+            .and_then(|gate| gate.acknowledged_mode(session_id))
     }
 
     pub(super) fn prepare(&self, request: &EffectRequest) -> Result<EffectRequest, GatewayError> {
@@ -820,7 +842,11 @@ pub(super) fn validate_process_obligations(
     request: &EffectRequest,
     obligations: &PolicyObligations,
 ) -> Result<(), GatewayError> {
-    let executable_allowed = if obligations.sandbox_backend == "oci" {
+    let danger_full_access =
+        obligations.sandbox_backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
+    let executable_allowed = if danger_full_access {
+        canonical_effect_path(&request.resource, false)?.is_file()
+    } else if obligations.sandbox_backend == "oci" {
         normalized_absolute_path(&request.resource)
             && obligations
                 .filesystem
@@ -862,10 +888,11 @@ pub(super) fn validate_process_obligations(
         .and_then(Value::as_object)
         .ok_or_else(|| GatewayError::Safety("process environment object is absent".into()))?;
     for name in environment.keys() {
-        if !obligations
-            .allowed_environment
-            .iter()
-            .any(|allowed| allowed == name)
+        if !danger_full_access
+            && !obligations
+                .allowed_environment
+                .iter()
+                .any(|allowed| allowed == name)
         {
             return Err(GatewayError::Safety(format!(
                 "environment variable {name} is not allowed"

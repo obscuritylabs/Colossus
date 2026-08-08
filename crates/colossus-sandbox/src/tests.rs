@@ -1,10 +1,10 @@
 use super::{
-    AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxJob,
-    SignedSandboxJob, atomic_create, atomic_write, authority, execute_sandbox_job,
-    host_process_limits_apply, non_public_ip, normalize_path_arguments, oci_command,
-    oci_proxy_run_arguments, oci_remove_arguments, oci_resource_names, proposed_write_bytes,
-    redact_proxy_credential, resolve_oci_origins, sandbox_helper_budget, sha256_hex,
-    tls_server_name, validate_process_spec,
+    AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, OCI_PROXY_CONFIG_VARIABLE,
+    ProcessSpec, SandboxJob, SignedSandboxJob, atomic_create, atomic_write, authority,
+    execute_sandbox_job, host_process_limits_apply, inherit_ambient_environment, non_public_ip,
+    normalize_path_arguments, oci_command, oci_proxy_run_arguments, oci_remove_arguments,
+    oci_resource_names, proposed_write_bytes, redact_proxy_credential, resolve_oci_origins,
+    sandbox_helper_budget, sha256_hex, tls_server_name, validate_process_spec,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{native_helper_diagnostics, native_target_pid};
@@ -340,6 +340,71 @@ fn direct_backends_do_not_claim_filesystem_confinement_for_cwd_or_argv() {
             .expect("direct argv paths require no unenforced filesystem declaration");
         assert_eq!(process.args, ["/path/outside/declared/filesystem"]);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn danger_full_access_requires_no_process_resource_allowlists() {
+    let cwd = tempdir().expect("cwd");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    let process = ProcessSpec {
+        cwd: cwd.path().into(),
+        args: Vec::new(),
+        environment: BTreeMap::from([("UNDECLARED_ENVIRONMENT".into(), "available".into())]),
+        stdin_base64: None,
+        timeout_ms: None,
+        max_output_bytes: None,
+    };
+    let obligations = |backend: &str| PolicyObligations {
+        sandbox_backend: backend.into(),
+        timeout_ms: 5_000,
+        max_output_bytes: 4096,
+        ..PolicyObligations::default()
+    };
+
+    validate_process_spec(
+        &process,
+        &executable.display().to_string(),
+        &obligations("danger_full_access"),
+    )
+    .expect("danger full access accepts ambient process resources");
+    assert!(
+        validate_process_spec(
+            &process,
+            &executable.display().to_string(),
+            &obligations("external"),
+        )
+        .is_err(),
+        "external execution still requires declared resources"
+    );
+}
+
+#[test]
+fn danger_full_access_ambient_environment_keeps_explicit_overrides_and_hides_control_state() {
+    let mut environment = BTreeMap::from([
+        ("PATH".into(), "/explicit/bin".into()),
+        ("EXPLICIT_ONLY".into(), "explicit".into()),
+    ]);
+    inherit_ambient_environment(
+        &mut environment,
+        [
+            ("PATH".into(), "/ambient/bin".into()),
+            ("AMBIENT_ONLY".into(), "ambient".into()),
+            ("COLOSSUS_SANDBOX_JOB_KEY".into(), "private".into()),
+            ("colossus_sandbox_native_inner".into(), "private".into()),
+            (OCI_PROXY_CONFIG_VARIABLE.into(), "private".into()),
+        ],
+    );
+
+    assert_eq!(environment["PATH"], "/explicit/bin");
+    assert_eq!(environment["EXPLICIT_ONLY"], "explicit");
+    assert_eq!(environment["AMBIENT_ONLY"], "ambient");
+    assert!(!environment.contains_key("COLOSSUS_SANDBOX_JOB_KEY"));
+    assert!(!environment.contains_key("colossus_sandbox_native_inner"));
+    assert!(!environment.contains_key(OCI_PROXY_CONFIG_VARIABLE));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

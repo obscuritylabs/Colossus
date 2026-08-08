@@ -122,9 +122,13 @@ worker, and TUI diagnostics; automatic warnings are interactive-only.
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
 writes reject symlink leaves and use same-directory atomic replacement. Processes run
-through authenticated helpers with cleared environments, exact or trusted-profile
-executables, bounded arguments, isolated shell homes/temp directories, sanitized
-command paths, bounded process trees, and selected native, Windows, or OCI isolation.
+through authenticated helpers with bounded arguments and process trees plus selected
+native, Windows, or OCI isolation. Isolating and `external` modes use cleared
+environments, exact or trusted-profile executables, isolated shell homes/temp
+directories, and sanitized command paths. Explicitly acknowledged
+`danger_full_access` retains the authenticated permit/audit path and process limits but
+deliberately permits ambient executables, environment, working directories, filesystem,
+and child networking; private helper-control variables are not inherited.
 The Linux helper is dispatched before the asynchronous CLI runtime starts so it can
 establish and map its rootless user namespace while still single-threaded, then create
 the private mount namespace used to mask protected paths. After mounting those masks,

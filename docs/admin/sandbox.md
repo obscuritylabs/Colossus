@@ -151,10 +151,14 @@ mode disables normal policy decisions or approval obligations, and neither may u
 
 Direct modes keep authenticated helper execution and resource/output supervision, but
 they do not enforce child-process filesystem or network allowlists. Process working
-directories and path-like arguments are not checked against `filesystem`; exact
-executable and environment-name grants still apply. With `external`, the platform
-boundary owns filesystem and network enforcement; with `danger_full_access`, no
-isolation boundary is asserted.
+directories and path-like arguments are not checked against `filesystem`. With
+`external`, exact executable and environment-name grants still apply and the platform
+boundary owns filesystem and network enforcement. With acknowledged
+`danger_full_access`, no process resource grants are required: executables resolve from
+absolute paths or ambient `PATH`, the child inherits the runtime environment, working
+directories may be outside the workspace, and child networking is unrestricted. No
+isolation boundary is asserted, but approval policy, process limits, permits,
+quarantine, and audit remain active.
 
 ## Expected result
 

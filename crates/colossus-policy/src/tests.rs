@@ -708,6 +708,13 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
             request
         };
 
+        assert_eq!(gateway.sandbox_boundary_mode(), Some(mode));
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            None,
+            "callers must not observe an unacknowledged boundary as acknowledged"
+        );
+
         let error = gateway
             .execute(request(), &executor)
             .await
@@ -757,13 +764,82 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
         assert!(gateway.execute(request(), &executor).await.is_err());
         assert_eq!(executor.calls.load(Ordering::Acquire), 1);
 
+        assert_eq!(
+            with_sandbox_boundary_acknowledgement(Some(INTERACTIVE_CAPABILITY.into()), async {
+                gateway.acknowledged_sandbox_boundary_mode(Some("session-1"))
+            })
+            .await,
+            Some(mode),
+            "a client-scoped acknowledgement authorizes its attached session"
+        );
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            None,
+            "the client-scoped acknowledgement does not outlive its attached operation"
+        );
+
         gate.acknowledge_session("session-1", mode)
             .expect("active session acknowledgement");
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            Some(mode)
+        );
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(None),
+            None,
+            "a sessionless caller never observes an acknowledged boundary"
+        );
         gateway
             .execute(request(), &executor)
             .await
             .expect("direct process cwd does not require an unenforced filesystem declaration");
         assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+    }
+}
+
+#[tokio::test]
+async fn danger_full_access_drops_process_executable_and_environment_grants_only() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    for (mode, allowed) in [
+        (SandboxBoundaryMode::External, false),
+        (SandboxBoundaryMode::DangerFullAccess, true),
+    ] {
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox(mode.as_backend(), "test", false);
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()])
+                .with_sandbox_boundary_gate(Arc::new(SandboxBoundaryGate::new(Some(mode), true))),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {"UNDECLARED_ENVIRONMENT": "available"},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+
+        let result = gateway.execute(request, &executor).await;
+        assert_eq!(result.is_ok(), allowed, "mode: {}", mode.as_backend());
+        assert_eq!(executor.calls.load(Ordering::Acquire), usize::from(allowed));
     }
 }
 
