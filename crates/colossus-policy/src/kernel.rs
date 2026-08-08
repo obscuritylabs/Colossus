@@ -403,6 +403,24 @@ impl SandboxBoundaryGate {
         }
     }
 
+    /// Configured boundary when this session already accepted it, otherwise `None`.
+    pub fn acknowledged_mode(&self, session_id: Option<&str>) -> Option<SandboxBoundaryMode> {
+        let mode = self.mode?;
+        self.acknowledged(session_id, mode).then_some(mode)
+    }
+
+    fn acknowledged(&self, session_id: Option<&str>, mode: SandboxBoundaryMode) -> bool {
+        if self.globally_acknowledged {
+            return true;
+        }
+        session_id.is_some_and(|session_id| {
+            self.acknowledged_sessions
+                .read()
+                .is_ok_and(|sessions| sessions.contains(session_id))
+                || self.active_scoped_acknowledgement_matches(session_id, mode)
+        })
+    }
+
     fn active_scoped_acknowledgement_matches(
         &self,
         session_id: &str,
@@ -434,20 +452,7 @@ impl SandboxBoundaryGate {
                 mode.as_backend()
             )));
         }
-        if self.globally_acknowledged {
-            return Ok(());
-        }
-        let acknowledged = request
-            .context
-            .session_id
-            .as_deref()
-            .is_some_and(|session_id| {
-                self.acknowledged_sessions
-                    .read()
-                    .is_ok_and(|sessions| sessions.contains(session_id))
-                    || self.active_scoped_acknowledgement_matches(session_id, mode)
-            });
-        if acknowledged {
+        if self.acknowledged(request.context.session_id.as_deref(), mode) {
             return Ok(());
         }
         let requirement = match mode {
@@ -499,6 +504,16 @@ impl SafetyKernel {
         self.sandbox_boundary_gate
             .as_deref()
             .and_then(SandboxBoundaryGate::mode)
+    }
+
+    /// Direct-execution boundary already acknowledged for one session, when one is active.
+    pub fn acknowledged_sandbox_boundary_mode(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<SandboxBoundaryMode> {
+        self.sandbox_boundary_gate
+            .as_deref()
+            .and_then(|gate| gate.acknowledged_mode(session_id))
     }
 
     pub(super) fn prepare(&self, request: &EffectRequest) -> Result<EffectRequest, GatewayError> {

@@ -159,12 +159,13 @@ impl ToolExecutor for GatewayToolExecutor {
                 .await?
             }
             "git.status" => {
+                let git = self.git_executable(self.danger_full_access(&context))?;
                 let process = self
                     .execute_process_tool(
                         &call,
                         context,
                         "git.status",
-                        self.git_executable()?,
+                        git,
                         tool_process_spec(
                             self.workspace.clone(),
                             vec!["status".into(), "--porcelain=v1".into()],
@@ -211,12 +212,13 @@ impl ToolExecutor for GatewayToolExecutor {
                             .collect::<Result<Vec<_>, _>>()?,
                     );
                 }
+                let git = self.git_executable(self.danger_full_access(&context))?;
                 let process = self
                     .execute_process_tool(
                         &call,
                         context,
                         "git.diff",
-                        self.git_executable()?,
+                        git,
                         tool_process_spec(
                             self.workspace.clone(),
                             args,
@@ -250,12 +252,13 @@ impl ToolExecutor for GatewayToolExecutor {
                     args.push("--".into());
                     args.push(safe_git_path(path)?);
                 }
+                let git = self.git_executable(self.danger_full_access(&context))?;
                 let process = self
                     .execute_process_tool(
                         &call,
                         context,
                         "git.show",
-                        self.git_executable()?,
+                        git,
                         tool_process_spec(
                             self.workspace.clone(),
                             args,
@@ -336,7 +339,7 @@ impl ToolExecutor for GatewayToolExecutor {
                 self.execute_patch_tool(&call, context).await?
             }
             "shell.run" => {
-                let danger_full_access = self.danger_full_access();
+                let danger_full_access = self.danger_full_access(&context);
                 let command = optional_tool_string(&call, "command")?;
                 let argv = optional_tool_string_array(&call, "argv")?;
                 if command.is_some() == argv.is_some() {
@@ -346,7 +349,7 @@ impl ToolExecutor for GatewayToolExecutor {
                     });
                 }
                 let (executable, args, invocation) = if let Some(command) = command {
-                    let executable = self.shell_executable()?;
+                    let executable = self.shell_executable(danger_full_access)?;
                     let args = shell_command_arguments(&executable, command)?;
                     (executable, args, json!({"command": command}))
                 } else {
@@ -358,7 +361,7 @@ impl ToolExecutor for GatewayToolExecutor {
                     if is_shell_wrapper(requested) {
                         reject_shell_startup_profiles(&call, &argv[1..])?;
                     }
-                    let executable = self.resolve_executable(requested)?;
+                    let executable = self.resolve_executable(requested, danger_full_access)?;
                     (
                         executable,
                         argv.iter().skip(1).cloned().collect(),

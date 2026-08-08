@@ -272,6 +272,14 @@ impl EffectGateway {
         self.kernel.sandbox_boundary_mode()
     }
 
+    /// Direct-execution boundary this session already acknowledged, if any.
+    pub fn acknowledged_sandbox_boundary_mode(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<SandboxBoundaryMode> {
+        self.kernel.acknowledged_sandbox_boundary_mode(session_id)
+    }
+
     /// Bind the policy-gated model evaluator after provider composition is complete.
     pub fn bind_risk_evaluator(
         &self,

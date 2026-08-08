@@ -78,8 +78,17 @@ fn canonical_executable(path: &Path) -> Option<PathBuf> {
 }
 
 impl GatewayToolExecutor {
-    pub(super) fn danger_full_access(&self) -> bool {
-        self.gateway.sandbox_boundary_mode() == Some(SandboxBoundaryMode::DangerFullAccess)
+    /// Whether this session may resolve unrestricted host resources for direct execution.
+    ///
+    /// Unrestricted resolution canonicalizes model-supplied host paths and probes the
+    /// ambient `PATH`, so it stays behind the same acknowledgement the kernel requires
+    /// before minting a direct-execution permit. Sessions that have not yet accepted the
+    /// boundary keep the confined resolution rules, so no host existence or file-type
+    /// result is exposed before authorization.
+    pub(super) fn danger_full_access(&self, context: &ExecutionContext) -> bool {
+        self.gateway
+            .acknowledged_sandbox_boundary_mode(context.session_id.as_deref())
+            == Some(SandboxBoundaryMode::DangerFullAccess)
     }
 
     pub(super) fn current_session(context: &ExecutionContext) -> Result<String, ToolError> {
@@ -502,14 +511,18 @@ impl GatewayToolExecutor {
         Ok(bounded_tool_text(&output, 1024 * 1024))
     }
 
-    pub(super) fn resolve_executable(&self, requested: &str) -> Result<PathBuf, ToolError> {
+    pub(super) fn resolve_executable(
+        &self,
+        requested: &str,
+        danger_full_access: bool,
+    ) -> Result<PathBuf, ToolError> {
         if requested.is_empty() || requested.contains('\0') {
             return Err(ToolError::InvalidArguments {
                 tool: "shell.run".into(),
                 message: "argv[0] must name an executable".into(),
             });
         }
-        if self.danger_full_access() {
+        if danger_full_access {
             return ambient_executable(requested).ok_or_else(|| {
                 ToolError::Denied(format!(
                     "executable {requested} was not found at an absolute path or on ambient PATH"
@@ -538,8 +551,8 @@ impl GatewayToolExecutor {
         }
     }
 
-    pub(super) fn git_executable(&self) -> Result<PathBuf, ToolError> {
-        if self.danger_full_access() {
+    pub(super) fn git_executable(&self, danger_full_access: bool) -> Result<PathBuf, ToolError> {
+        if danger_full_access {
             return ambient_executable("git")
                 .ok_or_else(|| ToolError::Denied("Git is unavailable on ambient PATH".into()));
         }
@@ -563,8 +576,8 @@ impl GatewayToolExecutor {
         }
     }
 
-    pub(super) fn shell_executable(&self) -> Result<PathBuf, ToolError> {
-        if self.danger_full_access() {
+    pub(super) fn shell_executable(&self, danger_full_access: bool) -> Result<PathBuf, ToolError> {
+        if danger_full_access {
             for variable in ["SHELL", "COMSPEC"] {
                 if let Some(shell) = std::env::var_os(variable)
                     && let Some(shell) = shell.to_str()

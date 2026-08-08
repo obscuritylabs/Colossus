@@ -4924,6 +4924,88 @@ async fn danger_full_access_shell_needs_no_process_resource_configuration() {
 }
 
 #[tokio::test]
+async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
+    let workspace = tempdir().expect("workspace");
+    let outside_cwd = tempdir().expect("outside cwd");
+    let candidate = outside_cwd.path().join("candidate");
+    let policy = colossus_policy::BuiltInPolicy::offline_default()
+        .with_action("shell.run", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false);
+    let gateway = Arc::new(colossus_policy::EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["shell.run".into()]).with_sandbox_boundary_gate(
+            Arc::new(colossus_policy::SandboxBoundaryGate::new(
+                Some(SandboxBoundaryMode::DangerFullAccess),
+                false,
+            )),
+        ),
+        [9_u8; 32],
+    ));
+    let recorded = Arc::new(Mutex::new(None));
+    let executor = GatewayToolExecutor {
+        gateway,
+        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+        process: Some(Arc::new(RecordingProcessExecutor {
+            request: Arc::clone(&recorded),
+        })),
+        http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+        work: None,
+        memory: None,
+        skills: None,
+        pack_processes: None,
+        integrations: None,
+        mcp: None,
+        bound_effects: None,
+        search: None,
+        workspace: workspace.path().to_path_buf(),
+        repository_id: "repo-test".into(),
+        executables: Vec::new(),
+    };
+
+    let probe = async || -> String {
+        executor
+            .execute(
+                ToolCall {
+                    call_id: "unacknowledged-shell".into(),
+                    name: "shell.run".into(),
+                    arguments: json!({
+                        "argv": [candidate.display().to_string(), "--version"],
+                        "cwd": outside_cwd.path(),
+                    }),
+                },
+                ExecutionContext {
+                    session_id: Some("session-unacknowledged".into()),
+                    ..ExecutionContext::default()
+                },
+            )
+            .await
+            .expect_err("unacknowledged danger full access shell")
+            .to_string()
+    };
+
+    let absent = probe().await;
+    fs::write(&candidate, "test executable identity").expect("executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755))
+            .expect("executable permissions");
+    }
+    let present = probe().await;
+    assert_eq!(
+        absent, present,
+        "unacknowledged resolution must not disclose host existence"
+    );
+    assert!(absent.contains("not explicitly configured"), "{absent}");
+    assert!(
+        recorded.lock().expect("request").is_none(),
+        "unacknowledged shell must not reach the process executor"
+    );
+}
+
+#[tokio::test]
 async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
     let workspace = tempdir().expect("workspace");
     let executable = workspace.path().join("git");

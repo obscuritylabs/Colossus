@@ -708,6 +708,13 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
             request
         };
 
+        assert_eq!(gateway.sandbox_boundary_mode(), Some(mode));
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            None,
+            "callers must not observe an unacknowledged boundary as acknowledged"
+        );
+
         let error = gateway
             .execute(request(), &executor)
             .await
@@ -757,8 +764,31 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
         assert!(gateway.execute(request(), &executor).await.is_err());
         assert_eq!(executor.calls.load(Ordering::Acquire), 1);
 
+        assert_eq!(
+            with_sandbox_boundary_acknowledgement(Some(INTERACTIVE_CAPABILITY.into()), async {
+                gateway.acknowledged_sandbox_boundary_mode(Some("session-1"))
+            })
+            .await,
+            Some(mode),
+            "a client-scoped acknowledgement authorizes its attached session"
+        );
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            None,
+            "the client-scoped acknowledgement does not outlive its attached operation"
+        );
+
         gate.acknowledge_session("session-1", mode)
             .expect("active session acknowledgement");
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            Some(mode)
+        );
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(None),
+            None,
+            "a sessionless caller never observes an acknowledged boundary"
+        );
         gateway
             .execute(request(), &executor)
             .await
