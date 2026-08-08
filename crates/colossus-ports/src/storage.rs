@@ -71,6 +71,14 @@ pub trait ProjectionStore: Send + Sync {
     /// Atomically apply mutations and advance an optimistic projection position.
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError>;
 
+    /// Apply independent projection batches, using one transaction when supported.
+    fn apply_all(&self, batches: &[ProjectionBatch]) -> Result<(), StoreError> {
+        for batch in batches {
+            self.apply(batch.clone())?;
+        }
+        Ok(())
+    }
+
     /// Delete a projection so it can be rebuilt.
     fn reset(&self, projection: &str) -> Result<(), StoreError>;
 }

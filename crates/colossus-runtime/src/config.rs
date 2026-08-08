@@ -1495,13 +1495,7 @@ pub(super) fn compose_memory_indexes(
         .index_path
         .clone()
         .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
-    let lexical: Arc<dyn MemoryIndex> = match TantivyMemoryIndex::open(&path) {
-        Ok(index) => Arc::new(index),
-        Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
-            "Tantivy index {} could not open: {error}",
-            path.display()
-        ))),
-    };
+    let lexical: Arc<dyn MemoryIndex> = Arc::new(LazyTantivyMemoryIndex::new(path));
     let mut indexes = vec![MemoryIndexRegistration::new("memory.tantivy-v1", lexical)?];
     let SemanticMemoryConfig::Chroma {
         base_url,
