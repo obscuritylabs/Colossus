@@ -60,38 +60,6 @@ impl EmbeddedInteractiveHost {
         )))
     }
 
-    async fn choose(
-        &self,
-        events: &mpsc::Sender<HostEvent>,
-        id: &str,
-        title: &str,
-        document: PresentationDocument,
-        choices: Vec<String>,
-        initial_choice: Option<usize>,
-    ) -> Result<Option<String>, String> {
-        let (response_tx, response_rx) = oneshot::channel();
-        events
-            .send(HostEvent::Prompt(InteractivePrompt {
-                id: id.into(),
-                title: title.into(),
-                document,
-                choices,
-                initial_choice,
-                allow_free_form: false,
-                response: response_tx,
-            }))
-            .await
-            .map_err(|_| "terminal event loop disconnected".to_owned())?;
-        match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
-            .await
-            .map_err(|_| "interactive choice timed out".to_owned())?
-            .map_err(|_| "interactive choice was dropped".to_owned())?
-        {
-            PromptResponse::Answer(answer) => Ok(Some(answer)),
-            PromptResponse::Cancelled => Ok(None),
-        }
-    }
-
     async fn presentation_command(
         &self,
         name: &str,
@@ -105,26 +73,8 @@ impl EmbeddedInteractiveHost {
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
-                if argument.is_empty() || argument == "list" {
-                    if argument == "list" {
-                        return Ok(Some(HostCommandResult::document(
-                            self.themes.status_document(preferences.theme_name()),
-                        )));
-                    }
-                    let names = self.themes.names();
-                    let initial_choice = names
-                        .iter()
-                        .position(|name| name == preferences.theme_name());
-                    let selected = self
-                        .choose(
-                            events,
-                            "theme-picker",
-                            "Choose theme",
-                            self.themes.selection_document(preferences.theme_name()),
-                            names,
-                            initial_choice,
-                        )
-                        .await?;
+                if argument.is_empty() {
+                    let selected = browse_themes(events, &self.themes, &preferences).await?;
                     let Some(selected) = selected else {
                         return Ok(Some(HostCommandResult::document(
                             PresentationDocument::new(),
@@ -134,6 +84,10 @@ impl EmbeddedInteractiveHost {
                         .select(&selected, &mut preferences)
                         .map_err(|error| error.to_string())?;
                     true
+                } else if argument == "list" {
+                    return Ok(Some(HostCommandResult::document(
+                        self.themes.status_document(preferences.theme_name()),
+                    )));
                 } else if argument == "reset" {
                     preferences.select_builtin_theme(ThemeName::Default);
                     true
@@ -233,11 +187,16 @@ impl EmbeddedInteractiveHost {
             .save_presentation_preferences(preferences)
             .await
             .map_err(|error| error.to_string())?;
-        Ok(Some(HostCommandResult {
-            document: document_from_json(
+        let document = if name == "theme" {
+            self.themes.selection_document(preferences.theme_name())
+        } else {
+            document_from_json(
                 &serde_json::to_value(&preferences).map_err(|error| error.to_string())?,
                 Some("Terminal preferences"),
-            ),
+            )
+        };
+        Ok(Some(HostCommandResult {
+            document,
             session: None,
             preferences: Some(preferences),
             completions: None,
@@ -526,29 +485,33 @@ impl EmbeddedInteractiveHost {
                 )),
             ));
         }
-        let choices = sessions
-            .iter()
-            .map(session_picker_choice)
-            .collect::<Vec<_>>();
-        let Some(selected) = self
-            .choose(
-                events,
-                "session-picker",
-                "Resume session",
-                PresentationDocument::new(),
-                choices.clone(),
-                Some(0),
-            )
-            .await?
-        else {
+        let sessions = sessions
+            .into_iter()
+            .map(|summary| {
+                let preview = self.session_preview(&summary.id);
+                session_browser_entry(summary, preview)
+            })
+            .collect();
+        let Some(selected) = browse_sessions(events, _session_id, sessions).await? else {
             return Ok(HostCommandResult::document(PresentationDocument::new()));
         };
-        let selected = choices
-            .iter()
-            .position(|choice| choice == &selected)
-            .and_then(|index| sessions.get(index))
-            .ok_or_else(|| "selected session is not available".to_owned())?;
-        self.switch_session(selected.id.clone()).await
+        self.switch_session(selected).await
+    }
+
+    /// Page backward past tool records until the bounded preview is complete.
+    fn session_preview(&self, session_id: &str) -> Vec<InteractiveSessionBrowserMessage> {
+        let mut collector = SessionPreviewCollector::new();
+        while collector.wants_older_page() {
+            match self.runtime.session_messages_page(
+                session_id,
+                collector.before_sequence(),
+                SESSION_BROWSER_PAGE_LIMIT,
+            ) {
+                Ok(page) => collector.absorb(page),
+                Err(_) => collector.stop(),
+            }
+        }
+        collector.finish()
     }
 
     async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {
@@ -560,9 +523,17 @@ impl EmbeddedInteractiveHost {
             .runtime
             .session_messages_page(&session_id, None, 100)
             .map_err(|error| error.to_string())?;
+        let pending_sandbox_boundary_acknowledgement = self
+            .runtime
+            .pending_sandbox_boundary_acknowledgement(&session_id)
+            .map_err(|error| error.to_string())?;
         Ok(HostCommandResult {
             document: PresentationDocument::new(),
-            session: Some((session_id.clone(), page)),
+            session: Some((
+                session_id.clone(),
+                page,
+                pending_sandbox_boundary_acknowledgement,
+            )),
             preferences: None,
             completions: None,
             sticky_skills: None,
@@ -1202,7 +1173,40 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            security_posture: self.runtime.security_posture().clone(),
+            pending_sandbox_boundary_acknowledgement: self
+                .runtime
+                .pending_sandbox_boundary_acknowledgement(&session.id)
+                .map_err(|error| error.to_string())?,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String> {
+        let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
+        let (response_tx, response_rx) = oneshot::channel();
+        events
+            .send(HostEvent::Prompt(sandbox_boundary_prompt(
+                mode,
+                response_tx,
+            )))
+            .await
+            .map_err(|_| "interactive client disconnected".to_owned())?;
+        let response = tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+            .await
+            .map_err(|_| "sandbox boundary acknowledgement timed out".to_owned())?
+            .map_err(|_| "sandbox boundary acknowledgement was dropped".to_owned())?;
+        if !matches!(response, PromptResponse::Answer(answer) if answer == acknowledge) {
+            return Ok(false);
+        }
+        self.runtime
+            .acknowledge_sandbox_boundary(session_id, mode)
+            .map_err(|error| error.to_string())?;
+        Ok(true)
     }
 
     async fn execute_command(

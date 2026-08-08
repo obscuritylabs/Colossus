@@ -12,6 +12,85 @@ pub struct TantivyMemoryIndex {
     active: Field,
 }
 
+/// Lazily opened disposable lexical memory projection.
+///
+/// Runtime composition stays free of index filesystem writes until a memory
+/// operation actually needs the projection.
+pub struct LazyTantivyMemoryIndex {
+    path: PathBuf,
+    inner: OnceLock<Result<TantivyMemoryIndex, String>>,
+}
+
+impl LazyTantivyMemoryIndex {
+    /// Configure a lexical projection without touching its directory.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            inner: OnceLock::new(),
+        }
+    }
+
+    fn state(&self) -> &Result<TantivyMemoryIndex, String> {
+        self.inner.get_or_init(|| {
+            TantivyMemoryIndex::open(&self.path).map_err(|error| {
+                format!(
+                    "Tantivy index {} could not open: {error}",
+                    self.path.display()
+                )
+            })
+        })
+    }
+
+    fn opened(&self) -> Result<&TantivyMemoryIndex, StoreError> {
+        self.state()
+            .as_ref()
+            .map_err(|reason| StoreError::Adapter(reason.clone()))
+    }
+}
+
+#[async_trait]
+impl MemoryIndex for LazyTantivyMemoryIndex {
+    fn position(&self) -> Result<u64, StoreError> {
+        self.opened()?.position()
+    }
+
+    async fn set_position(&self, position: u64) -> Result<(), StoreError> {
+        self.opened()?.set_position(position).await
+    }
+
+    async fn upsert(
+        &self,
+        event_id: &str,
+        memory_id: &str,
+        text: &str,
+        metadata: &Value,
+        embedding: Option<&[f32]>,
+    ) -> Result<(), StoreError> {
+        self.opened()?
+            .upsert(event_id, memory_id, text, metadata, embedding)
+            .await
+    }
+
+    async fn remove(&self, event_id: &str, memory_id: &str) -> Result<(), StoreError> {
+        self.opened()?.remove(event_id, memory_id).await
+    }
+
+    async fn search(&self, query: &str, limit: usize) -> Result<Vec<(String, f32)>, StoreError> {
+        self.opened()?.search(query, limit).await
+    }
+
+    async fn status(&self) -> Result<Value, StoreError> {
+        match self.state() {
+            Ok(index) => index.status().await,
+            Err(reason) => Ok(json!({"ready": false, "kind": "unavailable", "reason": reason})),
+        }
+    }
+
+    async fn rebuild(&self, records: &[(String, String, Value)]) -> Result<(), StoreError> {
+        self.opened()?.rebuild(records).await
+    }
+}
+
 /// Degraded index adapter preserving canonical-memory availability and visible lag.
 pub struct UnavailableMemoryIndex {
     reason: String,

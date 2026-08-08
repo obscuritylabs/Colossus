@@ -30,6 +30,8 @@ Permit only named resources and bounded effects for repository work.
       backend: native
       profile: workspace-development
       allowBrokerFallback: false
+      acknowledgeExternalBoundary: false
+      acknowledgeDangerFullAccess: false
       helperPath: null
       ociRuntime: null
       ociImage: null
@@ -121,12 +123,42 @@ the exclusion.
 | `native` | Host-native isolation and the normal default |
 | `oci` | Preloaded Docker or Podman image pinned by full `@sha256:` digest |
 | `windows_job` | AppContainer and Job Object isolation on Windows |
+| `external` | Direct execution inside an operator-asserted Coder/Kubernetes/host boundary |
+| `danger_full_access` | Direct execution with no asserted isolation boundary |
 | `broker` | Explicitly acknowledged downgrade only |
 
 Broker mode requires `allowBrokerFallback: true`, is not represented as sandbox
 isolation, and cannot supply `workspace-development`. OCI uses no pull, a read-only
 root, dropped capabilities, bounded resources, and exact bind mounts. Networked OCI work
 also requires the immutable proxy image.
+
+`external` is the intended choice when the Colossus process is already contained by a
+trusted platform boundary and native kernel sandboxing is unavailable, as can happen in
+Coder workspaces running in Kubernetes:
+
+```yaml
+sandbox:
+  backend: external
+  acknowledgeExternalBoundary: false
+```
+
+With the default `false`, the TUI shows a warning and requires a session-scoped
+acknowledgement. Set it to `true` only in operator-managed configuration when the same
+external boundary is guaranteed for headless runs. Use `danger_full_access` plus
+`acknowledgeDangerFullAccess` only when ambient access is intentional. Neither direct
+mode disables normal policy decisions or approval obligations, and neither may use
+`workspace-development` because Colossus cannot hide `.colossus` from the child process.
+
+Direct modes keep authenticated helper execution and resource/output supervision, but
+they do not enforce child-process filesystem or network allowlists. Process working
+directories and path-like arguments are not checked against `filesystem`. With
+`external`, exact executable and environment-name grants still apply and the platform
+boundary owns filesystem and network enforcement. With acknowledged
+`danger_full_access`, no process resource grants are required: executables resolve from
+absolute paths or ambient `PATH`, the child inherits the runtime environment, working
+directories may be outside the workspace, and child networking is unrestricted. No
+isolation boundary is asserted, but approval policy, process limits, permits,
+quarantine, and audit remain active.
 
 ## Expected result
 
@@ -145,8 +177,9 @@ connections. Retain the diagnostic and audit evidence.
 
 Treat unavailable native isolation, a failed protected-path probe, an invalid helper, an
 unpinned OCI image, resource cleanup uncertainty, or Windows isolation setup failure as
-a blocked effect. Colossus fails closed; it does not silently fall back to broker
-execution.
+a blocked effect. Colossus fails closed; it does not silently fall back to broker or
+direct execution. Select and acknowledge `external` or `danger_full_access` explicitly
+when that behavior is intended.
 
 ## Next step
 

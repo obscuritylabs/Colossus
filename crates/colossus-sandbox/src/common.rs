@@ -47,7 +47,8 @@ pub struct ProcessSpec {
     /// Literal argv entries; no shell parsing occurs.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Explicit environment map after policy allowlisting.
+    /// Explicit environment map after policy validation. The permit-bearing adapter
+    /// adds ambient values only for acknowledged `danger_full_access` execution.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     /// Optional base64-encoded standard input.
@@ -79,6 +80,15 @@ pub struct SandboxExecutorConfig {
 pub struct SandboxDoctorReport {
     /// Platform identifier.
     pub platform: String,
+    /// Exact backend selected by runtime configuration.
+    #[serde(default)]
+    pub selected_backend: String,
+    /// Whether the selected backend supplies Colossus-owned process isolation.
+    #[serde(default)]
+    pub colossus_process_isolation: bool,
+    /// Whether a direct-execution mode was acknowledged globally for headless callers.
+    #[serde(default)]
+    pub direct_execution_globally_acknowledged: bool,
     /// Whether native kernel isolation is available.
     pub native_supported: bool,
     /// Native backend details without secrets.
@@ -169,6 +179,9 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
     );
     SandboxDoctorReport {
         platform: std::env::consts::OS.into(),
+        selected_backend: String::new(),
+        colossus_process_isolation: false,
+        direct_execution_globally_acknowledged: false,
         native_supported,
         native_details,
         helper_executable: config.helper_executable.clone(),

@@ -1,6 +1,6 @@
 use super::{
-    EventSourcedMemoryRepository, MemoryIndexRegistration, MemoryService, TantivyMemoryIndex,
-    UnavailableMemoryIndex,
+    EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
+    TantivyMemoryIndex, UnavailableMemoryIndex,
 };
 use colossus_contracts::{Actor, ActorType, MemoryRecord, MemoryScope, MemoryStatus};
 use colossus_ports::{
@@ -62,6 +62,17 @@ async fn tantivy_index_passes_shared_conformance() {
     let directory = tempdir().expect("tempdir");
     let index = TantivyMemoryIndex::open(directory.path()).expect("index");
     assert_memory_index_conformance(&index).await;
+}
+
+#[test]
+fn lazy_tantivy_index_defers_filesystem_initialization() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("memory-index");
+    let index = LazyTantivyMemoryIndex::new(path.clone());
+
+    assert!(!path.exists());
+    assert_eq!(index.position().expect("position"), 0);
+    assert!(path.is_dir());
 }
 
 #[test]

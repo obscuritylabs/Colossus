@@ -4,6 +4,56 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Opaque capability proving one attached client completed a boundary prompt.
+///
+/// Clones share zeroizing storage and debug output is always redacted.
+#[derive(Clone, Eq, PartialEq)]
+pub struct SandboxBoundaryAcknowledgement(Arc<zeroize::Zeroizing<String>>);
+
+impl SandboxBoundaryAcknowledgement {
+    pub(super) fn new(value: String) -> Result<Self, WorkerError> {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(WorkerError::Protocol(
+                "sandbox boundary acknowledgement capability is invalid".into(),
+            ));
+        }
+        Ok(Self(Arc::new(zeroize::Zeroizing::new(value))))
+    }
+
+    pub(super) fn expose(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::fmt::Debug for SandboxBoundaryAcknowledgement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SandboxBoundaryAcknowledgement([REDACTED])")
+    }
+}
+
+impl Serialize for SandboxBoundaryAcknowledgement {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.expose())
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxBoundaryAcknowledgement {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ClientHello {
@@ -65,18 +115,30 @@ pub enum WorkerError {
     /// No worker answered at the configured endpoint.
     #[error("worker is unavailable at {0}")]
     Unavailable(String),
+    /// A live endpoint belongs to a worker that cannot speak this protocol version.
+    #[error(
+        "worker at {0} is listening without a protocol-v{PROTOCOL_VERSION} authentication secret; stop that worker and start it again with this build"
+    )]
+    Incompatible(String),
     /// A live worker could not accept another connection before the bounded deadline.
     #[error("worker is busy at {0}")]
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v6 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v8 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractiveWorkerRequest {
+    /// Prompt for and issue one client-scoped direct-execution acknowledgement.
+    SandboxBoundaryAcknowledge {
+        /// Exact durable session displayed by the attached client.
+        session_id: String,
+        /// Exact configured boundary being acknowledged.
+        mode: SandboxBoundaryMode,
+    },
     /// Run either normal Execute Mode or structurally constrained Plan Mode.
     Run {
         /// Explicit application run mode and optional selected Plan draft.
@@ -151,6 +213,8 @@ pub enum WorkerOperation {
     Ping,
     /// Verify the authoritative journal chain and anchors.
     AuditVerify,
+    /// Verify the journal and report whether secure anchors are enabled.
+    AuditAnchorStatus,
     /// Read bounded redacted event envelopes.
     AuditRead {
         /// First global sequence.
@@ -179,6 +243,11 @@ pub enum WorkerOperation {
     StateDoctor,
     /// Inspect sandbox readiness.
     SandboxDoctor,
+    /// Return the direct-execution boundary acknowledgement pending for one session.
+    SandboxBoundaryStatus {
+        /// Exact durable session.
+        session_id: String,
+    },
     /// List provider profile readiness without network access.
     ProviderProfiles,
     /// Exercise one provider diagnostic path.
@@ -267,10 +336,13 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v6 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v8 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,
+        /// Opaque capability issued by an earlier acknowledgement prompt on this client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
     },
     /// Execute structurally read-only Plan Mode.
     RunPlan {

@@ -26,9 +26,17 @@ impl WorkerClient {
         if !platform::endpoint_is_trusted(&endpoint)? {
             return Ok(None);
         }
+        let authentication_key =
+            match WorkerAuthenticationKey::load(&config.worker_ipc_auth_path()?) {
+                Ok(key) => key,
+                Err(WorkerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return missing_secret_outcome(&endpoint).map(|()| None);
+                }
+                Err(error) => return Err(error),
+            };
         Ok(Some(Self {
             endpoint,
-            authentication_key: WorkerAuthenticationKey::new(config.worker_ipc_auth_key()?),
+            authentication_key,
         }))
     }
 
@@ -38,9 +46,19 @@ impl WorkerClient {
         if !platform::endpoint_is_trusted(&endpoint)? {
             return Err(WorkerError::Unavailable(endpoint));
         }
+        let authentication_key = WorkerAuthenticationKey::load(&config.worker_ipc_auth_path()?)
+            .map_err(|error| match error {
+                WorkerError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    match missing_secret_outcome(&endpoint) {
+                        Ok(()) => WorkerError::Unavailable(endpoint.clone()),
+                        Err(error) => error,
+                    }
+                }
+                error => error,
+            })?;
         Ok(Self {
             endpoint,
-            authentication_key: WorkerAuthenticationKey::new(config.worker_ipc_auth_key()?),
+            authentication_key,
         })
     }
 
@@ -169,7 +187,7 @@ impl WorkerClient {
         }
     }
 
-    /// Execute one protocol-v6 interactive operation with authenticated prompts,
+    /// Execute one protocol-v8 interactive operation with authenticated prompts,
     /// notices, released events, and cooperative cancellation.
     pub async fn call_interactive<T>(
         &self,
@@ -220,7 +238,7 @@ impl WorkerClient {
     /// Execute an interactive model or Plan Mode run.
     ///
     /// This compatibility convenience keeps callers that expect an agent outcome
-    /// concise while all protocol-v6 operations share [`Self::call_interactive`].
+    /// concise while all protocol-v8 operations share [`Self::call_interactive`].
     pub async fn run_model_controlled(
         &self,
         operation: WorkerOperation,
@@ -413,6 +431,21 @@ where
             }
         }
     }
+}
+
+/// Classify a trusted endpoint whose authentication secret is absent.
+///
+/// Protocol v8 replaced the storage-derived key with the independent
+/// `<storage.path>.worker-auth` secret, so a worker from an older build listens
+/// without ever writing that file. Reporting it as an absent worker would start an
+/// embedded runtime that contends for the writer lease the live worker still owns,
+/// so a live endpoint is an incompatible worker that must be restarted. A socket
+/// file left behind by a killed worker accepts nothing and stays an absent worker.
+pub(super) fn missing_secret_outcome(endpoint: &str) -> Result<(), WorkerError> {
+    if platform::endpoint_is_live(endpoint) {
+        return Err(WorkerError::Incompatible(endpoint.to_owned()));
+    }
+    Ok(())
 }
 
 pub(super) fn handshake_timeout_error(endpoint: &str) -> WorkerError {

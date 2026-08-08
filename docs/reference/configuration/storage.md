@@ -1,6 +1,6 @@
 ---
 title: Storage configuration
-description: Configure canonical journal storage, encryption and signing keys, secure anchors, and PostgreSQL with practical examples.
+description: Configure keyless or protected canonical journal storage in redb and PostgreSQL.
 audience: operator
 type: reference
 ---
@@ -17,13 +17,16 @@ Use this mental model when configuring storage:
 | Component | Purpose |
 | --- | --- |
 | Journal adapter | Persists the canonical append-only event history in redb or PostgreSQL |
-| Journal key | Encrypts event payloads before either adapter stores them |
-| Signing key | Signs checkpoints and supplies domain-separated worker authentication material |
+| Protection mode | Stores payloads as plaintext canonical JSON or authenticated ciphertext |
+| Journal key | Encrypts event payloads in protected mode |
+| Signing key | Signs checkpoints in protected mode |
 | Secure anchor | Keeps the last trusted journal sequence and hash outside the journal so rollback or truncation can be detected |
 | `storage.path` | Selects the local redb file or, with PostgreSQL, the local Colossus instance identity |
 
-Both adapters store encrypted journal payloads. PostgreSQL TLS protects the database
-connection; it does not replace journal encryption.
+Both adapters support `keys.kind: none` and the fully protected `platform` and
+`environment` modes. PostgreSQL TLS protects the database connection; it does not
+change payload protection at rest. Normal worker IPC uses an independent owner-only
+`<storage.path>.worker-auth` secret and never derives authentication from storage keys.
 
 For deployment topology, worker ownership, projections, and the public application API,
 see [Storage and worker](../../admin/storage-worker.md).
@@ -32,7 +35,8 @@ see [Storage and worker](../../admin/storage-worker.md).
 
 | Scenario | Adapter | Key provider | Guidance |
 | --- | --- | --- | --- |
-| Desktop or single-user CLI | `redb` | `platform` | Simplest default; the OS credential store protects keys and the anchor |
+| Disposable container or simple job | `redb` or `postgres` | `none` | Dependency-free default; protect the volume and accept plaintext payloads |
+| Desktop managed deployment | `redb` | `platform` | The OS credential store protects keys and the anchor |
 | Headless single-host service | `redb` | `environment` | Inject both keys and preserve the file-backed anchor |
 | One long-running worker | `redb` | Either | Let the worker own the single redb writer lease |
 | Shared or multi-process deployment | `postgres` | Usually `environment` | Put the journal in PostgreSQL and inject identical keys into every runtime |
@@ -42,9 +46,34 @@ Start with redb unless multiple processes need direct access to the canonical jo
 Changing `adapter` is not a migration: Colossus does not import, merge, copy, or delete
 the other adapter's journal.
 
+## Keyless plaintext default
+
+Generated CLI and development configurations use this explicit shape:
+
+```yaml
+storage:
+  path: .colossus/state.redb
+  adapter: redb
+  startupVerification: incremental
+  keys:
+    kind: none
+```
+
+Omitting `storage.keys` also selects `none`; generated YAML keeps it explicit. Payload
+descriptors use `plaintext-json-v1`, `key_id: none`, an empty nonce, and hex-encoded
+canonical JSON. Colossus still checks each payload hash and JSON shape when it is read,
+maintains the record-hash chain, stream indexes, outbox, and projections, and performs a
+complete replay for `audit verify` or `startupVerification: full`.
+
+Incremental keyless startup performs bounded local head, hash, index, outbox, and
+projection-bound checks without replaying historical payloads. Signed checkpoints and
+secure anchors are disabled. This mode protects integrity against ordinary corruption,
+not confidentiality or rollback by an attacker who can consistently rewrite all local
+state.
+
 ## Local redb with platform keys
 
-This is the recommended local configuration:
+This is the recommended protected local configuration:
 
 ```yaml
 storage:
@@ -76,7 +105,7 @@ Its exact meaning depends on the adapter:
 
 | Adapter | Meaning of `storage.path` |
 | --- | --- |
-| `redb` | The encrypted canonical redb database file and the basis for its writer lease |
+| `redb` | The canonical redb database file and the basis for its writer lease |
 | `postgres` | A local instance identity used to derive worker IPC and adjacent local state paths; it is not the PostgreSQL journal location |
 
 With PostgreSQL, changing `storage.path` changes local instance identity even when the
@@ -100,8 +129,8 @@ redb, or `adapter: postgres` without that block fails configuration validation.
 
 | Value | Startup behavior |
 | --- | --- |
-| Omitted or `incremental` | Bootstrap the versioned secure anchor when necessary, then verify the signed checkpoint boundary and later journal tail |
-| `full` | Replay, decrypt, and cryptographically verify every journal event before every writable start |
+| Omitted or `incremental` | Protected mode verifies the signed checkpoint tail; keyless mode performs bounded local integrity checks |
+| `full` | Replay, decode, and verify every journal event before every writable start |
 
 Incremental verification is the default. A legacy, absent, quarantined, or incompatible
 secure anchor causes one complete bootstrap audit and writes a version-two attestation.
@@ -114,7 +143,17 @@ writable start. The `audit verify` command always performs a complete audit rega
 of this setting. `state doctor` reports the configured mode, actual verification path,
 verified sequence range, event count, and secure-anchor version.
 
-## Key providers
+## Key providers and fixed protection mode
+
+`kind: none` is the default. `kind: platform` and `kind: environment` both enable the
+complete protected tier: authenticated payload encryption, signed checkpoints, and
+secure anchors. Encryption and signing cannot be enabled independently.
+
+Each redb file and PostgreSQL schema stores a durable protection marker. An empty store
+is initialized from configuration. A nonempty store created before this marker existed
+is classified as encrypted. A configured mismatch fails startup before event writes;
+Colossus never creates mixed payload algorithms and does not migrate protection in
+place. Use a fresh path or schema to harden or simplify a deployment.
 
 The journal encryption key and checkpoint signing key are independent 32-byte secrets.
 Do not give them the same value. The identifiers in YAML are identities, not secret
@@ -192,6 +231,7 @@ rolled-back, or altered journal state.
 
 | Key provider | Anchor location |
 | --- | --- |
+| `none` | Disabled; `checkpoint` returns no checkpoint |
 | `platform` | Protected credential-store account derived from `service` and `journal_key_id` |
 | `environment` | JSON file at `anchor_path`, updated with an atomic rename |
 
@@ -233,8 +273,9 @@ The value of `COLOSSUS_DATABASE_URL` may be a libpq-style URL or key/value conne
 string. Put only the environment variable name in YAML. Colossus does not include the
 resolved connection value in its safe configuration summaries or adapter diagnostics.
 
-PostgreSQL journal payloads remain encrypted with `COLOSSUS_JOURNAL_KEY`. Every runtime
-that opens the same schema must resolve compatible journal and signing keys.
+With this example PostgreSQL journal payloads are encrypted with
+`COLOSSUS_JOURNAL_KEY`. A PostgreSQL configuration may instead use `keys.kind: none`;
+every runtime opening one schema must select the same protection mode.
 
 ### PostgreSQL fields
 
@@ -290,12 +331,12 @@ Colossus-owned clients.
 
 ## Key and adapter combinations
 
-All four schema combinations are valid, but deployment topology matters:
+All six adapter/protection combinations are valid, but deployment topology matters:
 
-| Adapter | Platform keys | Environment keys |
-| --- | --- | --- |
-| redb | Recommended for interactive single-host use | Recommended when a service manager injects secrets |
-| PostgreSQL | Suitable only when every process resolves the same protected entries | Recommended for multi-host deployments with a central secret manager |
+| Adapter | No keys | Platform keys | Environment keys |
+| --- | --- | --- | --- |
+| redb | Simple jobs and protected local volumes | Protected interactive single-host use | Services with injected secrets |
+| PostgreSQL | Simple shared jobs where database controls are sufficient | Same-host processes resolving the same entries | Multi-host deployments with a central secret manager |
 
 For PostgreSQL on multiple hosts, each host also has its own local `storage.path` and,
 with environment keys, its own `anchor_path`. Manage those local identities and anchors
@@ -309,6 +350,7 @@ as durable deployment state even though the journal is shared.
 | PostgreSQL configuration is rejected before connecting | `postgres` requires a `postgres` block, while redb forbids one |
 | PostgreSQL is healthy but journal decryption fails | Every process must use the same journal key bytes and stable key ID |
 | An old journal becomes unreadable after a config edit | Changing key IDs or secret bytes does not rotate or migrate encrypted events |
+| Startup reports a payload-protection mismatch | The nonempty path or schema was initialized in another mode; select it or use fresh storage |
 | `storage.path` changes but PostgreSQL data does not move | Under PostgreSQL the path is local instance identity, not the database location |
 | A copied redb file does not behave like a migration | Adapter and path changes never import keys, anchors, or events |
 | The connection string appears directly in YAML | `connectionVariable` accepts the environment variable name, not a literal credential |

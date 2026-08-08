@@ -1,4 +1,4 @@
-//! Encrypted, hash-chained PostgreSQL event journal and projection store.
+//! Mode-locked PostgreSQL event journal with plaintext and encrypted payloads.
 
 #![allow(clippy::missing_errors_doc)]
 
@@ -7,14 +7,15 @@ use chacha20poly1305::{
     aead::{Aead, Payload},
 };
 use colossus_contracts::{
-    EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
-    ProjectionWorkItem, SecureAnchor, SecureAnchorStatus, SignedCheckpoint,
-    StartupVerificationMode, StartupVerificationReport,
+    ENCRYPTED_PAYLOAD_ALGORITHM, EncryptedPayload, EventEnvelope, NewEvent,
+    PLAINTEXT_PAYLOAD_ALGORITHM, ProjectionBatch, ProjectionMutation, ProjectionWorkItem,
+    SecureAnchor, SecureAnchorStatus, SignedCheckpoint, StartupVerificationMode,
+    StartupVerificationReport,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_ports::{
-    CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_LIST_BATCH, MAX_STREAM_READ_BATCH,
-    ProjectionStore, StoreError, VerificationReport,
+    CheckpointSigner, EventJournal, JournalPayloadProtection, KeyProvider, MAX_STREAM_LIST_BATCH,
+    MAX_STREAM_READ_BATCH, ProjectionStore, StoreError, VerificationReport,
 };
 use postgres::{
     Client, Config as PgConfig, NoTls,

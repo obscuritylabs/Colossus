@@ -148,6 +148,89 @@ inventing identities, paths, or file contents.
   approval response, artifact focus, and artifact keyboard navigation.
 
 final result: passed
+---
+
+# TUI effect-approval dock refinement QA
+
+## Comparison target
+
+- Source defect capture:
+  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-38cee459-4020-41a2-988e-f7d95b7061e4.png`
+- Source pixels: 2830 × 632. The terminal's font scale and display density were not
+  recorded in the capture.
+- Filled-control refinement capture:
+  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-d58bd717-c2c9-4e38-af62-43a10552bb95.png`
+- Refinement-capture pixels: 1392 × 295. The terminal's font scale and display density
+  were not recorded in the capture.
+- Rendered implementation screenshot: pending capture from
+  `target/debug/colossus`; the exact Ratatui cell buffer was verified at 120 × 32
+  cells and the minimum layout at 40 × 12 cells.
+- State: MCP effect approval, Summary selected, no decision selected, composer paused,
+  and draft preserved.
+
+## Findings
+
+The implementation-level layout checks have no remaining P0, P1, or P2 findings. A
+final raster comparison is blocked until the revised binary reaches the same real
+terminal, font, color profile, and approval state as the source capture.
+
+### Required fidelity surfaces
+
+- Typography and hierarchy: the nested `Field`/`Value` table is replaced with five
+  borderless summary rows. Labels remain bold and neutral while values retain normal
+  emphasis.
+- Layout and spacing: the dock is capped at 10 rows instead of 14. Requester, action,
+  resource, policy reason, and risk review fit in the initial 120-column view while
+  preserving 18 transcript rows above the dock in the canonical test state.
+- Color and state semantics: amber now identifies the active section, selected
+  decision, and fail-closed prompt. Green no longer makes an unresolved approval look
+  successful.
+- Copy and controls: `[S]`, `[R]`, and `[P]` make the section shortcuts explicit;
+  `[A]` and `[D]` identify the decisions; `No decision selected` exposes the initial
+  fail-closed state. The help row leads with `Esc deny` and only shows paging help when
+  details overflow.
+- Responsive behavior: the 40 × 12 cell check retains all three compact section tabs,
+  the decision prompt, and the fail-closed Escape hint.
+- Safety: summary values remove control characters and invisible joiners before
+  rendering, and the existing explicit Enter confirmation remains unchanged.
+
+## Comparison history
+
+1. P1 — the nested summary table occupied most of the dock and visually read like a
+   debug inspector.
+   - Fix: extract the released summary key/value entries and render compact borderless
+     rows.
+2. P1 — policy reason and risk review were below the visible area in the source state.
+   - Fix: cap the dock at 10 rows and keep all five decision-context fields in the
+     initial summary view.
+3. P2 — unresolved approval controls used the same green language as successful state.
+   - Fix: use the warning treatment for focus and selection and neutral styling for
+     unselected actions.
+4. P2 — the initial decision state was visually ambiguous.
+   - Fix: show explicit bracketed shortcuts and `No decision selected` without
+     preselecting an action.
+5. P2 — the help row competed with the decision content.
+   - Fix: reduce it to the primary fail-closed and navigation controls, adding scroll
+     range only when needed.
+6. P2 — inactive section and decision controls blended into the surrounding terminal
+   surface, leaving the active tab as the only visibly bounded control.
+   - Fix: give every section and decision a theme-derived filled surface. Inactive
+     controls use a subdued tint; the active control uses the warning accent with
+     contrast-selected text. Mono terminals retain reverse-video and dim distinctions.
+7. P1 — compact Summary values could lose an authorization-relevant suffix with no
+   complete representation in another section.
+   - Fix: wrap complete values in Summary and repeat the sanitized, wrapped, scrollable
+     approval scope before the prepared body in Exact request.
+
+## Verification
+
+- `cargo test -p colossus-tui --lib`: passed, 55 tests.
+- `cargo xtask check rust`: passed, including formatting, crate-root structure,
+  locked metadata, workspace Clippy, workspace tests, and fuzz-harness Clippy.
+- `cargo build -p colossus-cli --bin colossus`: passed and rebuilt the debug binary.
+- Real-terminal raster comparison: pending a revised approval capture.
+
+final result: blocked
 
 ---
 
@@ -378,5 +461,79 @@ gap `0`, document client height `879`, and document scroll height `879`.
 - Runtime error check: no Vite error overlay and no page alerts were present after
   the interaction. The in-app Browser surface does not expose a separate console-log
   stream.
+
+final result: passed
+
+---
+
+# `/resume` session browser design QA
+
+## Comparison target
+
+- Source visual truth: `/Users/alex/.codex/generated_images/019fddf6-9559-7532-9145-64591a486f7b/exec-f978682f-c5f2-4c9e-a2a1-a285dcc5abbc.png`
+- Rendered implementation: `/private/tmp/colossus-session-browser-tight.png`
+- Full-view comparison: `/private/tmp/colossus-session-browser-tight-comparison.png`
+- Focused comparison: `/private/tmp/colossus-session-browser-tight-focused-comparison.png`
+- State: dark terminal theme; four non-empty sessions; active session marked; second session selected; recent conversation at its initial scroll position; `/resume` activity, composer, and footer visible; inline mode hosted on a temporary alternate screen.
+
+## Viewport and normalization
+
+- Source pixels: `1937 x 812`.
+- Implementation source capture: a `168 x 37` Ratatui terminal grid rasterized at `1932 x 844`.
+- Normalized implementation pixels: `1937 x 812`, matching the source visual truth.
+- CSS size: not applicable to the native terminal interface.
+- Density normalization: the implementation terminal grid was rasterized with a monospaced cell model, then normalized to the exact source pixel dimensions. Both full views were downsampled identically to `700 x 293` panels for the combined comparison. The focused list and conversation regions were cropped from the full-resolution source and normalized implementation.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain.
+- Fonts and typography: both views use a terminal-owned monospaced hierarchy with bold section labels, role labels, and selected-row text. Line wrapping and truncation preserve the source's dense terminal character.
+- Spacing and layout rhythm: the implementation matches the full-width framed composition, approximately `44% / 56%` list-to-preview split, inset frame, compact two-line session rows, separated header and controls, and reserved space for activity, composer, and footer. The title and ID lines now sit directly above the next session with no unused third row.
+- Colors and visual tokens: dark background, green semantic accents, muted metadata, yellow shortcut keys, and a pale high-contrast selection surface match the source. The implementation intentionally derives hues from the active terminal theme.
+- Image quality and asset fidelity: the design contains no raster imagery, logos, illustrations, or custom icons. Borders, scrollbar cues, and controls are native terminal glyphs rendered at the target grid density.
+- Copy and content: header, list columns, current-session treatment, preview labels, metadata, and keyboard guidance match the source. Relative times and conversation text are intentionally live session data rather than fixed mock copy.
+- Interaction and viewport behavior: opening `/resume` from inline mode now enters the terminal's temporary alternate screen and dismissal restores the original main screen. A PTY regression verifies both terminal transitions and confirms that session-browser labels never enter native scrollback.
+
+## Open Questions
+
+- None blocking. Exact relative timestamps will differ from the static reference because the implementation computes them at render time.
+
+## Comparison history
+
+1. Initial comparison
+   - Evidence: `/private/tmp/comparison-bottom.png` and the selected source.
+   - [P2] The initial fixture used a `200 x 45` grid, making the view denser and taller than the source's effective terminal grid.
+   - [P2] Session rows were too compressed and the selected background used the raw accent color.
+   - [P2] Underlying transcript text could remain visible in the frame margins.
+2. Fixes made
+   - Normalized the comparison to the source's effective `168 x 37` terminal grid and exact `1937 x 812` pixel canvas.
+   - Tuned horizontal and bottom margins, changed full-view session entries to three rows, and softened the theme-derived selection color.
+   - Cleared the complete browser canvas above persistent bottom chrome before rendering the frame.
+3. Post-fix comparison
+   - Evidence: `/private/tmp/colossus-session-browser-final-comparison.png` and `/private/tmp/colossus-session-browser-final-focused-comparison.png`.
+   - Frame proportions, pane split, list density, selection treatment, typography hierarchy, persistent chrome, and conversation layout now align without actionable P0/P1/P2 drift.
+4. User-requested density refinement
+   - [P2] User feedback identified excessive blank space beneath each session entry.
+   - Fix: reduced the full-view entry height from three terminal rows to the two rows actually used by title/metadata and session ID, then updated viewport accounting and regression coverage.
+   - Post-fix evidence: `/private/tmp/colossus-session-browser-tight-comparison.png` and `/private/tmp/colossus-session-browser-tight-focused-comparison.png` show the unused row removed while preserving column alignment, selection fill, and readable grouping.
+5. Inline viewport isolation
+   - [P2] User feedback identified that opening the browser enlarged the inline viewport and appended its rows to terminal history.
+   - Fix: classified the session browser as a transient full-screen surface, entering the alternate screen before drawing and restoring the original inline viewport on resume or cancel.
+   - Post-fix evidence: the unchanged visual state remains captured in `/private/tmp/colossus-session-browser-tight.png`; `inline_session_browser_uses_a_transient_screen_without_polluting_history` verifies enter/leave terminal transitions, exact restoration of 30 durable history rows, and absence of browser labels from native scrollback.
+
+## Implementation checklist
+
+- [x] Match the selected full-width master-detail composition.
+- [x] Keep activity, composer, and footer visible.
+- [x] Mark and skip the active session during resume selection.
+- [x] Support search, selection, preview paging, resume, and cancel.
+- [x] Provide a compact usable layout at the minimum `40 x 12` terminal size.
+- [x] Verify full-view and focused comparisons after fixes.
+- [x] Remove the unused blank row beneath every full-view session entry.
+- [x] Isolate the browser from inline terminal scrollback and restore the prior viewport on exit.
+
+## Follow-up polish
+
+- P3: If a future terminal backend exposes measured font metrics, visual fixtures could use those metrics instead of the current deterministic monospaced cell model.
 
 final result: passed

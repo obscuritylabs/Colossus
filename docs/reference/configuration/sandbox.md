@@ -21,6 +21,8 @@ see the [Sandbox administration guide](../../admin/sandbox.md).
 | Interactive work in one repository | `workspace-development` | `native` or `windows_job` | Derived workspace and shell grants, plus explicit additions |
 | Automation or a durable workflow | `offline-default` or a custom label | Supported isolating backend | Explicit least-privilege grants |
 | Reproducible container execution | Any nonempty profile | `oci` | Explicit mounts, image executables, and optional network origins |
+| Coder/Kubernetes with a separately managed isolation boundary | `offline-default` or a custom label | `external` | Explicit acknowledgement of the external boundary |
+| Intentionally unrestricted process execution | `offline-default` or a custom label | `danger_full_access` | Explicit danger acknowledgement |
 | Externally brokered execution | Any profile except `workspace-development` | `broker` | Explicit acknowledgement; no Colossus process isolation |
 
 Start with `workspace-development` for local interactive use. Use explicit grants for
@@ -37,6 +39,8 @@ sandbox:
   backend: native
   profile: workspace-development
   allowBrokerFallback: false
+  acknowledgeExternalBoundary: false
+  acknowledgeDangerFullAccess: false
   helperPath: null
   ociRuntime: null
   ociImage: null
@@ -54,7 +58,8 @@ sandbox:
 
 ## Profile
 
-`sandbox.profile` is a nonempty policy identity. Two names have built-in meaning:
+`sandbox.profile` is a nonempty policy identity and defaults to `offline-default` when
+omitted. Two names have built-in meaning:
 
 | Value | Behavior |
 | --- | --- |
@@ -65,7 +70,8 @@ sandbox:
 The development preset applies only to terminal users and agents without workflow
 lineage. It is rejected with `policy.kind: opa`, because OPA must return complete
 filesystem, executable, environment, network, and limit obligations. It is also rejected
-with `backend: broker`, which cannot enforce the protected workspace control paths.
+with `backend: broker`, `external`, or `danger_full_access`, which cannot enforce the
+protected workspace control paths.
 
 Explicit grants remain additive under `workspace-development`:
 
@@ -92,7 +98,64 @@ before deriving development grants. Shell processes cannot read or modify that d
 | `native` | Normal macOS and Linux execution using host-native isolation |
 | `windows_job` | Windows execution using AppContainer and Job Object isolation |
 | `oci` | A preloaded Docker or Podman image with a read-only root and exact bind mounts |
+| `external` | Supervised direct execution when Coder, Kubernetes, or another trusted host owns isolation |
+| `danger_full_access` | Supervised direct execution with no asserted isolation boundary |
 | `broker` | An explicitly accepted downgrade where another boundary owns execution |
+
+### Direct-execution acknowledgements
+
+`external` and `danger_full_access` are explicit modes; Colossus never falls back to
+them when another backend is unavailable. Both retain authenticated helper execution,
+time/output bounds, resource supervision where supported, the effect gateway, audit,
+policy decisions, and approval obligations. `external` also retains exact executable
+and environment-name validation. `danger_full_access` deliberately drops those process
+allowlists and inherits the runtime environment after a process permit is minted.
+Neither mode supplies Colossus filesystem or network isolation.
+
+For a Coder or Kubernetes workload whose pod/container boundary is managed separately,
+edit the existing sandbox block:
+
+```yaml
+sandbox:
+  backend: external
+  acknowledgeExternalBoundary: true
+```
+
+`acknowledgeExternalBoundary` defaults to `false`. An interactive TUI then presents the
+same bottom-docked, fail-closed decision flow used for effect approvals and requires a
+session acknowledgement before any process permit can be minted. Embedded mode keeps that
+acknowledgement process-local. Worker-backed mode issues an opaque capability to the attached
+TUI client and accepts it only for that session's interactive operations; ordinary worker API
+calls and other clients remain blocked. A headless runtime fails process effects closed unless
+the field is explicitly `true`.
+
+Use unrestricted execution only when ambient runtime access is intentional:
+
+```yaml
+sandbox:
+  backend: danger_full_access
+  acknowledgeDangerFullAccess: true
+```
+
+`acknowledgeDangerFullAccess` follows the same TUI/headless behavior and defaults to
+`false`. Selecting either direct backend does not change approval mode and does not
+auto-approve any policy obligation. The two acknowledgement fields are valid only with
+their matching backend, which prevents a stale acknowledgement from silently applying
+after a backend change.
+
+In direct modes, `filesystem` and `networkDestinations` remain policy/audit declarations
+and continue to constrain Colossus-owned filesystem and HTTP adapters. They are not an
+OS-enforced allowlist for arbitrary child-process access; the external platform owns
+that enforcement for `external`, and no such enforcement is asserted for
+`danger_full_access`. Process working directories and path-like arguments therefore do
+not require matching `filesystem` entries in either direct mode. `external` still
+requires exact executable and environment-name grants. After its explicit danger
+acknowledgement, `danger_full_access` resolves absolute executables or command names on
+ambient `PATH`, permits working directories outside the workspace, inherits ambient
+environment variables, accepts explicit environment overrides, and leaves child-process
+network access unrestricted without `networkDestinations`. Internal helper-control
+variables are never inherited. Approval decisions, time/output/process limits, permits,
+quarantine, and audit still apply.
 
 ### `allowBrokerFallback`
 
@@ -168,6 +231,9 @@ For native execution, each path must resolve to a regular host file. For OCI exe
 the path names the executable inside the pinned workload image. No `PATH` lookup widens
 this list. Shell command mode needs either `workspace-development` or one explicitly
 granted platform shell; argument-vector mode can call another exact granted executable.
+The acknowledged `danger_full_access` backend is the intentional exception: `shell.run`
+uses an ambient platform shell, resolves command names on the runtime `PATH`, and does
+not require `sandbox.executables` entries.
 
 ## Environment variables
 
@@ -187,6 +253,10 @@ child processes and configuration fields that explicitly require a sandbox envir
 grant. In-process provider credentials do not need an entry merely because their
 provider profile uses `env:VARIABLE`. The owning configuration page states when both a
 credential reference and an environment grant are required.
+
+An acknowledged `danger_full_access` process instead inherits the runtime environment
+after authorization and may override names through `shell.run.env` without listing them
+here. Colossus keeps its private helper-control variables out of that inherited map.
 
 ## Network destinations
 
@@ -218,6 +288,10 @@ must be listed exactly. The wildcard does not authorize raw sockets, non-HTTP pr
 credentials, actions, or a sandbox bypass. Network effects retain DNS pinning, TLS
 authority checks, disabled ambient proxies and redirects, bounded connections, and
 private-address rejection for wildcard destinations.
+
+These destinations still constrain Colossus-owned HTTP adapters in every backend. They
+do not constrain raw child-process networking in either direct mode; in
+`danger_full_access`, unrestricted child networking is intentional and needs no entry.
 
 ## Resource limits
 
@@ -353,8 +427,8 @@ preloaded images.
 | Symptom | Check |
 | --- | --- |
 | A path is rejected | Use a canonical absolute root and grant the required mode |
-| A command is unavailable | Add its exact executable path; do not rely on `PATH` lookup |
-| A child-process variable is unavailable | Add only its name here; keep values outside YAML |
+| A command is unavailable | Add its exact executable path; only acknowledged `danger_full_access` relies on ambient `PATH` |
+| A child-process variable is unavailable | Add only its name here; acknowledged `danger_full_access` instead inherits ambient names and accepts explicit overrides |
 | A remote endpoint is denied | Grant its origin without a path, query, fragment, or credentials |
 | A local service is denied with `"*"` | Add the exact loopback or private origin |
 | OCI configuration is rejected | Use preloaded immutable image digests and reserve the required cleanup timeout |

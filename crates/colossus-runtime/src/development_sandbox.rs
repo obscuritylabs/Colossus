@@ -25,7 +25,10 @@ pub(super) fn derive_development_sandbox(
                 .into(),
         ));
     }
-    if config.sandbox.backend == "broker" {
+    if matches!(
+        config.sandbox.backend.as_str(),
+        "broker" | "external" | "danger_full_access"
+    ) {
         return Err(RuntimeError::Config(
             "workspace-development requires an isolating sandbox backend".into(),
         ));
@@ -140,17 +143,17 @@ fn resolve_in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
+pub(super) fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
     resolve_first(&["/bin/zsh", "/bin/sh"])
 }
 
 #[cfg(target_os = "linux")]
-fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
+pub(super) fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
     resolve_first(&["/bin/bash", "/bin/sh"])
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
+pub(super) fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
     let system_root = std::env::var_os("SystemRoot")
         .or_else(|| std::env::var_os("WINDIR"))
         .ok_or_else(|| RuntimeError::Config("Windows system root is unavailable".into()))?;
@@ -165,7 +168,7 @@ fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
+pub(super) fn resolve_platform_shell() -> Result<PathBuf, RuntimeError> {
     Err(RuntimeError::Config(
         "workspace-development has no supported platform shell".into(),
     ))

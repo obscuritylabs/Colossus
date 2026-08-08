@@ -80,24 +80,115 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
     }
 
     async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
-        let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
-        if !prompt.details.is_null() {
-            body.extend(document_from_json(&prompt.details, None).blocks);
-        }
-        let tone = match prompt.kind {
-            WorkerPromptKind::Approval => PresentationTone::Warning,
-            WorkerPromptKind::UserInput => PresentationTone::Neutral,
+        let (kind, document) = match prompt.kind {
+            WorkerPromptKind::Approval => {
+                let actor = prompt
+                    .details
+                    .get("actor")
+                    .and_then(Value::as_object)
+                    .map(|actor| {
+                        let kind = actor
+                            .get("actor_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                            .replace('_', " ");
+                        let id = actor.get("id").and_then(Value::as_str).unwrap_or("unknown");
+                        format!("{kind} · {id}")
+                    });
+                let action = prompt
+                    .details
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or("effect");
+                let resource = prompt
+                    .details
+                    .get("resource")
+                    .and_then(Value::as_str)
+                    .unwrap_or("configured resource");
+                let reason = prompt
+                    .details
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&prompt.question);
+                let risk = prompt.details.get("risk").and_then(Value::as_object);
+                let risk_reason = risk
+                    .and_then(|risk| risk.get("reason"))
+                    .and_then(Value::as_str);
+                let risk_level = risk
+                    .and_then(|risk| risk.get("level"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("not assessed");
+                let mut details = Vec::new();
+                if let Some(actor) = actor {
+                    details.push(("Requested by".into(), actor));
+                }
+                details.extend([
+                    ("Action".into(), action.into()),
+                    ("Resource".into(), resource.into()),
+                    ("Reason".into(), reason.into()),
+                ]);
+                if let Some(risk_reason) = risk_reason {
+                    details.push(("Risk review".into(), format!("{risk_level}: {risk_reason}")));
+                }
+                let content =
+                    bounded_approval_content(prompt.details.get("content").unwrap_or(&Value::Null))
+                        .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                (
+                    InteractivePromptKind::Approval,
+                    PresentationDocument::from_block(PresentationBlock::Card {
+                        title: prompt.title.clone(),
+                        tone: PresentationTone::Warning,
+                        body: vec![
+                            PresentationBlock::KeyValue(details),
+                            PresentationBlock::Code {
+                                language: Some("exact prepared request".into()),
+                                content,
+                            },
+                        ],
+                    }),
+                )
+            }
+            WorkerPromptKind::SandboxBoundaryAcknowledgement => {
+                let mode = serde_json::from_value::<SandboxBoundaryMode>(
+                    prompt.details.get("mode").cloned().ok_or_else(|| {
+                        WorkerError::Protocol("sandbox boundary prompt omitted its mode".into())
+                    })?,
+                )
+                .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                let (placeholder_tx, _placeholder_rx) = oneshot::channel();
+                let expected = sandbox_boundary_prompt(mode, placeholder_tx);
+                if prompt.title != expected.title
+                    || prompt.choices != expected.choices
+                    || prompt.allow_free_form
+                {
+                    return Err(WorkerError::Protocol(
+                        "worker sent a noncanonical sandbox boundary prompt".into(),
+                    ));
+                }
+                (expected.kind, expected.document)
+            }
+            WorkerPromptKind::UserInput => {
+                let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
+                if !prompt.details.is_null() {
+                    body.extend(document_from_json(&prompt.details, None).blocks);
+                }
+                (
+                    InteractivePromptKind::UserInput,
+                    PresentationDocument::from_block(PresentationBlock::Card {
+                        title: prompt.title.clone(),
+                        tone: PresentationTone::Neutral,
+                        body,
+                    }),
+                )
+            }
         };
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(HostEvent::Prompt(InteractivePrompt {
                 id: prompt.prompt_id,
+                kind,
                 title: prompt.title.clone(),
-                document: PresentationDocument::from_block(PresentationBlock::Card {
-                    title: prompt.title,
-                    tone,
-                    body,
-                }),
+                document,
                 choices: prompt.choices,
                 initial_choice: None,
                 allow_free_form: prompt.allow_free_form,
@@ -121,6 +212,7 @@ pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
     themes: ThemeLibrary,
     approval_mode: ApprovalMode,
+    sandbox_boundary_acknowledgements: Mutex<BTreeMap<String, SandboxBoundaryAcknowledgement>>,
 }
 
 impl WorkerInteractiveHost {
@@ -133,7 +225,34 @@ impl WorkerInteractiveHost {
             client: Arc::new(client),
             themes,
             approval_mode,
+            sandbox_boundary_acknowledgements: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn sandbox_boundary_acknowledgement(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SandboxBoundaryAcknowledgement>, String> {
+        self.sandbox_boundary_acknowledgements
+            .lock()
+            .map_err(|_| "sandbox boundary acknowledgement lock is poisoned".to_owned())
+            .map(|acknowledgements| acknowledgements.get(session_id).cloned())
+    }
+
+    async fn pending_sandbox_boundary_acknowledgement(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SandboxBoundaryMode>, String> {
+        if self.sandbox_boundary_acknowledgement(session_id)?.is_some() {
+            return Ok(None);
+        }
+        serde_json::from_value(
+            self.value(WorkerOperation::SandboxBoundaryStatus {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())
     }
 
     async fn value(&self, operation: WorkerOperation) -> Result<Value, String> {
@@ -152,36 +271,6 @@ impl WorkerInteractiveHost {
             &self.value(operation).await?,
             title,
         )))
-    }
-
-    async fn choose(
-        &self,
-        events: &mpsc::Sender<HostEvent>,
-        id: &str,
-        title: &str,
-        choices: Vec<String>,
-    ) -> Result<Option<String>, String> {
-        let (response_tx, response_rx) = oneshot::channel();
-        events
-            .send(HostEvent::Prompt(InteractivePrompt {
-                id: id.into(),
-                title: title.into(),
-                document: PresentationDocument::new(),
-                choices,
-                initial_choice: Some(0),
-                allow_free_form: false,
-                response: response_tx,
-            }))
-            .await
-            .map_err(|_| "terminal event loop disconnected".to_owned())?;
-        match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
-            .await
-            .map_err(|_| "interactive choice timed out".to_owned())?
-            .map_err(|_| "interactive choice was dropped".to_owned())?
-        {
-            PromptResponse::Answer(answer) => Ok(Some(answer)),
-            PromptResponse::Cancelled => Ok(None),
-        }
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
@@ -238,9 +327,16 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
+        let pending_sandbox_boundary_acknowledgement = self
+            .pending_sandbox_boundary_acknowledgement(&session_id)
+            .await?;
         Ok(HostCommandResult {
             document: PresentationDocument::new(),
-            session: Some((session_id.clone(), page)),
+            session: Some((
+                session_id.clone(),
+                page,
+                pending_sandbox_boundary_acknowledgement,
+            )),
             preferences: None,
             completions: None,
             sticky_skills: None,
@@ -254,6 +350,7 @@ impl WorkerInteractiveHost {
     async fn resume_session(
         &self,
         arguments: &str,
+        current_session_id: &str,
         events: &mpsc::Sender<HostEvent>,
     ) -> Result<HostCommandResult, String> {
         let argument = arguments.trim();
@@ -276,28 +373,43 @@ impl WorkerInteractiveHost {
                 )),
             ));
         }
-        let choices = sessions
-            .iter()
-            .map(session_picker_choice)
-            .collect::<Vec<_>>();
-        let Some(selected) = self
-            .choose(events, "session-picker", "Resume session", choices.clone())
-            .await?
-        else {
+        let mut entries = Vec::with_capacity(sessions.len());
+        for summary in sessions {
+            let preview = self.session_preview(&summary.id).await;
+            entries.push(session_browser_entry(summary, preview));
+        }
+        let Some(selected) = browse_sessions(events, current_session_id, entries).await? else {
             return Ok(HostCommandResult::document(PresentationDocument::new()));
         };
-        let selected = choices
-            .iter()
-            .position(|choice| choice == &selected)
-            .and_then(|index| sessions.get(index))
-            .ok_or_else(|| "selected session is not available".to_owned())?;
-        self.switch_session(selected.id.clone()).await
+        self.switch_session(selected).await
+    }
+
+    /// Page backward past tool records until the bounded preview is complete.
+    async fn session_preview(&self, session_id: &str) -> Vec<InteractiveSessionBrowserMessage> {
+        let mut collector = SessionPreviewCollector::new();
+        while collector.wants_older_page() {
+            let page = self
+                .value(WorkerOperation::SessionMessagesPage {
+                    session_id: session_id.into(),
+                    before_sequence: collector.before_sequence(),
+                    limit: SESSION_BROWSER_PAGE_LIMIT,
+                })
+                .await
+                .ok()
+                .and_then(|value| serde_json::from_value::<SessionMessagePage>(value).ok());
+            match page {
+                Some(page) => collector.absorb(page),
+                None => collector.stop(),
+            }
+        }
+        collector.finish()
     }
 
     async fn presentation_command(
         &self,
         name: &str,
         arguments: &str,
+        events: &mpsc::Sender<HostEvent>,
     ) -> Result<Option<HostCommandResult>, String> {
         let mut preferences = serde_json::from_value::<TerminalPreferences>(
             self.value(WorkerOperation::PresentationGet).await?,
@@ -306,12 +418,21 @@ impl WorkerInteractiveHost {
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
-                if argument.is_empty() || argument == "list" {
+                if argument.is_empty() {
+                    let selected = browse_themes(events, &self.themes, &preferences).await?;
+                    let Some(selected) = selected else {
+                        return Ok(Some(HostCommandResult::document(
+                            PresentationDocument::new(),
+                        )));
+                    };
+                    self.themes
+                        .select(&selected, &mut preferences)
+                        .map_err(|error| error.to_string())?;
+                } else if argument == "list" {
                     return Ok(Some(HostCommandResult::document(
                         self.themes.status_document(preferences.theme_name()),
                     )));
-                }
-                if argument == "reset" {
+                } else if argument == "reset" {
                     preferences.select_builtin_theme(ThemeName::Default);
                 } else if let Some(theme) = argument.strip_prefix("preview ") {
                     return Ok(Some(HostCommandResult::document(
@@ -385,11 +506,16 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
-        Ok(Some(HostCommandResult {
-            document: document_from_json(
+        let document = if name == "theme" {
+            self.themes.selection_document(preferences.theme_name())
+        } else {
+            document_from_json(
                 &serde_json::to_value(&preferences).map_err(|error| error.to_string())?,
                 Some("Terminal preferences"),
-            ),
+            )
+        };
+        Ok(Some(HostCommandResult {
+            document,
             session: None,
             preferences: Some(preferences),
             completions: None,
@@ -410,7 +536,7 @@ impl WorkerInteractiveHost {
         events: &mpsc::Sender<HostEvent>,
         control: &RunControl,
     ) -> Result<HostCommandResult, String> {
-        if let Some(result) = self.presentation_command(name, arguments).await? {
+        if let Some(result) = self.presentation_command(name, arguments, events).await? {
             return Ok(result);
         }
         match name {
@@ -497,14 +623,14 @@ impl WorkerInteractiveHost {
                     .map_err(|error| error.to_string())?;
                     self.switch_session(session.id).await
                 }
-                "resume" => self.resume_session("", events).await,
+                "resume" => self.resume_session("", session_id, events).await,
                 value if value.starts_with("resume ") => {
                     self.switch_session(value.trim_start_matches("resume ").trim().into())
                         .await
                 }
                 _ => Err("/session expects show, new, resume, or resume SESSION_ID".into()),
             },
-            "resume" => self.resume_session(arguments, events).await,
+            "resume" => self.resume_session(arguments, session_id, events).await,
             "work" => {
                 let state = serde_json::from_value::<WorkStateSnapshot>(
                     self.value(WorkerOperation::WorkState {
@@ -595,6 +721,8 @@ impl WorkerInteractiveHost {
                                 session_id: session_id.into(),
                                 goal_id: goal_id.into(),
                             },
+                            sandbox_boundary_acknowledgement: self
+                                .sandbox_boundary_acknowledgement(session_id)?,
                         },
                         &mut observer,
                         &prompts,
@@ -1034,7 +1162,10 @@ impl WorkerInteractiveHost {
         let plan = match self
             .client
             .call_interactive::<PlanRecord>(
-                WorkerOperation::RunInteractive { request },
+                WorkerOperation::RunInteractive {
+                    request,
+                    sandbox_boundary_acknowledgement: None,
+                },
                 &mut observer,
                 &prompts,
                 control,
@@ -1133,6 +1264,14 @@ impl InteractiveHost for WorkerInteractiveHost {
             .filter_map(|skill| skill.get("name").and_then(Value::as_str))
             .map(str::to_owned)
             .collect::<Vec<_>>();
+        let status = self.value(WorkerOperation::Ping).await?;
+        let security_posture = serde_json::from_value(
+            status
+                .get("security_posture")
+                .cloned()
+                .ok_or_else(|| "worker status has no security posture".to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         Ok(InteractiveSnapshot {
             session_id: session.id.clone(),
             transcript,
@@ -1140,7 +1279,62 @@ impl InteractiveHost for WorkerInteractiveHost {
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
             footer: self.footer(&session.id, "ready").await?,
+            security_posture,
+            pending_sandbox_boundary_acknowledgement: self
+                .pending_sandbox_boundary_acknowledgement(&session.id)
+                .await?,
         })
+    }
+
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AcknowledgementResult {
+            acknowledged: bool,
+            #[serde(default)]
+            sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
+        }
+
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        let control = RunControl::default();
+        let result = self
+            .client
+            .call_interactive::<AcknowledgementResult>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
+                        session_id: session_id.into(),
+                        mode,
+                    },
+                    sandbox_boundary_acknowledgement: None,
+                },
+                &mut observer,
+                &prompts,
+                &control,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        if !result.acknowledged {
+            if result.sandbox_boundary_acknowledgement.is_some() {
+                return Err("worker returned a capability for a rejected acknowledgement".into());
+            }
+            return Ok(false);
+        }
+        let acknowledgement = result
+            .sandbox_boundary_acknowledgement
+            .ok_or_else(|| "worker returned an invalid sandbox boundary capability".to_owned())?;
+        self.sandbox_boundary_acknowledgements
+            .lock()
+            .map_err(|_| "sandbox boundary acknowledgement lock is poisoned".to_owned())?
+            .insert(session_id.into(), acknowledgement);
+        Ok(true)
     }
 
     async fn execute_command(
@@ -1211,6 +1405,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                         include_provider_response_diagnostics: request
                             .include_provider_response_diagnostics,
                     },
+                    sandbox_boundary_acknowledgement: self
+                        .sandbox_boundary_acknowledgement(&request.session_id)?,
                 },
                 &mut observer,
                 &prompts,
@@ -1270,6 +1466,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                         strategy: request.strategy,
                         max_turns: None,
                     },
+                    sandbox_boundary_acknowledgement: self
+                        .sandbox_boundary_acknowledgement(&request.session_id)?,
                 },
                 &mut observer,
                 &prompts,

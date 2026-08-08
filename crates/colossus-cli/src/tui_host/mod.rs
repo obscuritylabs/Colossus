@@ -3,12 +3,12 @@
 use super::{ApprovalMode, TERMINAL_HISTORY_CAPACITY, doctor_profile, terminal_completion_values};
 use async_trait::async_trait;
 use colossus_contracts::{
-    AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
+    ActorType, AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
-    MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
+    MemoryStatus, ModelMessageRole, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
     ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SessionMessagePage, SessionSummary,
-    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
+    SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -24,16 +24,20 @@ use colossus_runtime::{Runtime, RuntimeError, format_provider_response_diagnosti
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
     HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractivePlanExecutionRequest,
-    InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot, PlanHostCommand,
-    PlanSelectionUpdate, PromptResponse, RuntimeCommand,
+    InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
+    InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
+    InteractiveThemePicker, InteractiveThemePickerEntry, PlanHostCommand, PlanSelectionUpdate,
+    PromptResponse, RuntimeCommand, sandbox_boundary_acknowledgement_choice,
+    sandbox_boundary_prompt,
 };
 use colossus_worker::{
-    InteractiveWorkerRequest, WorkerClient, WorkerError, WorkerOperation, WorkerPrompt,
-    WorkerPromptHandler, WorkerPromptKind,
+    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerClient, WorkerError,
+    WorkerOperation, WorkerPrompt, WorkerPromptHandler, WorkerPromptKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -44,6 +48,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const APPROVAL_CONTENT_PREVIEW_CHARACTERS: usize = 64 * 1024;
 
 fn current_session_plan(
     plan: Option<PlanRecord>,

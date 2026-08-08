@@ -8,10 +8,10 @@ use super::{
     ProviderProfileConfig, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, goal_objective_from_plan, model_workspace_path,
-    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
-    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
-    terminal_actor,
+    configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
+    model_workspace_path, recover_interrupted_subagents, recover_unknown_effects,
+    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -19,10 +19,13 @@ use colossus_contracts::{
     ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
     ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult, RiskLevel,
-    RiskRecommendation, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
-    ToolCall,
+    RiskRecommendation, SandboxBoundaryMode, StartupVerificationMode, SubagentStatus, TaskStatus,
+    TerminalPreferences, ToolCall,
 };
-use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
+use colossus_mcp::{
+    McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
+    McpTransportKind,
+};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, SafetyKernel,
     effect_request,
@@ -44,7 +47,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tempfile::tempdir;
@@ -707,6 +710,126 @@ workflows:
 surprise: true
 "#;
     assert!(RuntimeConfig::from_yaml(yaml).is_err());
+}
+
+#[test]
+fn storage_keys_default_to_explicit_plaintext_none() {
+    let config = RuntimeConfig::offline_template("state.redb");
+    assert!(matches!(config.storage.keys, super::KeyConfig::None));
+    assert!(config.to_yaml().expect("YAML").contains("kind: none"));
+
+    let mut document: Value =
+        serde_saphyr::from_str(&config.to_yaml().expect("YAML")).expect("YAML value");
+    document["storage"]
+        .as_object_mut()
+        .expect("storage mapping")
+        .remove("keys");
+    let parsed = RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("YAML"))
+        .expect("configuration without keys");
+    assert!(matches!(parsed.storage.keys, super::KeyConfig::None));
+}
+
+#[test]
+fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    assert_eq!(
+        config.security_posture().findings[0].code,
+        "storage.plaintext"
+    );
+    config.mcp.servers.insert(
+        "remote".into(),
+        McpServerConfig {
+            transport: McpTransportKind::StreamableHttp,
+            command: PathBuf::new(),
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            url: Some("https://mcp.example.com/".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: false,
+            oauth: Some(McpOAuthConfig {
+                client_id: "colossus".into(),
+                client_secret_reference: None,
+                callback_port: 8765,
+                scopes: Vec::new(),
+            }),
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+    let report = config.security_posture();
+    assert_eq!(
+        report
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        ["storage.plaintext", "credentials.mcp_oauth_plaintext"]
+    );
+
+    config.use_platform_storage();
+    assert!(config.security_posture().is_hardened());
+}
+
+#[test]
+fn worker_authentication_path_is_adjacent_to_local_state() {
+    let config = RuntimeConfig::offline_template(".colossus/state.redb");
+    assert_eq!(
+        config.worker_ipc_auth_path_at(PathBuf::from("/workspace").as_path()),
+        PathBuf::from("/workspace/.colossus/state.redb.worker-auth")
+    );
+}
+
+#[test]
+fn direct_sandbox_backends_have_distinct_explicit_acknowledgements() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    for backend in ["external", "danger_full_access"] {
+        config.sandbox.backend = backend.into();
+        config.sandbox.acknowledge_external_boundary = false;
+        config.sandbox.acknowledge_danger_full_access = false;
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+        if backend == "external" {
+            config.sandbox.acknowledge_external_boundary = true;
+        } else {
+            config.sandbox.acknowledge_danger_full_access = true;
+        }
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+    }
+
+    config.sandbox.backend = "native".into();
+    config.sandbox.acknowledge_external_boundary = true;
+    config.sandbox.acknowledge_danger_full_access = false;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config.sandbox.acknowledge_external_boundary = false;
+    config.sandbox.acknowledge_danger_full_access = true;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn sandbox_profile_defaults_but_direct_backends_cannot_use_workspace_development() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.backend = "external".into();
+    let mut document: Value =
+        serde_saphyr::from_str(&config.to_yaml().expect("YAML")).expect("YAML value");
+    document["sandbox"]
+        .as_object_mut()
+        .expect("sandbox object")
+        .remove("profile");
+    let parsed = RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("YAML"))
+        .expect("default sandbox profile");
+    assert_eq!(parsed.sandbox.profile, "offline-default");
+
+    config.sandbox.profile = "workspace-development".into();
+    let workspace = tempdir().expect("workspace");
+    assert!(derive_development_sandbox(&config, workspace.path()).is_err());
+    config.sandbox.backend = "danger_full_access".into();
+    assert!(derive_development_sandbox(&config, workspace.path()).is_err());
 }
 
 #[test]
@@ -1376,6 +1499,7 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
             url: None,
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
+            allow_stateless: false,
             oauth: None,
             allowed_tools: vec!["search".into()],
             research_tools: vec![McpResearchToolConfig {
@@ -1390,6 +1514,20 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
         },
     );
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+    config
+        .mcp
+        .servers
+        .get_mut("fixture")
+        .expect("fixture")
+        .allow_stateless = true;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config
+        .mcp
+        .servers
+        .get_mut("fixture")
+        .expect("fixture")
+        .allow_stateless = false;
 
     config
         .mcp
@@ -1420,6 +1558,52 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
         .expect("fixture")
         .allowed_tools = Vec::new();
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn remote_mcp_stateless_opt_in_round_trips_and_defaults_off() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.environment.push("SPLUNK_MCP_TOKEN".into());
+    config
+        .sandbox
+        .network_destinations
+        .push("http://127.0.0.1:18000".into());
+    config.mcp.servers.insert(
+        "splunk".into(),
+        McpServerConfig {
+            transport: McpTransportKind::StreamableHttp,
+            command: PathBuf::new(),
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            url: Some("http://127.0.0.1:18000/services/mcp".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::from([(
+                "Authorization".into(),
+                McpCredentialHeaderConfig {
+                    scheme: Some("Bearer".into()),
+                    reference: "env:SPLUNK_MCP_TOKEN".into(),
+                },
+            )]),
+            allow_stateless: true,
+            oauth: None,
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: Some(5_000),
+            max_output_bytes: Some(64 * 1024),
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+
+    let yaml = config.to_yaml().expect("YAML");
+    assert!(yaml.contains("allowStateless: true"));
+    let parsed = RuntimeConfig::from_yaml(&yaml).expect("stateless remote config");
+    assert!(parsed.mcp.servers["splunk"].allow_stateless);
+
+    let default_yaml = yaml.replacen("      allowStateless: true\n", "", 1);
+    let defaulted = RuntimeConfig::from_yaml(&default_yaml).expect("default stateful config");
+    assert!(!defaulted.mcp.servers["splunk"].allow_stateless);
 }
 
 #[test]
@@ -3430,6 +3614,7 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
                 "credential_headers": {
                     "Authorization": {"scheme": "Bearer", "reference": "env:HOST_MCP_TOKEN"}
                 },
+                "allow_stateless": true,
                 "oauth": {
                     "clientId": "sensitive-client-context",
                     "clientSecretReference": "env:HOST_MCP_CLIENT_SECRET",
@@ -3454,6 +3639,10 @@ async fn mcp_risk_metadata_is_exact_bounded_and_credential_free() {
         .expect("decision");
 
     let metadata = redacted_risk_metadata(&request, &decision);
+    assert_eq!(
+        metadata["proposed_effect"]["endpoint"]["allow_stateless"],
+        true
+    );
     let disclosed = serde_json::to_string(&metadata).expect("metadata");
     assert!(disclosed.contains("http://127.0.0.1:3001/mcp"));
     assert!(disclosed.contains("everything"));
@@ -4624,6 +4813,196 @@ impl colossus_policy::EffectExecutor for FakeProcessExecutor {
             effect_succeeded: true,
         })
     }
+}
+
+struct RecordingProcessExecutor {
+    request: Arc<Mutex<Option<colossus_contracts::EffectRequest>>>,
+}
+
+#[async_trait::async_trait]
+impl colossus_policy::EffectExecutor for RecordingProcessExecutor {
+    async fn execute(
+        &self,
+        request: &colossus_contracts::EffectRequest,
+        _permit: colossus_policy::ExecutionPermit,
+    ) -> Result<colossus_contracts::QuarantinedEffectResult, colossus_policy::ExecutionError> {
+        *self.request.lock().expect("request") = Some(request.clone());
+        Ok(colossus_contracts::QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&json!({
+                "backend": "danger_full_access",
+                "exit_code": 0,
+                "success": true,
+                "timed_out": false,
+                "resource_limit_exceeded": null,
+                "output_truncated": false,
+                "stdout_base64": "",
+                "stderr_base64": "",
+            }))
+            .expect("result JSON"),
+            effect_succeeded: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn danger_full_access_shell_needs_no_process_resource_configuration() {
+    let workspace = tempdir().expect("workspace");
+    let outside_cwd = tempdir().expect("outside cwd");
+    let policy = colossus_policy::BuiltInPolicy::offline_default()
+        .with_action("shell.run", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false);
+    let gateway = Arc::new(colossus_policy::EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["shell.run".into()]).with_sandbox_boundary_gate(
+            Arc::new(colossus_policy::SandboxBoundaryGate::new(
+                Some(SandboxBoundaryMode::DangerFullAccess),
+                true,
+            )),
+        ),
+        [9_u8; 32],
+    ));
+    let recorded = Arc::new(Mutex::new(None));
+    let executor = GatewayToolExecutor {
+        gateway,
+        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+        process: Some(Arc::new(RecordingProcessExecutor {
+            request: Arc::clone(&recorded),
+        })),
+        http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+        work: None,
+        memory: None,
+        skills: None,
+        pack_processes: None,
+        integrations: None,
+        mcp: None,
+        bound_effects: None,
+        search: None,
+        workspace: workspace.path().to_path_buf(),
+        repository_id: "repo-test".into(),
+        executables: Vec::new(),
+    };
+
+    let result = executor
+        .execute(
+            ToolCall {
+                call_id: "danger-shell".into(),
+                name: "shell.run".into(),
+                arguments: json!({
+                    "command": "echo unrestricted",
+                    "cwd": outside_cwd.path(),
+                    "env": {"PATH": "/operator/path", "UNDECLARED_ENVIRONMENT": "available"},
+                }),
+            },
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("danger full access shell");
+    let output: Value = serde_json::from_str(&result.output).expect("tool output");
+    assert_eq!(
+        output["cwd"],
+        outside_cwd
+            .path()
+            .canonicalize()
+            .expect("canonical cwd")
+            .display()
+            .to_string()
+    );
+    let request = recorded
+        .lock()
+        .expect("request")
+        .clone()
+        .expect("recorded request");
+    assert_eq!(request.content["environment"]["PATH"], "/operator/path");
+    assert_eq!(
+        request.content["environment"]["UNDECLARED_ENVIRONMENT"],
+        "available"
+    );
+    assert!(Path::new(&request.resource).is_absolute());
+}
+
+#[tokio::test]
+async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
+    let workspace = tempdir().expect("workspace");
+    let outside_cwd = tempdir().expect("outside cwd");
+    let candidate = outside_cwd.path().join("candidate");
+    let policy = colossus_policy::BuiltInPolicy::offline_default()
+        .with_action("shell.run", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false);
+    let gateway = Arc::new(colossus_policy::EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["shell.run".into()]).with_sandbox_boundary_gate(
+            Arc::new(colossus_policy::SandboxBoundaryGate::new(
+                Some(SandboxBoundaryMode::DangerFullAccess),
+                false,
+            )),
+        ),
+        [9_u8; 32],
+    ));
+    let recorded = Arc::new(Mutex::new(None));
+    let executor = GatewayToolExecutor {
+        gateway,
+        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+        process: Some(Arc::new(RecordingProcessExecutor {
+            request: Arc::clone(&recorded),
+        })),
+        http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+        work: None,
+        memory: None,
+        skills: None,
+        pack_processes: None,
+        integrations: None,
+        mcp: None,
+        bound_effects: None,
+        search: None,
+        workspace: workspace.path().to_path_buf(),
+        repository_id: "repo-test".into(),
+        executables: Vec::new(),
+    };
+
+    let probe = async || -> String {
+        executor
+            .execute(
+                ToolCall {
+                    call_id: "unacknowledged-shell".into(),
+                    name: "shell.run".into(),
+                    arguments: json!({
+                        "argv": [candidate.display().to_string(), "--version"],
+                        "cwd": outside_cwd.path(),
+                    }),
+                },
+                ExecutionContext {
+                    session_id: Some("session-unacknowledged".into()),
+                    ..ExecutionContext::default()
+                },
+            )
+            .await
+            .expect_err("unacknowledged danger full access shell")
+            .to_string()
+    };
+
+    let absent = probe().await;
+    fs::write(&candidate, "test executable identity").expect("executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755))
+            .expect("executable permissions");
+    }
+    let present = probe().await;
+    assert_eq!(
+        absent, present,
+        "unacknowledged resolution must not disclose host existence"
+    );
+    assert!(absent.contains("not explicitly configured"), "{absent}");
+    assert!(
+        recorded.lock().expect("request").is_none(),
+        "unacknowledged shell must not reach the process executor"
+    );
 }
 
 #[tokio::test]

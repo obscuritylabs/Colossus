@@ -14,8 +14,10 @@ pub(super) async fn dispatch(
             "protocol_version": PROTOCOL_VERSION,
             "pid": std::process::id(),
             "workspace": runtime.workspace(),
+            "security_posture": runtime.security_posture(),
         })),
         WorkerOperation::AuditVerify => Ok(serde_json::to_value(runtime.journal().verify()?)?),
+        WorkerOperation::AuditAnchorStatus => Ok(runtime.audit_anchor_status()?),
         WorkerOperation::AuditRead { from, limit } => Ok(serde_json::to_value(
             runtime
                 .journal()
@@ -48,6 +50,9 @@ pub(super) async fn dispatch(
         }
         WorkerOperation::StateDoctor => Ok(runtime.state_doctor()?),
         WorkerOperation::SandboxDoctor => Ok(serde_json::to_value(runtime.sandbox_doctor())?),
+        WorkerOperation::SandboxBoundaryStatus { session_id } => Ok(serde_json::to_value(
+            runtime.pending_sandbox_boundary_acknowledgement(&session_id)?,
+        )?),
         WorkerOperation::ProviderProfiles => Ok(serde_json::to_value(runtime.provider_profiles())?),
         WorkerOperation::ProviderDoctor {
             profile,

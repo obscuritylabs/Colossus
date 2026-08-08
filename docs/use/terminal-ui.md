@@ -54,10 +54,17 @@ cards. The notice is informational and never opens a modal or interrupts typing.
 
 If the evaluator is unavailable or returns an invalid assessment, an **Automatic
 approval review failed** card explains that Colossus is falling back to manual approval
-before the approval overlay opens.
+before the bottom approval dock opens.
 
 The canonical workspace is also the worker compatibility identity. A TUI client refuses
 to attach to a worker serving another workspace.
+
+When `sandbox.backend` is `external` or `danger_full_access` and its matching
+configuration acknowledgement is `false`, startup opens a boundary warning. Accepting
+it enables process effects only for the active session in this runtime process and
+records audit evidence. Cancelling or submitting a blank response keeps process effects
+blocked. This boundary acknowledgement is separate from approval mode; every normal
+policy and approval obligation still applies.
 
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never
@@ -131,8 +138,16 @@ cancellation pauses the queue for confirmation.
 
 ### 5. Handle approvals and questions
 
-Approval and `user.ask` prompts take focus without discarding your draft. Select an exact
-option or type an answer, then press Enter. Esc or a blank response fails closed.
+Effect approvals take focus in a compact bottom dock above the preserved composer. The
+borderless Summary keeps requester, action, resource, policy reason, and risk review in
+the initial view, with long values wrapped and scrollable. Use `S`, `R`, and `P` to
+inspect Summary, Exact request, and Protections; PageUp/PageDown appears in the help row
+only when the active section overflows. Exact request repeats the complete sanitized
+approval scope. Up/Down or `A`/`D` selects a decision, and Enter confirms it. Nothing is
+selected initially, so Enter, Esc, disconnect, or timeout fails closed. Filled neutral
+controls distinguish available actions from the amber active control without implying
+that an action has already been approved. `user.ask` continues to use a focused overlay
+without discarding your draft.
 
 Use `wait_for_input` in a workflow when a run must wait durably without an attached
 terminal; `user.ask` is turn-scoped.
@@ -168,9 +183,11 @@ and `/audit verify` to confirm the active session and journal.
   revision. Reload it with `/plan use PLAN_ID`, inspect it, and deliberately retry.
 - **An Approved plan will not refine:** Approved plans are immutable. Execute, discard,
   start a new plan, or return to Execute mode.
-- **A worker protocol mismatch appears:** protocol v6 is not compatible with an older
-  resident worker. Restart the worker and client with the same Colossus version, inspect
-  `/plans`, and do not assume an interrupted request was retried.
+- **A worker protocol mismatch appears:** protocol v8 is not compatible with an older
+  resident worker, including one that predates the `<storage.path>.worker-auth` secret
+  and is reported as listening without it. Restart the worker and client with the same
+  Colossus version, inspect `/plans`, and do not assume an interrupted request was
+  retried.
 - **Terminal state looks damaged after a crash:** reset the terminal, then use durable
   session and audit commands to inspect application state.
 

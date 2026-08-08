@@ -10,8 +10,8 @@ use colossus_contracts::{
     AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
     IntegrationAuth, MemoryScope, MemoryStatus, PlanExecutionStrategy, PlanStatus, PlanStep,
     PolicyDecision, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope,
-    SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
-    WorkflowScheduleMisfirePolicy,
+    SandboxBoundaryMode, SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest,
+    UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -37,7 +37,11 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 6;
+// Version 8 replaced the storage-derived worker authentication key with the
+// independent `<storage.path>.worker-auth` secret. A version-7 worker and a
+// version-8 client cannot authenticate each other, so both sides must reject
+// the mismatch instead of silently failing the handshake tag.
+const PROTOCOL_VERSION: u16 = 8;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -78,7 +82,9 @@ mod server;
 pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
 pub use frames::{WorkerApprovalMode, WorkerPrompt, WorkerPromptKind};
-pub use operations::{InteractiveWorkerRequest, WorkerError, WorkerOperation};
+pub use operations::{
+    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerError, WorkerOperation,
+};
 pub use public_api::{PublicApiDeploymentMode, PublicApiHostOptions, PublicApiReadyMetadata};
 pub use public_credentials::{
     ApplicationGrant, IssuedCredential, PublicApiAuthenticationKey, PublicApiCredentialError,
@@ -88,7 +94,7 @@ pub use server::WorkerServer;
 
 use authentication::*;
 #[cfg(test)]
-use client::handshake_timeout_error;
+use client::{handshake_timeout_error, missing_secret_outcome};
 use dispatch::*;
 use frames::*;
 use handshake::*;

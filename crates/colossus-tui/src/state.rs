@@ -85,18 +85,56 @@ pub(super) struct CompletionContext<'a> {
     pub(super) kind: CompletionKind,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ApprovalSection {
+    #[default]
+    Summary,
+    Request,
+    Protections,
+}
+
+impl ApprovalSection {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Summary => "Summary",
+            Self::Request => "Exact request",
+            Self::Protections => "Protections",
+        }
+    }
+
+    pub(super) const fn next(self) -> Self {
+        match self {
+            Self::Summary => Self::Request,
+            Self::Request => Self::Protections,
+            Self::Protections => Self::Summary,
+        }
+    }
+
+    pub(super) const fn previous(self) -> Self {
+        match self {
+            Self::Summary => Self::Protections,
+            Self::Request => Self::Summary,
+            Self::Protections => Self::Request,
+        }
+    }
+}
+
 pub(super) enum Overlay {
     Prompt {
         request: InteractivePrompt,
         input: String,
         selected: Option<usize>,
+        approval_section: ApprovalSection,
+        document_scroll: usize,
     },
+    SessionBrowser(SessionBrowserState),
+    ThemePicker(ThemePickerState),
     HistorySearch {
         query: String,
     },
     PlanExecutionChoice {
         plan: PlanRecord,
-        selected: usize,
+        selected: Option<usize>,
     },
     QueuePaused,
 }
@@ -122,6 +160,8 @@ pub struct TuiState {
     pub preferences: TerminalPreferences,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Effective non-durable security posture for persistent terminal chrome.
+    pub security_posture: SecurityPostureReport,
     /// Process-local terminal behavior; never loaded from or saved to preferences.
     pub mode: InteractiveMode,
     /// Process-local canonical selected plan; cleared on session switches and restart.
@@ -138,6 +178,8 @@ pub struct TuiState {
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
+    pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
+    pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
@@ -154,8 +196,36 @@ pub struct TuiState {
 impl TuiState {
     /// Build reducer state from one bounded host snapshot.
     pub fn from_snapshot(snapshot: InteractiveSnapshot) -> Self {
-        let (transcript, transcript_sources) =
+        let (mut transcript, mut transcript_sources) =
             transcript_from_messages(snapshot.transcript.messages, &snapshot.preferences);
+        if !snapshot.security_posture.is_hardened() {
+            let mut body = Vec::new();
+            for finding in &snapshot.security_posture.findings {
+                body.push(PresentationBlock::Markdown(format!(
+                    "**{}**\n\n{}",
+                    finding.summary, finding.remediation
+                )));
+            }
+            transcript.push(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document: PresentationDocument::from_block(PresentationBlock::Card {
+                    title: format!(
+                        "Security posture · {} warning{}",
+                        snapshot.security_posture.finding_count(),
+                        if snapshot.security_posture.finding_count() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    ),
+                    tone: PresentationTone::Warning,
+                    body,
+                }),
+                temporary: false,
+            });
+            transcript_sources.push(None);
+        }
         Self {
             session_id: snapshot.session_id,
             transcript,
@@ -164,6 +234,7 @@ impl TuiState {
             before_sequence: snapshot.transcript.before_sequence,
             preferences: snapshot.preferences,
             footer: snapshot.footer,
+            security_posture: snapshot.security_posture,
             mode: InteractiveMode::Execute,
             selected_plan: None,
             composer: Composer::default(),
@@ -178,6 +249,9 @@ impl TuiState {
             control: None,
             overlay: None,
             pending_plan_execution: None,
+            pending_sandbox_boundary_acknowledgement: snapshot
+                .pending_sandbox_boundary_acknowledgement,
+            sandbox_boundary_acknowledgement_in_progress: false,
             activity: None,
             started_at: None,
             scroll_from_bottom: 0,
@@ -195,6 +269,31 @@ impl TuiState {
     /// Current editable draft, excluding type-ahead ghost text.
     pub fn draft(&self) -> &str {
         &self.composer.draft
+    }
+
+    pub(super) fn docked_decision_kind(&self) -> Option<InteractivePromptKind> {
+        match self.overlay.as_ref() {
+            Some(Overlay::Prompt { request, .. }) if request.kind.uses_decision_dock() => {
+                Some(request.kind)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn docked_decision_active(&self) -> bool {
+        self.docked_decision_kind().is_some() || self.plan_execution_decision_active()
+    }
+
+    pub(super) fn plan_execution_decision_active(&self) -> bool {
+        matches!(self.overlay, Some(Overlay::PlanExecutionChoice { .. }))
+    }
+
+    pub(super) fn transient_inline_screen_active(&self) -> bool {
+        matches!(
+            self.overlay,
+            Some(Overlay::SessionBrowser(_) | Overlay::ThemePicker(_))
+        ) || self.docked_decision_active()
+            || self.structured_completion_context().is_some()
     }
 
     pub(super) fn run_request(&self, prompt: String) -> Result<InteractiveRunRequest, String> {
@@ -270,7 +369,7 @@ impl TuiState {
 
     /// Whether a serialized command or run is active.
     pub const fn is_busy(&self) -> bool {
-        self.operation.is_some()
+        self.operation.is_some() || self.sandbox_boundary_acknowledgement_in_progress
     }
 
     /// Append an older page without duplicating or exposing system messages.
@@ -456,7 +555,7 @@ impl TuiState {
             self.composer.completion_index = Some(
                 self.composer
                     .completion_index
-                    .map_or(0, |index| (index + 1) % count),
+                    .map_or(1 % count, |index| (index + 1) % count),
             );
         }
     }
@@ -577,12 +676,22 @@ impl TuiState {
         self.should_exit = true;
     }
 
-    fn cancel_overlay(&mut self) -> bool {
+    pub(super) fn cancel_overlay(&mut self) -> bool {
         let Some(overlay) = self.overlay.take() else {
             return false;
         };
-        if let Overlay::Prompt { request, .. } = overlay {
-            let _ = request.response.send(PromptResponse::Cancelled);
+        match overlay {
+            Overlay::Prompt { request, .. } => {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            }
+            Overlay::SessionBrowser(browser) => {
+                let _ = browser.request.response.send(PromptResponse::Cancelled);
+            }
+            Overlay::ThemePicker(picker) => {
+                self.preferences = picker.original_preferences;
+                let _ = picker.request.response.send(PromptResponse::Cancelled);
+            }
+            _ => {}
         }
         true
     }

@@ -182,10 +182,12 @@ impl ApprovalProvider for WorkerInteractiveApproval {
                 choices: vec!["Allow once".into(), "Deny".into()],
                 allow_free_form: false,
                 details: json!({
+                    "actor": request.actor,
                     "action": request.action,
                     "resource": request.resource,
                     "content": request.content,
                     "decision_id": decision.decision_id,
+                    "reason": decision.reason,
                     "risk": request.risk,
                 }),
             })

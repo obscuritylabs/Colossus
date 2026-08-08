@@ -14,6 +14,23 @@ pub fn create_private_directory(path: &Path) -> Result<(), WindowsNativeError> {
     }
 }
 
+/// Create one file with an explicit owner-private DACL and write its exact contents.
+///
+/// The new file never inherits the parent directory's access entries, fails when the
+/// name already exists, and is removed again when its committed owner or DACL is not
+/// private. Use it for local secrets that must stay unreadable by other local accounts.
+pub fn create_private_file(path: &Path, contents: &[u8]) -> Result<(), WindowsNativeError> {
+    #[cfg(windows)]
+    {
+        crate::windows::create_private_file(path, contents)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, contents);
+        Err(WindowsNativeError::UnsupportedPlatform)
+    }
+}
+
 /// Atomically replace one private file with another file in the same private directory.
 pub fn replace_private_file(source: &Path, destination: &Path) -> Result<(), WindowsNativeError> {
     #[cfg(windows)]

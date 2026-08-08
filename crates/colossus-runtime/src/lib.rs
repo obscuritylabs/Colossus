@@ -28,7 +28,8 @@ use colossus_contracts::{
     ProviderStreamItem, ProviderTurn, PublisherTrust, QuarantinedEffectResult, RegistryPullResult,
     RegistryPushResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
     ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
-    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SessionMessage,
+    SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
+    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
     SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
     SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
     SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
@@ -41,8 +42,8 @@ use colossus_integrations::{
 };
 use colossus_journal_postgres::{PostgresEventJournal, PostgresJournalConfig};
 use colossus_journal_redb::{
-    Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
-    RedbWriterLease, platform_secret,
+    DisabledCheckpointSigner, Ed25519CheckpointSigner, EnvironmentKeyProvider,
+    PlaintextKeyProvider, PlatformKeyProvider, RedbEventJournal, RedbWriterLease, platform_secret,
 };
 use colossus_mcp::{
     MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor,
@@ -51,7 +52,7 @@ use colossus_mcp::{
     validate_tool_arguments,
 };
 use colossus_memory::{
-    EventSourcedMemoryRepository, MemoryIndexRegistration, MemoryService, TantivyMemoryIndex,
+    EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
     UnavailableMemoryIndex,
 };
 use colossus_memory_chroma::{
@@ -64,13 +65,13 @@ use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
     MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectObserver,
-    ReleasedEffectResult, SafetyKernel, canonical_network_origin, effect_request,
-    network_destination_match, system_actor,
+    ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, canonical_network_origin,
+    effect_request, network_destination_match, system_actor,
 };
 use colossus_ports::{
-    ApprovalProvider, AuditExporter, ContextError, ContextPreparer, ContextRepository,
-    EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
-    MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
+    ApprovalProvider, AuditExporter, CheckpointSigner, ContextError, ContextPreparer,
+    ContextRepository, EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue,
+    KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
     ProviderTurnOptions, ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl,
     RunEventObserver, SearchError, SearchProvider, SessionRepository, SkillRepository, StoreError,
@@ -156,6 +157,8 @@ mod repository_tools;
 mod research_gateway;
 mod research_skill_effects;
 mod runtime_helpers;
+mod sandbox_boundary;
+mod security_posture;
 mod services;
 mod sessions_context;
 mod subagents;

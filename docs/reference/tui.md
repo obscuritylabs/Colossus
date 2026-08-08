@@ -19,8 +19,22 @@ With `--approval-mode risk-auto`, successful low-risk reviews appear as non-bloc
 or require a response.
 
 Evaluator outages and invalid assessments appear as non-blocking **Automatic approval
-review failed** cards before the explicit approval overlay opens. These cards contain
-only a sanitized failure category, action, resource, and manual-fallback explanation.
+review failed** cards before the explicit approval dock opens above the composer. These
+cards contain only a sanitized failure category, action, resource, and manual-fallback
+explanation.
+
+Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
+current transcript visible and the composer draft preserved. **Summary** presents the
+released actor, action, resource, policy reason, and risk metadata as borderless rows so
+the decision context is visible without opening a nested table; long values wrap and
+remain scrollable. **Exact request** shows the bounded prepared request, with any
+65,536-character display truncation marked explicitly, and repeats the complete
+sanitized approval scope before confirmation.
+**Protections** explains request binding, one-use behavior, policy re-evaluation, and
+the enforcement layers that remain active. Section and decision controls use filled,
+theme-resolved surfaces so focus remains visible without implying approval. Inline mode
+renders this transient dock on a temporary terminal screen, so dismissing it restores
+native scrollback byte-for-byte.
 
 ## Keys
 
@@ -39,20 +53,41 @@ only a sanitized failure category, action, resource, and manual-fallback explana
 | Mouse wheel | Transcript | Use native scrollback by default; scroll a few retained lines in alternate-screen mode |
 | `End` | Alternate-screen transcript | Return to live output |
 | `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
+| `Up` / `Down` | Docked security decision | Select a decision without submitting it |
+| `A` / `D` | Effect approval | Select **Allow once** or **Deny**; Enter still confirms |
+| `A` / `D` | Sandbox boundary acknowledgement | Select acknowledge/enable or keep blocked; Enter still confirms |
+| `S` / `R` / `P` | Docked security decision | Inspect Summary, Exact request, or Protections |
+| `Tab` / `Shift-Tab` | Docked security decision | Move between detail sections |
+| `PageUp` / `PageDown` | Docked security decision | Scroll the active detail section |
+| `Enter` | Docked security decision | Confirm the explicitly selected decision; blank remains fail closed |
 | `Down` | Suggestions | Select the next item |
 | `Shift-Tab` / `Up` | Suggestions | Select the previous item |
 | `Tab` / `Right` | Suggestions | Accept the visible suggestion |
 | `Enter` | Explicitly selected suggestion | Accept the selection |
-| `Up` / `Down`, `Enter` | Session picker | Move and resume the selected session |
+| `/` | Session browser | Focus search; `Esc` leaves search before dismissing the browser |
+| `Up` / `Down` | Session browser | Move between matching sessions; the current session is marked and skipped |
+| `PageUp` / `PageDown` | Session browser | Scroll the selected session's recent-conversation preview |
+| `Enter` | Session browser | Resume the selected durable session |
+| `/` | Theme browser | Focus search; `Esc` leaves search before cancelling the browser |
+| `Up` / `Down` | Theme browser | Preview the previous or next matching theme without saving it |
+| `Enter` | Theme browser | Save the previewed theme |
+| `D` / `G` | Plan execution dock | Select Direct or Goal Mode; Enter still confirms |
+| `Enter` | Plan execution dock | Confirm the explicitly selected strategy; no strategy is preselected |
 
 Typing `/` at the beginning of a draft opens slash-command completion. Typing `@` at a
 skill-token boundary opens skill completion. Suggestions are bounded and dismiss until
 the draft changes after `Esc`.
 
+In inline mode, the session and theme browsers open on a temporary alternate screen.
+Closing either restores the inline viewport and native terminal history byte-for-byte,
+so browser rows never become scrollback output. Theme navigation is a reversible live
+preview: `Esc` restores the original theme and only `Enter` saves the selection.
+
 ## Commands
 
-The in-product `/help` command is the executable authority for commands and required
-arguments in the current runtime.
+The in-product `/help` command is generated from the current completion catalog and is
+the executable authority for available command families and required arguments in the
+current runtime.
 
 | Family | Commands |
 | --- | --- |
@@ -73,8 +108,10 @@ arguments in the current runtime.
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
 | Diagnostics | `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off`, `/tools` |
 
-Use `/resume` or `/session resume` without an ID for the picker; exact session IDs are
-accepted when deterministic selection matters.
+Use `/resume` or `/session resume` without an ID for the searchable master-detail
+browser; exact session IDs are accepted when deterministic selection matters. The
+browser keeps the running-command row, composer draft, and status footer visible while
+it is open.
 
 ## Plan workflow
 
@@ -99,7 +136,7 @@ selected plan, status, and revision when space permits.
 | `/plan discard` | Discard the selected Draft or Approved plan at its displayed revision |
 | `/plan execute direct` | Atomically consume the selected Approved plan, then run it once |
 | `/plan execute goal [ITERATIONS]` | Atomically consume the selected Approved plan into Goal Mode; the default is 5 and the accepted range is 1–50 |
-| `/plan execute` | Choose Direct, Goal Mode, or Cancel in an overlay; line mode uses choices 1, 2, and 3 |
+| `/plan execute` | Open a contextual decision dock with plan revision, step/mutation counts, and Direct/Goal consequences; no strategy is preselected and Enter confirms it. Line mode uses choices 1, 2, and 3 |
 | `/goal resume GOAL_ID` | Continue the remaining budget of an Active goal in the current session |
 
 Submitting a prompt in Plan mode creates a new Draft when nothing is selected. With a
@@ -108,12 +145,13 @@ refined; use `/plan execute`, `/plan new`, `/plan discard`, or `/plan off`. Conc
 changes reject the stale revision. Reload the current record explicitly with
 `/plan use PLAN_ID` before retrying.
 
-Canceling the execution-choice overlay, or cancellation/failure before plan consumption,
-keeps the mode and selection. Once Direct execution or Goal handoff commits consumption,
-the terminal returns to Execute mode and clears the selection even if later work fails
-or is cancelled. The consumed plan and completed, cancelled, or failed evidence remain
-inspectable. A cancelled or failed Goal stays Active; `/goal resume GOAL_ID` uses only
-its remaining iteration budget.
+Canceling the execution decision dock, or cancellation/failure before plan consumption,
+keeps the mode and selection. The dock preserves the composer draft and requires an
+explicit Direct or Goal selection before Enter can start execution. Once Direct
+execution or Goal handoff commits consumption, the terminal returns to Execute mode and
+clears the selection even if later work fails or is cancelled. The consumed plan and
+completed, cancelled, or failed evidence remain inspectable. A cancelled or failed Goal
+stays Active; `/goal resume GOAL_ID` uses only its remaining iteration budget.
 
 `/events compact` shows only a short preview of raw `web.fetch`, `docs.fetch`, and
 `network.http` response bodies. Use `/events verbose` when inspecting the full released
@@ -142,7 +180,8 @@ Use the CLI `research run` route when depth or lane selection must be explicit.
   next item starts, and the queue does not drain while the execution-choice overlay is
   open.
 - A failure or cooperative cancellation pauses the queue for explicit confirmation.
-- Approval and `user.ask` use focus-taking, one-use overlays and preserve the draft.
+- Effect approval uses a focus-taking bottom dock; `user.ask` retains its one-use
+  overlay. Both preserve the draft.
 - Blank, cancelled, timed-out, disconnected, replayed, or malformed prompt answers fail
   closed.
 - New output does not move an operator reading older content; the UI shows a new-item

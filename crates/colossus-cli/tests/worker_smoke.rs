@@ -154,6 +154,9 @@ fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
+    let mut worker_auth_path = state.as_os_str().to_os_string();
+    worker_auth_path.push(".worker-auth");
+    let worker_auth_path = std::path::PathBuf::from(worker_auth_path);
     #[cfg(unix)]
     let socket = std::path::PathBuf::from(format!("{}.worker.sock", state.display()));
     let anchor = directory.path().join("anchor.json");
@@ -296,7 +299,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 6);
+    assert_eq!(status["protocol_version"], 8);
 
     let route = run(binary, &config, &["models", "route", "primary"]);
     assert!(
@@ -863,12 +866,14 @@ steps:
         "{lease_stderr}"
     );
 
+    let worker_authentication = fs::read(&worker_auth_path).expect("worker authentication key");
+    fs::write(
+        &worker_auth_path,
+        b"colossus-worker-auth-v1:7777777777777777777777777777777777777777777777777777777777777777",
+    )
+    .expect("replace worker authentication key for negative test");
     let wrong_key = command(binary, &config)
         .args(["worker", "--shutdown"])
-        .env(
-            "COLOSSUS_WORKER_TEST_SIGNING_KEY",
-            "7777777777777777777777777777777777777777777777777777777777777777",
-        )
         .output()
         .expect("wrong-key shutdown");
     assert!(!wrong_key.status.success());
@@ -876,16 +881,13 @@ steps:
 
     let wrong_key_echo = command(binary, &config)
         .args(["echo", "must-not-send"])
-        .env(
-            "COLOSSUS_WORKER_TEST_SIGNING_KEY",
-            "7777777777777777777777777777777777777777777777777777777777777777",
-        )
         .output()
         .expect("wrong-key echo");
     assert!(!wrong_key_echo.status.success());
     let wrong_key_error = String::from_utf8_lossy(&wrong_key_echo.stderr);
     assert!(wrong_key_error.contains("authentication tag mismatch"));
     assert!(!wrong_key_error.contains("writer lease"));
+    fs::write(&worker_auth_path, worker_authentication).expect("restore worker authentication key");
 
     let echo = run(binary, &config, &["echo", "still-alive"]);
     assert!(echo.status.success());

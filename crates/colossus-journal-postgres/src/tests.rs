@@ -1,6 +1,10 @@
 use super::{PostgresEventJournal, PostgresJournalConfig, PostgresTlsConfig};
-use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
-use colossus_journal_redb::{Ed25519CheckpointSigner, StaticKeyProvider};
+use colossus_contracts::{
+    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, PLAINTEXT_PAYLOAD_ALGORITHM,
+};
+use colossus_journal_redb::{
+    DisabledCheckpointSigner, Ed25519CheckpointSigner, PlaintextKeyProvider, StaticKeyProvider,
+};
 use colossus_ports::{EventJournal, ProjectionStore, StoreError};
 use colossus_projection::JournalExternalWorkQueue;
 use colossus_session::EventSourcedSessionRepository;
@@ -55,6 +59,15 @@ fn open(config: &PostgresJournalConfig) -> PostgresEventJournal {
         Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
     )
     .expect("open PostgreSQL journal")
+}
+
+fn open_plaintext(config: &PostgresJournalConfig) -> PostgresEventJournal {
+    PostgresEventJournal::open(
+        config.clone(),
+        Arc::new(PlaintextKeyProvider),
+        Arc::new(DisabledCheckpointSigner),
+    )
+    .expect("open plaintext PostgreSQL journal")
 }
 
 fn with_schema(config: &PostgresJournalConfig, suffix: &str) -> PostgresJournalConfig {
@@ -184,6 +197,40 @@ fn live_shared_journal_and_projection_conformance() {
         ..config
     };
     assert_projection_store_conformance(&open(&projection_config));
+}
+
+#[test]
+fn live_plaintext_journal_round_trips_and_locks_the_schema_mode() {
+    let Some(config) = live_config() else {
+        return;
+    };
+    {
+        let journal = open_plaintext(&config);
+        let stored = journal.append(event("plaintext", 0, 1)).expect("append");
+        assert_eq!(stored.payload.algorithm, PLAINTEXT_PAYLOAD_ALGORITHM);
+        assert_eq!(
+            journal.decrypt_payload(&stored).expect("payload"),
+            json!({"value": 1})
+        );
+        assert!(journal.checkpoint().expect("checkpoint").is_none());
+    }
+    let reopened = open_plaintext(&config);
+    assert_eq!(
+        reopened
+            .startup_verification_report()
+            .expect("startup report")
+            .path,
+        "local_integrity"
+    );
+    drop(reopened);
+    assert!(
+        PostgresEventJournal::open(
+            config,
+            Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32])),
+            Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
+        )
+        .is_err()
+    );
 }
 
 #[test]

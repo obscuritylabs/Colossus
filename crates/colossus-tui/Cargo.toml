@@ -14,6 +14,7 @@ colossus-presentation.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 unicode-width.workspace = true
 

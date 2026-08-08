@@ -8,6 +8,43 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-08-08
+
+### Added
+
+- Added explicitly acknowledged direct-execution sandbox modes, including a dangerous
+  full-access profile that can use ambient executables, permitted process resources,
+  host working directories, and child-process networking after acknowledgement.
+- Added keyless plaintext redb and PostgreSQL storage for deployments that intentionally
+  rely on host storage controls, with bounded startup and worker compatibility checks.
+- Added dense, searchable session and theme browsers, generated command help, and an
+  explicit Direct-or-Goal decision surface for approved plan execution.
+
+### Changed
+
+- Docked effect approval review above the composer with focused summary, exact-request,
+  and protection views that preserve complete sanitized scope.
+- Reduced storage commit amplification during startup while retaining typed schema
+  validation on the read-only fast path.
+- Expanded provider connection documentation across supported hosted, compatible, and
+  local model backends.
+
+### Fixed
+
+- Kept completion, session, theme, help, and plan-selection chrome off durable inline
+  terminal scrollback by rendering focus-taking command surfaces transiently.
+- Added Splunk Streamable HTTP compatibility for empty one-way acknowledgements while
+  keeping credential-header exemptions scoped to the configured credential map.
+- Paged resumed-session previews past tool-only records so recent user and assistant
+  context remains visible in tool-heavy sessions.
+
+### Security
+
+- Kept dangerous full-access execution behind explicit acknowledgement while preserving
+  policy, approval, audit, process-limit, and resource enforcement.
+- Protected plaintext worker startup and Windows worker authentication material, and
+  rejected incompatible live workers through the versioned IPC contract.
+
 ## [0.10.4] - 2026-08-04
 
 ### Fixed

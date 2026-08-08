@@ -4,6 +4,7 @@ use super::*;
 pub struct PostgresEventJournal {
     config: PostgresJournalConfig,
     tls_connector: Option<MakeRustlsConnect>,
+    payload_protection: JournalPayloadProtection,
     keys: Arc<dyn KeyProvider>,
     signer: Arc<dyn CheckpointSigner>,
     last_checkpoint: Mutex<Instant>,
@@ -54,9 +55,11 @@ impl PostgresEventJournal {
             PostgresTlsConfig::Disabled => None,
             tls => Some(Self::build_tls_connector_with_roots(tls, tls_roots)?),
         };
+        let payload_protection = keys.payload_protection();
         let journal = Self {
             config,
             tls_connector,
+            payload_protection,
             keys,
             signer,
             last_checkpoint: Mutex::new(Instant::now()),
@@ -72,6 +75,7 @@ impl PostgresEventJournal {
             }),
         };
         journal.migrate()?;
+        journal.initialize_payload_protection()?;
         let startup = journal.quarantine_result(journal.verify_startup(mode));
         if let Err(error) = startup {
             journal.recovery_mode.store(true, Ordering::Release);
@@ -90,8 +94,53 @@ impl PostgresEventJournal {
         Ok(self.startup_report.lock().map_err(adapter_error)?.clone())
     }
 
+    fn initialize_payload_protection(&self) -> Result<(), StoreError> {
+        let mut client = self.connect()?;
+        let mut transaction = client.transaction().map_err(database_error)?;
+        let row = transaction
+            .query_one(
+                "SELECT last_sequence, payload_protection, EXISTS (SELECT 1 FROM journal_events) FROM journal_metadata WHERE singleton = TRUE FOR UPDATE",
+                &[],
+            )
+            .map_err(database_error)?;
+        let head_sequence = to_u64(row.get::<_, i64>(0), "journal head")?;
+        let marker = row.get::<_, Option<String>>(1);
+        let nonempty = head_sequence > 0 || row.get::<_, bool>(2);
+        let effective = match marker.as_deref() {
+            Some("encrypted") => JournalPayloadProtection::Encrypted,
+            Some("plaintext") => JournalPayloadProtection::Plaintext,
+            Some(_) => {
+                return Err(StoreError::Verification(
+                    "journal payload-protection marker is unsupported".into(),
+                ));
+            }
+            None if nonempty => JournalPayloadProtection::Encrypted,
+            None => self.payload_protection,
+        };
+        if effective != self.payload_protection {
+            return Err(StoreError::Verification(format!(
+                "journal payload protection is {}, but configuration requests {}; use a fresh PostgreSQL schema because in-place protection changes are unsupported",
+                effective.as_str(),
+                self.payload_protection.as_str()
+            )));
+        }
+        if marker.is_none() {
+            transaction
+                .execute(
+                    "UPDATE journal_metadata SET payload_protection = $1 WHERE singleton = TRUE",
+                    &[&self.payload_protection.as_str()],
+                )
+                .map_err(database_error)?;
+        }
+        transaction.commit().map_err(commit_error)
+    }
+
     fn verify_startup(&self, mode: StartupVerificationMode) -> Result<(), StoreError> {
-        let anchor = self.keys.load_anchor()?;
+        let anchor = if self.payload_protection == JournalPayloadProtection::Encrypted {
+            self.keys.load_anchor()?
+        } else {
+            None
+        };
         let (head_sequence, _) = self.head()?;
         if head_sequence == 0 {
             if anchor.as_ref().is_some_and(|anchor| anchor.sequence != 0) {
@@ -107,6 +156,13 @@ impl PostgresEventJournal {
                 verified_event_count: 0,
                 anchor_format_version: anchor.map(|anchor| anchor.format_version),
             };
+            return Ok(());
+        }
+        if self.payload_protection == JournalPayloadProtection::Plaintext
+            && mode == StartupVerificationMode::Incremental
+        {
+            let report = self.verify_plaintext_incremental()?;
+            *self.startup_report.lock().map_err(adapter_error)? = report;
             return Ok(());
         }
         let trusted_incremental = mode == StartupVerificationMode::Incremental
@@ -127,7 +183,9 @@ impl PostgresEventJournal {
             }
         }
         let report = self.verify_inner()?;
-        self.checkpoint()?;
+        if self.payload_protection == JournalPayloadProtection::Encrypted {
+            self.checkpoint()?;
+        }
         *self.startup_report.lock().map_err(adapter_error)? = StartupVerificationReport {
             configured_mode: mode,
             path: if mode == StartupVerificationMode::Full {
@@ -138,9 +196,106 @@ impl PostgresEventJournal {
             verified_from_sequence: Some(1),
             verified_through_sequence: report.last_sequence,
             verified_event_count: report.event_count,
-            anchor_format_version: Some(SECURE_ANCHOR_FORMAT_VERSION),
+            anchor_format_version: (self.payload_protection == JournalPayloadProtection::Encrypted)
+                .then_some(SECURE_ANCHOR_FORMAT_VERSION),
         };
         Ok(())
+    }
+
+    fn verify_plaintext_incremental(&self) -> Result<StartupVerificationReport, StoreError> {
+        let mut client = self.connect()?;
+        let mut transaction = client.transaction().map_err(database_error)?;
+        let metadata = transaction
+            .query_one(
+                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE singleton = TRUE FOR SHARE",
+                &[],
+            )
+            .map_err(database_error)?;
+        let head_sequence = to_u64(metadata.get::<_, i64>(0), "journal head")?;
+        let head_hash = metadata.get::<_, String>(1);
+        if metadata.get::<_, Option<Vec<u8>>>(2).is_some() {
+            return Err(StoreError::Verification(
+                "plaintext journal contains a signed checkpoint".into(),
+            ));
+        }
+        // Incremental startup must stay bounded, so the sequence bounds are read as
+        // ordered single-row primary-key lookups. PostgreSQL cannot answer COUNT(*)
+        // from an index under MVCC, so counting either canonical table would make
+        // every start linear in journal size. Interior gaps remain the responsibility
+        // of `startupVerification: full`.
+        let event_bounds = transaction
+            .query_one(
+                "SELECT (SELECT global_sequence FROM journal_events ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM journal_events ORDER BY global_sequence DESC LIMIT 1)",
+                &[],
+            )
+            .map_err(database_error)?;
+        let outbox_bounds = transaction
+            .query_one(
+                "SELECT (SELECT global_sequence FROM projection_outbox ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM projection_outbox ORDER BY global_sequence DESC LIMIT 1)",
+                &[],
+            )
+            .map_err(database_error)?;
+        let expected_head = to_i64(head_sequence, "journal head")?;
+        if event_bounds.get::<_, Option<i64>>(0) != Some(1)
+            || event_bounds.get::<_, Option<i64>>(1) != Some(expected_head)
+            || outbox_bounds.get::<_, Option<i64>>(0) != Some(1)
+            || outbox_bounds.get::<_, Option<i64>>(1) != Some(expected_head)
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal local index bounds do not match its head".into(),
+            ));
+        }
+        let row = transaction
+            .query_one(
+                "SELECT e.envelope, o.event_id FROM journal_events e JOIN projection_outbox o USING (global_sequence) WHERE e.global_sequence = $1",
+                &[&expected_head],
+            )
+            .map_err(database_error)?;
+        let bytes = row.get::<_, Vec<u8>>(0);
+        let persisted: PersistedEventEnvelope =
+            serde_json::from_slice(&bytes).map_err(adapter_error)?;
+        let envelope: EventEnvelope = serde_json::from_slice(&bytes).map_err(adapter_error)?;
+        if envelope.global_sequence != head_sequence
+            || envelope.record_hash != head_hash
+            || row.get::<_, String>(1) != envelope.event_id
+        {
+            return Err(StoreError::Verification(
+                "plaintext journal head metadata or outbox is inconsistent".into(),
+            ));
+        }
+        self.verify_persisted_event(&envelope, &persisted)?;
+        let stream_version = transaction
+            .query_one(
+                "SELECT stream_version FROM journal_stream_versions WHERE stream_id = $1",
+                &[&envelope.stream_id],
+            )
+            .map_err(database_error)?;
+        if to_u64(stream_version.get::<_, i64>(0), "stream version")? != envelope.stream_version {
+            return Err(StoreError::Verification(
+                "plaintext journal head stream index is inconsistent".into(),
+            ));
+        }
+        if transaction
+            .query_opt(
+                "SELECT projection FROM projection_positions WHERE position > $1 LIMIT 1",
+                &[&to_i64(head_sequence, "journal head")?],
+            )
+            .map_err(database_error)?
+            .is_some()
+        {
+            return Err(StoreError::Verification(
+                "a projection is ahead of the plaintext journal head".into(),
+            ));
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok(StartupVerificationReport {
+            configured_mode: StartupVerificationMode::Incremental,
+            path: "local_integrity".into(),
+            verified_from_sequence: Some(head_sequence),
+            verified_through_sequence: head_sequence,
+            verified_event_count: 1,
+            anchor_format_version: None,
+        })
     }
 
     fn verify_incremental(
@@ -475,6 +630,15 @@ impl PostgresEventJournal {
         envelope: &EventEnvelope,
         plaintext: &[u8],
     ) -> Result<EncryptedPayload, StoreError> {
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            return Ok(EncryptedPayload {
+                key_id: "none".into(),
+                algorithm: PLAINTEXT_PAYLOAD_ALGORITHM.into(),
+                nonce: String::new(),
+                ciphertext: hex::encode(plaintext),
+                plaintext_hash: sha256_hex(plaintext),
+            });
+        }
         let (key_id, key) = self.keys.active_key()?;
         let mut nonce = [0_u8; 24];
         getrandom::fill(&mut nonce).map_err(adapter_error)?;
@@ -490,7 +654,7 @@ impl PostgresEventJournal {
             .map_err(adapter_error)?;
         Ok(EncryptedPayload {
             key_id,
-            algorithm: "XChaCha20-Poly1305".into(),
+            algorithm: ENCRYPTED_PAYLOAD_ALGORITHM.into(),
             nonce: hex::encode(nonce),
             ciphertext: hex::encode(ciphertext),
             plaintext_hash: sha256_hex(plaintext),
@@ -502,7 +666,24 @@ impl PostgresEventJournal {
         event: &EventEnvelope,
         persisted: &PersistedEventEnvelope,
     ) -> Result<Vec<u8>, StoreError> {
-        if event.payload.algorithm != "XChaCha20-Poly1305" {
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            if event.payload.algorithm != PLAINTEXT_PAYLOAD_ALGORITHM
+                || event.payload.key_id != "none"
+                || !event.payload.nonce.is_empty()
+            {
+                return Err(StoreError::Verification(format!(
+                    "event {} payload does not match plaintext journal protection",
+                    event.event_id
+                )));
+            }
+            return hex::decode(&event.payload.ciphertext).map_err(|_| {
+                StoreError::Verification(format!(
+                    "event {} plaintext payload encoding is invalid",
+                    event.event_id
+                ))
+            });
+        }
+        if event.payload.algorithm != ENCRYPTED_PAYLOAD_ALGORITHM {
             return Err(StoreError::Verification(format!(
                 "unsupported payload algorithm {}",
                 event.payload.algorithm
@@ -978,6 +1159,11 @@ impl PostgresEventJournal {
         let checkpoint = checkpoint_bytes
             .map(|bytes| serde_json::from_slice(&bytes).map_err(adapter_error))
             .transpose()?;
+        if self.payload_protection == JournalPayloadProtection::Plaintext && checkpoint.is_some() {
+            return Err(StoreError::Verification(
+                "plaintext journal contains a signed checkpoint".into(),
+            ));
+        }
         if let Some(checkpoint) = &checkpoint {
             self.verify_checkpoint(checkpoint, &event_hashes)?;
         }
@@ -1007,6 +1193,9 @@ impl EventJournal for PostgresEventJournal {
 
     fn append_batch(&self, events: Vec<NewEvent>) -> Result<Vec<EventEnvelope>, StoreError> {
         let persisted = self.append_locked(events)?;
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            return Ok(persisted);
+        }
         let checkpoint_sequence = if persisted.is_empty() {
             0
         } else {
@@ -1316,6 +1505,9 @@ impl EventJournal for PostgresEventJournal {
     }
 
     fn checkpoint(&self) -> Result<Option<SignedCheckpoint>, StoreError> {
+        if self.payload_protection == JournalPayloadProtection::Plaintext {
+            return Ok(None);
+        }
         if self.is_recovery_mode() {
             return Err(StoreError::RecoveryMode);
         }

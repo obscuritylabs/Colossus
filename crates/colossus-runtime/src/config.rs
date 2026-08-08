@@ -474,12 +474,19 @@ const fn default_provider_timeout_ms() -> u64 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxConfig {
-    /// `native`, `oci`, `windows_job`, or explicitly downgraded `broker`.
+    /// Isolating backend or an explicitly acknowledged direct-execution boundary.
     pub backend: String,
     /// Stable policy profile label.
+    #[serde(default = "default_sandbox_profile")]
     pub profile: String,
     /// Permit a policy-authorized native-to-broker downgrade.
     pub allow_broker_fallback: bool,
+    /// Assert that an embedding platform enforces the process isolation boundary.
+    #[serde(default)]
+    pub acknowledge_external_boundary: bool,
+    /// Explicitly accept process execution without an asserted isolation boundary.
+    #[serde(default)]
+    pub acknowledge_danger_full_access: bool,
     /// Optional trusted helper executable for embedded applications.
     pub helper_path: Option<PathBuf>,
     /// Exact Docker or Podman executable for OCI fallback.
@@ -524,6 +531,8 @@ impl Default for SandboxConfig {
             },
             profile: "offline-default".into(),
             allow_broker_fallback: false,
+            acknowledge_external_boundary: false,
+            acknowledge_danger_full_access: false,
             helper_path: None,
             oci_runtime: None,
             oci_image: None,
@@ -541,6 +550,10 @@ impl Default for SandboxConfig {
     }
 }
 
+fn default_sandbox_profile() -> String {
+    "offline-default".into()
+}
+
 /// Canonical storage configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -556,7 +569,8 @@ pub struct StorageConfig {
     /// PostgreSQL settings, required exactly when `adapter` is `postgres`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PostgresJournalConfig>,
-    /// Mandatory key provider.
+    /// Optional journal protection provider. Missing configuration selects plaintext storage.
+    #[serde(default)]
     pub keys: KeyConfig,
 }
 
@@ -572,10 +586,13 @@ pub enum StorageAdapter {
     Postgres,
 }
 
-/// Mandatory encryption/signing key provider configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Journal protection provider configuration.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KeyConfig {
+    /// Hash-chained plaintext storage without external keys or signed anchors.
+    #[default]
+    None,
     /// OS Keychain, DPAPI, or Secret Service.
     Platform {
         /// Credential-store service namespace.
@@ -596,6 +613,16 @@ pub enum KeyConfig {
         /// Separately persisted secure anchor path.
         anchor_path: PathBuf,
     },
+}
+
+impl KeyConfig {
+    /// Stable diagnostic label for the selected journal payload protection.
+    pub const fn protection_label(&self) -> &'static str {
+        match self {
+            Self::None => "plaintext",
+            Self::Platform { .. } | Self::Environment { .. } => "encrypted",
+        }
+    }
 }
 
 /// Policy configuration. Unknown fields fail deserialization.
@@ -717,7 +744,7 @@ impl RuntimeConfig {
         }
         if !matches!(
             config.sandbox.backend.as_str(),
-            "native" | "oci" | "windows_job" | "broker"
+            "native" | "oci" | "windows_job" | "broker" | "external" | "danger_full_access"
         ) {
             return Err(RuntimeError::Config(format!(
                 "unknown sandbox backend {}",
@@ -727,6 +754,19 @@ impl RuntimeConfig {
         if config.sandbox.backend == "broker" && !config.sandbox.allow_broker_fallback {
             return Err(RuntimeError::Config(
                 "broker sandbox backend requires allowBrokerFallback: true".into(),
+            ));
+        }
+        if config.sandbox.acknowledge_external_boundary && config.sandbox.backend != "external" {
+            return Err(RuntimeError::Config(
+                "sandbox.acknowledgeExternalBoundary is valid only with backend: external".into(),
+            ));
+        }
+        if config.sandbox.acknowledge_danger_full_access
+            && config.sandbox.backend != "danger_full_access"
+        {
+            return Err(RuntimeError::Config(
+                "sandbox.acknowledgeDangerFullAccess is valid only with backend: danger_full_access"
+                    .into(),
             ));
         }
         if config.sandbox.profile.is_empty()
@@ -924,9 +964,34 @@ impl RuntimeConfig {
         self.sandbox.profile = profile.into();
     }
 
-    /// Safe offline configuration template using the platform credential store.
-    pub fn offline_template(state_path: impl Into<PathBuf>) -> Self {
+    /// Select dependency-free plaintext journal storage.
+    pub fn use_plaintext_storage(&mut self) {
+        self.storage.keys = KeyConfig::None;
+    }
+
+    /// Select a fresh platform credential identity for journal encryption and signing.
+    pub fn use_platform_storage(&mut self) {
         let instance_id = Uuid::now_v7();
+        self.storage.keys = KeyConfig::Platform {
+            service: "dev.colossus.runtime".into(),
+            journal_key_id: format!("journal-{instance_id}"),
+            signing_key_id: format!("checkpoint-{instance_id}"),
+        };
+    }
+
+    /// Select explicit headless environment references without generating secret values.
+    pub fn use_environment_storage(&mut self, anchor_path: impl Into<PathBuf>) {
+        let instance_id = Uuid::now_v7();
+        self.storage.keys = KeyConfig::Environment {
+            journal_variable: "COLOSSUS_JOURNAL_KEY".into(),
+            journal_key_id: format!("journal-{instance_id}"),
+            signing_variable: "COLOSSUS_SIGNING_KEY".into(),
+            anchor_path: anchor_path.into(),
+        };
+    }
+
+    /// Safe offline configuration template with dependency-free plaintext storage.
+    pub fn offline_template(state_path: impl Into<PathBuf>) -> Self {
         Self {
             schema_version: 2,
             access: AccessConfig::default(),
@@ -935,11 +1000,7 @@ impl RuntimeConfig {
                 adapter: StorageAdapter::Redb,
                 startup_verification: StartupVerificationMode::Incremental,
                 postgres: None,
-                keys: KeyConfig::Platform {
-                    service: "dev.colossus.runtime".into(),
-                    journal_key_id: format!("journal-{instance_id}"),
-                    signing_key_id: format!("checkpoint-{instance_id}"),
-                },
+                keys: KeyConfig::None,
             },
             network: NetworkConfig::default(),
             audit: AuditConfig::default(),
@@ -965,29 +1026,22 @@ impl RuntimeConfig {
         }
     }
 
-    /// Replace canonical storage with an isolated environment-keyed development journal.
+    /// Replace canonical storage with an isolated plaintext development journal.
     ///
     /// All non-storage settings are preserved so a developer can reuse provider, policy,
     /// tool, and sandbox configuration without opening the source journal or credential
-    /// store. The fresh key identity, redb path, and anchor path cannot alias the source
-    /// storage configuration.
+    /// store. The fresh redb path cannot alias the source storage configuration.
     pub fn with_isolated_development_storage(
         mut self,
         state_path: impl Into<PathBuf>,
-        anchor_path: impl Into<PathBuf>,
+        _anchor_path: impl Into<PathBuf>,
     ) -> Self {
-        let instance_id = Uuid::now_v7();
         self.storage = StorageConfig {
             path: state_path.into(),
             adapter: StorageAdapter::Redb,
             startup_verification: StartupVerificationMode::Incremental,
             postgres: None,
-            keys: KeyConfig::Environment {
-                journal_variable: "COLOSSUS_DEV_JOURNAL_KEY".into(),
-                journal_key_id: format!("journal-development-{instance_id}"),
-                signing_variable: "COLOSSUS_DEV_SIGNING_KEY".into(),
-                anchor_path: anchor_path.into(),
-            },
+            keys: KeyConfig::None,
         };
         self
     }
@@ -1050,29 +1104,17 @@ impl RuntimeConfig {
         ))
     }
 
-    /// Derive a domain-separated worker authentication key from checkpoint key material.
-    pub fn worker_ipc_auth_key(&self) -> Result<[u8; 32], RuntimeError> {
-        self.worker_ipc_auth_key_at(&std::env::current_dir()?)
+    /// Owner-private local secret used by the normal worker IPC protocol.
+    pub fn worker_ipc_auth_path(&self) -> Result<PathBuf, RuntimeError> {
+        Ok(self.worker_ipc_auth_path_at(&std::env::current_dir()?))
     }
 
-    /// Derive the worker key for an endpoint resolved against an explicit workspace.
-    pub fn worker_ipc_auth_key_at(&self, workspace: &Path) -> Result<[u8; 32], RuntimeError> {
-        let secret = match &self.storage.keys {
-            KeyConfig::Platform {
-                service,
-                signing_key_id,
-                ..
-            } => platform_secret(service, &format!("signing-key:{signing_key_id}"))?,
-            KeyConfig::Environment {
-                signing_variable, ..
-            } => explicit_secret(signing_variable)?,
-        };
-        let endpoint = self.worker_ipc_endpoint_at(workspace)?;
-        let mut digest = Sha256::new();
-        digest.update(b"colossus-worker-ipc-v1\0");
-        digest.update(secret);
-        digest.update(endpoint.as_bytes());
-        Ok(digest.finalize().into())
+    /// Resolve the worker secret path against an explicit workspace.
+    pub fn worker_ipc_auth_path_at(&self, workspace: &Path) -> PathBuf {
+        let state_path = workspace_absolute_path(workspace, &self.storage.path);
+        let mut path = state_path.as_os_str().to_os_string();
+        path.push(".worker-auth");
+        PathBuf::from(path)
     }
 }
 
@@ -1453,13 +1495,7 @@ pub(super) fn compose_memory_indexes(
         .index_path
         .clone()
         .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
-    let lexical: Arc<dyn MemoryIndex> = match TantivyMemoryIndex::open(&path) {
-        Ok(index) => Arc::new(index),
-        Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
-            "Tantivy index {} could not open: {error}",
-            path.display()
-        ))),
-    };
+    let lexical: Arc<dyn MemoryIndex> = Arc::new(LazyTantivyMemoryIndex::new(path));
     let mut indexes = vec![MemoryIndexRegistration::new("memory.tantivy-v1", lexical)?];
     let SemanticMemoryConfig::Chroma {
         base_url,

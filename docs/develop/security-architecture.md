@@ -101,13 +101,34 @@ registry validates model arguments against the unchanged canonical schema before
 or dispatch, and execution handlers independently recheck security-relevant cross-field
 invariants.
 
+## Journal protection tiers
+
+The canonical journal always retains optimistic stream concurrency, record hashes, the
+global hash chain, indexes, projection outbox, per-read payload validation, and complete
+`audit verify`. `storage.keys.kind: none` encodes canonical JSON with
+`plaintext-json-v1`; it intentionally provides no confidentiality, signed checkpoint,
+or external rollback anchor. `platform` and `environment` enable authenticated payload
+encryption, Ed25519 checkpoints, and a separately protected anchor as one complete tier.
+
+Each redb file and PostgreSQL schema stores a protection marker. Empty stores initialize
+from configuration; nonempty markerless stores are conservatively classified as
+encrypted. A mismatch aborts runtime construction before event writes. Mixed algorithms
+and in-place protection migration are unsupported. Incremental plaintext startup checks
+only bounded local head/index invariants, while full startup and explicit audit
+verification replay all payloads. Runtime-owned structured posture findings feed CLI,
+worker, and TUI diagnostics; automatic warnings are interactive-only.
+
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
 writes reject symlink leaves and use same-directory atomic replacement. Processes run
-through authenticated helpers with cleared environments, exact or trusted-profile
-executables, bounded arguments, isolated shell homes/temp directories, sanitized
-command paths, bounded process trees, and selected native, Windows, or OCI isolation.
+through authenticated helpers with bounded arguments and process trees plus selected
+native, Windows, or OCI isolation. Isolating and `external` modes use cleared
+environments, exact or trusted-profile executables, isolated shell homes/temp
+directories, and sanitized command paths. Explicitly acknowledged
+`danger_full_access` retains the authenticated permit/audit path and process limits but
+deliberately permits ambient executables, environment, working directories, filesystem,
+and child networking; private helper-control variables are not inherited.
 The Linux helper is dispatched before the asynchronous CLI runtime starts so it can
 establish and map its rootless user namespace while still single-threaded, then create
 the private mount namespace used to mask protected paths. After mounting those masks,
@@ -170,17 +191,21 @@ failures become typed `unavailable` results: they cannot stop normal CLI or TUI 
 and the TUI remains silent unless a newer stable version was validated. Discovery does
 not download or replace an executable; installation remains operator-owned.
 
-Configured stdio MCP remains a process effect. Stateful Streamable HTTP MCP is a network
-effect and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and
-redirect rejection, CA roots, permit timeouts, and bounded response path. Remote
+Configured stdio MCP remains a process effect. Streamable HTTP MCP is a network effect
+and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and redirect
+rejection, CA roots, permit timeouts, and bounded response path. Remote
 declarations contain only literal non-secret headers and environment credential
 references; the permit-bearing adapter resolves those references immediately before the
 request. OAuth authorization is an operator-only PKCE flow and never starts from an agent
 tool call. Tokens are server/endpoint/repository-bound in the platform credential
-namespace or a domain-separated XChaCha20-Poly1305 redb sidecar, and client secrets remain
-behind their configured references. Each discovery page and tool call uses a fresh
-initialized stateful session, disables request and expired-session retries, and treats
-an uncertain tool call as `OutcomeUnknown`.
+namespace, a domain-separated XChaCha20-Poly1305 redb sidecar, or an explicitly reported
+owner-only plaintext sidecar selected by keyless `auto`; client secrets remain behind
+their configured references. Stateful sessions remain the default. A strict,
+request-bound `allowStateless` opt-in permits one top-level remote declaration to omit
+`Mcp-Session-Id`; stdio and pack-provided servers reject that field. Each discovery page
+and tool call uses a fresh initialized transport, disables request and expired-session
+retries, accepts empty success responses only for one-way JSON-RPC frames, and treats an
+uncertain tool call as `OutcomeUnknown`.
 
 Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
 OAuth ceremony to the official Codex CLI and forces its supported file credential store;
@@ -213,7 +238,7 @@ bodyless `network.http` GET, and configured top-level `mcp.call` effects without
 lineage can use a low-risk `allow` recommendation to mint a request-bound approval
 proof. The evaluator has no tools and receives redacted proposed-effect metadata:
 network review includes the requested URL or search query, while MCP review includes
-the exact endpoint identity, transport, configured server/tool, bounded advisory
+the exact endpoint identity, transport and stateless opt-in, configured server/tool, bounded advisory
 description and annotations, fresh schema hash, and validated arguments. Resolved
 credentials and authentication configuration are absent, environment values become
 names, and sensitive argument fields are redacted. Field-name redaction is word based
@@ -258,8 +283,9 @@ certificate or chain as the local API identity.
 
 Authentication creates the application actor and its exact scope, role, and tool
 ceilings on the server. Public requests cannot submit identity or authority. Credential
-verifiers and grants are encrypted in the journal under an API-specific authentication
-root; bearer secrets exist only during issuance and in the application's platform
+verifiers are keyed under an API-specific authentication root and the verifier plus
+grant are recorded in the journal; bearer secrets exist only during issuance and in
+the application's platform
 credential store. API TLS, API authentication, private worker IPC, journal encryption,
 checkpoint signing, permit MAC, and provider keys are independent.
 
@@ -391,6 +417,11 @@ coordination directory used by the workspace writer lease. The sidecar binds thi
 endpoint before acknowledging bootstrap activation, so an unsafe or unavailable local
 endpoint fails on the inherited control channel rather than being misreported as a
 public TLS failure. No worker key or provider credential is written into the pathname.
+For ordinary CLI-started workers, the server creates or loads a versioned random key
+from the owner-only, no-follow regular file at `<storage.path>.worker-auth`; clients
+never create or repair that file. This key is independent of journal encryption,
+checkpoint signing, permit MACs, and sandbox job authentication. Managed Local instead
+retains inherited-channel delivery and never persists its worker bootstrap key.
 
 Skill discovery is part of model input and therefore uses the same object-bound
 discipline. On Unix, repository skill roots are traversed relative to the retained

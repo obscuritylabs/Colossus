@@ -55,6 +55,10 @@ pub struct InteractiveSnapshot {
     pub completions: Vec<String>,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Effective runtime security posture rendered as non-durable terminal state.
+    pub security_posture: SecurityPostureReport,
+    /// Direct-execution boundary that still requires this TUI session's acknowledgement.
+    pub pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
 }
 
 /// Request for one normal provider/tool turn.
@@ -347,8 +351,8 @@ pub enum PlanSelectionUpdate {
 pub struct HostCommandResult {
     /// Human presentation to append to the transcript.
     pub document: PresentationDocument,
-    /// New active session and its newest page after a session switch.
-    pub session: Option<(String, SessionMessagePage)>,
+    /// New active session, newest page, and direct-execution boundary status after a switch.
+    pub session: Option<(String, SessionMessagePage, Option<SandboxBoundaryMode>)>,
     /// Updated preferences when the command changed presentation state.
     pub preferences: Option<TerminalPreferences>,
     /// Updated completion catalog when host state changed.
@@ -449,10 +453,78 @@ pub enum PromptResponse {
     Cancelled,
 }
 
+/// One recent visible message rendered in a session-browser preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveSessionBrowserMessage {
+    /// Human or assistant provenance used for the preview label and style.
+    pub role: ModelMessageRole,
+    /// Bounded, presentation-safe message text.
+    pub content: String,
+}
+
+/// One resumable session plus its bounded recent-conversation preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveSessionBrowserEntry {
+    /// Canonical durable session metadata.
+    pub summary: SessionSummary,
+    /// Recent user and assistant messages in chronological order.
+    pub recent_messages: Vec<InteractiveSessionBrowserMessage>,
+}
+
+/// Focus-taking master-detail browser used by `/resume`.
+pub struct InteractiveSessionBrowser {
+    /// Exact session attached to the current TUI.
+    pub current_session_id: String,
+    /// Recent non-empty sessions, newest first, including the active session.
+    pub sessions: Vec<InteractiveSessionBrowserEntry>,
+    /// One-use channel returning the selected durable session ID.
+    pub response: oneshot::Sender<PromptResponse>,
+}
+
+/// One selectable terminal theme and the exact preferences used for its preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveThemePickerEntry {
+    /// Stable built-in or custom theme identity.
+    pub name: String,
+    /// Process-local preview preferences; no durable write has occurred yet.
+    pub preferences: TerminalPreferences,
+}
+
+/// Focus-taking theme browser with reversible live previews.
+pub struct InteractiveThemePicker {
+    /// Theme active when the picker opened.
+    pub current_theme: String,
+    /// Bounded built-in and custom themes in display order.
+    pub themes: Vec<InteractiveThemePickerEntry>,
+    /// One-use channel returning the selected theme identity.
+    pub response: oneshot::Sender<PromptResponse>,
+}
+
+/// Presentation and interaction class for one focus-taking prompt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractivePromptKind {
+    /// Policy requires a request-bound effect approval.
+    Approval,
+    /// The active session requires explicit acceptance of a direct-execution boundary.
+    SandboxBoundaryAcknowledgement,
+    /// A tool needs bounded operator input but grants no effect authority.
+    UserInput,
+    /// A local interface picker such as session or plan selection.
+    Choice,
+}
+
+impl InteractivePromptKind {
+    pub(crate) const fn uses_decision_dock(self) -> bool {
+        matches!(self, Self::Approval | Self::SandboxBoundaryAcknowledgement)
+    }
+}
+
 /// Focus-taking prompt sent by the trusted runtime bridge to the TUI.
 pub struct InteractivePrompt {
     /// One-use prompt identity bound by the host to the connection and run.
     pub id: String,
+    /// Typed presentation and interaction behavior.
+    pub kind: InteractivePromptKind,
     /// Short overlay title.
     pub title: String,
     /// Policy-released prompt details.
@@ -475,12 +547,18 @@ pub enum HostEvent {
     Notice(PresentationDocument),
     /// A trusted bridge needs focused operator input.
     Prompt(InteractivePrompt),
+    /// The host prepared a searchable master-detail session browser.
+    SessionBrowser(InteractiveSessionBrowser),
+    /// The host prepared a searchable theme browser with exact live previews.
+    ThemePicker(InteractiveThemePicker),
     /// The current operation reached a terminal result.
     OperationFinished(Box<Result<OperationResult, String>>),
     /// Non-fatal history persistence failed after the requested operation began.
     HistoryWarning(String),
     /// An asynchronously requested older transcript page completed.
     OlderPage(Result<SessionMessagePage, String>),
+    /// Active-session direct-execution acknowledgement reached a terminal result.
+    SandboxBoundaryAcknowledgement(Result<Option<SandboxBoundaryMode>, String>),
 }
 
 /// Optional one-shot source of a policy-released startup notice.
@@ -505,6 +583,14 @@ pub enum OperationResult {
 pub trait InteractiveHost: Send + Sync {
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
+
+    /// Prompt for and acknowledge one direct-execution boundary for the active TUI session.
+    async fn acknowledge_sandbox_boundary(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<bool, String>;
 
     /// Execute one typed application command without writing to the terminal.
     async fn execute_command(

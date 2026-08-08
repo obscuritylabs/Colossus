@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::SessionMessage;
 
 fn plan(id: &str, session_id: &str, status: PlanStatus, revision: u64) -> PlanRecord {
     PlanRecord {
@@ -287,19 +288,134 @@ fn session(
     }
 }
 
+fn conversation_message(sequence: u64) -> SessionMessage {
+    SessionMessage {
+        session_id: "019f72e2-c116-7fa3-b668-5778378e114f".into(),
+        run_id: "run".into(),
+        sequence,
+        message: colossus_contracts::ModelMessage {
+            role: if sequence.is_multiple_of(2) {
+                ModelMessageRole::User
+            } else {
+                ModelMessageRole::Assistant
+            },
+            content: format!("Message {sequence}\nwith   normalized spacing"),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+        created_at: "2026-07-18T01:41:50Z".into(),
+    }
+}
+
+fn tool_message(sequence: u64) -> SessionMessage {
+    SessionMessage {
+        session_id: "019f72e2-c116-7fa3-b668-5778378e114f".into(),
+        run_id: "run".into(),
+        sequence,
+        message: colossus_contracts::ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: format!("tool result {sequence}"),
+            tool_call_id: Some(format!("call-{sequence}")),
+            tool_calls: Vec::new(),
+        },
+        created_at: "2026-07-18T01:41:50Z".into(),
+    }
+}
+
+/// Page `messages` (chronological) backward the way the runtime store does.
+fn message_page(messages: &[SessionMessage], before_sequence: Option<u64>) -> SessionMessagePage {
+    let upper = before_sequence.unwrap_or(u64::MAX);
+    let mut page = messages
+        .iter()
+        .rev()
+        .filter(|message| message.sequence < upper)
+        .take(SESSION_BROWSER_PAGE_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    page.reverse();
+    let before_sequence = page.first().map(|message| message.sequence);
+    let has_more = before_sequence.is_some_and(|first| {
+        messages
+            .iter()
+            .any(|message| message.sequence < first && message.sequence < upper)
+    });
+    SessionMessagePage {
+        messages: page,
+        before_sequence,
+        has_more,
+    }
+}
+
+fn collected_preview(messages: &[SessionMessage]) -> Vec<InteractiveSessionBrowserMessage> {
+    let mut collector = SessionPreviewCollector::new();
+    while collector.wants_older_page() {
+        collector.absorb(message_page(messages, collector.before_sequence()));
+    }
+    collector.finish()
+}
+
 #[test]
-fn session_picker_choice_prioritizes_human_context_over_full_ids() {
-    let choice = session_picker_choice(&session(
-        "019f72e2-c116-7fa3-b668-5778378e114f",
-        12,
-        Some("How can we\nget   sccache working locally?"),
-        Some("Build speed"),
-    ));
-    assert_eq!(
-        choice,
-        "Build speed · 12 msgs · 019f72e2 · 2026-07-18 01:41Z\nHow can we get sccache working locally?"
+fn session_browser_entry_keeps_the_latest_visible_conversation_bounded() {
+    let messages = (0..10).map(conversation_message).collect::<Vec<_>>();
+    let entry = session_browser_entry(
+        session(
+            "019f72e2-c116-7fa3-b668-5778378e114f",
+            12,
+            Some("How can we get sccache working locally?"),
+            Some("Build speed"),
+        ),
+        collected_preview(&messages),
     );
-    assert!(!choice.contains("c116-7fa3"));
+    assert_eq!(entry.recent_messages.len(), 8);
+    assert_eq!(
+        entry
+            .recent_messages
+            .first()
+            .map(|message| message.content.as_str()),
+        Some("Message 2 with normalized spacing")
+    );
+    assert_eq!(
+        entry
+            .recent_messages
+            .last()
+            .map(|message| message.content.as_str()),
+        Some("Message 9 with normalized spacing")
+    );
+    assert_eq!(compact_text("Safe\n text\u{200b}\u{1b}", 100), "Safe text");
+}
+
+#[test]
+fn session_preview_pages_backward_past_tool_heavy_history() {
+    // Two prompts trailed by far more tool records than one page can hold.
+    let mut messages = vec![conversation_message(0), conversation_message(1)];
+    messages.extend((2..(2 + (SESSION_BROWSER_PAGE_LIMIT as u64 * 3))).map(tool_message));
+    let preview = collected_preview(&messages);
+    assert_eq!(
+        preview
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Message 0 with normalized spacing",
+            "Message 1 with normalized spacing",
+        ]
+    );
+}
+
+#[test]
+fn session_preview_stops_after_the_bounded_backward_page_budget() {
+    let messages = (0..(SESSION_BROWSER_PAGE_LIMIT as u64
+        * (SESSION_BROWSER_PREVIEW_PAGES as u64 + 2)))
+        .map(tool_message)
+        .collect::<Vec<_>>();
+    let mut collector = SessionPreviewCollector::new();
+    let mut pages = 0_usize;
+    while collector.wants_older_page() {
+        collector.absorb(message_page(&messages, collector.before_sequence()));
+        pages += 1;
+    }
+    assert_eq!(pages, SESSION_BROWSER_PREVIEW_PAGES);
+    assert!(collector.finish().is_empty());
 }
 
 #[test]
@@ -314,6 +430,35 @@ fn resume_picker_excludes_empty_sessions_before_applying_the_limit() {
     );
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "first");
+}
+
+#[tokio::test]
+async fn theme_browser_releases_exact_reversible_preview_preferences() {
+    let themes = ThemeLibrary::default();
+    let preferences = TerminalPreferences::default();
+    let (sender, mut events) = mpsc::channel(1);
+    let browser = tokio::spawn(async move {
+        browse_themes(&sender, &themes, &preferences)
+            .await
+            .expect("browse themes")
+    });
+
+    let HostEvent::ThemePicker(request) = events.recv().await.expect("theme picker") else {
+        panic!("expected a theme picker event");
+    };
+    assert_eq!(request.current_theme, "default");
+    assert_eq!(request.themes.len(), 5);
+    let hacker = request
+        .themes
+        .iter()
+        .find(|theme| theme.name == "hacker")
+        .expect("hacker preview");
+    assert_eq!(hacker.preferences.theme_name(), "hacker");
+    request
+        .response
+        .send(PromptResponse::Answer("hacker".into()))
+        .expect("select hacker");
+    assert_eq!(browser.await.expect("browser task"), Some("hacker".into()));
 }
 
 #[tokio::test]
@@ -439,6 +584,7 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     let HostEvent::Prompt(prompt) = events.recv().await.expect("prompt") else {
         panic!("expected an approval prompt");
     };
+    assert_eq!(prompt.kind, InteractivePromptKind::Approval);
     let [PresentationBlock::Card { body, .. }] = prompt.document.blocks.as_slice() else {
         panic!("expected one approval card");
     };
@@ -448,6 +594,11 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     assert!(details.iter().any(|(label, value)| {
         label == "Risk review" && value.contains("request-bound MCP discovery metadata")
     }));
+    assert!(
+        details
+            .iter()
+            .any(|(label, value)| { label == "Requested by" && value.contains("System service") })
+    );
     prompt
         .response
         .send(PromptResponse::Answer("Deny".into()))
@@ -459,6 +610,128 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
             .expect("result")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn worker_tui_projects_approvals_into_the_typed_dock_document() {
+    let (sender, mut events) = mpsc::channel(1);
+    let handler = worker::TuiWorkerPromptHandler { sender };
+    let prompt = WorkerPrompt {
+        prompt_id: "worker-approval".into(),
+        kind: WorkerPromptKind::Approval,
+        title: "Approval required".into(),
+        question: "explicit operator approval required".into(),
+        choices: vec!["Allow once".into(), "Deny".into()],
+        allow_free_form: false,
+        details: json!({
+            "actor": {"actor_type": "model", "id": "primary"},
+            "action": "mcp.call",
+            "resource": "http://127.0.0.1:18000/mcp",
+            "reason": "explicit operator approval required",
+            "risk": {
+                "status": "unavailable",
+                "level": null,
+                "reason": "The configured risk evaluator was unavailable."
+            },
+            "content": {"operation": {"server": "splunk", "tool": "index_info"}}
+        }),
+    };
+    let task = tokio::spawn(async move { handler.prompt(prompt).await });
+
+    let HostEvent::Prompt(prompt) = events.recv().await.expect("approval prompt") else {
+        panic!("expected worker approval prompt");
+    };
+    assert_eq!(prompt.kind, InteractivePromptKind::Approval);
+    let [PresentationBlock::Card { body, .. }] = prompt.document.blocks.as_slice() else {
+        panic!("expected approval card");
+    };
+    let [
+        PresentationBlock::KeyValue(details),
+        PresentationBlock::Code { content, .. },
+    ] = body.as_slice()
+    else {
+        panic!("expected dock summary and exact request");
+    };
+    assert!(
+        details
+            .iter()
+            .any(|(label, value)| { label == "Requested by" && value == "model · primary" })
+    );
+    assert!(
+        details
+            .iter()
+            .any(|(label, value)| { label == "Risk review" && value.starts_with("not assessed:") })
+    );
+    assert!(content.contains("index_info"));
+    prompt
+        .response
+        .send(PromptResponse::Answer("Deny".into()))
+        .expect("deny response");
+    assert_eq!(
+        task.await.expect("prompt task").expect("prompt result"),
+        Some("Deny".into())
+    );
+}
+
+#[tokio::test]
+async fn worker_tui_accepts_only_the_canonical_boundary_prompt() {
+    let (sender, mut events) = mpsc::channel(1);
+    let handler = worker::TuiWorkerPromptHandler { sender };
+    let prompt = WorkerPrompt {
+        prompt_id: "worker-boundary".into(),
+        kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
+        title: "External sandbox boundary".into(),
+        question: "Acknowledge the external boundary?".into(),
+        choices: vec![
+            "Acknowledge the external boundary".into(),
+            "Keep process execution blocked".into(),
+        ],
+        allow_free_form: false,
+        details: json!({"mode": "external"}),
+    };
+    let task = tokio::spawn(async move { handler.prompt(prompt).await });
+
+    let HostEvent::Prompt(prompt) = events.recv().await.expect("boundary prompt") else {
+        panic!("expected worker boundary prompt");
+    };
+    assert_eq!(
+        prompt.kind,
+        InteractivePromptKind::SandboxBoundaryAcknowledgement
+    );
+    assert!(matches!(
+        prompt.document.blocks.as_slice(),
+        [PresentationBlock::Card {
+            tone: PresentationTone::Warning,
+            ..
+        }]
+    ));
+    prompt
+        .response
+        .send(PromptResponse::Answer(
+            "Acknowledge the external boundary".into(),
+        ))
+        .expect("acknowledgement response");
+    assert_eq!(
+        task.await.expect("prompt task").expect("prompt result"),
+        Some("Acknowledge the external boundary".into())
+    );
+
+    let (sender, mut events) = mpsc::channel(1);
+    let handler = worker::TuiWorkerPromptHandler { sender };
+    let error = handler
+        .prompt(WorkerPrompt {
+            prompt_id: "worker-boundary-tampered".into(),
+            kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
+            title: "External sandbox boundary".into(),
+            question: "Acknowledge the external boundary?".into(),
+            choices: vec!["Always allow without prompting".into()],
+            allow_free_form: false,
+            details: json!({"mode": "external"}),
+        })
+        .await
+        .expect_err("noncanonical boundary prompt");
+    assert!(matches!(error, WorkerError::Protocol(_)));
+    assert!(events.try_recv().is_err());
 }
 
 #[tokio::test]

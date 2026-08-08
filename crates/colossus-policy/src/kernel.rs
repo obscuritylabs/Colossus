@@ -235,10 +235,246 @@ pub trait ReleasedEffectObserver: Send {
     async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError>;
 }
 
+const MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS: usize = 4_096;
+
+tokio::task_local! {
+    static ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT: Option<String>;
+}
+
+/// Scope one worker-issued acknowledgement to the current interactive operation.
+///
+/// Task-local state deliberately does not propagate into detached tasks, so process
+/// effects outside the attached operation continue to fail closed.
+pub async fn with_sandbox_boundary_acknowledgement<F>(
+    acknowledgement: Option<String>,
+    future: F,
+) -> F::Output
+where
+    F: Future,
+{
+    ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT
+        .scope(acknowledgement, future)
+        .await
+}
+
+#[derive(Clone)]
+struct ScopedSandboxBoundaryAcknowledgement {
+    session_id: String,
+    mode: SandboxBoundaryMode,
+}
+
+/// Process-local acknowledgement state for backends that do not isolate processes.
+pub struct SandboxBoundaryGate {
+    mode: Option<SandboxBoundaryMode>,
+    globally_acknowledged: bool,
+    acknowledged_sessions: RwLock<BTreeSet<String>>,
+    scoped_acknowledgements: RwLock<BTreeMap<String, ScopedSandboxBoundaryAcknowledgement>>,
+}
+
+impl SandboxBoundaryGate {
+    /// Construct the gate for the configured backend and optional headless acknowledgement.
+    pub fn new(mode: Option<SandboxBoundaryMode>, globally_acknowledged: bool) -> Self {
+        Self {
+            mode,
+            globally_acknowledged,
+            acknowledged_sessions: RwLock::new(BTreeSet::new()),
+            scoped_acknowledgements: RwLock::new(BTreeMap::new()),
+        }
+    }
+
+    /// Direct-execution mode configured for this runtime, if any.
+    pub const fn mode(&self) -> Option<SandboxBoundaryMode> {
+        self.mode
+    }
+
+    /// Whether configuration explicitly acknowledged this boundary for headless callers.
+    pub const fn globally_acknowledged(&self) -> bool {
+        self.globally_acknowledged
+    }
+
+    /// Whether this session still needs an interactive acknowledgement.
+    pub fn pending_for_session(&self, session_id: &str) -> Option<SandboxBoundaryMode> {
+        let mode = self.mode?;
+        if self.globally_acknowledged
+            || self
+                .acknowledged_sessions
+                .read()
+                .is_ok_and(|sessions| sessions.contains(session_id))
+        {
+            None
+        } else {
+            Some(mode)
+        }
+    }
+
+    /// Acknowledge the configured direct-execution mode for one process-local session.
+    pub fn acknowledge_session(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), GatewayError> {
+        if session_id.is_empty() {
+            return Err(GatewayError::Safety(
+                "sandbox boundary acknowledgement requires a nonempty session id".into(),
+            ));
+        }
+        if self.mode != Some(mode) {
+            return Err(GatewayError::Safety(format!(
+                "cannot acknowledge {} when that sandbox backend is not configured",
+                mode.as_backend()
+            )));
+        }
+        let mut sessions = self.acknowledged_sessions.write().map_err(|_| {
+            GatewayError::Safety("sandbox boundary acknowledgement lock is poisoned".into())
+        })?;
+        if !sessions.contains(session_id)
+            && sessions.len() >= MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS
+        {
+            return Err(GatewayError::Safety(
+                "sandbox boundary acknowledgement capacity is exhausted; restart the runtime"
+                    .into(),
+            ));
+        }
+        sessions.insert(session_id.into());
+        Ok(())
+    }
+
+    /// Roll back a just-recorded acknowledgement when durable audit append fails.
+    pub fn revoke_session_acknowledgement(&self, session_id: &str) {
+        if let Ok(mut sessions) = self.acknowledged_sessions.write() {
+            sessions.remove(session_id);
+        }
+    }
+
+    /// Register an opaque acknowledgement issued to one attached interactive client.
+    pub fn acknowledge_interactive_client(
+        &self,
+        acknowledgement: &str,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), GatewayError> {
+        if acknowledgement.len() != 64
+            || !acknowledgement
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || session_id.is_empty()
+        {
+            return Err(GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement requires an exact opaque capability and nonempty session id"
+                    .into(),
+            ));
+        }
+        if self.mode != Some(mode) {
+            return Err(GatewayError::Safety(format!(
+                "cannot acknowledge {} when that sandbox backend is not configured",
+                mode.as_backend()
+            )));
+        }
+        let mut acknowledgements = self.scoped_acknowledgements.write().map_err(|_| {
+            GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement lock is poisoned".into(),
+            )
+        })?;
+        if acknowledgements.contains_key(acknowledgement) {
+            return Err(GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement was replayed".into(),
+            ));
+        }
+        if acknowledgements.len() >= MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS {
+            return Err(GatewayError::Safety(
+                "interactive sandbox boundary acknowledgement capacity is exhausted; restart the runtime"
+                    .into(),
+            ));
+        }
+        acknowledgements.insert(
+            acknowledgement.into(),
+            ScopedSandboxBoundaryAcknowledgement {
+                session_id: session_id.into(),
+                mode,
+            },
+        );
+        Ok(())
+    }
+
+    /// Roll back a worker-issued acknowledgement when durable audit append fails.
+    pub fn revoke_interactive_client_acknowledgement(&self, acknowledgement: &str) {
+        if let Ok(mut acknowledgements) = self.scoped_acknowledgements.write() {
+            acknowledgements.remove(acknowledgement);
+        }
+    }
+
+    /// Configured boundary when this session already accepted it, otherwise `None`.
+    pub fn acknowledged_mode(&self, session_id: Option<&str>) -> Option<SandboxBoundaryMode> {
+        let mode = self.mode?;
+        self.acknowledged(session_id, mode).then_some(mode)
+    }
+
+    fn acknowledged(&self, session_id: Option<&str>, mode: SandboxBoundaryMode) -> bool {
+        if self.globally_acknowledged {
+            return true;
+        }
+        session_id.is_some_and(|session_id| {
+            self.acknowledged_sessions
+                .read()
+                .is_ok_and(|sessions| sessions.contains(session_id))
+                || self.active_scoped_acknowledgement_matches(session_id, mode)
+        })
+    }
+
+    fn active_scoped_acknowledgement_matches(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+    ) -> bool {
+        ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT
+            .try_with(|active| {
+                active.as_deref().is_some_and(|acknowledgement| {
+                    self.scoped_acknowledgements
+                        .read()
+                        .is_ok_and(|acknowledgements| {
+                            acknowledgements.get(acknowledgement).is_some_and(|entry| {
+                                entry.session_id == session_id && entry.mode == mode
+                            })
+                        })
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn validate(
+        &self,
+        request: &EffectRequest,
+        mode: SandboxBoundaryMode,
+    ) -> Result<(), GatewayError> {
+        if self.mode != Some(mode) {
+            return Err(GatewayError::Safety(format!(
+                "policy selected {} but the runtime was not configured for that direct-execution boundary",
+                mode.as_backend()
+            )));
+        }
+        if self.acknowledged(request.context.session_id.as_deref(), mode) {
+            return Ok(());
+        }
+        let requirement = match mode {
+            SandboxBoundaryMode::External => {
+                "set sandbox.acknowledgeExternalBoundary: true for an operator-managed headless runtime or acknowledge the external boundary in the TUI"
+            }
+            SandboxBoundaryMode::DangerFullAccess => {
+                "set sandbox.acknowledgeDangerFullAccess: true for an operator-managed headless runtime or acknowledge danger full access in the TUI"
+            }
+        };
+        Err(GatewayError::Safety(format!(
+            "{} process execution is not acknowledged; {requirement}",
+            mode.as_backend()
+        )))
+    }
+}
+
 /// Hard safety checks policy is never allowed to override.
 pub struct SafetyKernel {
     known_capabilities: BTreeSet<String>,
     policy_input_limit: usize,
+    sandbox_boundary_gate: Option<Arc<SandboxBoundaryGate>>,
 }
 
 impl SafetyKernel {
@@ -247,6 +483,7 @@ impl SafetyKernel {
         Self {
             known_capabilities: known_capabilities.into_iter().collect(),
             policy_input_limit: DEFAULT_POLICY_INPUT_LIMIT,
+            sandbox_boundary_gate: None,
         }
     }
 
@@ -254,6 +491,29 @@ impl SafetyKernel {
     pub fn with_policy_input_limit(mut self, bytes: usize) -> Self {
         self.policy_input_limit = bytes;
         self
+    }
+
+    /// Require runtime acknowledgement before direct-execution permits may be minted.
+    pub fn with_sandbox_boundary_gate(mut self, gate: Arc<SandboxBoundaryGate>) -> Self {
+        self.sandbox_boundary_gate = Some(gate);
+        self
+    }
+
+    /// Direct-execution boundary configured for this kernel, when one is active.
+    pub fn sandbox_boundary_mode(&self) -> Option<SandboxBoundaryMode> {
+        self.sandbox_boundary_gate
+            .as_deref()
+            .and_then(SandboxBoundaryGate::mode)
+    }
+
+    /// Direct-execution boundary already acknowledged for one session, when one is active.
+    pub fn acknowledged_sandbox_boundary_mode(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<SandboxBoundaryMode> {
+        self.sandbox_boundary_gate
+            .as_deref()
+            .and_then(|gate| gate.acknowledged_mode(session_id))
     }
 
     pub(super) fn prepare(&self, request: &EffectRequest) -> Result<EffectRequest, GatewayError> {
@@ -309,7 +569,7 @@ impl SafetyKernel {
         }
         if !matches!(
             obligations.sandbox_backend.as_str(),
-            "broker" | "native" | "oci" | "windows_job"
+            "broker" | "native" | "oci" | "windows_job" | "external" | "danger_full_access"
         ) {
             return Err(GatewayError::Safety(format!(
                 "unknown sandbox backend {}",
@@ -324,6 +584,21 @@ impl SafetyKernel {
                 "process execution cannot downgrade to the broker without an explicit obligation"
                     .into(),
             ));
+        }
+        if request.phase == EffectPhase::PreEffect
+            && decision.outcome != DecisionOutcome::Deny
+            && is_process_effect(request)
+            && let Some(mode) = SandboxBoundaryMode::from_backend(&obligations.sandbox_backend)
+        {
+            self.sandbox_boundary_gate
+                .as_ref()
+                .ok_or_else(|| {
+                    GatewayError::Safety(format!(
+                        "{} process execution requires a runtime acknowledgement gate",
+                        mode.as_backend()
+                    ))
+                })?
+                .validate(request, mode)?;
         }
         if obligations.sandbox_backend == "windows_job"
             && is_process_effect(request)
@@ -567,7 +842,11 @@ pub(super) fn validate_process_obligations(
     request: &EffectRequest,
     obligations: &PolicyObligations,
 ) -> Result<(), GatewayError> {
-    let executable_allowed = if obligations.sandbox_backend == "oci" {
+    let danger_full_access =
+        obligations.sandbox_backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
+    let executable_allowed = if danger_full_access {
+        canonical_effect_path(&request.resource, false)?.is_file()
+    } else if obligations.sandbox_backend == "oci" {
         normalized_absolute_path(&request.resource)
             && obligations
                 .filesystem
@@ -592,14 +871,16 @@ pub(super) fn validate_process_obligations(
         .and_then(Value::as_str)
         .ok_or_else(|| GatewayError::Safety("process cwd is absent".into()))?;
     let cwd = canonical_effect_path(cwd, false)?;
-    let cwd_allowed = obligations.filesystem.iter().any(|grant| {
-        matches!(grant.mode.as_str(), "read" | "write")
-            && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
-    });
-    if !cwd_allowed {
-        return Err(GatewayError::Safety(
-            "process cwd is outside allowed filesystem roots".into(),
-        ));
+    if SandboxBoundaryMode::from_backend(&obligations.sandbox_backend).is_none() {
+        let cwd_allowed = obligations.filesystem.iter().any(|grant| {
+            matches!(grant.mode.as_str(), "read" | "write")
+                && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
+        });
+        if !cwd_allowed {
+            return Err(GatewayError::Safety(
+                "process cwd is outside allowed filesystem roots".into(),
+            ));
+        }
     }
     let environment = request
         .content
@@ -607,10 +888,11 @@ pub(super) fn validate_process_obligations(
         .and_then(Value::as_object)
         .ok_or_else(|| GatewayError::Safety("process environment object is absent".into()))?;
     for name in environment.keys() {
-        if !obligations
-            .allowed_environment
-            .iter()
-            .any(|allowed| allowed == name)
+        if !danger_full_access
+            && !obligations
+                .allowed_environment
+                .iter()
+                .any(|allowed| allowed == name)
         {
             return Err(GatewayError::Safety(format!(
                 "environment variable {name} is not allowed"
@@ -707,25 +989,82 @@ pub(super) fn is_hard_secret_key(key: &str) -> bool {
     )
 }
 
+/// Effect-content field holding the configured secret HTTP header references.
+const CREDENTIAL_HEADERS_FIELD: &str = "credential_headers";
+
 pub(super) fn redact_hard_secrets(value: &mut Value) {
+    redact_effect_content(value, true);
+}
+
+fn redact_effect_content(value: &mut Value, at_content_root: bool) {
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
-                    let bytes = serde_json::to_vec(child).unwrap_or_default();
-                    *child = json!({
-                        "redacted": true,
-                        "sha256": sha256_hex(&bytes),
-                        "size": bytes.len()
-                    });
+                if at_content_root && key == CREDENTIAL_HEADERS_FIELD {
+                    redact_credential_headers(child);
+                } else if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
+                    *child = redacted_placeholder(child);
                 } else {
-                    redact_hard_secrets(child);
+                    redact_effect_content(child, false);
                 }
             }
         }
-        Value::Array(array) => array.iter_mut().for_each(redact_hard_secrets),
+        Value::Array(array) => array
+            .iter_mut()
+            .for_each(|child| redact_effect_content(child, false)),
         _ => {}
     }
+}
+
+/// Preserve well-formed structured references only inside the configured
+/// `credential_headers` map, so strict downstream input validation still accepts
+/// the effect shape without granting a general exemption to hard-secret keys.
+fn redact_credential_headers(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        redact_effect_content(value, false);
+        return;
+    };
+    for child in object.values_mut() {
+        if !is_environment_credential_header_reference(child) {
+            *child = redacted_placeholder(child);
+        }
+    }
+}
+
+fn redacted_placeholder(value: &Value) -> Value {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    json!({
+        "redacted": true,
+        "sha256": sha256_hex(&bytes),
+        "size": bytes.len()
+    })
+}
+
+fn is_environment_credential_header_reference(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.len() > 2
+        || !object.contains_key("reference")
+        || object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "reference" | "scheme"))
+        || !object
+            .get("reference")
+            .is_some_and(is_environment_credential_reference)
+    {
+        return false;
+    }
+    object.get("scheme").is_none_or(|scheme| {
+        scheme.is_null()
+            || scheme.as_str().is_some_and(|scheme| {
+                !scheme.is_empty()
+                    && scheme.len() <= 64
+                    && scheme
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+    })
 }
 
 pub(super) fn is_environment_credential_reference(value: &Value) -> bool {

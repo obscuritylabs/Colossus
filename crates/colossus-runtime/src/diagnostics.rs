@@ -128,6 +128,7 @@ impl Runtime {
             "journal_head": journal_head,
             "record_hash": record_hash,
             "storage": self.storage_diagnostic,
+            "security_posture": self.security_posture,
             "writer_lease": writer_lease,
             "projection_store": {
                 "adapter": projection_adapter,
@@ -147,6 +148,31 @@ impl Runtime {
         }))
     }
 
+    /// Complete journal verification plus explicit checkpoint and anchor posture.
+    pub fn audit_anchor_status(&self) -> Result<Value, RuntimeError> {
+        let verification = self.journal.verify()?;
+        let protection = self
+            .storage_diagnostic
+            .get("payload_protection")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let secure_anchor = if protection == "plaintext" {
+            json!({
+                "status": "disabled",
+                "reason": "storage.keys.kind is none",
+            })
+        } else if verification.checkpoint.is_some() {
+            json!({"status": "verified"})
+        } else {
+            json!({"status": "not_initialized"})
+        };
+        Ok(json!({
+            "payload_protection": protection,
+            "secure_anchor": secure_anchor,
+            "verification": verification,
+        }))
+    }
+
     /// Policy readiness and decision-log safety status.
     pub async fn policy_doctor(&self) -> Result<Value, RuntimeError> {
         self.policy
@@ -160,6 +186,13 @@ impl Runtime {
     pub fn sandbox_doctor(&self) -> SandboxDoctorReport {
         let mut report = sandbox_doctor(&self.sandbox_executor_config);
         report.canonical_workspace = Some(self.workspace.clone());
+        report.selected_backend = self.sandbox_backend.clone();
+        report.colossus_process_isolation = matches!(
+            self.sandbox_backend.as_str(),
+            "native" | "windows_job" | "oci"
+        );
+        report.direct_execution_globally_acknowledged =
+            self.sandbox_boundary_gate.globally_acknowledged();
         report.sandbox_profile = self.sandbox_profile.clone();
         report.protected_path_exclusions_supported = match self.sandbox_backend.as_str() {
             "native" => report.protected_path_exclusions_supported,
@@ -290,6 +323,7 @@ impl Runtime {
         let mut value = serde_json::to_value(&self.access).unwrap_or_else(|_| json!({}));
         if let Some(report) = value.as_object_mut() {
             report.insert("canonical_workspace".into(), json!(self.workspace));
+            report.insert("security_posture".into(), json!(self.security_posture));
             report.insert(
                 "sandbox".into(),
                 json!({
@@ -315,6 +349,11 @@ impl Runtime {
             );
         }
         value
+    }
+
+    /// Structured effective runtime security posture.
+    pub fn security_posture(&self) -> &SecurityPostureReport {
+        &self.security_posture
     }
 
     /// List safe metadata for explicitly configured MCP servers.

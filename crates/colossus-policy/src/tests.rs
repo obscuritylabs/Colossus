@@ -1,14 +1,14 @@
 use super::{
     AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, NetworkDestinationMatch, QuarantinedEffectObserver, ReleasedEffectObserver,
-    ReleasedEffectResult, SafetyKernel, StreamingEffectExecutor, effect_request,
-    network_destination_match, system_actor,
+    ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, StreamingEffectExecutor,
+    effect_request, network_destination_match, system_actor, with_sandbox_boundary_acknowledgement,
 };
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, ApprovalReviewNotice, AutomaticApprovalNotice, DecisionOutcome,
-    QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation, RiskReviewFailure,
-    RiskReviewFallbackNotice, RiskStatus,
+    ExecutionContext, QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation,
+    RiskReviewFailure, RiskReviewFallbackNotice, RiskStatus, SandboxBoundaryMode,
 };
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
@@ -235,6 +235,7 @@ fn mcp_call_request(
             "url": url,
             "headers": {},
             "credential_headers": {},
+            "allow_stateless": false,
             "oauth": null,
             "timeout_ms": 30_000,
             "max_output_bytes": 1_048_576,
@@ -653,6 +654,226 @@ async fn process_environment_and_executable_obligations_fail_closed() {
         .await
         .expect_err("environment denied");
     assert!(matches!(error, GatewayError::Safety(_)));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn direct_process_backends_require_the_exact_session_acknowledgement() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    for mode in [
+        SandboxBoundaryMode::External,
+        SandboxBoundaryMode::DangerFullAccess,
+    ] {
+        const INTERACTIVE_CAPABILITY: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox(mode.as_backend(), "test", false)
+            .with_filesystem_root(executable.display().to_string(), "execute");
+        let gate = Arc::new(SandboxBoundaryGate::new(Some(mode), false));
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()])
+                .with_sandbox_boundary_gate(Arc::clone(&gate)),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let request = || {
+            let mut request = effect_request(
+                system_actor("test"),
+                "process.spawn",
+                executable.display().to_string(),
+                serde_json::json!({
+                    "cwd": directory.path(),
+                    "args": [],
+                    "environment": {},
+                    "stdin_base64": null,
+                }),
+            );
+            request.capabilities = vec!["process.spawn".into()];
+            request.context = ExecutionContext {
+                session_id: Some("session-1".into()),
+                ..ExecutionContext::default()
+            };
+            request
+        };
+
+        assert_eq!(gateway.sandbox_boundary_mode(), Some(mode));
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            None,
+            "callers must not observe an unacknowledged boundary as acknowledged"
+        );
+
+        let error = gateway
+            .execute(request(), &executor)
+            .await
+            .expect_err("unacknowledged direct process execution");
+        assert!(error.to_string().contains("is not acknowledged"));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+        gate.acknowledge_session("another-session", mode)
+            .expect("other session acknowledgement");
+        assert!(gateway.execute(request(), &executor).await.is_err());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+        gate.acknowledge_interactive_client(INTERACTIVE_CAPABILITY, "session-1", mode)
+            .expect("interactive client acknowledgement");
+        assert!(
+            gate.acknowledge_interactive_client(INTERACTIVE_CAPABILITY, "session-1", mode)
+                .is_err()
+        );
+        assert!(gateway.execute(request(), &executor).await.is_err());
+        assert!(
+            with_sandbox_boundary_acknowledgement(
+                Some("wrong-capability".into()),
+                gateway.execute(request(), &executor),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        let mut other_session_request = request();
+        other_session_request.context.session_id = Some("unacknowledged-session".into());
+        assert!(
+            with_sandbox_boundary_acknowledgement(
+                Some(INTERACTIVE_CAPABILITY.into()),
+                gateway.execute(other_session_request, &executor),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        with_sandbox_boundary_acknowledgement(
+            Some(INTERACTIVE_CAPABILITY.into()),
+            gateway.execute(request(), &executor),
+        )
+        .await
+        .expect("client-scoped acknowledgement authorizes its attached operation");
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+        assert!(gateway.execute(request(), &executor).await.is_err());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+
+        assert_eq!(
+            with_sandbox_boundary_acknowledgement(Some(INTERACTIVE_CAPABILITY.into()), async {
+                gateway.acknowledged_sandbox_boundary_mode(Some("session-1"))
+            })
+            .await,
+            Some(mode),
+            "a client-scoped acknowledgement authorizes its attached session"
+        );
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            None,
+            "the client-scoped acknowledgement does not outlive its attached operation"
+        );
+
+        gate.acknowledge_session("session-1", mode)
+            .expect("active session acknowledgement");
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(Some("session-1")),
+            Some(mode)
+        );
+        assert_eq!(
+            gateway.acknowledged_sandbox_boundary_mode(None),
+            None,
+            "a sessionless caller never observes an acknowledged boundary"
+        );
+        gateway
+            .execute(request(), &executor)
+            .await
+            .expect("direct process cwd does not require an unenforced filesystem declaration");
+        assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+    }
+}
+
+#[tokio::test]
+async fn danger_full_access_drops_process_executable_and_environment_grants_only() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    for (mode, allowed) in [
+        (SandboxBoundaryMode::External, false),
+        (SandboxBoundaryMode::DangerFullAccess, true),
+    ] {
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox(mode.as_backend(), "test", false);
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()])
+                .with_sandbox_boundary_gate(Arc::new(SandboxBoundaryGate::new(Some(mode), true))),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {"UNDECLARED_ENVIRONMENT": "available"},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+
+        let result = gateway.execute(request, &executor).await;
+        assert_eq!(result.is_ok(), allowed, "mode: {}", mode.as_backend());
+        assert_eq!(executor.calls.load(Ordering::Acquire), usize::from(allowed));
+    }
+}
+
+#[tokio::test]
+async fn denied_direct_process_effects_do_not_request_a_boundary_acknowledgement() {
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("process.spawn", DecisionOutcome::Deny)
+        .with_sandbox("external", "test", false);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(AllowApproval {
+            approved_by: "user".into(),
+        }),
+        SafetyKernel::new(["process.spawn".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::External), false),
+        )),
+        [9_u8; 32],
+    );
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let mut request = effect_request(
+        system_actor("test"),
+        "process.spawn",
+        "/unavailable",
+        serde_json::json!({}),
+    );
+    request.capabilities = vec!["process.spawn".into()];
+    let error = gateway
+        .execute(request, &executor)
+        .await
+        .expect_err("policy denial");
+    assert!(matches!(error, GatewayError::Denied(_)));
     assert_eq!(executor.calls.load(Ordering::Acquire), 0);
 }
 
@@ -2110,7 +2331,7 @@ impl colossus_ports::PolicyDecisionPoint for RecordingPolicy {
 }
 
 #[tokio::test]
-async fn hard_secrets_are_hashed_before_policy_disclosure() {
+async fn hard_secrets_are_hashed_and_structured_credential_references_are_preserved() {
     let seen = Arc::new(Mutex::new(None));
     let gateway = EffectGateway::new(
         Arc::new(InMemoryEventJournal::default()),
@@ -2136,7 +2357,32 @@ async fn hard_secrets_are_hashed_before_policy_disclosure() {
                     "message": "safe",
                     "api_key": "must-not-leak",
                     "headers": {"authorization": "Bearer secret"},
-                    "credential_references": {"password": "env:SAFE_PASSWORD_REF"}
+                    "credential_references": {"password": "env:SAFE_PASSWORD_REF"},
+                    "credential_headers": {
+                        "Authorization": {
+                            "scheme": "Bearer",
+                            "reference": "env:SPLUNK_MCP_TOKEN"
+                        }
+                    },
+                    "invalid_credential_header": {
+                        "authorization": {
+                            "scheme": "Bearer",
+                            "reference": "env:SPLUNK_MCP_TOKEN",
+                            "value": "must-not-leak"
+                        }
+                    },
+                    "password": {
+                        "scheme": "must-not-leak-scheme",
+                        "reference": "env:SPLUNK_MCP_TOKEN"
+                    },
+                    "arguments": {
+                        "credential_headers": {
+                            "password": {
+                                "scheme": "must-not-leak-scheme",
+                                "reference": "env:SPLUNK_MCP_TOKEN"
+                            }
+                        }
+                    }
                 }),
             ),
             &executor,
@@ -2157,6 +2403,22 @@ async fn hard_secrets_are_hashed_before_policy_disclosure() {
     assert_eq!(
         request.content["credential_references"]["password"],
         "env:SAFE_PASSWORD_REF"
+    );
+    assert_eq!(
+        request.content["credential_headers"]["Authorization"],
+        serde_json::json!({
+            "scheme": "Bearer",
+            "reference": "env:SPLUNK_MCP_TOKEN"
+        })
+    );
+    assert_eq!(
+        request.content["invalid_credential_header"]["authorization"]["redacted"],
+        true
+    );
+    assert_eq!(request.content["password"]["redacted"], true);
+    assert_eq!(
+        request.content["arguments"]["credential_headers"]["password"]["redacted"],
+        true
     );
     assert!(
         !serde_json::to_string(&request)

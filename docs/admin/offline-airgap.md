@@ -9,15 +9,15 @@ type: how-to
 
 ## Goal
 
-Run Colossus without external credentials or network access and retain encrypted,
-verifiable state.
+Run Colossus without external credentials or network access and retain verifiable
+state, optionally with protected storage.
 
 ## Prerequisites
 
 - A native archive with its checksum, or a signed offline bundle and trusted publisher
   key.
-- A supported platform credential service, or two independently managed 32-byte keys
-  injected at launch.
+- For protected storage only: a supported platform credential service, or two
+  independently managed 32-byte keys injected at launch.
 - Any local model, workflows, skills, policies, or extensions required inside the
   boundary, already reviewed and transferred.
 
@@ -52,6 +52,10 @@ verifiable state.
    The built-in `echo` route, redb journal, built-in policy, local workflows, repository
    tools, and lexical index need no internet access.
 
+   The command above uses `--storage-keys none`, the dependency-free default. Add
+   `--storage-keys environment` or `--storage-keys platform` when confidentiality,
+   signed checkpoints, and rollback anchors are required.
+
 5. Run the acceptance sequence:
 
     ```bash
@@ -73,8 +77,9 @@ recommended audit/smoke baseline and never acquires those derived grants.
 
 ## Expected result
 
-The run completes with no external network grant, writes encrypted journal events,
-creates a signed checkpoint, and verifies against the secure anchor.
+The run completes with no external network grant and the hash-chained journal verifies.
+With protected storage it also writes ciphertext, creates a signed checkpoint, and
+verifies against the secure anchor.
 
 ## Verification
 
@@ -86,8 +91,8 @@ host boundary that no unapproved egress occurred.
 
 - A checksum proves transport integrity, not publisher identity; require the signed
   bundle when authenticity matters.
-- Do not enable plaintext storage when no credential service is available. Inject
-  separately managed environment keys.
+- Keyless storage is plaintext. Protect its volume, or initialize a fresh journal with
+  separately managed environment keys when confidentiality is required.
 - An unavailable external adapter degrades explicitly; Colossus does not discover or
   contact alternatives.
 - Never blindly retry an unknown external effect after reconnecting the environment.

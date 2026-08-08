@@ -27,6 +27,7 @@ keyring.workspace = true
 redb.workspace = true
 reqwest.workspace = true
 rmcp = { workspace = true, features = ["auth", "client", "transport-streamable-http-client"] }
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -37,6 +38,7 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+colossus-testkit.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 

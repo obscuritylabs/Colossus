@@ -90,6 +90,20 @@ mod unix {
         )
     }
 
+    /// Report whether a process is currently accepting connections at the endpoint.
+    ///
+    /// A socket file left behind by a killed worker is trusted but refuses every
+    /// connection, so only an accepted connection proves a listener is alive.
+    pub fn endpoint_is_live(endpoint: &str) -> bool {
+        match std::os::unix::net::UnixStream::connect(endpoint) {
+            Ok(stream) => {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     pub fn endpoint_is_trusted(endpoint: &str) -> Result<bool, WorkerError> {
         let path = Path::new(endpoint);
         if shortened_endpoint(path) && !validate_shortened_parent(path)? {
@@ -298,6 +312,21 @@ mod windows {
 
     pub fn endpoint_is_trusted(_endpoint: &str) -> Result<bool, WorkerError> {
         Ok(true)
+    }
+
+    /// Report whether a named-pipe server currently exists at the endpoint.
+    ///
+    /// The synchronous open avoids the connector's bounded retries: an absent
+    /// pipe answers immediately, and a busy pipe still proves a live server.
+    pub fn endpoint_is_live(endpoint: &str) -> bool {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(endpoint)
+        {
+            Ok(_) => true,
+            Err(error) => connection_is_busy(&error),
+        }
     }
 }
 

@@ -42,11 +42,7 @@ storage:
   path: .colossus/state.redb
   startupVerification: incremental
   keys:
-    kind: environment
-    journal_variable: COLOSSUS_JOURNAL_KEY
-    journal_key_id: journal-production
-    signing_variable: COLOSSUS_SIGNING_KEY
-    anchor_path: .colossus/secure-anchor.json
+    kind: none
 network:
   caBundlePath: null
 policy:
@@ -82,6 +78,8 @@ sandbox:
   backend: native
   profile: workspace-development
   allowBrokerFallback: false
+  acknowledgeExternalBoundary: false
+  acknowledgeDangerFullAccess: false
   helperPath: null
   ociRuntime: null
   ociImage: null

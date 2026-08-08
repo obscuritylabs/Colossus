@@ -324,7 +324,9 @@ impl WorkerPromptHandler for LineWorkerPromptHandler {
             body.extend(document_from_json(&prompt.details, None).blocks);
         }
         let tone = match prompt.kind {
-            WorkerPromptKind::Approval => colossus_presentation::PresentationTone::Warning,
+            WorkerPromptKind::Approval | WorkerPromptKind::SandboxBoundaryAcknowledgement => {
+                colossus_presentation::PresentationTone::Warning
+            }
             WorkerPromptKind::UserInput => colossus_presentation::PresentationTone::Neutral,
         };
         write_stderr_document(&PresentationDocument::from_block(PresentationBlock::Card {

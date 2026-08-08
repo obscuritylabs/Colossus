@@ -6,8 +6,9 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy,
-    PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SessionMessage,
-    SessionMessagePage, TerminalPreferences, ThemeTextStyle,
+    PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode,
+    SecurityPostureReport, SessionMessage, SessionMessagePage, SessionSummary, TerminalPreferences,
+    ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{
@@ -56,6 +57,16 @@ pub const MINIMUM_TERMINAL_HEIGHT: u16 = 12;
 const MAX_COMPLETION_MENU_ROWS: usize = 6;
 /// Transcript rows retained above completion chrome so the menu remains renderable.
 const MINIMUM_COMPLETION_TRANSCRIPT_ROWS: u16 = 3;
+/// Most rows occupied by the bottom-docked effect approval surface.
+const MAX_APPROVAL_DOCK_ROWS: u16 = 10;
+/// Fewest rows that keep approval summary, navigation, and decisions usable.
+const MIN_APPROVAL_DOCK_ROWS: u16 = 8;
+/// Transcript rows retained above a bottom-docked approval.
+const MINIMUM_APPROVAL_TRANSCRIPT_ROWS: u16 = 3;
+/// Most rows occupied by the contextual plan-execution decision dock.
+const MAX_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
+/// Fewest rows that keep plan context, choices, and confirmation usable.
+const MIN_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
 /// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
@@ -69,10 +80,15 @@ const MAX_NATIVE_HISTORY_MESSAGES: usize =
 const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
 mod app;
+pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
+mod completion;
 mod contract;
+mod plan_execution;
 mod render;
+mod session_browser;
 mod state;
 mod terminal;
+mod theme_picker;
 mod transcript;
 
 pub use app::run_tui;
@@ -80,11 +96,18 @@ pub use contract::{
     BackgroundNoticeProvider, BootstrapRequest, FooterState, HostCommandResult, HostEvent,
     HostPlanExecutionOutcome, HostPlanExecutionResult, HostRunResult, InteractiveCommand,
     InteractiveHost, InteractiveMode, InteractivePlanExecutionRequest, InteractivePrompt,
-    InteractiveRunRequest, InteractiveSnapshot, LocalCommand, OperationResult, PlanCommand,
-    PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode,
+    InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
+    InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
+    InteractiveThemePicker, InteractiveThemePickerEntry, LocalCommand, OperationResult,
+    PlanCommand, PlanHostCommand, PlanSelectionUpdate, PromptResponse, RuntimeCommand, ScreenMode,
     TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
 };
 pub use state::TuiState;
+
+use completion::*;
+use plan_execution::*;
+use session_browser::*;
+use theme_picker::*;
 
 #[cfg(test)]
 use app::*;

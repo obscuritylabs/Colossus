@@ -13,6 +13,7 @@ pub struct Runtime {
     pub(super) workspace: PathBuf,
     pub(super) writer_lease: Option<RedbWriterLease>,
     pub(super) storage_diagnostic: Value,
+    pub(super) security_posture: SecurityPostureReport,
     pub(super) journal: Arc<dyn EventJournal>,
     pub(super) recovery_reason: Option<String>,
     pub(super) projections: Arc<ProjectionWorker>,
@@ -58,6 +59,8 @@ pub struct Runtime {
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
     pub(super) sandbox_profile: String,
+    pub(super) sandbox_boundary_gate: Arc<SandboxBoundaryGate>,
+    pub(super) sandbox_boundary_acknowledgement_lock: std::sync::Mutex<()>,
     pub(super) development_sandbox: DevelopmentSandbox,
     pub(super) sandbox_filesystem: Vec<FilesystemGrant>,
     pub(super) sandbox_executables: Vec<PathBuf>,
@@ -157,33 +160,47 @@ impl Runtime {
         if let Some(parent) = storage_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let (keys, signing_key_id, signing_key): (Arc<dyn KeyProvider>, String, [u8; 32]) =
+        let (keys, signer): (Arc<dyn KeyProvider>, Arc<dyn CheckpointSigner>) =
             match &config.storage.keys {
+                KeyConfig::None => (
+                    Arc::new(PlaintextKeyProvider),
+                    Arc::new(DisabledCheckpointSigner),
+                ),
                 KeyConfig::Platform {
                     service,
                     journal_key_id,
                     signing_key_id,
-                } => (
-                    Arc::new(PlatformKeyProvider::new(service, journal_key_id)?),
-                    signing_key_id.clone(),
-                    platform_secret(service, &format!("signing-key:{signing_key_id}"))?,
-                ),
+                } => {
+                    let signing_key =
+                        platform_secret(service, &format!("signing-key:{signing_key_id}"))?;
+                    (
+                        Arc::new(PlatformKeyProvider::new(service, journal_key_id)?),
+                        Arc::new(Ed25519CheckpointSigner::new(
+                            signing_key_id.clone(),
+                            signing_key,
+                        )),
+                    )
+                }
                 KeyConfig::Environment {
                     journal_variable,
                     journal_key_id,
                     signing_variable,
                     anchor_path,
-                } => (
-                    Arc::new(EnvironmentKeyProvider::new(
-                        journal_variable,
-                        journal_key_id,
-                        anchor_path,
-                    )),
-                    "environment-checkpoint-v1".into(),
-                    explicit_secret(signing_variable)?,
-                ),
+                } => {
+                    let signing_key = explicit_secret(signing_variable)?;
+                    (
+                        Arc::new(EnvironmentKeyProvider::new(
+                            journal_variable,
+                            journal_key_id,
+                            anchor_path,
+                        )),
+                        Arc::new(Ed25519CheckpointSigner::new(
+                            "environment-checkpoint-v1",
+                            signing_key,
+                        )),
+                    )
+                }
             };
-        let signer = Arc::new(Ed25519CheckpointSigner::new(signing_key_id, signing_key));
         let StorageComposition {
             writer_lease,
             journal,
@@ -209,6 +226,7 @@ impl Runtime {
                     diagnostic: json!({
                         "adapter": "redb",
                         "path": storage_path,
+                        "payload_protection": config.storage.keys.protection_label(),
                         "startup_verification": startup_verification,
                     }),
                 }
@@ -231,6 +249,7 @@ impl Runtime {
                 let recovery_reason = postgres.recovery_reason()?;
                 let mut diagnostic = postgres.diagnostic();
                 diagnostic["startup_verification"] = json!(postgres.startup_verification_report()?);
+                diagnostic["payload_protection"] = json!(config.storage.keys.protection_label());
                 StorageComposition {
                     writer_lease: None,
                     journal: postgres.clone(),
@@ -313,6 +332,8 @@ impl Runtime {
             &config.mcp,
             &config.sandbox,
         )?;
+        let security_posture =
+            security_posture::build_security_posture(config, &active_pack_extensions.mcp);
         #[cfg(unix)]
         let filesystem_skills: Arc<dyn SkillRepository> =
             Arc::new(FilesystemSkillRepository::new_workspace_bound(
@@ -435,13 +456,16 @@ impl Runtime {
                     .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("git"))
             })
             .count();
+        let danger_full_access =
+            config.sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
         let access_context = AccessContext {
             filesystem_read: access_filesystem
                 .iter()
                 .any(|grant| matches!(grant.mode.as_str(), "read" | "write" | "metadata")),
             filesystem_write: access_filesystem.iter().any(|grant| grant.mode == "write"),
-            git_executable: configured_git_executables == 1,
-            any_executable: !access_executables.is_empty(),
+            git_executable: configured_git_executables == 1
+                || (danger_full_access && ambient_executable("git").is_some()),
+            any_executable: danger_full_access || !access_executables.is_empty(),
             network_destination: !config.sandbox.network_destinations.is_empty(),
             agent_search_route: searches.resolve("agent").is_ok(),
             interactive: user_prompts.is_some(),
@@ -582,20 +606,14 @@ impl Runtime {
                 .map_err(GatewayError::from)?,
             ),
         };
-        let permit_key = match &config.storage.keys {
-            KeyConfig::Platform {
-                service,
-                journal_key_id,
-                ..
-            } => platform_secret(service, &format!("permit-mac:{journal_key_id}"))?,
-            KeyConfig::Environment {
-                signing_variable, ..
-            } => {
-                let signing = explicit_secret(signing_variable)?;
-                sha2_compat(&signing, b"colossus-permit-mac-v1")
-            }
-        };
-        let sandbox_job_key = sha2_compat(&permit_key, b"colossus-sandbox-job-v1");
+        let mut permit_key = [0_u8; 32];
+        getrandom::fill(&mut permit_key).map_err(|_| {
+            RuntimeError::Config("operating-system randomness is unavailable".into())
+        })?;
+        let mut sandbox_job_key = [0_u8; 32];
+        getrandom::fill(&mut sandbox_job_key).map_err(|_| {
+            RuntimeError::Config("operating-system randomness is unavailable".into())
+        })?;
         let sandbox_executor_config = SandboxExecutorConfig {
             helper_executable: config
                 .sandbox
@@ -662,6 +680,10 @@ impl Runtime {
         } else {
             match active_pack_extensions.mcp.oauth_credential_store {
                 McpOAuthCredentialStoreKind::Auto => match &config.storage.keys {
+                    KeyConfig::None => mcp_executor.with_plaintext_oauth_storage(
+                        &storage_path.with_extension("mcp-oauth.redb"),
+                        repository_id.clone(),
+                    )?,
                     KeyConfig::Platform { service, .. } => mcp_executor
                         .with_platform_oauth_storage(service.clone(), repository_id.clone()),
                     KeyConfig::Environment { .. } => mcp_executor.with_encrypted_oauth_storage(
@@ -672,17 +694,30 @@ impl Runtime {
                 },
                 McpOAuthCredentialStoreKind::Platform => {
                     let service = match &config.storage.keys {
+                        KeyConfig::None => "colossus-mcp-oauth".into(),
                         KeyConfig::Platform { service, .. } => service.clone(),
                         KeyConfig::Environment { .. } => "colossus-mcp-oauth".into(),
                     };
                     mcp_executor.with_platform_oauth_storage(service, repository_id.clone())
                 }
-                McpOAuthCredentialStoreKind::EncryptedState => mcp_executor
-                    .with_encrypted_oauth_storage(
+                McpOAuthCredentialStoreKind::PlaintextState => mcp_executor
+                    .with_plaintext_oauth_storage(
+                        &storage_path.with_extension("mcp-oauth.redb"),
+                        repository_id.clone(),
+                    )?,
+                McpOAuthCredentialStoreKind::EncryptedState => {
+                    if matches!(config.storage.keys, KeyConfig::None) {
+                        return Err(RuntimeError::Config(
+                            "mcp.oauthCredentialStore encrypted_state requires platform or environment storage keys"
+                                .into(),
+                        ));
+                    }
+                    mcp_executor.with_encrypted_oauth_storage(
                         &storage_path.with_extension("mcp-oauth.redb"),
                         Arc::clone(&keys),
                         repository_id.clone(),
-                    )?,
+                    )?
+                }
             }
         };
         let mcp_executor = Arc::new(mcp_executor);
@@ -697,11 +732,24 @@ impl Runtime {
             .iter()
             .map(|action| action.name.clone())
             .collect::<Vec<_>>();
+        let sandbox_boundary_mode = SandboxBoundaryMode::from_backend(&config.sandbox.backend);
+        let sandbox_boundary_acknowledged = match sandbox_boundary_mode {
+            Some(SandboxBoundaryMode::External) => config.sandbox.acknowledge_external_boundary,
+            Some(SandboxBoundaryMode::DangerFullAccess) => {
+                config.sandbox.acknowledge_danger_full_access
+            }
+            None => false,
+        };
+        let sandbox_boundary_gate = Arc::new(SandboxBoundaryGate::new(
+            sandbox_boundary_mode,
+            sandbox_boundary_acknowledged,
+        ));
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
             approvals,
-            SafetyKernel::new(known_capabilities),
+            SafetyKernel::new(known_capabilities)
+                .with_sandbox_boundary_gate(Arc::clone(&sandbox_boundary_gate)),
             permit_key,
         ));
         let search_provider: Arc<dyn SearchProvider> = Arc::new(GatewaySearchProvider {
@@ -936,6 +984,7 @@ impl Runtime {
             workspace,
             writer_lease,
             storage_diagnostic,
+            security_posture,
             journal,
             recovery_reason,
             projections,
@@ -981,6 +1030,8 @@ impl Runtime {
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),
             sandbox_profile: config.sandbox.profile.clone(),
+            sandbox_boundary_gate,
+            sandbox_boundary_acknowledgement_lock: std::sync::Mutex::new(()),
             development_sandbox,
             sandbox_filesystem: config.sandbox.filesystem.clone(),
             sandbox_executables: config.sandbox.executables.clone(),

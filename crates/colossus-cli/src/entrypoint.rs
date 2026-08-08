@@ -52,6 +52,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 from,
                 access_profile,
                 sandbox_profile,
+                storage_keys,
             },
     }) = &cli.command
     {
@@ -61,6 +62,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             from.as_deref(),
             *access_profile,
             *sandbox_profile,
+            *storage_keys,
         );
     }
     if let Command::Codex(command) = &cli.command {
@@ -85,6 +87,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let config = RuntimeConfig::from_path(&config_path)?;
+    if !matches!(cli.command, Command::Tui { .. }) {
+        emit_security_posture_warning(&config.security_posture())?;
+    }
     if matches!(
         cli.command,
         Command::Config(ConfigCommand {
@@ -284,9 +289,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             )?,
         },
         Command::Audit(command) => match command.command {
-            AuditAction::Verify | AuditAction::AnchorStatus => {
+            AuditAction::Verify => {
                 print_json(&runtime.journal().verify()?)?;
             }
+            AuditAction::AnchorStatus => print_json(&runtime.audit_anchor_status()?)?,
             AuditAction::Show { from, limit } => {
                 print_json(&runtime.journal().read_global(from, limit)?)?;
             }

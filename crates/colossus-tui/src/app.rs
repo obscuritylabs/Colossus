@@ -1,6 +1,8 @@
 use super::*;
 use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
+const KEEP_PROCESS_EXECUTION_BLOCKED: &str = "Keep process execution blocked";
+
 /// Launch the terminal UI and retain exclusive ownership of all terminal writes.
 pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Result<(), TuiError> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -25,6 +27,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             }
         });
     }
+    start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode)?;
 
     loop {
@@ -32,6 +35,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
         continue_native_history_preload(
             &mut state,
             Arc::clone(&host),
@@ -71,6 +75,87 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         }
     }
     Ok(())
+}
+
+fn start_sandbox_boundary_acknowledgement(
+    state: &mut TuiState,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    if state.sandbox_boundary_acknowledgement_in_progress {
+        return;
+    }
+    let Some(mode) = state.pending_sandbox_boundary_acknowledgement.take() else {
+        return;
+    };
+    state.sandbox_boundary_acknowledgement_in_progress = true;
+    let session_id = state.session_id.clone();
+    tokio::spawn(async move {
+        let result = host
+            .acknowledge_sandbox_boundary(&session_id, mode, event_tx.clone())
+            .await
+            .map(|acknowledged| acknowledged.then_some(mode));
+        let _ = event_tx
+            .send(HostEvent::SandboxBoundaryAcknowledgement(result))
+            .await;
+    });
+}
+
+/// Build the fail-closed acknowledgement prompt for one direct-execution boundary.
+pub fn sandbox_boundary_prompt(
+    mode: SandboxBoundaryMode,
+    response: oneshot::Sender<PromptResponse>,
+) -> InteractivePrompt {
+    let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
+    let title = match mode {
+        SandboxBoundaryMode::External => "External sandbox boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Danger full access",
+    };
+    let (boundary, isolation, details) = match mode {
+        SandboxBoundaryMode::External => (
+            "Operator-asserted external boundary",
+            "Provided by Coder, Kubernetes, or another trusted host",
+            "Colossus will supervise child processes but will not isolate their filesystem or network access. Continue only when the trusted host boundary enforces the isolation you require. Policy approvals remain separate and active.",
+        ),
+        SandboxBoundaryMode::DangerFullAccess => (
+            "Ambient runtime access",
+            "No Colossus or asserted external filesystem/network isolation",
+            "Colossus will supervise child processes without a Colossus sandbox or an asserted external isolation boundary. Commands receive the ambient access of this runtime. Policy approvals remain separate and active.",
+        ),
+    };
+    InteractivePrompt {
+        id: format!("sandbox-boundary:{}", mode.as_backend()),
+        kind: InteractivePromptKind::SandboxBoundaryAcknowledgement,
+        title: title.into(),
+        document: PresentationDocument::from_block(PresentationBlock::Card {
+            title: title.into(),
+            tone: PresentationTone::Warning,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Mode".into(), mode.as_backend().into()),
+                    ("Boundary".into(), boundary.into()),
+                    ("Isolation".into(), isolation.into()),
+                    (
+                        "Acknowledgement".into(),
+                        "Current TUI session in this Colossus process".into(),
+                    ),
+                ]),
+                PresentationBlock::Markdown(details.into()),
+            ],
+        }),
+        choices: vec![acknowledge.into(), KEEP_PROCESS_EXECUTION_BLOCKED.into()],
+        initial_choice: None,
+        allow_free_form: false,
+        response,
+    }
+}
+
+/// Return the exact affirmative choice accepted for one direct-execution boundary.
+pub const fn sandbox_boundary_acknowledgement_choice(mode: SandboxBoundaryMode) -> &'static str {
+    match mode {
+        SandboxBoundaryMode::External => "Acknowledge the external boundary",
+        SandboxBoundaryMode::DangerFullAccess => "Enable danger full access",
+    }
 }
 
 fn continue_native_history_preload(
@@ -267,6 +352,14 @@ fn handle_key(
 }
 
 pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
+    if matches!(state.overlay, Some(Overlay::SessionBrowser(_))) {
+        handle_session_browser_key(state, key);
+        return;
+    }
+    if matches!(state.overlay, Some(Overlay::ThemePicker(_))) {
+        handle_theme_picker_key(state, key);
+        return;
+    }
     if key.code == KeyCode::Esc {
         state.cancel_focus();
         return;
@@ -279,39 +372,67 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             request,
             input,
             selected,
-        } => match key.code {
+            approval_section,
+            document_scroll,
+        } if request.kind.uses_decision_dock() => match key.code {
             KeyCode::Enter => {
-                let overlay = state.overlay.take();
-                if let Some(Overlay::Prompt {
-                    request,
-                    input,
-                    selected,
-                }) = overlay
-                {
-                    let answer = input.trim();
-                    let response = if answer.is_empty() {
-                        selected
-                            .and_then(|index| request.choices.get(index))
-                            .cloned()
-                            .map(PromptResponse::Answer)
-                            .unwrap_or(PromptResponse::Cancelled)
-                    } else if let Ok(index) = answer.parse::<usize>() {
-                        request
-                            .choices
-                            .get(index.saturating_sub(1))
-                            .cloned()
-                            .map(PromptResponse::Answer)
-                            .unwrap_or(PromptResponse::Cancelled)
-                    } else if request.allow_free_form
-                        || request.choices.iter().any(|choice| choice == answer)
-                    {
-                        PromptResponse::Answer(answer.to_owned())
-                    } else {
-                        PromptResponse::Cancelled
-                    };
-                    let _ = request.response.send(response);
-                }
+                finish_prompt(state);
             }
+            KeyCode::Up if !request.choices.is_empty() => {
+                let current = selected.unwrap_or(0);
+                *selected = Some(if current == 0 {
+                    request.choices.len() - 1
+                } else {
+                    current - 1
+                });
+            }
+            KeyCode::Down if !request.choices.is_empty() => {
+                *selected =
+                    Some(selected.map_or(0, |current| (current + 1) % request.choices.len()));
+            }
+            KeyCode::Home if !request.choices.is_empty() => {
+                *selected = Some(0);
+            }
+            KeyCode::End if !request.choices.is_empty() => {
+                *selected = Some(request.choices.len() - 1);
+            }
+            KeyCode::PageUp => {
+                *document_scroll = document_scroll.saturating_sub(5);
+            }
+            KeyCode::PageDown => {
+                *document_scroll = document_scroll.saturating_add(5);
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                *approval_section = approval_section.next();
+                *document_scroll = 0;
+            }
+            KeyCode::BackTab | KeyCode::Left => {
+                *approval_section = approval_section.previous();
+                *document_scroll = 0;
+            }
+            KeyCode::Char('s' | 'S') => {
+                *approval_section = ApprovalSection::Summary;
+                *document_scroll = 0;
+            }
+            KeyCode::Char('r' | 'R') => {
+                *approval_section = ApprovalSection::Request;
+                *document_scroll = 0;
+            }
+            KeyCode::Char('p' | 'P') => {
+                *approval_section = ApprovalSection::Protections;
+                *document_scroll = 0;
+            }
+            KeyCode::Char('a' | 'A') => select_decision_choice(request, selected, true),
+            KeyCode::Char('d' | 'D') => select_decision_choice(request, selected, false),
+            _ => {}
+        },
+        Overlay::Prompt {
+            request,
+            input,
+            selected,
+            ..
+        } => match key.code {
+            KeyCode::Enter => finish_prompt(state),
             KeyCode::Up | KeyCode::BackTab if !request.choices.is_empty() => {
                 let current = selected.unwrap_or(0);
                 *selected = Some(if current == 0 {
@@ -380,32 +501,39 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
         },
         Overlay::PlanExecutionChoice { plan, selected } => match key.code {
             KeyCode::Enter => {
+                let Some(selected) = *selected else {
+                    return;
+                };
                 let plan = plan.clone();
-                let strategy = match *selected {
-                    0 => Some(PlanExecutionStrategy::Direct),
-                    1 => Some(PlanExecutionStrategy::Goal {
+                let strategy = match selected {
+                    0 => PlanExecutionStrategy::Direct,
+                    1 => PlanExecutionStrategy::Goal {
                         max_iterations: DEFAULT_GOAL_ITERATIONS,
-                    }),
-                    _ => None,
+                    },
+                    _ => return,
                 };
                 state.overlay = None;
-                if let Some(strategy) = strategy {
-                    state.pending_plan_execution = Some(InteractivePlanExecutionRequest {
-                        session_id: state.session_id.clone(),
-                        plan_id: plan.id,
-                        revision: plan.revision,
-                        strategy,
-                    });
-                }
+                state.pending_plan_execution = Some(InteractivePlanExecutionRequest {
+                    session_id: state.session_id.clone(),
+                    plan_id: plan.id,
+                    revision: plan.revision,
+                    strategy,
+                });
             }
             KeyCode::Up | KeyCode::BackTab => {
-                *selected = if *selected == 0 { 2 } else { *selected - 1 };
+                *selected = Some(match *selected {
+                    Some(0) | None => 1,
+                    Some(_) => 0,
+                });
             }
             KeyCode::Down | KeyCode::Tab => {
-                *selected = (*selected + 1) % 3;
+                *selected = Some(match *selected {
+                    Some(0) => 1,
+                    Some(_) | None => 0,
+                });
             }
-            KeyCode::Home => *selected = 0,
-            KeyCode::End => *selected = 2,
+            KeyCode::Home | KeyCode::Char('d' | 'D') => *selected = Some(0),
+            KeyCode::End | KeyCode::Char('g' | 'G') => *selected = Some(1),
             _ => {}
         },
         Overlay::QueuePaused => match key.code {
@@ -420,7 +548,186 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
+        Overlay::SessionBrowser(_) | Overlay::ThemePicker(_) => {}
     }
+}
+
+fn handle_session_browser_key(state: &mut TuiState, key: KeyEvent) {
+    let mut resume = None;
+    let mut cancel = false;
+    let Some(Overlay::SessionBrowser(browser)) = state.overlay.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc if browser.search_active => browser.search_active = false,
+        KeyCode::Esc => cancel = true,
+        KeyCode::Char('/') if !browser.search_active => browser.search_active = true,
+        KeyCode::Backspace if browser.search_active => {
+            browser.query.pop();
+            browser.reconcile_selection();
+        }
+        KeyCode::Char(character)
+            if browser.search_active
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            browser.query.push(character);
+            browser.reconcile_selection();
+        }
+        KeyCode::Up | KeyCode::BackTab => browser.move_selection(-1),
+        KeyCode::Down | KeyCode::Tab => browser.move_selection(1),
+        KeyCode::Home => browser.select_boundary(false),
+        KeyCode::End => browser.select_boundary(true),
+        KeyCode::PageUp => {
+            browser.preview_scroll = browser.preview_scroll.saturating_sub(5);
+        }
+        KeyCode::PageDown => {
+            browser.preview_scroll = browser.preview_scroll.saturating_add(5);
+        }
+        KeyCode::Enter => {
+            resume = browser
+                .selected_entry()
+                .map(|entry| entry.summary.id.clone());
+        }
+        _ => {}
+    }
+    if cancel {
+        state.cancel_overlay();
+    } else if let Some(session_id) = resume
+        && let Some(Overlay::SessionBrowser(browser)) = state.overlay.take()
+    {
+        let _ = browser
+            .request
+            .response
+            .send(PromptResponse::Answer(session_id));
+    }
+}
+
+fn handle_theme_picker_key(state: &mut TuiState, key: KeyEvent) {
+    let mut apply = None;
+    let mut cancel = false;
+    let mut preview = None;
+    let Some(Overlay::ThemePicker(picker)) = state.overlay.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc if picker.search_active => picker.search_active = false,
+        KeyCode::Esc => cancel = true,
+        KeyCode::Char('/') if !picker.search_active => picker.search_active = true,
+        KeyCode::Backspace if picker.search_active => {
+            picker.query.pop();
+            picker.reconcile_selection();
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Char(character)
+            if picker.search_active
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            picker.query.push(character);
+            picker.reconcile_selection();
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Up | KeyCode::BackTab => {
+            picker.move_selection(-1);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            picker.move_selection(1);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Home => {
+            picker.select_boundary(false);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::End => {
+            picker.select_boundary(true);
+            preview = picker
+                .selected_entry()
+                .map(|entry| entry.preferences.clone());
+        }
+        KeyCode::Enter => {
+            apply = picker.selected_entry().map(|entry| entry.name.clone());
+        }
+        _ => {}
+    }
+    if let Some(preview) = preview {
+        state.preferences = preview;
+    }
+    if cancel {
+        state.cancel_overlay();
+    } else if let Some(theme) = apply
+        && let Some(Overlay::ThemePicker(picker)) = state.overlay.take()
+    {
+        state.preferences = picker.original_preferences;
+        let _ = picker.request.response.send(PromptResponse::Answer(theme));
+    }
+}
+
+fn select_prompt_choice(request: &InteractivePrompt, selected: &mut Option<usize>, choice: &str) {
+    if let Some(index) = request
+        .choices
+        .iter()
+        .position(|candidate| candidate == choice)
+    {
+        *selected = Some(index);
+    }
+}
+
+fn select_decision_choice(request: &InteractivePrompt, selected: &mut Option<usize>, allow: bool) {
+    if request.kind == InteractivePromptKind::SandboxBoundaryAcknowledgement {
+        let index = usize::from(!allow);
+        if index < request.choices.len() {
+            *selected = Some(index);
+        }
+    } else {
+        select_prompt_choice(request, selected, if allow { "Allow once" } else { "Deny" });
+    }
+}
+
+fn finish_prompt(state: &mut TuiState) {
+    let overlay = state.overlay.take();
+    let Some(Overlay::Prompt {
+        request,
+        input,
+        selected,
+        ..
+    }) = overlay
+    else {
+        return;
+    };
+    let answer = input.trim();
+    let response = if answer.is_empty() {
+        selected
+            .and_then(|index| request.choices.get(index))
+            .cloned()
+            .map(PromptResponse::Answer)
+            .unwrap_or(PromptResponse::Cancelled)
+    } else if let Ok(index) = answer.parse::<usize>() {
+        request
+            .choices
+            .get(index.saturating_sub(1))
+            .cloned()
+            .map(PromptResponse::Answer)
+            .unwrap_or(PromptResponse::Cancelled)
+    } else if request.allow_free_form || request.choices.iter().any(|choice| choice == answer) {
+        PromptResponse::Answer(answer.to_owned())
+    } else {
+        PromptResponse::Cancelled
+    };
+    let _ = request.response.send(response);
 }
 
 pub(super) fn request_older_page(
@@ -445,15 +752,37 @@ pub(super) fn request_older_page(
 
 pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
     let text = sanitize_input(text);
+    let mut theme_preview = None;
     if let Some(overlay) = state.overlay.as_mut() {
         match overlay {
-            Overlay::Prompt { input, .. } | Overlay::HistorySearch { query: input } => {
+            Overlay::Prompt { request, input, .. } if !request.kind.uses_decision_dock() => {
                 input.push_str(&text);
             }
-            Overlay::PlanExecutionChoice { .. } | Overlay::QueuePaused => {}
+            Overlay::HistorySearch { query: input } => {
+                input.push_str(&text);
+            }
+            Overlay::SessionBrowser(browser) if browser.search_active => {
+                browser.query.push_str(&text);
+                browser.reconcile_selection();
+            }
+            Overlay::ThemePicker(picker) if picker.search_active => {
+                picker.query.push_str(&text);
+                picker.reconcile_selection();
+                theme_preview = picker
+                    .selected_entry()
+                    .map(|entry| entry.preferences.clone());
+            }
+            Overlay::Prompt { .. }
+            | Overlay::SessionBrowser(_)
+            | Overlay::ThemePicker(_)
+            | Overlay::PlanExecutionChoice { .. }
+            | Overlay::QueuePaused => {}
         }
     } else {
         state.composer.insert(&text);
+    }
+    if let Some(preview) = theme_preview {
+        state.preferences = preview;
     }
 }
 
@@ -671,7 +1000,10 @@ fn handle_plan_command(
                     event_tx,
                 );
             } else {
-                state.overlay = Some(Overlay::PlanExecutionChoice { plan, selected: 0 });
+                state.overlay = Some(Overlay::PlanExecutionChoice {
+                    plan,
+                    selected: None,
+                });
             }
         }
     }
@@ -776,12 +1108,15 @@ pub(super) fn handle_local_command(
 ) {
     match command {
         LocalCommand::Exit => state.should_exit = true,
-        LocalCommand::Help => state.append_entry(TranscriptEntry {
-            sequence: None,
-            kind: TranscriptKind::Command,
-            document: help_document(),
-            temporary: false,
-        }),
+        LocalCommand::Help => {
+            let document = help_document(&state.completions);
+            state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document,
+                temporary: false,
+            });
+        }
         LocalCommand::Preferences => state.append_entry(TranscriptEntry {
             sequence: None,
             kind: TranscriptKind::Command,
@@ -850,7 +1185,27 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     request,
                     input: String::new(),
                     selected,
+                    approval_section: ApprovalSection::Summary,
+                    document_scroll: 0,
                 });
+            }
+        }
+        HostEvent::SessionBrowser(request) => {
+            if state.overlay.is_some() {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            } else {
+                state.overlay = Some(Overlay::SessionBrowser(SessionBrowserState::new(request)));
+            }
+        }
+        HostEvent::ThemePicker(request) => {
+            if state.overlay.is_some() {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            } else {
+                let picker = ThemePickerState::new(request, state.preferences.clone());
+                if let Some(entry) = picker.selected_entry() {
+                    state.preferences = entry.preferences.clone();
+                }
+                state.overlay = Some(Overlay::ThemePicker(picker));
             }
         }
         HostEvent::HistoryWarning(error) => {
@@ -871,11 +1226,34 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 }
             }
         }
+        HostEvent::SandboxBoundaryAcknowledgement(result) => {
+            state.sandbox_boundary_acknowledgement_in_progress = false;
+            match result {
+                Ok(Some(mode)) => state.append_entry(TranscriptEntry {
+                    sequence: None,
+                    kind: TranscriptKind::Command,
+                    document: PresentationDocument::from_block(PresentationBlock::Markdown(
+                        format!(
+                            "Acknowledged `{}` for this TUI session. Process effects still require normal policy authorization and approvals.",
+                            mode.as_backend()
+                        ),
+                    )),
+                    temporary: false,
+                }),
+                Ok(None) => state.append_entry(error_entry(
+                    "Process execution remains blocked because the configured direct-execution boundary was not acknowledged.",
+                )),
+                Err(error) => state.append_entry(error_entry(&format!(
+                    "Sandbox boundary acknowledgement failed: {error}"
+                ))),
+            }
+        }
         HostEvent::OperationFinished(result) => {
-            if matches!(state.overlay, Some(Overlay::Prompt { .. }))
-                && let Some(Overlay::Prompt { request, .. }) = state.overlay.take()
-            {
-                let _ = request.response.send(PromptResponse::Cancelled);
+            if matches!(
+                state.overlay,
+                Some(Overlay::Prompt { .. } | Overlay::SessionBrowser(_) | Overlay::ThemePicker(_))
+            ) {
+                state.cancel_overlay();
             }
             let result = *result;
             state.operation = None;
@@ -1125,8 +1503,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             temporary: false,
         });
     }
-    if let Some((session_id, page)) = result.session {
+    if let Some((session_id, page, pending_sandbox_boundary_acknowledgement)) = result.session {
         state.session_id = session_id;
+        state.pending_sandbox_boundary_acknowledgement = pending_sandbox_boundary_acknowledgement;
         state.selected_plan = None;
         let (transcript, transcript_sources) =
             transcript_from_messages(page.messages, &state.preferences);

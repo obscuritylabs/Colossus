@@ -1,4 +1,4 @@
-//! Encrypted, hash-chained redb event journal.
+//! Mode-locked, hash-chained redb event journal with plaintext and encrypted payloads.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chacha20poly1305::{
@@ -6,17 +6,21 @@ use chacha20poly1305::{
     aead::{Aead, Payload},
 };
 use colossus_contracts::{
-    EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
-    ProjectionWorkItem, SecureAnchor, SecureAnchorStatus, SignedCheckpoint,
-    StartupVerificationMode, StartupVerificationReport,
+    ENCRYPTED_PAYLOAD_ALGORITHM, EncryptedPayload, EventEnvelope, NewEvent,
+    PLAINTEXT_PAYLOAD_ALGORITHM, ProjectionBatch, ProjectionMutation, ProjectionWorkItem,
+    SecureAnchor, SecureAnchorStatus, SignedCheckpoint, StartupVerificationMode,
+    StartupVerificationReport,
 };
 use colossus_ports::{
-    CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_LIST_BATCH, MAX_STREAM_READ_BATCH,
-    ProjectionStore, StoreError, VerificationReport,
+    CheckpointSigner, EventJournal, JournalPayloadProtection, KeyProvider, MAX_STREAM_LIST_BATCH,
+    MAX_STREAM_READ_BATCH, ProjectionStore, StoreError, VerificationReport,
 };
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use fs4::fs_std::FileExt as _;
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{
+    Database, ReadTransaction, ReadableDatabase, ReadableTable, ReadableTableMetadata,
+    TableDefinition, TableError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
@@ -40,11 +44,14 @@ use common::*;
 mod keys;
 #[cfg(test)]
 use keys::cached_platform_secret;
-pub use keys::{EnvironmentKeyProvider, PlatformKeyProvider, StaticKeyProvider, platform_secret};
+pub use keys::{
+    EnvironmentKeyProvider, PlaintextKeyProvider, PlatformKeyProvider, StaticKeyProvider,
+    platform_secret,
+};
 
 mod crypto;
-pub use crypto::Ed25519CheckpointSigner;
 use crypto::*;
+pub use crypto::{DisabledCheckpointSigner, Ed25519CheckpointSigner};
 
 mod journal;
 pub use journal::RedbEventJournal;

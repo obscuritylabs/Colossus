@@ -67,6 +67,7 @@ impl McpExecutor {
                 url: server.url.clone(),
                 headers: server.headers.clone(),
                 credential_headers: server.credential_headers.clone(),
+                allow_stateless: server.allow_stateless,
                 oauth: server.oauth.clone(),
                 allowed_tools: ToolAllowlist::from_config(name, &server.allowed_tools)?,
                 research_tools: server.research_tools.clone(),
@@ -136,6 +137,19 @@ impl McpExecutor {
     ) -> Result<Self, McpError> {
         self.oauth_store = Some(
             OAuthStoreFactory::encrypted_state(path, keys, repository_id.into())
+                .map_err(safe_oauth_error)?,
+        );
+        Ok(self)
+    }
+
+    /// Persist OAuth records in a dedicated owner-private plaintext redb sidecar.
+    pub fn with_plaintext_oauth_storage(
+        mut self,
+        path: &Path,
+        repository_id: impl Into<String>,
+    ) -> Result<Self, McpError> {
+        self.oauth_store = Some(
+            OAuthStoreFactory::plaintext_state(path, repository_id.into())
                 .map_err(safe_oauth_error)?,
         );
         Ok(self)
@@ -252,6 +266,7 @@ impl McpExecutor {
             .map(|server| McpServerSummary {
                 name: server.name.clone(),
                 transport: server.transport.as_str().into(),
+                allow_stateless: server.allow_stateless,
                 allowed_tools: server.allowed_tools.summary(),
                 research_tools: server
                     .research_tools
@@ -336,6 +351,7 @@ impl McpExecutor {
             url: server.url.clone(),
             headers: server.headers.clone(),
             credential_headers: server.credential_headers.clone(),
+            allow_stateless: server.allow_stateless,
             oauth: server.oauth.clone(),
             timeout_ms: server.timeout_ms,
             max_output_bytes: server.max_output_bytes,
@@ -408,6 +424,7 @@ impl McpExecutor {
             || input.url != server.url
             || input.headers != server.headers
             || input.credential_headers != server.credential_headers
+            || input.allow_stateless != server.allow_stateless
             || input.oauth != server.oauth
             || input.timeout_ms != server.timeout_ms
             || input.max_output_bytes != server.max_output_bytes
@@ -1056,7 +1073,7 @@ where
         .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
     let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint);
     config.retry_config = Arc::new(NeverRetry::default());
-    config.allow_stateless = false;
+    config.allow_stateless = server.allow_stateless;
     config.reinit_on_expired_session = false;
     config.custom_headers = headers;
     let transport = StreamableHttpClientTransport::with_client(http, config);

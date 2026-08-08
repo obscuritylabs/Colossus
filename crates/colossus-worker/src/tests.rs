@@ -7,6 +7,30 @@ fn windows_pipe_saturation_is_classified_as_busy() {
     assert!(platform::connection_is_busy(&error));
 }
 
+#[cfg(unix)]
+#[test]
+fn only_an_accepting_endpoint_reports_an_incompatible_worker() {
+    let directory = tempfile::tempdir().expect("directory");
+    let endpoint = directory.path().join("worker.sock");
+    let path = endpoint.to_str().expect("endpoint path");
+
+    assert!(!platform::endpoint_is_live(path));
+    assert!(missing_secret_outcome(path).is_ok());
+
+    let listener = std::os::unix::net::UnixListener::bind(&endpoint).expect("listener");
+    assert!(platform::endpoint_is_live(path));
+    assert!(matches!(
+        missing_secret_outcome(path),
+        Err(WorkerError::Incompatible(reported)) if reported == path
+    ));
+
+    // A killed worker leaves its socket file behind while accepting nothing.
+    drop(listener);
+    assert!(endpoint.exists());
+    assert!(!platform::endpoint_is_live(path));
+    assert!(missing_secret_outcome(path).is_ok());
+}
+
 #[test]
 fn delayed_authenticated_handshake_is_never_worker_absence() {
     assert!(matches!(
@@ -47,6 +71,48 @@ fn artifact_operations_round_trip_without_artifact_bytes_or_credentials() {
             ..
         }
     ));
+}
+
+#[test]
+fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
+    let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
+        request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
+            session_id: "session-1".into(),
+            mode: SandboxBoundaryMode::External,
+        },
+        sandbox_boundary_acknowledgement: None,
+    })
+    .expect("serialize sandbox boundary acknowledgement");
+    assert_eq!(encoded["operation"], "run_interactive");
+    assert_eq!(encoded["request"]["kind"], "sandbox_boundary_acknowledge");
+    assert_eq!(encoded["request"]["session_id"], "session-1");
+    assert_eq!(encoded["request"]["mode"], "external");
+    let decoded: WorkerOperation =
+        serde_json::from_value(encoded).expect("deserialize sandbox boundary acknowledgement");
+    assert!(matches!(
+        decoded,
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
+                session_id,
+                mode: SandboxBoundaryMode::External,
+            },
+            sandbox_boundary_acknowledgement: None,
+        } if session_id == "session-1"
+    ));
+    assert!(
+        serde_json::from_value::<WorkerOperation>(json!({
+            "operation": "sandbox_boundary_acknowledge",
+            "session_id": "session-1",
+            "mode": "external",
+        }))
+        .is_err()
+    );
+    assert_eq!(
+        operation_name(&WorkerOperation::SandboxBoundaryStatus {
+            session_id: "session-1".into(),
+        }),
+        "sandbox_boundary_status"
+    );
 }
 
 #[test]
@@ -112,6 +178,7 @@ fn model_attachment_protocol_carries_paths_without_client_read_content() {
 
 #[test]
 fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
+    const CAPABILITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     let operation = WorkerOperation::RunInteractive {
         request: InteractiveWorkerRequest::Run {
             mode: AgentRunMode::Execute,
@@ -124,8 +191,12 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
             sticky_skills: Vec::new(),
             include_provider_response_diagnostics: true,
         },
+        sandbox_boundary_acknowledgement: Some(
+            SandboxBoundaryAcknowledgement::new(CAPABILITY.into()).expect("capability"),
+        ),
     };
-    let encoded = serde_json::to_value(operation).expect("serialize interactive run");
+    assert!(!format!("{operation:?}").contains(CAPABILITY));
+    let encoded = serde_json::to_value(&operation).expect("serialize interactive run");
     assert_eq!(
         encoded["request"]["include_provider_response_diagnostics"],
         true
@@ -144,9 +215,13 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
             request: InteractiveWorkerRequest::Run {
                 include_provider_response_diagnostics: false,
                 ..
-            }
-        }
+            },
+            sandbox_boundary_acknowledgement: Some(acknowledgement),
+        } if acknowledgement.expose() == CAPABILITY
     ));
+    assert!(
+        serde_json::from_value::<SandboxBoundaryAcknowledgement>(json!("low-entropy")).is_err()
+    );
 }
 
 #[test]
@@ -166,6 +241,7 @@ fn interactive_plan_run_binds_the_selected_revision() {
             sticky_skills: Vec::new(),
             include_provider_response_diagnostics: false,
         },
+        sandbox_boundary_acknowledgement: None,
     })
     .expect("serialize interactive Plan Mode run");
     assert_eq!(encoded["request"]["mode"]["mode"], "plan");
@@ -205,6 +281,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
     ] {
         let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
             request: request.clone(),
+            sandbox_boundary_acknowledgement: None,
         })
         .expect("serialize interactive request");
         assert_eq!(encoded["operation"], "run_interactive");
@@ -234,6 +311,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
                 strategy: PlanExecutionStrategy::Direct,
                 max_turns: None,
             },
+            sandbox_boundary_acknowledgement: None,
         }),
         "run_interactive.plan_execute"
     );
@@ -1095,6 +1173,9 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
                 prompt.details["risk"]["reason"],
                 "risk-auto skipped because this action is ineligible"
             );
+            assert_eq!(prompt.details["actor"]["actor_type"], "system");
+            assert_eq!(prompt.details["actor"]["id"], "worker-test");
+            assert_eq!(prompt.details["reason"], "operator must approve");
             responder_bridge
                 .respond(&prompt.prompt_id, Some(answer))
                 .await
@@ -1218,7 +1299,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 6);
+    assert_eq!(PROTOCOL_VERSION, 8);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
