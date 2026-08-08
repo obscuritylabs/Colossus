@@ -28,7 +28,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.release.draft == false && github.event.release.prerelease == false)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       actions: read
@@ -160,7 +160,7 @@ jobs:
     name: Publish missing SDK artifacts
     if: needs.validate.outputs.authorize_publish == 'true'
     needs: validate
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     environment: sdk-production
     env:
