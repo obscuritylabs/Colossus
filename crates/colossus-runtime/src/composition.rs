@@ -456,13 +456,16 @@ impl Runtime {
                     .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("git"))
             })
             .count();
+        let danger_full_access =
+            config.sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
         let access_context = AccessContext {
             filesystem_read: access_filesystem
                 .iter()
                 .any(|grant| matches!(grant.mode.as_str(), "read" | "write" | "metadata")),
             filesystem_write: access_filesystem.iter().any(|grant| grant.mode == "write"),
-            git_executable: configured_git_executables == 1,
-            any_executable: !access_executables.is_empty(),
+            git_executable: configured_git_executables == 1
+                || (danger_full_access && ambient_executable("git").is_some()),
+            any_executable: danger_full_access || !access_executables.is_empty(),
             network_destination: !config.sandbox.network_destinations.is_empty(),
             agent_search_route: searches.resolve("agent").is_ok(),
             interactive: user_prompts.is_some(),

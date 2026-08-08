@@ -151,6 +151,16 @@ impl EffectExecutor for SandboxProcessExecutor {
             .map_err(|error| adapter_failure(format!("invalid process request: {error}")))?;
         validate_process_spec(&spec, &request.resource, permit.obligations())?;
         normalize_path_arguments(&mut spec, permit.obligations())?;
+        if permit.obligations().sandbox_backend
+            == SandboxBoundaryMode::DangerFullAccess.as_backend()
+        {
+            inherit_ambient_environment(
+                &mut spec.environment,
+                std::env::vars_os().filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                }),
+            );
+        }
         let effective_timeout_ms = spec.timeout_ms.unwrap_or(permit.obligations().timeout_ms);
         let effective_output_bytes = spec
             .max_output_bytes
@@ -353,7 +363,11 @@ pub(super) fn validate_process_spec(
     executable: &str,
     obligations: &PolicyObligations,
 ) -> Result<(), ExecutionError> {
-    let executable_allowed = if obligations.sandbox_backend == "oci" {
+    let danger_full_access =
+        obligations.sandbox_backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
+    let executable_allowed = if danger_full_access {
+        fs::canonicalize(executable).is_ok_and(|executable| executable.is_file())
+    } else if obligations.sandbox_backend == "oci" {
         normalized_oci_path(executable)
             && obligations
                 .filesystem
@@ -414,7 +428,7 @@ pub(super) fn validate_process_spec(
         return Err(adapter_failure("process environment exceeds entry bound"));
     }
     for (name, value) in &spec.environment {
-        if !obligations.allowed_environment.contains(name)
+        if (!danger_full_access && !obligations.allowed_environment.contains(name))
             || !valid_environment_name(name)
             || value.len() > 64 * 1024
             || value.contains('\0')
@@ -448,6 +462,20 @@ pub(super) fn valid_environment_name(name: &str) -> bool {
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+pub(super) fn inherit_ambient_environment(
+    environment: &mut BTreeMap<String, String>,
+    ambient: impl IntoIterator<Item = (String, String)>,
+) {
+    let explicit = std::mem::take(environment);
+    environment.extend(ambient.into_iter().filter(|(name, _)| {
+        let control_name = name.to_ascii_uppercase();
+        valid_environment_name(name)
+            && !control_name.starts_with("COLOSSUS_SANDBOX_")
+            && control_name != OCI_PROXY_CONFIG_VARIABLE
+    }));
+    environment.extend(explicit);
 }
 
 pub(super) fn normalize_path_arguments(

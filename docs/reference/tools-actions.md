@@ -16,7 +16,7 @@ and output bounds.
 | --- | --- | --- |
 | Utility | `echo`, `user.ask`, `tool.search`, `trace.show` | Pure; `user.ask` requires an interactive interface |
 | Filesystem | `filesystem.list`, `filesystem.read`, `filesystem.search`, `filesystem.write`, `filesystem.replace` | Canonical roots; reads quarantined; writes atomic |
-| Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Resolved shell or exact executable, command/argv, workspace cwd, isolated environment, and resource limits |
+| Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Normally an exact executable, workspace cwd, isolated environment, and resource limits; acknowledged `danger_full_access` uses ambient process resources while retaining limits and audit |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write |
 | Trace export | `trace.export` | Bounded metadata-only workspace write |
 | Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined reads |

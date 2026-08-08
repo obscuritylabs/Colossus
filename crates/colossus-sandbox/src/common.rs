@@ -47,7 +47,8 @@ pub struct ProcessSpec {
     /// Literal argv entries; no shell parsing occurs.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Explicit environment map after policy allowlisting.
+    /// Explicit environment map after policy validation. The permit-bearing adapter
+    /// adds ambient values only for acknowledged `danger_full_access` execution.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     /// Optional base64-encoded standard input.

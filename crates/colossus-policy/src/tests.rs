@@ -768,6 +768,52 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
 }
 
 #[tokio::test]
+async fn danger_full_access_drops_process_executable_and_environment_grants_only() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    for (mode, allowed) in [
+        (SandboxBoundaryMode::External, false),
+        (SandboxBoundaryMode::DangerFullAccess, true),
+    ] {
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox(mode.as_backend(), "test", false);
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()])
+                .with_sandbox_boundary_gate(Arc::new(SandboxBoundaryGate::new(Some(mode), true))),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {"UNDECLARED_ENVIRONMENT": "available"},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+
+        let result = gateway.execute(request, &executor).await;
+        assert_eq!(result.is_ok(), allowed, "mode: {}", mode.as_backend());
+        assert_eq!(executor.calls.load(Ordering::Acquire), usize::from(allowed));
+    }
+}
+
+#[tokio::test]
 async fn denied_direct_process_effects_do_not_request_a_boundary_acknowledgement() {
     let policy = BuiltInPolicy::offline_default()
         .with_action("process.spawn", DecisionOutcome::Deny)

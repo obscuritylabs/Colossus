@@ -25,7 +25,63 @@ pub(super) struct GatewayToolExecutor {
     pub(super) executables: Vec<PathBuf>,
 }
 
+pub(super) fn ambient_executable(requested: &str) -> Option<PathBuf> {
+    if requested.is_empty() || requested.contains('\0') {
+        return None;
+    }
+    let requested = Path::new(requested);
+    if requested.is_absolute() {
+        return canonical_executable(requested);
+    }
+    if requested.components().count() != 1 {
+        return None;
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|root| ambient_executable_in(&root, requested))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ambient_executable_in(root: &Path, requested: &Path) -> Option<PathBuf> {
+    canonical_executable(&root.join(requested))
+}
+
+#[cfg(target_os = "windows")]
+fn ambient_executable_in(root: &Path, requested: &Path) -> Option<PathBuf> {
+    if requested.extension().is_some() {
+        return canonical_executable(&root.join(requested));
+    }
+    let extensions = std::env::var_os("PATHEXT")
+        .map(|value| {
+            value
+                .to_string_lossy()
+                .split(';')
+                .filter(|extension| !extension.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![".COM".into(), ".EXE".into(), ".BAT".into(), ".CMD".into()]);
+    extensions.into_iter().find_map(|extension| {
+        canonical_executable(&root.join(format!("{}{extension}", requested.to_string_lossy())))
+    })
+}
+
+fn canonical_executable(path: &Path) -> Option<PathBuf> {
+    let path = fs::canonicalize(path).ok().filter(|path| path.is_file())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if fs::metadata(&path).ok()?.permissions().mode() & 0o111 == 0 {
+            return None;
+        }
+    }
+    Some(path)
+}
+
 impl GatewayToolExecutor {
+    pub(super) fn danger_full_access(&self) -> bool {
+        self.gateway.sandbox_boundary_mode() == Some(SandboxBoundaryMode::DangerFullAccess)
+    }
+
     pub(super) fn current_session(context: &ExecutionContext) -> Result<String, ToolError> {
         context
             .session_id
@@ -450,7 +506,14 @@ impl GatewayToolExecutor {
         if requested.is_empty() || requested.contains('\0') {
             return Err(ToolError::InvalidArguments {
                 tool: "shell.run".into(),
-                message: "argv[0] must name one configured executable".into(),
+                message: "argv[0] must name an executable".into(),
+            });
+        }
+        if self.danger_full_access() {
+            return ambient_executable(requested).ok_or_else(|| {
+                ToolError::Denied(format!(
+                    "executable {requested} was not found at an absolute path or on ambient PATH"
+                ))
             });
         }
         let requested_path = Path::new(requested);
@@ -476,6 +539,10 @@ impl GatewayToolExecutor {
     }
 
     pub(super) fn git_executable(&self) -> Result<PathBuf, ToolError> {
+        if self.danger_full_access() {
+            return ambient_executable("git")
+                .ok_or_else(|| ToolError::Denied("Git is unavailable on ambient PATH".into()));
+        }
         let matches = self
             .executables
             .iter()
@@ -497,6 +564,18 @@ impl GatewayToolExecutor {
     }
 
     pub(super) fn shell_executable(&self) -> Result<PathBuf, ToolError> {
+        if self.danger_full_access() {
+            for variable in ["SHELL", "COMSPEC"] {
+                if let Some(shell) = std::env::var_os(variable)
+                    && let Some(shell) = shell.to_str()
+                    && is_shell_wrapper(shell)
+                    && let Some(shell) = ambient_executable(shell)
+                {
+                    return Ok(shell);
+                }
+            }
+            return resolve_platform_shell().map_err(|error| ToolError::Failed(error.to_string()));
+        }
         let matches = self
             .executables
             .iter()

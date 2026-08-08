@@ -19,8 +19,8 @@ use colossus_contracts::{
     ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
     ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult, RiskLevel,
-    RiskRecommendation, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
-    ToolCall,
+    RiskRecommendation, SandboxBoundaryMode, StartupVerificationMode, SubagentStatus, TaskStatus,
+    TerminalPreferences, ToolCall,
 };
 use colossus_mcp::{
     McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
@@ -47,7 +47,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tempfile::tempdir;
@@ -4813,6 +4813,114 @@ impl colossus_policy::EffectExecutor for FakeProcessExecutor {
             effect_succeeded: true,
         })
     }
+}
+
+struct RecordingProcessExecutor {
+    request: Arc<Mutex<Option<colossus_contracts::EffectRequest>>>,
+}
+
+#[async_trait::async_trait]
+impl colossus_policy::EffectExecutor for RecordingProcessExecutor {
+    async fn execute(
+        &self,
+        request: &colossus_contracts::EffectRequest,
+        _permit: colossus_policy::ExecutionPermit,
+    ) -> Result<colossus_contracts::QuarantinedEffectResult, colossus_policy::ExecutionError> {
+        *self.request.lock().expect("request") = Some(request.clone());
+        Ok(colossus_contracts::QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&json!({
+                "backend": "danger_full_access",
+                "exit_code": 0,
+                "success": true,
+                "timed_out": false,
+                "resource_limit_exceeded": null,
+                "output_truncated": false,
+                "stdout_base64": "",
+                "stderr_base64": "",
+            }))
+            .expect("result JSON"),
+            effect_succeeded: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn danger_full_access_shell_needs_no_process_resource_configuration() {
+    let workspace = tempdir().expect("workspace");
+    let outside_cwd = tempdir().expect("outside cwd");
+    let policy = colossus_policy::BuiltInPolicy::offline_default()
+        .with_action("shell.run", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false);
+    let gateway = Arc::new(colossus_policy::EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["shell.run".into()]).with_sandbox_boundary_gate(
+            Arc::new(colossus_policy::SandboxBoundaryGate::new(
+                Some(SandboxBoundaryMode::DangerFullAccess),
+                true,
+            )),
+        ),
+        [9_u8; 32],
+    ));
+    let recorded = Arc::new(Mutex::new(None));
+    let executor = GatewayToolExecutor {
+        gateway,
+        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+        process: Some(Arc::new(RecordingProcessExecutor {
+            request: Arc::clone(&recorded),
+        })),
+        http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+        work: None,
+        memory: None,
+        skills: None,
+        pack_processes: None,
+        integrations: None,
+        mcp: None,
+        bound_effects: None,
+        search: None,
+        workspace: workspace.path().to_path_buf(),
+        repository_id: "repo-test".into(),
+        executables: Vec::new(),
+    };
+
+    let result = executor
+        .execute(
+            ToolCall {
+                call_id: "danger-shell".into(),
+                name: "shell.run".into(),
+                arguments: json!({
+                    "command": "echo unrestricted",
+                    "cwd": outside_cwd.path(),
+                    "env": {"PATH": "/operator/path", "UNDECLARED_ENVIRONMENT": "available"},
+                }),
+            },
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("danger full access shell");
+    let output: Value = serde_json::from_str(&result.output).expect("tool output");
+    assert_eq!(
+        output["cwd"],
+        outside_cwd
+            .path()
+            .canonicalize()
+            .expect("canonical cwd")
+            .display()
+            .to_string()
+    );
+    let request = recorded
+        .lock()
+        .expect("request")
+        .clone()
+        .expect("recorded request");
+    assert_eq!(request.content["environment"]["PATH"], "/operator/path");
+    assert_eq!(
+        request.content["environment"]["UNDECLARED_ENVIRONMENT"],
+        "available"
+    );
+    assert!(Path::new(&request.resource).is_absolute());
 }
 
 #[tokio::test]

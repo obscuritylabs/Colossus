@@ -336,6 +336,7 @@ impl ToolExecutor for GatewayToolExecutor {
                 self.execute_patch_tool(&call, context).await?
             }
             "shell.run" => {
+                let danger_full_access = self.danger_full_access();
                 let command = optional_tool_string(&call, "command")?;
                 let argv = optional_tool_string_array(&call, "argv")?;
                 if command.is_some() == argv.is_some() {
@@ -364,25 +365,32 @@ impl ToolExecutor for GatewayToolExecutor {
                         json!({"argv": argv}),
                     )
                 };
-                let cwd = model_workspace_path(
-                    &self.workspace,
-                    optional_tool_string(&call, "cwd")?.unwrap_or("."),
-                )?;
+                let requested_cwd = optional_tool_string(&call, "cwd")?.unwrap_or(".");
+                let cwd = if danger_full_access {
+                    unrestricted_process_cwd(&self.workspace, requested_cwd)?
+                } else {
+                    model_workspace_path(&self.workspace, requested_cwd)?
+                };
                 let mut environment = optional_tool_environment(&call, "env")?;
-                reject_reserved_shell_environment(&call, &environment)?;
-                let isolated = tempfile::Builder::new()
-                    .prefix(".colossus-shell-")
-                    .tempdir_in(&self.workspace)
-                    .map_err(|error| {
-                        ToolError::Failed(format!(
-                            "cannot create isolated shell directory: {error}"
-                        ))
-                    })?;
-                configure_shell_environment(
-                    &mut environment,
-                    isolated.path(),
-                    &self.sanitized_command_path()?,
-                );
+                let _isolated = if danger_full_access {
+                    None
+                } else {
+                    reject_reserved_shell_environment(&call, &environment)?;
+                    let isolated = tempfile::Builder::new()
+                        .prefix(".colossus-shell-")
+                        .tempdir_in(&self.workspace)
+                        .map_err(|error| {
+                            ToolError::Failed(format!(
+                                "cannot create isolated shell directory: {error}"
+                            ))
+                        })?;
+                    configure_shell_environment(
+                        &mut environment,
+                        isolated.path(),
+                        &self.sanitized_command_path()?,
+                    );
+                    Some(isolated)
+                };
                 let process = self
                     .execute_process_tool(
                         &call,
@@ -401,13 +409,18 @@ impl ToolExecutor for GatewayToolExecutor {
                 exit_code = process.exit_code;
                 let mut command = vec![process.executable.display().to_string()];
                 command.extend(process.args.clone());
+                let displayed_cwd = if danger_full_access {
+                    process.cwd.display().to_string()
+                } else {
+                    workspace_relative(&self.workspace, &process.cwd)?
+                };
                 serde_json::to_string(&json!({
                     "invocation": invocation,
                     "resolved_argv": command,
                     "exit_code": process.exit_code,
                     "stdout": process.stdout,
                     "stderr": process.stderr,
-                    "cwd": workspace_relative(&self.workspace, &process.cwd)?,
+                    "cwd": displayed_cwd,
                     "truncated": process.truncated,
                     "observed_origins": process.observed_origins,
                 }))

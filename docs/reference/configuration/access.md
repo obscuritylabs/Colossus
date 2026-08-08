@@ -225,8 +225,8 @@ grant the underlying resource.
 | --- | --- | --- |
 | Filesystem read | `filesystem.read`, repository tools, `patch.preview` | At least one read-, metadata-, or write-capable filesystem grant |
 | Filesystem write | `filesystem.write`, `patch.apply`, `trace.export` | At least one write-capable filesystem grant |
-| Git executable | `git.status`, `git.diff`, `git.show` | Exactly one configured or derived executable whose file stem is Git |
-| Any executable | `shell.run` | At least one configured or derived exact executable |
+| Git executable | `git.status`, `git.diff`, `git.show` | Exactly one configured or derived Git executable, or Git on ambient `PATH` under acknowledged `danger_full_access` |
+| Any executable | `shell.run` | At least one configured or derived exact executable, or acknowledged `danger_full_access` |
 | Network destination | `web.fetch`, `docs.fetch`, `network.http` | At least one sandbox network destination |
 | Agent search route | `web.search` | A valid top-level `search.roles.agent` route |
 | Interactive interface | `user.ask` | A trusted prompt-capable interface for the current runtime |
@@ -399,7 +399,7 @@ Review [Sandbox configuration](sandbox.md), [Network configuration](network.md),
 | An excluded capability still works through another interface | Exclusion hides a model tool; add an exact action deny when the action itself must be blocked |
 | A pinned tool is visible but denied | Add its exact action to `allow` or `requireApproval` |
 | A pinned hosted-model run cannot start | Allow the exact provider action used by the configured provider |
-| `shell.run` is hidden under development | Configure an exact executable or use the reviewed `workspace-development` sandbox profile |
+| `shell.run` is hidden under development | Configure an exact executable, use the reviewed `workspace-development` sandbox profile, or explicitly select and acknowledge `danger_full_access` |
 | `web.search` is hidden despite network access | Configure an exact `search.roles.agent` route; a destination alone is insufficient |
 | `user.ask` is hidden in a worker or headless run | The current runtime has no trusted interactive prompt interface |
 | `allow_all` still cannot read, execute, or connect | Add the separate sandbox grant, credential, route, or trusted extension declaration |

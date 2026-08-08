@@ -267,6 +267,11 @@ impl EffectGateway {
         }
     }
 
+    /// Direct-execution boundary configured in the non-bypassable kernel, if any.
+    pub fn sandbox_boundary_mode(&self) -> Option<SandboxBoundaryMode> {
+        self.kernel.sandbox_boundary_mode()
+    }
+
     /// Bind the policy-gated model evaluator after provider composition is complete.
     pub fn bind_risk_evaluator(
         &self,

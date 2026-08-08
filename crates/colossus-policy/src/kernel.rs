@@ -494,6 +494,13 @@ impl SafetyKernel {
         self
     }
 
+    /// Direct-execution boundary configured for this kernel, when one is active.
+    pub fn sandbox_boundary_mode(&self) -> Option<SandboxBoundaryMode> {
+        self.sandbox_boundary_gate
+            .as_deref()
+            .and_then(SandboxBoundaryGate::mode)
+    }
+
     pub(super) fn prepare(&self, request: &EffectRequest) -> Result<EffectRequest, GatewayError> {
         if request.schema_version != 1 || request.request_id.is_empty() {
             return Err(GatewayError::Safety(
@@ -820,7 +827,11 @@ pub(super) fn validate_process_obligations(
     request: &EffectRequest,
     obligations: &PolicyObligations,
 ) -> Result<(), GatewayError> {
-    let executable_allowed = if obligations.sandbox_backend == "oci" {
+    let danger_full_access =
+        obligations.sandbox_backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
+    let executable_allowed = if danger_full_access {
+        canonical_effect_path(&request.resource, false)?.is_file()
+    } else if obligations.sandbox_backend == "oci" {
         normalized_absolute_path(&request.resource)
             && obligations
                 .filesystem
@@ -862,10 +873,11 @@ pub(super) fn validate_process_obligations(
         .and_then(Value::as_object)
         .ok_or_else(|| GatewayError::Safety("process environment object is absent".into()))?;
     for name in environment.keys() {
-        if !obligations
-            .allowed_environment
-            .iter()
-            .any(|allowed| allowed == name)
+        if !danger_full_access
+            && !obligations
+                .allowed_environment
+                .iter()
+                .any(|allowed| allowed == name)
         {
             return Err(GatewayError::Safety(format!(
                 "environment variable {name} is not allowed"

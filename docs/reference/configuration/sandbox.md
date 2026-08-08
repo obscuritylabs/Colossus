@@ -106,9 +106,11 @@ before deriving development grants. Shell processes cannot read or modify that d
 
 `external` and `danger_full_access` are explicit modes; Colossus never falls back to
 them when another backend is unavailable. Both retain authenticated helper execution,
-environment filtering, exact executable validation, time/output bounds, resource
-supervision where supported, the effect gateway, audit, policy decisions, and approval
-obligations. Neither mode supplies Colossus filesystem or network isolation.
+time/output bounds, resource supervision where supported, the effect gateway, audit,
+policy decisions, and approval obligations. `external` also retains exact executable
+and environment-name validation. `danger_full_access` deliberately drops those process
+allowlists and inherits the runtime environment after a process permit is minted.
+Neither mode supplies Colossus filesystem or network isolation.
 
 For a Coder or Kubernetes workload whose pod/container boundary is managed separately,
 edit the existing sandbox block:
@@ -146,8 +148,14 @@ and continue to constrain Colossus-owned filesystem and HTTP adapters. They are 
 OS-enforced allowlist for arbitrary child-process access; the external platform owns
 that enforcement for `external`, and no such enforcement is asserted for
 `danger_full_access`. Process working directories and path-like arguments therefore do
-not require matching `filesystem` entries in either direct mode. Exact executable and
-environment-name grants, approval decisions, time/output bounds, and audit still apply.
+not require matching `filesystem` entries in either direct mode. `external` still
+requires exact executable and environment-name grants. After its explicit danger
+acknowledgement, `danger_full_access` resolves absolute executables or command names on
+ambient `PATH`, permits working directories outside the workspace, inherits ambient
+environment variables, accepts explicit environment overrides, and leaves child-process
+network access unrestricted without `networkDestinations`. Internal helper-control
+variables are never inherited. Approval decisions, time/output/process limits, permits,
+quarantine, and audit still apply.
 
 ### `allowBrokerFallback`
 
@@ -223,6 +231,9 @@ For native execution, each path must resolve to a regular host file. For OCI exe
 the path names the executable inside the pinned workload image. No `PATH` lookup widens
 this list. Shell command mode needs either `workspace-development` or one explicitly
 granted platform shell; argument-vector mode can call another exact granted executable.
+The acknowledged `danger_full_access` backend is the intentional exception: `shell.run`
+uses an ambient platform shell, resolves command names on the runtime `PATH`, and does
+not require `sandbox.executables` entries.
 
 ## Environment variables
 
@@ -242,6 +253,10 @@ child processes and configuration fields that explicitly require a sandbox envir
 grant. In-process provider credentials do not need an entry merely because their
 provider profile uses `env:VARIABLE`. The owning configuration page states when both a
 credential reference and an environment grant are required.
+
+An acknowledged `danger_full_access` process instead inherits the runtime environment
+after authorization and may override names through `shell.run.env` without listing them
+here. Colossus keeps its private helper-control variables out of that inherited map.
 
 ## Network destinations
 
@@ -273,6 +288,10 @@ must be listed exactly. The wildcard does not authorize raw sockets, non-HTTP pr
 credentials, actions, or a sandbox bypass. Network effects retain DNS pinning, TLS
 authority checks, disabled ambient proxies and redirects, bounded connections, and
 private-address rejection for wildcard destinations.
+
+These destinations still constrain Colossus-owned HTTP adapters in every backend. They
+do not constrain raw child-process networking in either direct mode; in
+`danger_full_access`, unrestricted child networking is intentional and needs no entry.
 
 ## Resource limits
 
@@ -408,8 +427,8 @@ preloaded images.
 | Symptom | Check |
 | --- | --- |
 | A path is rejected | Use a canonical absolute root and grant the required mode |
-| A command is unavailable | Add its exact executable path; do not rely on `PATH` lookup |
-| A child-process variable is unavailable | Add only its name here; keep values outside YAML |
+| A command is unavailable | Add its exact executable path; only acknowledged `danger_full_access` relies on ambient `PATH` |
+| A child-process variable is unavailable | Add only its name here; acknowledged `danger_full_access` instead inherits ambient names and accepts explicit overrides |
 | A remote endpoint is denied | Grant its origin without a path, query, fragment, or credentials |
 | A local service is denied with `"*"` | Add the exact loopback or private origin |
 | OCI configuration is rejected | Use preloaded immutable image digests and reserve the required cleanup timeout |

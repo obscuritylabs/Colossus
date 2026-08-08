@@ -360,6 +360,33 @@ pub(super) fn model_workspace_path(workspace: &Path, input: &str) -> Result<Path
     Ok(workspace.join(model_workspace_relative(workspace, input)?))
 }
 
+pub(super) fn unrestricted_process_cwd(
+    workspace: &Path,
+    input: &str,
+) -> Result<PathBuf, ToolError> {
+    if input.is_empty() || input.contains('\0') {
+        return Err(ToolError::InvalidArguments {
+            tool: "shell.run".into(),
+            message: "cwd must name a directory".into(),
+        });
+    }
+    let input = Path::new(input);
+    let candidate = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        workspace.join(input)
+    };
+    let cwd = fs::canonicalize(&candidate)
+        .map_err(|error| ToolError::Failed(format!("cannot resolve process cwd: {error}")))?;
+    if !cwd.is_dir() {
+        return Err(ToolError::InvalidArguments {
+            tool: "shell.run".into(),
+            message: "cwd must name a directory".into(),
+        });
+    }
+    Ok(cwd)
+}
+
 /// Normalizes a model-supplied path into its workspace-relative spelling.
 ///
 /// Absolute paths that resolve inside the workspace are rewritten to the relative
