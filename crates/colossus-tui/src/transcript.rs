@@ -284,6 +284,23 @@ pub(super) fn plan_status_document(
             ("Selected plan".into(), plan.id.clone()),
             ("Revision".into(), plan.revision.to_string()),
             ("Plan status".into(), plan_status_label(plan.status).into()),
+            (
+                "Plan steps".into(),
+                format!(
+                    "{} ordered step{} (separate from durable /tasks)",
+                    plan.steps.len(),
+                    if plan.steps.len() == 1 { "" } else { "s" }
+                ),
+            ),
+            (
+                "Next action".into(),
+                match plan.status {
+                    PlanStatus::Draft => "Review, refine, approve for execution, or discard".into(),
+                    PlanStatus::Approved => "Choose Direct or Goal Mode execution".into(),
+                    PlanStatus::Executed => "Inspect the linked execution evidence".into(),
+                    PlanStatus::Discarded => "Create or select another plan".into(),
+                },
+            ),
         ]);
     } else {
         rows.push(("Selected plan".into(), "none".into()));

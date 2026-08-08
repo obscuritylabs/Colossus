@@ -71,6 +71,12 @@ closed. That corrective turn exposes only the runtime-bound `plan.create` or
 question. A failed or cancelled turn can therefore have persisted zero or one plan;
 inspect the typed `PlanWritten` event or returned plan evidence before retrying.
 
+The ordered `PlanStep` values saved by `plan.create` or `plan.update` are part of the
+Plan. They are not `TaskRecord` values and do not appear under `/tasks`. Plan Mode does
+not expose `task.create` or `task.update`: this keeps planning non-mutating except for
+its single bounded Plan write. Create durable Tasks explicitly when that separate
+tracking workflow is useful.
+
 New plans start at revision 1. Existing legacy records without the field read as
 revision 0. Refinement replaces Markdown content and ordered steps while preserving the
 original prompt, and every refinement or lifecycle transition increments the optimistic
@@ -87,8 +93,10 @@ Plan the release, including rollback and focused verification.
 /plan show
 ```
 
-The completed turn selects its Draft. Another ordinary prompt in Plan mode refines that
-exact selected revision. To return to an existing plan:
+The completed turn selects its Draft and opens a review dock with Keep refining,
+Approve, and Discard choices. Approval then opens the Direct/Goal execution dock.
+Another ordinary prompt in Plan mode refines that exact selected revision. To return to
+an existing plan:
 
 ```text
 /plans

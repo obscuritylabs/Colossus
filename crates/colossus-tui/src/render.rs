@@ -418,7 +418,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         "Enter sends"
     };
-    let title = if state.plan_execution_decision_active() {
+    let title = if state.plan_review_decision_active() {
+        " Message · paused for plan review · draft preserved ".into()
+    } else if state.plan_execution_decision_active() {
         " Message · paused for plan execution · draft preserved ".into()
     } else if let Some(kind) = state.docked_decision_kind() {
         let decision = match kind {
@@ -446,7 +448,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
                     )
                 } else {
                     format!(
-                        " Plan {} · refine r{} · {action} ",
+                        " Plan {} · draft r{} · message refines · {action} · /plan approve ",
                         short_plan_id(&plan.id),
                         plan.revision
                     )
@@ -534,7 +536,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         render_approval_dock(frame, state, area);
         return;
     }
-    if state.plan_execution_decision_active() {
+    if state.plan_decision_active() {
         render_plan_execution_dock(frame, state, area);
         return;
     }
@@ -613,6 +615,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         Some(
             Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
+            | Overlay::PlanReviewChoice { .. }
             | Overlay::PlanExecutionChoice { .. },
         ) => return,
         None => return,
