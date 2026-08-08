@@ -68,13 +68,17 @@ impl ProjectionWorker {
     /// Apply up to `limit_per_projection` pending events for every handler.
     pub fn run_once(&self, limit_per_projection: usize) -> Result<ProjectionRunReport, StoreError> {
         let mut applied = 0_u64;
+        let mut passive_batches = Vec::new();
+        let mut passive_applied = 0_u64;
         for handler in &self.handlers {
-            let mut position = self.store.position(handler.name())?;
+            let position = self.store.position(handler.name())?;
             let work = self
                 .journal
                 .read_projection_work(position.saturating_add(1), limit_per_projection)?;
+            let mut through_sequence = position;
+            let mut events = Vec::with_capacity(work.len());
             for item in work {
-                let expected_sequence = position.saturating_add(1);
+                let expected_sequence = through_sequence.saturating_add(1);
                 if item.global_sequence != expected_sequence {
                     return Err(StoreError::Verification(format!(
                         "projection {} expected outbox sequence {expected_sequence}, got {}",
@@ -100,6 +104,32 @@ impl ProjectionWorker {
                         item.global_sequence
                     )));
                 }
+                through_sequence = item.global_sequence;
+                events.push(event);
+            }
+            if events.is_empty() {
+                continue;
+            }
+            if events.iter().all(|event| !handler.applies_to(event)) {
+                passive_batches.push(ProjectionBatch {
+                    projection: handler.name().into(),
+                    expected_position: position,
+                    through_sequence,
+                    mutations: Vec::new(),
+                });
+                passive_applied =
+                    passive_applied.saturating_add(through_sequence.saturating_sub(position));
+                continue;
+            }
+            if !passive_batches.is_empty() {
+                self.store.apply_all(&passive_batches)?;
+                applied = applied.saturating_add(passive_applied);
+                passive_batches.clear();
+                passive_applied = 0;
+            }
+
+            let mut projected_position = position;
+            for event in events {
                 let mutations = if handler.applies_to(&event) {
                     let payload = if handler.requires_payload() {
                         self.journal.decrypt_payload(&event)?
@@ -112,13 +142,17 @@ impl ProjectionWorker {
                 };
                 self.store.apply(ProjectionBatch {
                     projection: handler.name().into(),
-                    expected_position: position,
-                    through_sequence: item.global_sequence,
+                    expected_position: projected_position,
+                    through_sequence: event.global_sequence,
                     mutations,
                 })?;
-                position = item.global_sequence;
+                projected_position = event.global_sequence;
                 applied = applied.saturating_add(1);
             }
+        }
+        if !passive_batches.is_empty() {
+            self.store.apply_all(&passive_batches)?;
+            applied = applied.saturating_add(passive_applied);
         }
         Ok(ProjectionRunReport {
             applied,

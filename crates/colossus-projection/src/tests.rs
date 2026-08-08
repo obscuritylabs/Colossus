@@ -3,14 +3,64 @@ use super::{
     ProjectionHandler, ProjectionWorker, default_handlers, pending_effects,
 };
 use colossus_contracts::{
-    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, ProjectionMutation,
+    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, ProjectionBatch,
+    ProjectionMutation,
 };
 use colossus_ports::{
     AggregateRepository, EventJournal, ExternalWorkQueue, ProjectionStore, StoreError,
 };
 use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
+
+#[derive(Default)]
+struct RecordingProjectionStore {
+    inner: InMemoryProjectionStore,
+    direct_applies: AtomicUsize,
+    grouped_applies: Mutex<Vec<Vec<ProjectionBatch>>>,
+}
+
+impl ProjectionStore for RecordingProjectionStore {
+    fn position(&self, projection: &str) -> Result<u64, StoreError> {
+        self.inner.position(projection)
+    }
+
+    fn get(&self, projection: &str, key: &str) -> Result<Option<Value>, StoreError> {
+        self.inner.get(projection, key)
+    }
+
+    fn list(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        self.inner.list(projection, key_prefix, limit)
+    }
+
+    fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
+        self.direct_applies.fetch_add(1, Ordering::Relaxed);
+        self.inner.apply(batch)
+    }
+
+    fn apply_all(&self, batches: &[ProjectionBatch]) -> Result<(), StoreError> {
+        self.grouped_applies
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?
+            .push(batches.to_vec());
+        for batch in batches {
+            self.inner.apply(batch.clone())?;
+        }
+        Ok(())
+    }
+
+    fn reset(&self, projection: &str) -> Result<(), StoreError> {
+        self.inner.reset(projection)
+    }
+}
 
 fn event(stream: &str, version: u64, event_type: &str, payload: Value) -> NewEvent {
     NewEvent {
@@ -38,6 +88,44 @@ fn worker(
     let journal_port: Arc<dyn EventJournal> = journal;
     let store_port: Arc<dyn ProjectionStore> = store;
     ProjectionWorker::new(journal_port, store_port, default_handlers()).expect("worker")
+}
+
+#[test]
+fn passive_projection_checkpoints_are_grouped() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    journal
+        .append(event(
+            "session:one",
+            0,
+            "session.created.v1",
+            json!({"title": "Session"}),
+        ))
+        .expect("append");
+    let store = Arc::new(RecordingProjectionStore::default());
+    let journal_port: Arc<dyn EventJournal> = journal;
+    let store_port: Arc<dyn ProjectionStore> = store.clone();
+    let worker =
+        ProjectionWorker::new(journal_port, store_port, default_handlers()).expect("worker");
+
+    let report = worker.run_once(8).expect("projection run");
+
+    assert_eq!(report.applied, 5);
+    assert!(report.projections.iter().all(|status| status.position == 1));
+    assert_eq!(store.direct_applies.load(Ordering::Relaxed), 1);
+    let grouped = store.grouped_applies.lock().expect("grouped applies");
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(
+        grouped[0]
+            .iter()
+            .map(|batch| batch.projection.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "work-v1",
+            "memory-v1",
+            "workflows-v1",
+            "effects-recovery-v1"
+        ]
+    );
 }
 
 #[test]

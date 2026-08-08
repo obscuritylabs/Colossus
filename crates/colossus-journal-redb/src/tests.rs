@@ -11,7 +11,7 @@ use chacha20poly1305::{
 };
 use colossus_contracts::{
     Actor, ActorType, EventClassification, ExecutionContext, NewEvent, PLAINTEXT_PAYLOAD_ALGORITHM,
-    SecureAnchor, SecureAnchorStatus, StartupVerificationMode,
+    ProjectionBatch, ProjectionMutation, SecureAnchor, SecureAnchorStatus, StartupVerificationMode,
 };
 use colossus_memory::EventSourcedMemoryRepository;
 use colossus_ports::{EventJournal, ExternalWorkQueue, KeyProvider, ProjectionStore, StoreError};
@@ -25,7 +25,7 @@ use colossus_testkit::{
 };
 use colossus_work::EventSourcedWorkRepository;
 use colossus_workflow::EventSourcedWorkflowRepository;
-use redb::{Database, ReadableDatabase};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde_json::json;
 use std::{
     process::Command,
@@ -80,6 +80,46 @@ fn plaintext_journal(path: &std::path::Path) -> RedbEventJournal {
         Arc::new(DisabledCheckpointSigner),
     )
     .expect("open plaintext journal")
+}
+
+#[test]
+fn established_schema_uses_read_only_fast_path() {
+    let directory = tempdir().expect("tempdir");
+    let database = Database::create(directory.path().join("schema.redb")).expect("database");
+
+    assert!(RedbEventJournal::ensure_schema(&database).expect("create schema"));
+    assert!(!RedbEventJournal::ensure_schema(&database).expect("reuse schema"));
+}
+
+#[test]
+fn established_schema_rejects_incompatible_table_definition() {
+    const MISMATCHED_PROJECTION_RECORDS: TableDefinition<&str, u64> =
+        TableDefinition::new("projection_records");
+
+    let directory = tempdir().expect("tempdir");
+    let database = Database::create(directory.path().join("mismatch.redb")).expect("database");
+    {
+        let write = database.begin_write().expect("write transaction");
+        write.open_table(EVENTS).expect("events");
+        write.open_table(STREAM_EVENTS).expect("stream events");
+        write.open_table(STREAM_VERSIONS).expect("stream versions");
+        write.open_table(METADATA).expect("metadata");
+        write.open_table(OUTBOX).expect("outbox");
+        write
+            .open_table(PROJECTION_POSITIONS)
+            .expect("projection positions");
+        write
+            .open_table(MISMATCHED_PROJECTION_RECORDS)
+            .expect("mismatched projection records");
+        write.commit().expect("commit");
+    }
+
+    let error =
+        RedbEventJournal::ensure_schema(&database).expect_err("reject incompatible definition");
+    assert!(
+        matches!(error, StoreError::Adapter(ref message) if message.contains("projection_records")),
+        "unexpected schema error: {error}"
+    );
 }
 
 #[test]
@@ -587,6 +627,45 @@ fn shared_projection_store_conformance_suite_passes() {
     let directory = tempdir().expect("tempdir");
     let journal = journal(&directory.path().join("state.redb"));
     assert_projection_store_conformance(&journal);
+}
+
+#[test]
+fn projection_batch_group_rolls_back_on_conflict() {
+    let directory = tempdir().expect("tempdir");
+    let journal = journal(&directory.path().join("state.redb"));
+    journal
+        .apply(ProjectionBatch {
+            projection: "existing-v1".into(),
+            expected_position: 0,
+            through_sequence: 1,
+            mutations: Vec::new(),
+        })
+        .expect("seed projection");
+
+    let error = journal
+        .apply_all(&[
+            ProjectionBatch {
+                projection: "new-v1".into(),
+                expected_position: 0,
+                through_sequence: 1,
+                mutations: vec![ProjectionMutation::Upsert {
+                    key: "record".into(),
+                    value: json!({"value": 1}),
+                }],
+            },
+            ProjectionBatch {
+                projection: "existing-v1".into(),
+                expected_position: 0,
+                through_sequence: 2,
+                mutations: Vec::new(),
+            },
+        ])
+        .expect_err("second batch conflicts");
+
+    assert!(matches!(error, StoreError::Conflict { actual: 1, .. }));
+    assert_eq!(journal.position("new-v1").expect("position"), 0);
+    assert!(journal.get("new-v1", "record").expect("record").is_none());
+    assert_eq!(journal.position("existing-v1").expect("position"), 1);
 }
 
 #[test]
