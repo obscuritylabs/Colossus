@@ -20,7 +20,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "cryptography>=46,<50",
+  "cryptography>=46,<51",
   "googleapis-common-protos>=1.75,<2",
   "grpcio>=1.82.1,<2",
   "protobuf>=7.35.1,<8",
