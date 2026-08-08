@@ -17,12 +17,14 @@ use colossus_ports::{
 };
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use fs4::fs_std::FileExt as _;
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{
+    Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition, TableHandle,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::{

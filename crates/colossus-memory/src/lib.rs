@@ -12,8 +12,8 @@ use colossus_ports::{
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tantivy::{
     Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term,

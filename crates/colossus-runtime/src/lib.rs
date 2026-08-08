@@ -52,7 +52,7 @@ use colossus_mcp::{
     validate_tool_arguments,
 };
 use colossus_memory::{
-    EventSourcedMemoryRepository, MemoryIndexRegistration, MemoryService, TantivyMemoryIndex,
+    EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
     UnavailableMemoryIndex,
 };
 use colossus_memory_chroma::{

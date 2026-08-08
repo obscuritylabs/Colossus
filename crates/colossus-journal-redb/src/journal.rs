@@ -36,19 +36,7 @@ impl RedbEventJournal {
         mode: StartupVerificationMode,
     ) -> Result<Self, StoreError> {
         let database = Database::create(path).map_err(adapter_error)?;
-        let write = database.begin_write().map_err(adapter_error)?;
-        write.open_table(EVENTS).map_err(adapter_error)?;
-        write.open_table(STREAM_EVENTS).map_err(adapter_error)?;
-        write.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
-        write.open_table(METADATA).map_err(adapter_error)?;
-        write.open_table(OUTBOX).map_err(adapter_error)?;
-        write
-            .open_table(PROJECTION_POSITIONS)
-            .map_err(adapter_error)?;
-        write
-            .open_table(PROJECTION_RECORDS)
-            .map_err(adapter_error)?;
-        write.commit().map_err(adapter_error)?;
+        Self::ensure_schema(&database)?;
         let payload_protection = keys.payload_protection();
         Self::initialize_payload_protection(&database, payload_protection)?;
         let journal = Self {
@@ -75,6 +63,43 @@ impl RedbEventJournal {
             *journal.recovery_reason.lock().map_err(adapter_error)? = Some(error.to_string());
         }
         Ok(journal)
+    }
+
+    pub(super) fn ensure_schema(database: &Database) -> Result<bool, StoreError> {
+        const REQUIRED_TABLES: [&str; 7] = [
+            "events",
+            "stream_events",
+            "stream_versions",
+            "metadata",
+            "projection_outbox",
+            "projection_positions",
+            "projection_records",
+        ];
+        let read = database.begin_read().map_err(adapter_error)?;
+        let tables = read
+            .list_tables()
+            .map_err(adapter_error)?
+            .map(|table| table.name().to_owned())
+            .collect::<BTreeSet<_>>();
+        if REQUIRED_TABLES.iter().all(|name| tables.contains(*name)) {
+            return Ok(false);
+        }
+
+        drop(read);
+        let write = database.begin_write().map_err(adapter_error)?;
+        write.open_table(EVENTS).map_err(adapter_error)?;
+        write.open_table(STREAM_EVENTS).map_err(adapter_error)?;
+        write.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
+        write.open_table(METADATA).map_err(adapter_error)?;
+        write.open_table(OUTBOX).map_err(adapter_error)?;
+        write
+            .open_table(PROJECTION_POSITIONS)
+            .map_err(adapter_error)?;
+        write
+            .open_table(PROJECTION_RECORDS)
+            .map_err(adapter_error)?;
+        write.commit().map_err(adapter_error)?;
+        Ok(true)
     }
 
     /// Bounded reason startup entered recovery mode.
@@ -1601,6 +1626,41 @@ impl EventJournal for RedbEventJournal {
     }
 }
 
+struct EncodedProjectionBatch {
+    projection: String,
+    expected_position: u64,
+    through_sequence: u64,
+    mutations: Vec<(String, Option<Vec<u8>>)>,
+}
+
+fn encode_projection_batch(batch: &ProjectionBatch) -> Result<EncodedProjectionBatch, StoreError> {
+    projection_prefix(&batch.projection)?;
+    if batch.through_sequence <= batch.expected_position {
+        return Err(StoreError::Adapter(
+            "projection position must advance".into(),
+        ));
+    }
+    let mutations = batch
+        .mutations
+        .iter()
+        .map(|mutation| match mutation {
+            ProjectionMutation::Upsert { key, value } => Ok((
+                projection_record_key(&batch.projection, key)?,
+                Some(serde_json::to_vec(value).map_err(adapter_error)?),
+            )),
+            ProjectionMutation::Delete { key } => {
+                Ok((projection_record_key(&batch.projection, key)?, None))
+            }
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
+    Ok(EncodedProjectionBatch {
+        projection: batch.projection.clone(),
+        expected_position: batch.expected_position,
+        through_sequence: batch.through_sequence,
+        mutations,
+    })
+}
+
 impl ProjectionStore for RedbEventJournal {
     fn position(&self, projection: &str) -> Result<u64, StoreError> {
         projection_prefix(projection)?;
@@ -1660,24 +1720,16 @@ impl ProjectionStore for RedbEventJournal {
     }
 
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
-        projection_prefix(&batch.projection)?;
-        if batch.through_sequence <= batch.expected_position {
-            return Err(StoreError::Adapter(
-                "projection position must advance".into(),
-            ));
+        self.apply_all(std::slice::from_ref(&batch))
+    }
+
+    fn apply_all(&self, batches: &[ProjectionBatch]) -> Result<(), StoreError> {
+        if batches.is_empty() {
+            return Ok(());
         }
-        let encoded = batch
-            .mutations
-            .into_iter()
-            .map(|mutation| match mutation {
-                ProjectionMutation::Upsert { key, value } => Ok((
-                    projection_record_key(&batch.projection, &key)?,
-                    Some(serde_json::to_vec(&value).map_err(adapter_error)?),
-                )),
-                ProjectionMutation::Delete { key } => {
-                    Ok((projection_record_key(&batch.projection, &key)?, None))
-                }
-            })
+        let encoded = batches
+            .iter()
+            .map(encode_projection_batch)
             .collect::<Result<Vec<_>, StoreError>>()?;
         let _guard = self.writer.lock().map_err(adapter_error)?;
         let write = self.database.begin_write().map_err(adapter_error)?;
@@ -1685,32 +1737,34 @@ impl ProjectionStore for RedbEventJournal {
             let mut positions = write
                 .open_table(PROJECTION_POSITIONS)
                 .map_err(adapter_error)?;
-            let actual = positions
-                .get(batch.projection.as_str())
-                .map_err(adapter_error)?
-                .map_or(0, |position| position.value());
-            if actual != batch.expected_position {
-                return Err(StoreError::Conflict {
-                    stream_id: format!("projection:{}", batch.projection),
-                    expected: batch.expected_position,
-                    actual,
-                });
-            }
             let mut records = write
                 .open_table(PROJECTION_RECORDS)
                 .map_err(adapter_error)?;
-            for (key, value) in &encoded {
-                if let Some(value) = value {
-                    records
-                        .insert(key.as_str(), value.as_slice())
-                        .map_err(adapter_error)?;
-                } else {
-                    records.remove(key.as_str()).map_err(adapter_error)?;
+            for batch in &encoded {
+                let actual = positions
+                    .get(batch.projection.as_str())
+                    .map_err(adapter_error)?
+                    .map_or(0, |position| position.value());
+                if actual != batch.expected_position {
+                    return Err(StoreError::Conflict {
+                        stream_id: format!("projection:{}", batch.projection),
+                        expected: batch.expected_position,
+                        actual,
+                    });
                 }
+                for (key, value) in &batch.mutations {
+                    if let Some(value) = value {
+                        records
+                            .insert(key.as_str(), value.as_slice())
+                            .map_err(adapter_error)?;
+                    } else {
+                        records.remove(key.as_str()).map_err(adapter_error)?;
+                    }
+                }
+                positions
+                    .insert(batch.projection.as_str(), batch.through_sequence)
+                    .map_err(adapter_error)?;
             }
-            positions
-                .insert(batch.projection.as_str(), batch.through_sequence)
-                .map_err(adapter_error)?;
         }
         write.commit().map_err(adapter_error)
     }
