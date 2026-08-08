@@ -298,40 +298,94 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
         CompletionKind::Command => palette.assistant_style(),
         CompletionKind::Skill => palette.tool_style(),
     };
-    let menu_width = area.width.saturating_sub(2).min(80);
-    let menu_area = Rect::new(area.x.saturating_add(1), area.y, menu_width, area.height);
-    let content_width = usize::from(menu_width.saturating_sub(5)).max(1);
-    let lines = candidates
+    let visible_candidates = candidates
         .iter()
         .enumerate()
         .skip(first)
         .take(visible_rows)
-        .map(|(index, candidate)| {
-            let is_selected = index == selected;
-            let marker = if is_selected { "› " } else { "  " };
-            let style = if is_selected {
-                ratatui_style(candidate_style)
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::REVERSED)
-            } else {
-                ratatui_style(candidate_style)
-            };
-            Line::from(Span::styled(
-                format!("{marker}{}", truncate_width(candidate, content_width)),
-                style,
-            ))
-        })
         .collect::<Vec<_>>();
+    let command_width = visible_candidates
+        .iter()
+        .map(|(_, candidate)| UnicodeWidthStr::width(**candidate))
+        .max()
+        .unwrap_or(1)
+        .min(MAX_COMMAND_COLUMN_WIDTH);
+    let description_width = if context.kind == CompletionKind::Command {
+        visible_candidates
+            .iter()
+            .filter_map(|(_, candidate)| command_description(candidate))
+            .map(UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0)
+            .min(MAX_DESCRIPTION_COLUMN_WIDTH)
+    } else {
+        0
+    };
     let label = match context.kind {
         CompletionKind::Command => "Commands",
         CompletionKind::Skill => "Skills",
     };
+    let title = format!(" {label} · {} ", candidates.len());
+    let controls = " ↑/↓ select · Tab accept ";
+    let desired_content_width =
+        2 + command_width + usize::from(description_width > 0) * (2 + description_width);
+    let desired_width = (desired_content_width + 2)
+        .max(UnicodeWidthStr::width(title.as_str()) + 2)
+        .max(UnicodeWidthStr::width(controls) + 2);
+    let menu_width = u16::try_from(desired_width)
+        .unwrap_or(u16::MAX)
+        .max(MIN_COMPLETION_MENU_WIDTH.min(area.width))
+        .min(area.width);
+    let menu_area = Rect::new(area.x, area.y, menu_width, area.height);
+    let content_width = usize::from(menu_width.saturating_sub(2)).max(1);
+    let available_after_marker = content_width.saturating_sub(2);
+    let show_descriptions = description_width > 0
+        && available_after_marker >= command_width + 2 + MIN_DESCRIPTION_COLUMN_WIDTH;
+    let command_column_width = if show_descriptions {
+        command_width.min(available_after_marker.saturating_sub(2 + MIN_DESCRIPTION_COLUMN_WIDTH))
+    } else {
+        command_width.min(available_after_marker)
+    };
+    let description_column_width = available_after_marker
+        .saturating_sub(command_column_width)
+        .saturating_sub(2);
+    let description_style = ratatui_style(palette.meta_style()).add_modifier(Modifier::DIM);
+    let lines = visible_candidates
+        .into_iter()
+        .map(|(index, candidate)| {
+            let is_selected = index == selected;
+            let marker = if is_selected { "› " } else { "  " };
+            let style = if is_selected {
+                ratatui_style(candidate_style).add_modifier(Modifier::BOLD)
+            } else {
+                ratatui_style(candidate_style)
+            };
+            let command = truncate_width(candidate, command_column_width);
+            let mut spans = vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{command:<command_column_width$}"), style),
+            ];
+            if show_descriptions {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    truncate_width(
+                        command_description(candidate).unwrap_or_default(),
+                        description_column_width,
+                    ),
+                    description_style,
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>();
     frame.render_widget(Clear, menu_area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(format!(
-            " {label} · {} matches · ↑/↓ select · Tab accept ",
-            candidates.len()
-        ))),
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_bottom(Span::styled(controls, ratatui_style(palette.meta_style()))),
+        ),
         menu_area,
     );
 }
@@ -364,7 +418,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         "Enter sends"
     };
-    let title = if state.plan_execution_decision_active() {
+    let title = if state.plan_review_decision_active() {
+        " Message · paused for plan review · draft preserved ".into()
+    } else if state.plan_execution_decision_active() {
         " Message · paused for plan execution · draft preserved ".into()
     } else if let Some(kind) = state.docked_decision_kind() {
         let decision = match kind {
@@ -376,6 +432,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         match state.mode {
             InteractiveMode::Execute => format!(" Message · {action} "),
+            InteractiveMode::Research => format!(" Research · sourced question · {action} "),
             InteractiveMode::Plan if state.selected_plan.is_none() => {
                 format!(" Plan · new draft · {action} ")
             }
@@ -391,7 +448,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
                     )
                 } else {
                     format!(
-                        " Plan {} · refine r{} · {action} ",
+                        " Plan {} · draft r{} · message refines · {action} · /plan approve ",
                         short_plan_id(&plan.id),
                         plan.revision
                     )
@@ -479,7 +536,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         render_approval_dock(frame, state, area);
         return;
     }
-    if state.plan_execution_decision_active() {
+    if state.plan_decision_active() {
         render_plan_execution_dock(frame, state, area);
         return;
     }
@@ -558,6 +615,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         Some(
             Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
+            | Overlay::PlanReviewChoice { .. }
             | Overlay::PlanExecutionChoice { .. },
         ) => return,
         None => return,

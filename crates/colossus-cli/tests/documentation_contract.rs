@@ -28,7 +28,6 @@ const LEGACY_PUBLIC_SIGNATURES: &[&str] = &[
     "/session latest",
     "/context snapshots",
     "/skill drop",
-    "/research on",
     "/agents resume",
 ];
 

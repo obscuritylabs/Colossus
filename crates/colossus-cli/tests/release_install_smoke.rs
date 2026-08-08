@@ -11,6 +11,30 @@ use tempfile::tempdir;
 const JOURNAL_KEY: &str = "7171717171717171717171717171717171717171717171717171717171717171";
 const SIGNING_KEY: &str = "8282828282828282828282828282828282828282828282828282828282828282";
 
+fn release_target() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        host => panic!("unsupported release installer test host: {host:?}"),
+    }
+}
+
+fn write_install_metadata(package: &Path) {
+    fs::write(
+        package.join("install-metadata"),
+        format!(
+            "schema_version=1\nversion={}\ntarget={}\nchannel=stable\ndistribution_origin=https://github.com/obscuritylabs/Colossus/releases\ninstaller_kind=direct\n",
+            env!("CARGO_PKG_VERSION"),
+            release_target()
+        ),
+    )
+    .expect("package installation metadata");
+}
+
 #[cfg(unix)]
 fn prepare_package(binary: &Path, package: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -27,6 +51,7 @@ fn prepare_package(binary: &Path, package: &Path) -> PathBuf {
     .expect("package installer");
     fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
         .expect("installer permissions");
+    write_install_metadata(package);
     installer
 }
 
@@ -39,6 +64,7 @@ fn prepare_package(binary: &Path, package: &Path) -> PathBuf {
         &installer,
     )
     .expect("package installer");
+    write_install_metadata(package);
     installer
 }
 
@@ -48,6 +74,7 @@ fn install(installer: &Path, prefix: &Path) -> Output {
         .arg(installer)
         .arg("--prefix")
         .arg(prefix)
+        .env("XDG_DATA_HOME", prefix.join("data"))
         .output()
         .expect("run installer")
 }
@@ -65,6 +92,7 @@ fn install(installer: &Path, prefix: &Path) -> Output {
         .arg(installer)
         .arg("-Prefix")
         .arg(prefix)
+        .env("LOCALAPPDATA", prefix.join("data"))
         .output()
         .expect("run installer")
 }
@@ -101,9 +129,10 @@ fn offline_command(binary: &Path, working_directory: &Path) -> Command {
 fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_run() {
     let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
-    let package = directory.path().join("package");
-    let prefix = directory.path().join("prefix");
-    let smoke = directory.path().join("smoke");
+    let root = fs::canonicalize(directory.path()).expect("canonical test root");
+    let package = root.join("package");
+    let prefix = root.join("prefix");
+    let smoke = root.join("smoke");
     fs::create_dir_all(&package).expect("package directory");
     fs::create_dir_all(smoke.join("workflows")).expect("smoke workflows");
     let installer = prepare_package(source_binary, &package);
@@ -119,6 +148,17 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     }
     let binary = installed_binary(&prefix);
     assert!(binary.is_file());
+    let receipt = if cfg!(windows) {
+        prefix.join("data/Colossus/install.json")
+    } else {
+        prefix.join("data/colossus/install.json")
+    };
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(receipt).expect("install receipt")).expect("receipt JSON");
+    assert_eq!(receipt["schemaVersion"], 1);
+    assert_eq!(receipt["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(receipt["target"], release_target());
+    assert_eq!(receipt["installerKind"], "direct");
     assert_eq!(
         fs::metadata(&binary).expect("installed metadata").len(),
         fs::metadata(source_binary).expect("source metadata").len()
@@ -194,8 +234,8 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     {
         use std::os::unix::fs::symlink;
 
-        let linked_prefix = directory.path().join("linked-prefix");
-        let actual_bin = directory.path().join("actual-bin");
+        let linked_prefix = root.join("linked-prefix");
+        let actual_bin = root.join("actual-bin");
         fs::create_dir(&linked_prefix).expect("linked prefix");
         fs::create_dir(&actual_bin).expect("actual bin");
         symlink(&actual_bin, linked_prefix.join("bin")).expect("linked bin directory");
@@ -203,13 +243,13 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
         assert!(!rejected.status.success());
         assert!(
             String::from_utf8_lossy(&rejected.stderr)
-                .contains("refusing to install through a linked bin directory")
+                .contains("refusing to install through linked path component")
         );
 
         let real_binary = package.join("colossus.real");
         fs::rename(package.join("colossus"), &real_binary).expect("rename package binary");
         symlink(&real_binary, package.join("colossus")).expect("linked package binary");
-        let rejected = install(&installer, &directory.path().join("rejected-prefix"));
+        let rejected = install(&installer, &root.join("rejected-prefix"));
         assert!(!rejected.status.success());
         assert!(
             String::from_utf8_lossy(&rejected.stderr)

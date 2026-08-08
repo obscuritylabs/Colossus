@@ -26,6 +26,7 @@ colossus-runtime.workspace = true
 colossus-sandbox.workspace = true
 colossus-sidecar-protocol.workspace = true
 colossus-tui.workspace = true
+colossus-update.workspace = true
 colossus-worker.workspace = true
 colossus-workflow.workspace = true
 crossterm.workspace = true

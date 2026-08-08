@@ -136,6 +136,10 @@ pub(super) enum Overlay {
         plan: PlanRecord,
         selected: Option<usize>,
     },
+    PlanReviewChoice {
+        plan: PlanRecord,
+        selected: Option<usize>,
+    },
     QueuePaused,
 }
 
@@ -177,7 +181,9 @@ pub struct TuiState {
     pub(super) operation: Option<OperationKind>,
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
+    pub(super) pending_plan_command: Option<PlanCommand>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
+    pub(super) open_plan_execution_after_approval: bool,
     pub(super) pending_sandbox_boundary_acknowledgement: Option<SandboxBoundaryMode>,
     pub(super) sandbox_boundary_acknowledgement_in_progress: bool,
     pub(super) activity: Option<String>,
@@ -239,7 +245,7 @@ impl TuiState {
             selected_plan: None,
             composer: Composer::default(),
             history: snapshot.history,
-            completions: with_plan_completions(snapshot.completions),
+            completions: with_mode_completions(snapshot.completions),
             sticky_skills: Vec::new(),
             provider_response_diagnostics: false,
             active_calls: BTreeMap::new(),
@@ -248,7 +254,9 @@ impl TuiState {
             operation: None,
             control: None,
             overlay: None,
+            pending_plan_command: None,
             pending_plan_execution: None,
+            open_plan_execution_after_approval: false,
             pending_sandbox_boundary_acknowledgement: snapshot
                 .pending_sandbox_boundary_acknowledgement,
             sandbox_boundary_acknowledgement_in_progress: false,
@@ -281,7 +289,15 @@ impl TuiState {
     }
 
     pub(super) fn docked_decision_active(&self) -> bool {
-        self.docked_decision_kind().is_some() || self.plan_execution_decision_active()
+        self.docked_decision_kind().is_some() || self.plan_decision_active()
+    }
+
+    pub(super) fn plan_decision_active(&self) -> bool {
+        self.plan_review_decision_active() || self.plan_execution_decision_active()
+    }
+
+    pub(super) fn plan_review_decision_active(&self) -> bool {
+        matches!(self.overlay, Some(Overlay::PlanReviewChoice { .. }))
     }
 
     pub(super) fn plan_execution_decision_active(&self) -> bool {
@@ -318,6 +334,11 @@ impl TuiState {
                     ));
                 }
             }),
+            InteractiveMode::Research => {
+                return Err(
+                    "Research mode questions must run through the research service.".into(),
+                );
+            }
         };
         Ok(InteractiveRunRequest {
             session_id: self.session_id.clone(),
@@ -329,8 +350,15 @@ impl TuiState {
         })
     }
 
+    pub(super) fn research_turn_command(&self, question: String) -> Option<RuntimeCommand> {
+        (self.mode == InteractiveMode::Research).then_some(RuntimeCommand::Known {
+            name: "research".into(),
+            arguments: question,
+        })
+    }
+
     pub(super) fn set_completions(&mut self, completions: Vec<String>) {
-        self.completions = with_plan_completions(completions);
+        self.completions = with_mode_completions(completions);
     }
 
     pub(super) fn apply_plan_selection(
@@ -555,7 +583,7 @@ impl TuiState {
             self.composer.completion_index = Some(
                 self.composer
                     .completion_index
-                    .map_or(0, |index| (index + 1) % count),
+                    .map_or(1 % count, |index| (index + 1) % count),
             );
         }
     }
@@ -680,6 +708,11 @@ impl TuiState {
         let Some(overlay) = self.overlay.take() else {
             return false;
         };
+        let restore_queue_pause = matches!(
+            overlay,
+            Overlay::PlanReviewChoice { .. } | Overlay::PlanExecutionChoice { .. }
+        ) && self.queue_paused
+            && !self.queue.is_empty();
         match overlay {
             Overlay::Prompt { request, .. } => {
                 let _ = request.response.send(PromptResponse::Cancelled);
@@ -692,6 +725,9 @@ impl TuiState {
                 let _ = picker.request.response.send(PromptResponse::Cancelled);
             }
             _ => {}
+        }
+        if restore_queue_pause {
+            self.overlay = Some(Overlay::QueuePaused);
         }
         true
     }
@@ -715,8 +751,16 @@ const PLAN_COMPLETIONS: &[&str] = &[
     "/goal resume",
 ];
 
-fn with_plan_completions(mut completions: Vec<String>) -> Vec<String> {
-    for completion in PLAN_COMPLETIONS {
+const RESEARCH_COMPLETIONS: &[&str] = &[
+    "/research",
+    "/research on",
+    "/research off",
+    "/research status",
+    "/research list",
+];
+
+fn with_mode_completions(mut completions: Vec<String>) -> Vec<String> {
+    for completion in PLAN_COMPLETIONS.iter().chain(RESEARCH_COMPLETIONS.iter()) {
         if !completions.iter().any(|candidate| candidate == completion) {
             completions.push((*completion).into());
         }

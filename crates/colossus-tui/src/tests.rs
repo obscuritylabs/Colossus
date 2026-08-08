@@ -1,9 +1,9 @@
 use super::*;
 use colossus_contracts::{
-    CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall, SandboxBoundaryMode,
-    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
-    StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult,
-    TranscriptDensity,
+    AgentRunResult, CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall,
+    SandboxBoundaryMode, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
+    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
+    ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -374,6 +374,43 @@ fn parser_enforces_the_exact_plan_command_grammar() {
 }
 
 #[test]
+fn parser_treats_research_as_a_mode_with_explicit_runs() {
+    assert_eq!(
+        parse_interactive_command("/research"),
+        InteractiveCommand::Research(ResearchCommand::Toggle)
+    );
+    assert_eq!(
+        parse_interactive_command("/research on"),
+        InteractiveCommand::Research(ResearchCommand::On)
+    );
+    assert_eq!(
+        parse_interactive_command("/research off"),
+        InteractiveCommand::Research(ResearchCommand::Off)
+    );
+    assert_eq!(
+        parse_interactive_command("/research status"),
+        InteractiveCommand::Research(ResearchCommand::Status)
+    );
+    assert_eq!(
+        parse_interactive_command("/research list"),
+        InteractiveCommand::Research(ResearchCommand::List)
+    );
+    assert_eq!(
+        parse_interactive_command("/research why is the cache cold?"),
+        InteractiveCommand::Research(ResearchCommand::Run {
+            question: "why is the cache cold?".into(),
+        })
+    );
+    assert_eq!(
+        parse_interactive_command("/researcher"),
+        InteractiveCommand::Runtime(RuntimeCommand::Known {
+            name: "researcher".into(),
+            arguments: String::new(),
+        })
+    );
+}
+
+#[test]
 fn run_request_carries_only_process_local_provider_diagnostic_state() {
     let mut state = TuiState::from_snapshot(snapshot());
     assert!(
@@ -441,6 +478,28 @@ fn plan_mode_derives_create_or_revision_bound_update_targets() {
 }
 
 #[test]
+fn research_mode_routes_messages_to_the_durable_research_command() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    assert_eq!(state.research_turn_command("normal".into()), None);
+
+    state.mode = InteractiveMode::Research;
+    assert_eq!(state.mode.as_str(), "research");
+    assert_eq!(
+        state.research_turn_command("why is the cache cold?".into()),
+        Some(RuntimeCommand::Known {
+            name: "research".into(),
+            arguments: "why is the cache cold?".into(),
+        })
+    );
+    assert!(
+        state
+            .run_request("must use research".into())
+            .expect_err("research is not a normal agent turn")
+            .contains("research service")
+    );
+}
+
+#[test]
 fn plan_state_is_process_local_and_session_switch_clears_only_selection() {
     let mut state = TuiState::from_snapshot(snapshot());
     assert!(
@@ -493,6 +552,26 @@ fn plan_commands_are_always_available_for_completion() {
         "/plan execute direct",
         "/plan execute goal",
         "/plans",
+    ] {
+        assert!(
+            state
+                .completions
+                .iter()
+                .any(|candidate| candidate == command),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn research_mode_commands_are_always_available_for_completion() {
+    let state = TuiState::from_snapshot(snapshot());
+    for command in [
+        "/research",
+        "/research on",
+        "/research off",
+        "/research status",
+        "/research list",
     ] {
         assert!(
             state
@@ -624,6 +703,204 @@ fn plan_write_events_select_the_exact_canonical_revision() {
 }
 
 #[test]
+fn completed_plan_turn_opens_an_explicit_review_dock() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let plan = plan_record(PlanStatus::Draft, 9);
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Run(HostRunResult {
+            outcome: AgentRunOutcome::Completed {
+                result: AgentRunResult {
+                    run_id: "run-plan".into(),
+                    session_id: Some("019f-test".into()),
+                    role: "primary".into(),
+                    profile: "test".into(),
+                    model_profile: "test".into(),
+                    provider_profile: "test".into(),
+                    model: "test".into(),
+                    plan: Some(plan.clone()),
+                    output: "Draft saved.".into(),
+                    event_count: 1,
+                    elapsed_seconds: 0.1,
+                },
+            },
+            footer: FooterState::default(),
+            plan_selection: PlanSelectionUpdate::Set(Box::new(plan.clone())),
+        })))),
+    );
+    assert_eq!(state.selected_plan, Some(plan.clone()));
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::PlanReviewChoice {
+            plan: ref reviewed,
+            selected: None,
+        }) if reviewed == &plan
+    ));
+}
+
+#[test]
+fn identical_consecutive_plan_status_cards_are_not_duplicated() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    let before = state.transcript.len();
+
+    append_plan_status(&mut state);
+    append_plan_status(&mut state);
+
+    assert_eq!(state.transcript.len(), before + 1);
+}
+
+#[test]
+fn plan_review_requires_confirmation_and_queues_the_selected_lifecycle_action() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let plan = plan_record(PlanStatus::Draft, 4);
+    state.selected_plan = Some(plan.clone());
+    state.overlay = Some(Overlay::PlanReviewChoice {
+        plan,
+        selected: None,
+    });
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.overlay.is_some());
+    assert!(state.pending_plan_command.is_none());
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    assert!(state.pending_plan_command.is_none());
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.overlay.is_none());
+    assert_eq!(state.pending_plan_command, Some(PlanCommand::Approve));
+}
+
+#[test]
+fn successful_plan_approval_opens_the_execution_strategy_dock() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    state.open_plan_execution_after_approval = true;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    let mut result = HostCommandResult::document(PresentationDocument::new());
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved.clone()));
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(result)))),
+    );
+
+    assert_eq!(state.selected_plan, Some(approved.clone()));
+    assert!(!state.open_plan_execution_after_approval);
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::PlanExecutionChoice {
+            plan: ref selected,
+            selected: None,
+        }) if selected == &approved
+    ));
+}
+
+#[test]
+fn interrupted_approval_keeps_the_execution_dock_above_a_paused_queue() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    state.queue.push_back("queued prompt".into());
+    state.open_plan_execution_after_approval = true;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    let mut result = HostCommandResult::document(PresentationDocument::new());
+    result.continue_queue = false;
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved.clone()));
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(result)))),
+    );
+
+    assert!(state.queue_paused);
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::PlanExecutionChoice {
+            plan: ref selected,
+            selected: None,
+        }) if selected == &approved
+    ));
+
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.pending_plan_execution.is_some());
+    assert!(state.overlay.is_none());
+    assert!(state.queue_paused);
+}
+
+#[test]
+fn cancelling_plan_execution_choice_surfaces_the_paused_queue() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 4));
+    state.queue.push_back("queued after approval".into());
+    state.open_plan_execution_after_approval = true;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    let mut result = HostCommandResult::document(PresentationDocument::new());
+    result.continue_queue = false;
+    result.plan_selection = PlanSelectionUpdate::Set(Box::new(approved));
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(result)))),
+    );
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
+}
+
+#[test]
+fn plan_review_dock_previews_steps_and_explains_tasks_are_separate() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.composer.insert("refinement stays visible");
+    let plan = plan_record(PlanStatus::Draft, 4);
+    state.selected_plan = Some(plan.clone());
+    state.overlay = Some(Overlay::PlanReviewChoice {
+        plan,
+        selected: None,
+    });
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw plan review dock");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Review plan plan-019"), "{rendered}");
+    assert!(rendered.contains("1. Implement"), "{rendered}");
+    assert!(
+        rendered.contains("durable /tasks records are a separate"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("[R] Keep refining"), "{rendered}");
+    assert!(rendered.contains("[A] Approve"), "{rendered}");
+    assert!(rendered.contains("[X] Discard"), "{rendered}");
+    assert!(rendered.contains("paused for plan review"), "{rendered}");
+    assert!(rendered.contains("refinement stays visible"), "{rendered}");
+}
+
+#[test]
 fn post_consumption_failure_returns_to_execute_and_clears_selection() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.mode = InteractiveMode::Plan;
@@ -733,6 +1010,23 @@ fn plan_mode_and_selection_are_visible_in_composer_and_footer() {
 }
 
 #[test]
+fn research_mode_is_visible_in_composer_and_footer() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Research;
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw research mode");
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Research · sourced question"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("mode=research"), "{rendered}");
+}
+
+#[test]
 fn unicode_editing_never_splits_a_character() {
     let mut composer = Composer::default();
     composer.insert("a🦀界");
@@ -815,11 +1109,11 @@ fn completion_selection_moves_in_both_directions_and_can_be_dismissed() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.composer.insert("/");
     state.advance_completion();
-    assert_eq!(state.composer.completion_index, Some(0));
-    state.advance_completion();
     assert_eq!(state.composer.completion_index, Some(1));
+    state.advance_completion();
+    assert_eq!(state.composer.completion_index, Some(2));
     state.previous_completion();
-    assert_eq!(state.composer.completion_index, Some(0));
+    assert_eq!(state.composer.completion_index, Some(1));
     assert!(state.hide_completion());
     assert!(state.completion_menu_candidates().is_empty());
     state.composer.insert("to");
@@ -859,6 +1153,97 @@ fn visible_completion_menu_is_adaptive_at_minimum_size() {
             "{width}x{height}: {rendered}"
         );
     }
+}
+
+#[test]
+fn command_completion_is_left_aligned_compact_and_described() {
+    let backend = TestBackend::new(120, 20);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.completions = vec![
+        "/help".into(),
+        "/tui prefs".into(),
+        "/tui save".into(),
+        "/tui reset".into(),
+        "/provider diagnostics on".into(),
+        "/provider diagnostics off".into(),
+    ];
+    state.composer.insert("/");
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw described command completion");
+    let rendered = terminal.backend().to_string();
+    let title_line = rendered
+        .lines()
+        .find(|line| line.contains("Commands · 6"))
+        .expect("completion title");
+    assert!(
+        title_line.trim_start_matches('"').starts_with('┌'),
+        "{rendered}"
+    );
+    let right_border = title_line
+        .chars()
+        .position(|character| character == '┐')
+        .expect("compact right border");
+    assert!(
+        right_border < 80,
+        "palette width={right_border}: {rendered}"
+    );
+
+    let help_line = rendered
+        .lines()
+        .find(|line| line.contains("/help"))
+        .expect("help row");
+    let prefs_line = rendered
+        .lines()
+        .find(|line| line.contains("/tui prefs"))
+        .expect("preferences row");
+    assert!(help_line.contains("Show commands and keyboard shortcuts"));
+    assert!(prefs_line.contains("Show terminal preferences"));
+    assert_eq!(
+        help_line.chars().position(|character| character == 'S'),
+        prefs_line.chars().position(|character| character == 'S'),
+        "description columns should align: {rendered}"
+    );
+}
+
+#[test]
+fn command_descriptions_cover_static_and_dynamic_completions() {
+    assert_eq!(
+        command_description("/resume"),
+        Some("Browse and resume prior sessions")
+    );
+    assert_eq!(
+        command_description("/theme preview mono"),
+        Some("Preview this terminal theme")
+    );
+    assert_eq!(command_description("@coding"), None);
+}
+
+#[test]
+fn command_completion_keeps_a_stable_minimum_width_while_filtering() {
+    let backend = TestBackend::new(120, 16);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.completions = vec!["/help".into(), "/provider diagnostics on".into()];
+    state.composer.insert("/he");
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw filtered command completion");
+    let rendered = terminal.backend().to_string();
+    let title_line = rendered
+        .lines()
+        .find(|line| line.contains("Commands · 1"))
+        .expect("filtered completion title")
+        .trim_start_matches('"');
+    let width = title_line
+        .chars()
+        .position(|character| character == '┐')
+        .expect("completion right border")
+        + 1;
+    assert_eq!(width, usize::from(MIN_COMPLETION_MENU_WIDTH), "{rendered}");
 }
 
 #[test]

@@ -284,6 +284,23 @@ pub(super) fn plan_status_document(
             ("Selected plan".into(), plan.id.clone()),
             ("Revision".into(), plan.revision.to_string()),
             ("Plan status".into(), plan_status_label(plan.status).into()),
+            (
+                "Plan steps".into(),
+                format!(
+                    "{} ordered step{} (separate from durable /tasks)",
+                    plan.steps.len(),
+                    if plan.steps.len() == 1 { "" } else { "s" }
+                ),
+            ),
+            (
+                "Next action".into(),
+                match plan.status {
+                    PlanStatus::Draft => "Review, refine, approve for execution, or discard".into(),
+                    PlanStatus::Approved => "Choose Direct or Goal Mode execution".into(),
+                    PlanStatus::Executed => "Inspect the linked execution evidence".into(),
+                    PlanStatus::Discarded => "Create or select another plan".into(),
+                },
+            ),
         ]);
     } else {
         rows.push(("Selected plan".into(), "none".into()));
@@ -292,6 +309,22 @@ pub(super) fn plan_status_document(
         title: "Plan workflow".into(),
         tone: PresentationTone::Neutral,
         body: vec![PresentationBlock::KeyValue(rows)],
+    })
+}
+
+pub(super) fn research_status_document(mode: InteractiveMode) -> PresentationDocument {
+    let messages = match mode {
+        InteractiveMode::Research => "Run bounded source-backed research",
+        InteractiveMode::Execute => "Run normal agent turns",
+        InteractiveMode::Plan => "Create or refine the selected plan",
+    };
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Research mode".into(),
+        tone: PresentationTone::Neutral,
+        body: vec![PresentationBlock::KeyValue(vec![
+            ("Mode".into(), mode.as_str().into()),
+            ("Messages".into(), messages.into()),
+        ])],
     })
 }
 
