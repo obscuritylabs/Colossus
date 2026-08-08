@@ -421,7 +421,7 @@ fn managed_bootstrap(
                 kind: provider_kind(provider.kind),
                 base_url: Some(provider.base_url.clone()),
                 credential_id: provider.credential_id.clone(),
-                timeout_ms: provider.timeout_ms,
+                timeout_ms: provider.effective_timeout_ms(),
             })
             .collect(),
         models: settings

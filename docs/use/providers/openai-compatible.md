@@ -52,7 +52,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://models.example.com/v1
       credentialReference: env:COLOSSUS_MODEL_TOKEN
-      timeoutMs: 120000
 models:
   profiles:
     compatible:
@@ -72,8 +71,10 @@ sandbox:
 <!-- provider-guide-config:end -->
 
 Colossus appends `/models` and `/chat/completions` to `baseUrl`. Include the API prefix
-but not either operation path. The sandbox destination is the exact origin only. Set
-`timeoutMs` for the connection's bounded catalog and generation requests.
+but not either operation path. The sandbox destination is the exact origin only. When
+`timeoutMs` is omitted, catalog and generation requests use 5 minutes for remote hosts
+and 15 minutes for `localhost`, IPv4 loopback, or IPv6 loopback. Set a positive
+`timeoutMs` only when the connection needs an explicit override.
 
 Set `toolCalls` and `streaming` from observed support for the exact server and model.
 Current provider profiles use bearer credentials and do not expose arbitrary custom

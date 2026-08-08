@@ -393,7 +393,7 @@ impl Default for ProvidersConfig {
                     kind: ProviderKind::Echo,
                     base_url: None,
                     credential_reference: None,
-                    timeout_ms: default_provider_timeout_ms(),
+                    timeout_ms: None,
                 },
             )]),
         }
@@ -410,9 +410,9 @@ pub struct ProviderProfileConfig {
     pub base_url: Option<String>,
     /// Credential reference such as `env:OPENAI_API_KEY`, `codex:default`, or an injected `host:provider-main`.
     pub credential_reference: Option<String>,
-    /// Provider transport timeout.
-    #[serde(default = "default_provider_timeout_ms")]
-    pub timeout_ms: u64,
+    /// Optional provider transport timeout override. Omission selects a host-aware default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// Explicit model profiles and role routing.
@@ -466,8 +466,29 @@ pub struct ModelProfileConfig {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-const fn default_provider_timeout_ms() -> u64 {
-    120_000
+pub(super) const REMOTE_PROVIDER_TIMEOUT_MS: u64 = 300_000;
+pub(super) const LOOPBACK_PROVIDER_TIMEOUT_MS: u64 = 900_000;
+
+impl ProviderProfileConfig {
+    pub(super) fn effective_timeout_ms(&self) -> u64 {
+        self.timeout_ms.unwrap_or_else(|| {
+            if self
+                .base_url
+                .as_deref()
+                .and_then(|value| Url::parse(value).ok())
+                .and_then(|url| url.host().map(|host| host.to_owned()))
+                .is_some_and(|host| match host {
+                    url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                    url::Host::Ipv4(address) => address.is_loopback(),
+                    url::Host::Ipv6(address) => address.is_loopback(),
+                })
+            {
+                LOOPBACK_PROVIDER_TIMEOUT_MS
+            } else {
+                REMOTE_PROVIDER_TIMEOUT_MS
+            }
+        })
+    }
 }
 
 /// Strict sandbox composition and built-in-policy defaults.
@@ -1437,7 +1458,7 @@ pub(super) fn provider_profile(
         config.kind,
         config.base_url.clone(),
         config.credential_reference.clone(),
-        config.timeout_ms,
+        config.effective_timeout_ms(),
     )
     .map_err(Into::into)
 }

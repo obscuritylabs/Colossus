@@ -401,6 +401,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
           ? "stored_in_native_keyring"
           : "not_configured",
         timeoutMs: provider.timeoutMs,
+        effectiveTimeoutMs: provider.effectiveTimeoutMs,
       })),
       models: configuration.models.map((model) => ({
         profile: model.profile,

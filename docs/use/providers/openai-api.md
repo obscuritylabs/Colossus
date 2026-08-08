@@ -45,7 +45,6 @@ providers:
       kind: open_ai_responses
       baseUrl: https://api.openai.com/v1
       credentialReference: env:OPENAI_API_KEY
-      timeoutMs: 120000
 models:
   profiles:
     openai:

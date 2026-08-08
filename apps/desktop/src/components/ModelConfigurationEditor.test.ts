@@ -32,7 +32,8 @@ const desktop: DesktopStatus = {
         providerKind: "openai_compatible",
         baseUrl: "http://127.0.0.1:11434/v1",
         hasCredential: false,
-        timeoutMs: 30_000,
+        timeoutMs: null,
+        effectiveTimeoutMs: 900_000,
       },
     ],
     models: [
@@ -82,6 +83,8 @@ describe("ModelConfigurationEditor", () => {
     expect(markup).toContain("http://127.0.0.1:11434/v1");
     expect(markup).toContain("example-model");
     expect(markup).toContain("No credential");
+    expect(markup).toContain("Automatic · 15 minutes");
+    expect(markup).not.toContain("Custom timeout (ms)");
     for (const role of [
       "primary",
       "risk evaluator",

@@ -575,8 +575,10 @@ impl Runtime {
                     for action in [profile.kind.generation_action(), "provider.models"] {
                         provider_action_timeouts
                             .entry(action)
-                            .and_modify(|timeout| *timeout = (*timeout).max(profile.timeout_ms))
-                            .or_insert(profile.timeout_ms);
+                            .and_modify(|timeout| {
+                                *timeout = (*timeout).max(profile.effective_timeout_ms());
+                            })
+                            .or_insert_with(|| profile.effective_timeout_ms());
                     }
                 }
                 for (action, timeout_ms) in provider_action_timeouts {

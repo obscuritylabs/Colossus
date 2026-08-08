@@ -51,7 +51,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://models.example.com/v1
       credentialReference: env:COLOSSUS_MODEL_TOKEN
-      timeoutMs: 120000
 models:
   profiles:
     primary-model:
@@ -101,7 +100,6 @@ providers:
       kind: open_ai_responses
       baseUrl: https://api.openai.com/v1
       credentialReference: env:OPENAI_API_KEY
-      timeoutMs: 120000
 ```
 
 The URL must:
@@ -171,9 +169,12 @@ variable.
 
 ### `timeoutMs`
 
-`timeoutMs` is a positive transport ceiling in milliseconds and defaults to `120000`
-when omitted. It independently bounds model-catalog and generation requests made through
-that provider profile.
+`timeoutMs` is an optional positive transport ceiling in milliseconds. When omitted,
+Colossus uses `300000` (5 minutes) for remote hosts and `900000` (15 minutes) for exact
+loopback hosts: `localhost`, IPv4 loopback, or IPv6 loopback. Private and LAN addresses
+that are not loopback use the remote default. An explicit positive value always wins.
+The resolved timeout independently bounds model-catalog and generation requests made
+through that provider profile.
 
 With the built-in policy, this provider timeout is not silently reduced to
 `sandbox.timeoutMs`; the sandbox limit continues to govern ordinary sandbox effects. An
@@ -309,7 +310,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://models.example.com/v1
       credentialReference: env:COLOSSUS_MODEL_TOKEN
-      timeoutMs: 120000
 models:
   profiles:
     general:
@@ -348,7 +348,6 @@ providers:
       kind: open_ai_responses
       baseUrl: https://api.openai.com/v1
       credentialReference: env:OPENAI_API_KEY
-      timeoutMs: 120000
 models:
   profiles:
     openai-primary:
@@ -379,7 +378,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: http://127.0.0.1:11434/v1
       credentialReference: null
-      timeoutMs: 120000
 models:
   profiles:
     local-primary:
@@ -411,7 +409,6 @@ providers:
       kind: echo
       baseUrl: null
       credentialReference: null
-      timeoutMs: 120000
 models:
   profiles:
     echo:
@@ -438,7 +435,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: http://127.0.0.1:1234/v1
       credentialReference: host:managed-local-primary
-      timeoutMs: 120000
 ```
 
 This configuration requires a host credential resolver supplied by the application. It

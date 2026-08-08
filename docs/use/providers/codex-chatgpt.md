@@ -54,7 +54,6 @@ providers:
     codex-provider:
       kind: open_ai_codex
       credentialReference: codex:default
-      timeoutMs: 120000
 models:
   profiles:
     codex:

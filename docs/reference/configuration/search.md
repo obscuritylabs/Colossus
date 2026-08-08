@@ -52,7 +52,6 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://openrouter.ai/api/v1
       credentialReference: env:OPENROUTER_API_KEY
-      timeoutMs: 120000
 models:
   profiles:
     openrouter-primary:

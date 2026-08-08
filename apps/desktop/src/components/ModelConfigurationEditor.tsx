@@ -9,6 +9,10 @@ import type {
   ManagedProviderConfigurationInput,
   ProviderKind,
 } from "../types";
+import {
+  REMOTE_PROVIDER_TIMEOUT_MS,
+  automaticProviderTimeoutMs,
+} from "../providerTimeout";
 
 const ROLES = [
   "primary",
@@ -20,22 +24,30 @@ const ROLES = [
   "research_synthesizer",
 ] as const;
 
+type EditableProvider = ManagedProviderConfigurationInput & {
+  effectiveTimeoutMs: number;
+};
+
 function defaultBaseUrl(kind: ProviderKind): string {
   return kind === "openai_responses"
     ? "https://api.openai.com/v1"
     : "https://openrouter.ai/api/v1";
 }
 
-function initialProviders(
-  desktop: DesktopStatus,
-): ManagedProviderConfigurationInput[] {
+function timeoutLabel(timeoutMs: number): string {
+  const minutes = timeoutMs / 60_000;
+  return `${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)} minutes`;
+}
+
+function initialProviders(desktop: DesktopStatus): EditableProvider[] {
   if (desktop.managedModelConfiguration.providers.length === 0) {
     return [
       {
         profile: "primary-provider",
         providerKind: "openai_compatible",
         baseUrl: defaultBaseUrl("openai_compatible"),
-        timeoutMs: 120_000,
+        timeoutMs: null,
+        effectiveTimeoutMs: REMOTE_PROVIDER_TIMEOUT_MS,
         credentialAction: "replace",
       },
     ];
@@ -45,6 +57,10 @@ function initialProviders(
     providerKind: provider.providerKind,
     baseUrl: provider.baseUrl,
     timeoutMs: provider.timeoutMs,
+    effectiveTimeoutMs:
+      provider.timeoutMs === null
+        ? provider.effectiveTimeoutMs
+        : automaticProviderTimeoutMs(provider.baseUrl),
     credentialAction: provider.hasCredential ? "reuse" : "none",
   }));
 }
@@ -96,10 +112,7 @@ export function ModelConfigurationEditor({
     ApplyManagedModelConfigurationRequest["accessProfile"]
   >(desktop.accessProfile);
 
-  function updateProvider(
-    index: number,
-    update: Partial<ManagedProviderConfigurationInput>,
-  ) {
+  function updateProvider(index: number, update: Partial<EditableProvider>) {
     setProviders((current) =>
       current.map((provider, currentIndex) =>
         currentIndex === index ? { ...provider, ...update } : provider,
@@ -125,7 +138,9 @@ export function ModelConfigurationEditor({
     }
     await onApply({
       workspaceId: desktop.workspace.workspaceId,
-      providers,
+      providers: providers.map(
+        ({ effectiveTimeoutMs: _, ...provider }) => provider,
+      ),
       models,
       roles,
       accessProfile,
@@ -183,6 +198,9 @@ export function ModelConfigurationEditor({
                 updateProvider(index, {
                   providerKind,
                   baseUrl: defaultBaseUrl(providerKind),
+                  effectiveTimeoutMs: automaticProviderTimeoutMs(
+                    defaultBaseUrl(providerKind),
+                  ),
                 });
               }}
             >
@@ -198,26 +216,52 @@ export function ModelConfigurationEditor({
               required
               spellCheck={false}
               disabled={busy}
-              onChange={(event) =>
-                updateProvider(index, { baseUrl: event.target.value })
-              }
+              onChange={(event) => {
+                const baseUrl = event.target.value;
+                updateProvider(index, {
+                  baseUrl,
+                  effectiveTimeoutMs: automaticProviderTimeoutMs(baseUrl),
+                });
+              }}
             />
           </label>
           <label>
-            <span>Timeout (ms)</span>
-            <input
-              type="number"
-              min={1}
-              value={provider.timeoutMs}
-              required
+            <span>Timeout</span>
+            <select
+              value={provider.timeoutMs === null ? "automatic" : "custom"}
               disabled={busy}
               onChange={(event) =>
                 updateProvider(index, {
-                  timeoutMs: Number(event.target.value),
+                  timeoutMs:
+                    event.target.value === "automatic"
+                      ? null
+                      : provider.effectiveTimeoutMs,
                 })
               }
-            />
+            >
+              <option value="automatic">
+                Automatic · {timeoutLabel(provider.effectiveTimeoutMs)}
+              </option>
+              <option value="custom">Custom</option>
+            </select>
           </label>
+          {provider.timeoutMs !== null ? (
+            <label>
+              <span>Custom timeout (ms)</span>
+              <input
+                type="number"
+                min={1}
+                value={provider.timeoutMs}
+                required
+                disabled={busy}
+                onChange={(event) =>
+                  updateProvider(index, {
+                    timeoutMs: Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+          ) : null}
           <label>
             <span>Credential</span>
             <select
@@ -262,7 +306,8 @@ export function ModelConfigurationEditor({
                 profile: `provider-${current.length + 1}`,
                 providerKind: "openai_compatible",
                 baseUrl: defaultBaseUrl("openai_compatible"),
-                timeoutMs: 120_000,
+                timeoutMs: null,
+                effectiveTimeoutMs: REMOTE_PROVIDER_TIMEOUT_MS,
                 credentialAction: "none",
               },
             ])

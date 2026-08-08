@@ -216,7 +216,8 @@ pub(crate) struct ManagedProviderDto {
     pub(crate) provider_kind: ProviderKindSetting,
     pub(crate) base_url: String,
     pub(crate) has_credential: bool,
-    pub(crate) timeout_ms: u64,
+    pub(crate) timeout_ms: Option<u64>,
+    pub(crate) effective_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -250,6 +251,7 @@ impl ManagedModelConfigurationDto {
                     base_url: provider.base_url.clone(),
                     has_credential: provider.credential_id.is_some(),
                     timeout_ms: provider.timeout_ms,
+                    effective_timeout_ms: provider.effective_timeout_ms(),
                 })
                 .collect(),
             models: settings
@@ -283,7 +285,7 @@ pub(crate) struct ManagedProviderInput {
     pub(crate) profile: String,
     pub(crate) provider_kind: ProviderKindSetting,
     pub(crate) base_url: String,
-    pub(crate) timeout_ms: u64,
+    pub(crate) timeout_ms: Option<u64>,
     pub(crate) credential_action: CredentialActionInput,
 }
 
@@ -337,7 +339,7 @@ impl ApplyManagedModelConfigurationInput {
         for provider in &self.providers {
             if !valid_profile(&provider.profile)
                 || !providers.insert(provider.profile.as_str())
-                || provider.timeout_ms == 0
+                || provider.timeout_ms == Some(0)
                 || validate_managed_provider_base_url(&provider.base_url).is_err()
             {
                 return Err(CommandErrorDto::invalid(
@@ -479,7 +481,7 @@ mod tests {
                 profile: "local-provider".into(),
                 provider_kind: ProviderKindSetting::OpenAiCompatible,
                 base_url: base_url.into(),
-                timeout_ms: 30_000,
+                timeout_ms: Some(30_000),
                 credential_action: CredentialActionInput::None,
             }],
             models: vec![ManagedModelInput {
@@ -578,6 +580,16 @@ mod tests {
     }
 
     #[test]
+    fn managed_configuration_accepts_an_automatic_timeout() {
+        let mut input = managed_input("http://127.0.0.1:11434/v1");
+        input.providers[0].timeout_ms = None;
+        input.validate().expect("automatic timeout");
+        let settings = input.providers_with_credentials(&BTreeMap::new());
+        assert_eq!(settings[0].timeout_ms, None);
+        assert_eq!(settings[0].effective_timeout_ms(), 900_000);
+    }
+
+    #[test]
     fn renderer_configuration_summary_omits_native_credential_ids() {
         let credential_id = uuid::Uuid::now_v7().to_string();
         let settings = DesktopSettings {
@@ -586,7 +598,7 @@ mod tests {
                 kind: ProviderKindSetting::OpenAiCompatible,
                 base_url: "https://models.example.test/v1".into(),
                 credential_id: Some(credential_id.clone()),
-                timeout_ms: 30_000,
+                timeout_ms: Some(30_000),
             }],
             models: vec![ModelSetting {
                 profile: "primary".into(),
@@ -608,6 +620,8 @@ mod tests {
                 .expect("summary");
         assert!(!serialized.contains(&credential_id));
         assert!(serialized.contains(r#""hasCredential":true"#));
+        assert!(serialized.contains(r#""timeoutMs":30000"#));
+        assert!(serialized.contains(r#""effectiveTimeoutMs":30000"#));
     }
 
     #[test]

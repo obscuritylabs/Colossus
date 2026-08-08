@@ -945,7 +945,7 @@ fn persist_provider_rotation(
         kind: request.provider_kind,
         base_url: provider_base_url(request.provider_kind).to_owned(),
         credential_id: Some(credential_id.clone()),
-        timeout_ms: 120_000,
+        timeout_ms: None,
     }];
     settings.models = vec![ModelSetting {
         profile: "primary".into(),
@@ -1800,7 +1800,7 @@ mod tests {
                 kind: crate::desktop_settings::ProviderKindSetting::OpenAiCompatible,
                 base_url: crate::desktop_settings::OPENROUTER_BASE_URL.into(),
                 credential_id: Some(credential_id.into()),
-                timeout_ms: 120_000,
+                timeout_ms: Some(120_000),
             }],
             models: vec![ModelSetting {
                 profile: "primary".into(),

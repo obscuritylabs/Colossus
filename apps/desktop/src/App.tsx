@@ -61,6 +61,10 @@ import {
 } from "./dev/operations-studio-fixture";
 import { managedOnboardingRequired } from "./onboarding";
 import {
+  REMOTE_PROVIDER_TIMEOUT_MS,
+  automaticProviderTimeoutMs,
+} from "./providerTimeout";
+import {
   agentRoleLabel,
   safeDisplayLabel,
   selectOperationalActivity,
@@ -178,7 +182,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
             providerKind: "openai_compatible",
             baseUrl: "https://openrouter.ai/api/v1",
             hasCredential: false,
-            timeoutMs: 120_000,
+            timeoutMs: null,
+            effectiveTimeoutMs: REMOTE_PROVIDER_TIMEOUT_MS,
           },
         ]
       : [],
@@ -1628,6 +1633,9 @@ export default function App() {
               baseUrl: provider.baseUrl,
               hasCredential: provider.credentialAction !== "none",
               timeoutMs: provider.timeoutMs,
+              effectiveTimeoutMs:
+                provider.timeoutMs ??
+                automaticProviderTimeoutMs(provider.baseUrl),
             })),
             models: request.models,
             roles: request.roles,
