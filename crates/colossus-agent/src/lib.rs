@@ -8,7 +8,7 @@ use colossus_contracts::{
     EventClassification, ExecutionContext, ModelMessage, ModelMessageRole, ModelRequest,
     ModelToolCall, NewEvent, PlanDraftTarget, PlanRecord, ProviderEvent, RunEvent,
     RunEventEnvelope, RunPhase, SessionMessageAppend, ToolCall, ToolResult,
-    validate_model_transcript,
+    validate_assistant_tool_call_turn, validate_model_transcript,
 };
 use colossus_ports::{
     ContextError, ContextPreparationRequest, ContextPreparer, EventJournal, ModelProvider,

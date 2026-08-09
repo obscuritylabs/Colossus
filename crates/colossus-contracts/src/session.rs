@@ -110,6 +110,42 @@ pub fn validate_model_transcript(
     }
 }
 
+/// Validate a newly emitted assistant tool-call turn before any tool executes.
+///
+/// The full transcript check can only run once every call has a terminal result, so
+/// call-identifier reuse would otherwise be detected after the executor already applied
+/// external effects. This rejects empty, duplicated, and previously used call
+/// identifiers against the settled transcript that precedes the turn.
+pub fn validate_assistant_tool_call_turn(
+    messages: &[ModelMessage],
+    assistant: &ModelMessage,
+) -> Result<(), ModelTranscriptIntegrityError> {
+    let message_index = messages.len();
+    let mut seen = BTreeSet::<String>::new();
+    for message in messages {
+        for call in &message.tool_calls {
+            seen.insert(call.call_id.clone());
+        }
+    }
+
+    for call in &assistant.tool_calls {
+        if call.call_id.is_empty() {
+            return Err(transcript_error(
+                message_index,
+                "assistant emitted a tool call without a call id",
+            ));
+        }
+        if !seen.insert(call.call_id.clone()) {
+            return Err(transcript_error(
+                message_index,
+                format!("assistant reused tool call id {}", call.call_id),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn transcript_error(
     message_index: usize,
     detail: impl Into<String>,

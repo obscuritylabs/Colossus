@@ -641,6 +641,14 @@ impl AgentService {
                     })
                     .collect(),
             };
+            // Reject malformed call identifiers before the executor can apply any external
+            // effect. The settled-transcript check below can only run once every call owns a
+            // terminal result, which is after the effects would already have happened.
+            validate_assistant_tool_call_turn(&messages, &assistant_message).map_err(|error| {
+                AgentError::Configuration(format!(
+                    "provider returned an invalid tool transcript: {error}"
+                ))
+            })?;
             let mut tool_messages = Vec::with_capacity(calls.len());
             let mut post_commit_events = Vec::<RunEvent>::new();
             let mut terminal = None::<(AgentError, String, String, &'static str, Value)>;

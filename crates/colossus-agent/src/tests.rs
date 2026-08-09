@@ -1589,6 +1589,67 @@ async fn assert_terminal_tool_turn_is_settled(kind: TerminalToolKind, call_count
 }
 
 #[tokio::test]
+async fn duplicate_tool_call_ids_are_rejected_before_any_tool_executes() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "first"}),
+        },
+        ProviderEvent::ToolCallRequested {
+            call_id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "second"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("duplicate-session", Some("duplicate"), test_actor())
+        .expect("session");
+    let executor = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "run duplicate calls",
+            2,
+            Some("duplicate-session"),
+        )
+        .await
+        .expect_err("duplicate call ids are rejected");
+    assert!(matches!(
+        error,
+        AgentError::Configuration(ref message)
+            if message.contains("invalid tool transcript") && message.contains("reused")
+    ));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+    let durable = sessions
+        .list_messages("duplicate-session")
+        .expect("durable messages")
+        .into_iter()
+        .map(|record| record.message)
+        .collect::<Vec<_>>();
+    assert!(
+        durable
+            .iter()
+            .all(|message| message.role != ModelMessageRole::Assistant)
+    );
+    validate_model_transcript(&durable).expect("settled durable transcript");
+}
+
+#[tokio::test]
 async fn denied_single_tool_call_is_durably_settled() {
     assert_terminal_tool_turn_is_settled(TerminalToolKind::Denied, 1).await;
 }

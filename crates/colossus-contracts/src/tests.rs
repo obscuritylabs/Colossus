@@ -1,7 +1,7 @@
 use super::{
     Actor, ActorType, AgentRunMode, ExecutionContext, ModelMessage, ModelMessageRole,
     ModelToolCall, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PolicyDecision, RunEvent,
-    ThemeName, ThemeSpinner, validate_model_transcript,
+    ThemeName, ThemeSpinner, validate_assistant_tool_call_turn, validate_model_transcript,
 };
 
 #[test]
@@ -226,5 +226,50 @@ fn model_transcript_requires_exact_tool_call_settlement() {
             .expect_err("duplicate call ids")
             .detail
             .contains("reused")
+    );
+}
+
+#[test]
+fn assistant_tool_call_turn_rejects_reused_ids_before_execution() {
+    let assistant = |call_ids: &[&str]| ModelMessage {
+        role: ModelMessageRole::Assistant,
+        content: String::new(),
+        tool_call_id: None,
+        tool_calls: call_ids
+            .iter()
+            .map(|call_id| ModelToolCall {
+                call_id: (*call_id).into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({}),
+            })
+            .collect(),
+    };
+    let result = |call_id: &str| ModelMessage {
+        role: ModelMessageRole::Tool,
+        content: "done".into(),
+        tool_call_id: Some(call_id.into()),
+        tool_calls: Vec::new(),
+    };
+    let settled = vec![assistant(&["call-1"]), result("call-1")];
+
+    validate_assistant_tool_call_turn(&settled, &assistant(&["call-2"]))
+        .expect("fresh call ids continue the transcript");
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&["call-1"]))
+            .expect_err("reused prior call id")
+            .detail
+            .contains("reused")
+    );
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&["call-2", "call-2"]))
+            .expect_err("duplicate call ids within one turn")
+            .detail
+            .contains("reused")
+    );
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&[""]))
+            .expect_err("empty call id")
+            .detail
+            .contains("without a call id")
     );
 }
