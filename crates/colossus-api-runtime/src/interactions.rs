@@ -23,6 +23,26 @@ const DEFAULT_INTERACTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const PUBLIC_APPROVAL_PROMPT: &str = "An effect requires explicit approval";
 const MAX_PUBLIC_ORIGIN_BYTES: usize = 512;
 
+/// Approval behavior selected by a trusted host for public application runs.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PublicApprovalMode {
+    /// Deny approval obligations without creating an interaction.
+    Deny,
+    /// Persist an interaction and wait for the calling application.
+    #[default]
+    Ask,
+    /// Review eligible low-risk obligations automatically and ask otherwise.
+    RiskAuto,
+    /// Satisfy approval obligations without creating an interaction.
+    FullAccess,
+}
+
+/// Dynamic native-owned approval mode for public application runs.
+pub trait PublicApprovalModeProvider: Send + Sync {
+    /// Return the mode to apply to the next approval obligation.
+    fn public_approval_mode(&self) -> PublicApprovalMode;
+}
+
 struct ApprovalContext {
     public_binding: String,
     action: String,
@@ -111,6 +131,7 @@ pub struct PublicInteractionRouter {
     pending: Arc<PendingResponses>,
     fallback_approvals: Arc<dyn ApprovalProvider>,
     fallback_prompts: Option<Arc<dyn UserPromptProvider>>,
+    public_approval_mode: Option<Arc<dyn PublicApprovalModeProvider>>,
     timeout: Duration,
 }
 
@@ -124,8 +145,26 @@ impl PublicInteractionRouter {
             pending: Arc::new(PendingResponses::default()),
             fallback_approvals,
             fallback_prompts,
+            public_approval_mode: None,
             timeout: DEFAULT_INTERACTION_TIMEOUT,
         }
+    }
+
+    /// Bind public runs to a trusted host-owned dynamic approval mode.
+    pub fn with_public_approval_mode(
+        mut self,
+        provider: Arc<dyn PublicApprovalModeProvider>,
+    ) -> Self {
+        self.public_approval_mode = Some(provider);
+        self
+    }
+
+    fn public_approval_mode(&self) -> PublicApprovalMode {
+        self.public_approval_mode
+            .as_ref()
+            .map_or(PublicApprovalMode::Ask, |provider| {
+                provider.public_approval_mode()
+            })
     }
 
     pub(super) async fn scope<T>(
@@ -203,7 +242,7 @@ impl UserPromptProvider for PublicInteractionRouter {
 impl ApprovalProvider for PublicInteractionRouter {
     fn risk_auto_enabled(&self) -> bool {
         ACTIVE_PUBLIC_RUN
-            .try_with(|_| false)
+            .try_with(|_| self.public_approval_mode() == PublicApprovalMode::RiskAuto)
             .unwrap_or_else(|_| self.fallback_approvals.risk_auto_enabled())
     }
 
@@ -232,6 +271,21 @@ impl ApprovalProvider for PublicInteractionRouter {
                     .await;
             }
         };
+        match self.public_approval_mode() {
+            PublicApprovalMode::Deny => return Ok(None),
+            PublicApprovalMode::FullAccess => {
+                return ApprovalProvider::request_approval(
+                    &AllowApproval {
+                        approved_by: active.writer.caller().principal().application_id().into(),
+                    },
+                    request,
+                    request_hash,
+                    decision,
+                )
+                .await;
+            }
+            PublicApprovalMode::Ask | PublicApprovalMode::RiskAuto => {}
+        }
         let public_binding = new_public_approval_binding(request_hash).map_err(|_| {
             PolicyError::Unavailable("the public approval binding could not be created".into())
         })?;

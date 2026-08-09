@@ -243,18 +243,16 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     }
     let prompt_router = interactive_tui.then(|| Arc::new(tui_host::TuiPromptRouter::default()));
     let configured_approval = cli.approval_mode.unwrap_or(ApprovalMode::Ask);
-    let approvals: Arc<dyn ApprovalProvider> = if let Some(router) = prompt_router.as_ref()
-        && matches!(
+    let tui_approvals = prompt_router.as_ref().map(|router| {
+        Arc::new(tui_host::TuiApprovalProvider::new(
+            Arc::clone(router),
             configured_approval,
-            ApprovalMode::Ask | ApprovalMode::RiskAuto
-        ) {
-        Arc::new(tui_host::TuiApprovalProvider {
-            router: Arc::clone(router),
-            risk_auto: configured_approval == ApprovalMode::RiskAuto,
-        })
-    } else {
-        approval_provider(&cli.command, cli.approval_mode)
-    };
+        ))
+    });
+    let approvals: Arc<dyn ApprovalProvider> = tui_approvals
+        .as_ref()
+        .map(|approvals| Arc::clone(approvals) as Arc<dyn ApprovalProvider>)
+        .unwrap_or_else(|| approval_provider(&cli.command, cli.approval_mode));
     let user_prompts: Option<Arc<dyn UserPromptProvider>> =
         if let Some(router) = prompt_router.as_ref() {
             Some(Arc::new(tui_host::TuiUserPromptProvider {
@@ -1231,7 +1229,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 Arc::clone(&runtime),
                 themes,
                 router,
-                configured_approval,
+                tui_approvals
+                    .clone()
+                    .ok_or_else(|| cli_error("interactive approvals are unavailable"))?,
             ));
             run_tui(
                 host,

@@ -288,6 +288,38 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
 }
 
 #[test]
+fn parser_handles_process_local_permission_modes() {
+    assert_eq!(
+        parse_interactive_command("/permissions"),
+        InteractiveCommand::Runtime(RuntimeCommand::Permissions(None))
+    );
+    for (value, mode) in [
+        ("deny", InteractiveApprovalMode::Deny),
+        ("ask", InteractiveApprovalMode::Ask),
+        ("risk-auto", InteractiveApprovalMode::RiskAuto),
+        ("full-access", InteractiveApprovalMode::FullAccess),
+    ] {
+        assert_eq!(
+            parse_interactive_command(&format!("/permissions {value}")),
+            InteractiveCommand::Runtime(RuntimeCommand::Permissions(Some(mode)))
+        );
+    }
+    for input in ["/permissions automatic", "/permissions ask now"] {
+        assert!(matches!(
+            parse_interactive_command(input),
+            InteractiveCommand::Invalid(_)
+        ));
+    }
+    assert_eq!(
+        parse_interactive_command("/permissions-extra"),
+        InteractiveCommand::Runtime(RuntimeCommand::Known {
+            name: "permissions-extra".into(),
+            arguments: String::new(),
+        })
+    );
+}
+
+#[test]
 fn help_is_generated_from_the_available_command_catalog() {
     let commands = vec![
         "/resume".into(),
@@ -1217,6 +1249,10 @@ fn command_descriptions_cover_static_and_dynamic_completions() {
     assert_eq!(
         command_description("/theme preview mono"),
         Some("Preview this terminal theme")
+    );
+    assert_eq!(
+        command_description("/permissions full-access"),
+        Some("Satisfy approval obligations automatically")
     );
     assert_eq!(command_description("@coding"), None);
 }

@@ -24,7 +24,8 @@ use desktop_commands::{
     add_external_target, apply_managed_model_configuration, choose_workspace,
     configure_managed_runtime, connect_colossus, connection_status, desktop_release_channel,
     desktop_status, import_ca_bundle, initialize_desktop, remove_ca_bundle, remove_external_target,
-    restart_managed_runtime, run_managed_self_test, select_target, set_terminal_enabled,
+    restart_managed_runtime, run_managed_self_test, select_target, set_approval_mode,
+    set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
 use terminal_commands::{
@@ -66,6 +67,7 @@ pub fn run() {
             restart_managed_runtime,
             run_managed_self_test,
             select_target,
+            set_approval_mode,
             set_terminal_enabled,
             connect_colossus,
             connection_status,

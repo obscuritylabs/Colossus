@@ -92,6 +92,7 @@ current runtime.
 | Family | Commands |
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
+| Permissions | `/permissions [deny\|ask\|risk-auto\|full-access]` |
 | TUI preferences | `/tui prefs`, `/tui save`, `/tui reset` |
 | Themes | `/theme`, `/theme list`, `/theme preview`, `/theme validate`, `/theme scaffold`, `/theme reset` |
 | Activity | `/stream on`, `/stream raw`, `/stream off`, `/events compact`, `/events verbose`, `/events off`, `/reasoning on`, `/reasoning off` |

@@ -185,6 +185,7 @@ pub(crate) async fn create_run(
     target_id: String,
     request: CreateRunInput,
 ) -> Result<RunDto, CommandErrorDto> {
+    let _run_creation = state.run_creation_guard().await;
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;

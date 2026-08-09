@@ -198,8 +198,35 @@ pub enum RuntimeCommand {
         /// Remaining command text after the name.
         arguments: String,
     },
+    /// Inspect or change approval handling for subsequent interactive agent operations.
+    Permissions(Option<InteractiveApprovalMode>),
     /// Typed plan lifecycle operation whose policy and persistence remain host-owned.
     Plan(PlanHostCommand),
+}
+
+/// Process-local handling for policy decisions that require operator approval.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractiveApprovalMode {
+    /// Deny approval obligations without prompting.
+    Deny,
+    /// Ask the operator for each approval obligation.
+    Ask,
+    /// Automatically approve eligible low-risk effects after model review and ask otherwise.
+    RiskAuto,
+    /// Satisfy approval obligations automatically without expanding policy permissions.
+    FullAccess,
+}
+
+impl InteractiveApprovalMode {
+    /// Stable command-line spelling shared with `--approval-mode`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+            Self::RiskAuto => "risk-auto",
+            Self::FullAccess => "full-access",
+        }
+    }
 }
 
 /// One terminal-local command.
@@ -257,6 +284,13 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
             InteractiveCommand::Local(LocalCommand::ProviderDiagnostics(false))
         }
         command
+            if command.strip_prefix("/permissions").is_some_and(|rest| {
+                rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace)
+            }) =>
+        {
+            parse_permissions_command(command)
+        }
+        command
             if command.strip_prefix("/plan").is_some_and(|rest| {
                 rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace)
             }) =>
@@ -280,6 +314,29 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
         }
         prompt => InteractiveCommand::Turn(prompt.to_owned()),
     }
+}
+
+fn parse_permissions_command(input: &str) -> InteractiveCommand {
+    let mut words = input.split_whitespace();
+    debug_assert_eq!(words.next(), Some("/permissions"));
+    let mode = match words.next() {
+        None => None,
+        Some("deny") => Some(InteractiveApprovalMode::Deny),
+        Some("ask") => Some(InteractiveApprovalMode::Ask),
+        Some("risk-auto") => Some(InteractiveApprovalMode::RiskAuto),
+        Some("full-access") => Some(InteractiveApprovalMode::FullAccess),
+        Some(_) => {
+            return InteractiveCommand::Invalid(
+                "Usage: /permissions [deny|ask|risk-auto|full-access]".into(),
+            );
+        }
+    };
+    if words.next().is_some() {
+        return InteractiveCommand::Invalid(
+            "Usage: /permissions [deny|ask|risk-auto|full-access]".into(),
+        );
+    }
+    InteractiveCommand::Runtime(RuntimeCommand::Permissions(mode))
 }
 
 fn parse_research_command(input: &str) -> InteractiveCommand {

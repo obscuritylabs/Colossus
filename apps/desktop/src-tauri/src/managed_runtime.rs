@@ -6,6 +6,7 @@ use colossus_sdk::{
     SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
     WorkspaceIdentity, scopes,
 };
+use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
 use std::{path::Path, str::FromStr as _};
 
 use crate::{
@@ -129,6 +130,7 @@ async fn start_after_operation_drain(
         .await;
 
     state.clear_terminal_workspace().await;
+    state.clear_managed_worker().await;
     if let Some(previous) = state.remove_target(MANAGED_TARGET_ID).await
         && let Err(error) = previous.client.close().await
     {
@@ -479,10 +481,44 @@ async fn install_managed_target(
 ) -> Result<(), (CommandErrorDto, RuntimeFailureCodeDto)> {
     state.observe_managed_lifecycle(lifecycle_generation, lifecycle.subscribe_status());
 
-    terminal_workspace.config = Some(options.managed_config_path());
+    let config_path = options.managed_config_path();
+    let worker_endpoint = worker_ipc_endpoint(&options.instance_dir().as_path().join("state.redb"))
+        .map_err(|_| {
+            classified(
+                "runtime_configuration",
+                "Managed Local generated an invalid private worker endpoint.",
+                RuntimeFailureCodeDto::Configuration,
+            )
+        })?;
+    terminal_workspace.config = Some(config_path.clone());
+    let worker_authentication = terminal_workspace
+        .worker_authentication
+        .as_ref()
+        .ok_or_else(|| {
+            classified(
+                "runtime_authentication",
+                "Managed Local approval-mode control is unavailable.",
+                RuntimeFailureCodeDto::Authentication,
+            )
+        })?
+        .copy_secret();
     let client = Colossus::start_sidecar(&lifecycle, options)
         .await
         .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?;
+    let worker =
+        match WorkerControlClient::new(worker_endpoint, worker_authentication).map_err(|_| {
+            classified(
+                "runtime_authentication",
+                "Managed Local approval-mode control is unavailable.",
+                RuntimeFailureCodeDto::Authentication,
+            )
+        }) {
+            Ok(worker) => worker,
+            Err(error) => {
+                let _ = client.close().await;
+                return Err(error);
+            }
+        };
     let previous = state
         .replace_target(
             MANAGED_TARGET_ID,
@@ -491,6 +527,7 @@ async fn install_managed_target(
         )
         .await;
     debug_assert!(previous.is_none());
+    state.configure_managed_worker(worker).await;
     state.configure_terminal_workspace(terminal_workspace).await;
     state.set_terminal_enabled(terminal_enabled).await;
     Ok(())

@@ -18,10 +18,66 @@ impl<T> Drop for AbortTaskOnDrop<T> {
     }
 }
 
+/// Shared worker-wide approval mode. `None` marks workers composed with an
+/// application-supplied provider that private IPC must not replace.
+#[derive(Clone)]
+pub(super) struct WorkerApprovalModeState {
+    encoded: Arc<AtomicU8>,
+}
+
+impl WorkerApprovalModeState {
+    pub(super) fn new(mode: Option<WorkerApprovalMode>) -> Self {
+        Self {
+            encoded: Arc::new(AtomicU8::new(Self::encode(mode))),
+        }
+    }
+
+    pub(super) fn get(&self) -> Option<WorkerApprovalMode> {
+        match self.encoded.load(Ordering::Acquire) {
+            1 => Some(WorkerApprovalMode::Deny),
+            2 => Some(WorkerApprovalMode::Ask),
+            3 => Some(WorkerApprovalMode::RiskAuto),
+            4 => Some(WorkerApprovalMode::FullAccess),
+            _ => None,
+        }
+    }
+
+    pub(super) fn set(&self, mode: WorkerApprovalMode) -> bool {
+        if self.get().is_none() {
+            return false;
+        }
+        self.encoded
+            .store(Self::encode(Some(mode)), Ordering::Release);
+        true
+    }
+
+    const fn encode(mode: Option<WorkerApprovalMode>) -> u8 {
+        match mode {
+            None => 0,
+            Some(WorkerApprovalMode::Deny) => 1,
+            Some(WorkerApprovalMode::Ask) => 2,
+            Some(WorkerApprovalMode::RiskAuto) => 3,
+            Some(WorkerApprovalMode::FullAccess) => 4,
+        }
+    }
+}
+
+impl colossus_api_runtime::PublicApprovalModeProvider for WorkerApprovalModeState {
+    fn public_approval_mode(&self) -> colossus_api_runtime::PublicApprovalMode {
+        match self.get().unwrap_or(WorkerApprovalMode::Deny) {
+            WorkerApprovalMode::Deny => colossus_api_runtime::PublicApprovalMode::Deny,
+            WorkerApprovalMode::Ask => colossus_api_runtime::PublicApprovalMode::Ask,
+            WorkerApprovalMode::RiskAuto => colossus_api_runtime::PublicApprovalMode::RiskAuto,
+            WorkerApprovalMode::FullAccess => colossus_api_runtime::PublicApprovalMode::FullAccess,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct InteractiveRunBridge {
     pub(super) outbound: tokio::sync::mpsc::Sender<WorkerFrameContent>,
     pub(super) responses: Arc<tokio::sync::Mutex<InteractiveResponseState>>,
+    pub(super) approval_mode: Option<WorkerApprovalMode>,
 }
 
 #[derive(Default)]
@@ -31,10 +87,14 @@ pub(super) struct InteractiveResponseState {
 }
 
 impl InteractiveRunBridge {
-    pub(super) fn new(outbound: tokio::sync::mpsc::Sender<WorkerFrameContent>) -> Self {
+    pub(super) fn new(
+        outbound: tokio::sync::mpsc::Sender<WorkerFrameContent>,
+        approval_mode: Option<WorkerApprovalMode>,
+    ) -> Self {
         Self {
             outbound,
             responses: Arc::new(tokio::sync::Mutex::new(InteractiveResponseState::default())),
+            approval_mode,
         }
     }
 
@@ -118,13 +178,28 @@ tokio::task_local! {
 }
 
 pub(super) struct WorkerInteractiveApproval {
-    pub(super) mode: WorkerApprovalMode,
+    pub(super) mode: WorkerApprovalModeState,
+}
+
+impl WorkerInteractiveApproval {
+    pub(super) fn new(mode: WorkerApprovalModeState) -> Self {
+        Self { mode }
+    }
+
+    fn effective_mode(&self) -> WorkerApprovalMode {
+        ACTIVE_INTERACTIVE_RUN
+            .try_with(|bridge| bridge.approval_mode)
+            .ok()
+            .flatten()
+            .or_else(|| self.mode.get())
+            .unwrap_or(WorkerApprovalMode::Deny)
+    }
 }
 
 #[async_trait]
 impl ApprovalProvider for WorkerInteractiveApproval {
     fn risk_auto_enabled(&self) -> bool {
-        self.mode == WorkerApprovalMode::RiskAuto
+        self.effective_mode() == WorkerApprovalMode::RiskAuto
     }
 
     async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
@@ -151,7 +226,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
         request_hash: &str,
         decision: &PolicyDecision,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
-        match self.mode {
+        match self.effective_mode() {
             WorkerApprovalMode::Deny => return Ok(None),
             WorkerApprovalMode::FullAccess => {
                 return ApprovalProvider::request_approval(

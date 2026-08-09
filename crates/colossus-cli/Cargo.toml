@@ -61,6 +61,7 @@ tempfile.workspace = true
 time.workspace = true
 colossus-packs.workspace = true
 colossus-tools.workspace = true
+colossus-worker-protocol.workspace = true
 portable-pty.workspace = true
 vt100.workspace = true
 

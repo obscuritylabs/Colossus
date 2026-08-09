@@ -44,6 +44,7 @@ members = [
     "crates/colossus-presentation",
     "crates/colossus-tui",
     "crates/colossus-runtime",
+    "crates/colossus-worker-protocol",
     "crates/colossus-worker",
     "crates/colossus-cli",
     "crates/colossus-testkit",
@@ -161,6 +162,7 @@ colossus-grpc = { version = "=0.10.5", path = "crates/colossus-grpc" }
 colossus-sdk = { version = "=0.10.5", path = "crates/colossus-sdk" }
 colossus-darwin-process = { version = "=0.10.5", path = "crates/colossus-darwin-process" }
 colossus-sidecar-protocol = { version = "=0.10.5", path = "crates/colossus-sidecar-protocol" }
+colossus-worker-protocol = { version = "=0.10.5", path = "crates/colossus-worker-protocol" }
 colossus-access = { version = "=0.10.5", path = "crates/colossus-access" }
 colossus-audit = { version = "=0.10.5", path = "crates/colossus-audit" }
 colossus-context = { version = "=0.10.5", path = "crates/colossus-context" }

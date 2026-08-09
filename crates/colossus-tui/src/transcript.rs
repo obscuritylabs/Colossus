@@ -385,6 +385,7 @@ pub(super) fn preferences_document(preferences: &TerminalPreferences) -> Present
 pub(super) fn runtime_command_name(command: &RuntimeCommand) -> &str {
     match command {
         RuntimeCommand::Known { name, .. } => name,
+        RuntimeCommand::Permissions(_) => "permissions",
         RuntimeCommand::Plan(_) => "plan",
     }
 }

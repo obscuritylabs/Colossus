@@ -27,6 +27,7 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
     provider: { configured: false, kind: null, model: "" },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
+    approvalMode: "ask",
     terminalEnabled: false,
     additionalCaBundle: {
       configured: false,

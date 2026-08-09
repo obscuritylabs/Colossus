@@ -25,8 +25,38 @@ impl ApprovalMode {
         match self {
             Self::Deny => "deny",
             Self::Ask => "ask",
-            Self::RiskAuto => "risk_auto",
-            Self::FullAccess => "full_access",
+            Self::RiskAuto => "risk-auto",
+            Self::FullAccess => "full-access",
+        }
+    }
+
+    pub(super) const fn worker_mode(self) -> WorkerApprovalMode {
+        match self {
+            Self::Deny => WorkerApprovalMode::Deny,
+            Self::Ask => WorkerApprovalMode::Ask,
+            Self::RiskAuto => WorkerApprovalMode::RiskAuto,
+            Self::FullAccess => WorkerApprovalMode::FullAccess,
+        }
+    }
+
+    pub(super) fn from_worker_value(value: &str) -> Option<Self> {
+        match value {
+            "deny" => Some(Self::Deny),
+            "ask" => Some(Self::Ask),
+            "risk_auto" => Some(Self::RiskAuto),
+            "full_access" => Some(Self::FullAccess),
+            _ => None,
+        }
+    }
+}
+
+impl From<colossus_tui::InteractiveApprovalMode> for ApprovalMode {
+    fn from(mode: colossus_tui::InteractiveApprovalMode) -> Self {
+        match mode {
+            colossus_tui::InteractiveApprovalMode::Deny => Self::Deny,
+            colossus_tui::InteractiveApprovalMode::Ask => Self::Ask,
+            colossus_tui::InteractiveApprovalMode::RiskAuto => Self::RiskAuto,
+            colossus_tui::InteractiveApprovalMode::FullAccess => Self::FullAccess,
         }
     }
 }

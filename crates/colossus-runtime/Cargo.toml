@@ -35,6 +35,7 @@ colossus-integrations.workspace = true
 colossus-telemetry.workspace = true
 colossus-tools.workspace = true
 colossus-workflow.workspace = true
+colossus-worker-protocol.workspace = true
 colossus-work.workspace = true
 fs4.workspace = true
 getrandom.workspace = true

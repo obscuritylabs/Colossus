@@ -74,12 +74,30 @@ fn artifact_operations_round_trip_without_artifact_bytes_or_credentials() {
 }
 
 #[test]
+fn approval_mode_control_is_an_explicit_authenticated_operation() {
+    let operation = WorkerOperation::SetApprovalMode {
+        approval_mode: WorkerApprovalMode::FullAccess,
+    };
+    let encoded = serde_json::to_value(&operation).expect("serialize approval mode");
+    assert_eq!(encoded["operation"], "set_approval_mode");
+    assert_eq!(encoded["approval_mode"], "full_access");
+    assert_eq!(operation_name(&operation), "set_approval_mode");
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded).expect("deserialize approval mode"),
+        WorkerOperation::SetApprovalMode {
+            approval_mode: WorkerApprovalMode::FullAccess
+        }
+    ));
+}
+
+#[test]
 fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
     let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
         request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
             session_id: "session-1".into(),
             mode: SandboxBoundaryMode::External,
         },
+        approval_mode: None,
         sandbox_boundary_acknowledgement: None,
     })
     .expect("serialize sandbox boundary acknowledgement");
@@ -96,6 +114,7 @@ fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
                 session_id,
                 mode: SandboxBoundaryMode::External,
             },
+            approval_mode: None,
             sandbox_boundary_acknowledgement: None,
         } if session_id == "session-1"
     ));
@@ -191,6 +210,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
             sticky_skills: Vec::new(),
             include_provider_response_diagnostics: true,
         },
+        approval_mode: Some(WorkerApprovalMode::RiskAuto),
         sandbox_boundary_acknowledgement: Some(
             SandboxBoundaryAcknowledgement::new(CAPABILITY.into()).expect("capability"),
         ),
@@ -201,6 +221,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
         encoded["request"]["include_provider_response_diagnostics"],
         true
     );
+    assert_eq!(encoded["approval_mode"], "risk_auto");
 
     let mut prior = encoded;
     prior["request"]
@@ -216,6 +237,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
                 include_provider_response_diagnostics: false,
                 ..
             },
+            approval_mode: Some(WorkerApprovalMode::RiskAuto),
             sandbox_boundary_acknowledgement: Some(acknowledgement),
         } if acknowledgement.expose() == CAPABILITY
     ));
@@ -241,6 +263,7 @@ fn interactive_plan_run_binds_the_selected_revision() {
             sticky_skills: Vec::new(),
             include_provider_response_diagnostics: false,
         },
+        approval_mode: None,
         sandbox_boundary_acknowledgement: None,
     })
     .expect("serialize interactive Plan Mode run");
@@ -281,6 +304,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
     ] {
         let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
             request: request.clone(),
+            approval_mode: None,
             sandbox_boundary_acknowledgement: None,
         })
         .expect("serialize interactive request");
@@ -311,6 +335,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
                 strategy: PlanExecutionStrategy::Direct,
                 max_turns: None,
             },
+            approval_mode: None,
             sandbox_boundary_acknowledgement: None,
         }),
         "run_interactive.plan_execute"
@@ -619,7 +644,7 @@ fn client_frames_reject_wrong_connection_request_and_replay() {
 #[tokio::test]
 async fn prompt_ids_are_one_use_and_unknown_ids_fail_closed() {
     let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge::new(outbound_tx.clone());
+    let bridge = InteractiveRunBridge::new(outbound_tx.clone(), None);
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     bridge
         .responses
@@ -669,7 +694,7 @@ async fn receive_test_prompt(
 #[tokio::test]
 async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() {
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(4);
-    let bridge = InteractiveRunBridge::new(outbound_tx);
+    let bridge = InteractiveRunBridge::new(outbound_tx, None);
 
     let answered_bridge = bridge.clone();
     let answered = tokio::spawn(async move {
@@ -727,7 +752,7 @@ async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() 
 
     let (disconnected_tx, disconnected_rx) = tokio::sync::mpsc::channel(1);
     drop(disconnected_rx);
-    let disconnected = InteractiveRunBridge::new(disconnected_tx);
+    let disconnected = InteractiveRunBridge::new(disconnected_tx, None);
     assert!(matches!(
         disconnected
             .request(test_prompt("disconnect", WorkerPromptKind::Approval))
@@ -847,7 +872,7 @@ async fn interactive_socket_preserves_event_notice_prompt_order() {
     let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
     let server = tokio::spawn(async move {
         let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
-        let bridge = InteractiveRunBridge::new(outbound_tx.clone());
+        let bridge = InteractiveRunBridge::new(outbound_tx.clone(), None);
         let run_bridge = bridge.clone();
         let control = RunControl::default();
         let run = async move {
@@ -919,7 +944,7 @@ async fn interactive_socket_cancel_releases_waiter_and_rejects_late_prompt() {
     let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
     let server = tokio::spawn(async move {
         let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
-        let bridge = InteractiveRunBridge::new(outbound_tx);
+        let bridge = InteractiveRunBridge::new(outbound_tx, None);
         let run_bridge = bridge.clone();
         let control = RunControl::default();
         let run_control = control.clone();
@@ -1064,7 +1089,7 @@ async fn interactive_socket_disconnect_cancels_server_and_clears_waiters() {
     let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
     let server = tokio::spawn(async move {
         let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
-        let bridge = InteractiveRunBridge::new(outbound_tx);
+        let bridge = InteractiveRunBridge::new(outbound_tx, None);
         let inspect = bridge.clone();
         let run_bridge = bridge.clone();
         let control = RunControl::default();
@@ -1162,7 +1187,7 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
 
     for (answer, expected_approval) in [("Allow once", true), ("Deny", false)] {
         let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
-        let bridge = InteractiveRunBridge::new(outbound_tx);
+        let bridge = InteractiveRunBridge::new(outbound_tx, None);
         let responder_bridge = bridge.clone();
         let answer = answer.to_owned();
         let responder = tokio::spawn(async move {
@@ -1181,9 +1206,9 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
                 .await
                 .expect("approval response");
         });
-        let provider = WorkerInteractiveApproval {
-            mode: WorkerApprovalMode::Ask,
-        };
+        let provider = WorkerInteractiveApproval::new(WorkerApprovalModeState::new(Some(
+            WorkerApprovalMode::Ask,
+        )));
         let proof = ACTIVE_INTERACTIVE_RUN
             .scope(
                 bridge,
@@ -1199,10 +1224,10 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
 #[tokio::test]
 async fn interactive_worker_forwards_automatic_approval_notices_without_prompting() {
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge::new(outbound_tx);
-    let provider = WorkerInteractiveApproval {
-        mode: WorkerApprovalMode::RiskAuto,
-    };
+    let bridge = InteractiveRunBridge::new(outbound_tx, None);
+    let provider = WorkerInteractiveApproval::new(WorkerApprovalModeState::new(Some(
+        WorkerApprovalMode::RiskAuto,
+    )));
     let notice = AutomaticApprovalNotice {
         action: "web.search".into(),
         resource: "configured search provider".into(),
@@ -1223,12 +1248,95 @@ async fn interactive_worker_forwards_automatic_approval_notices_without_promptin
 }
 
 #[tokio::test]
+async fn interactive_worker_uses_the_client_scoped_approval_mode_override() {
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge::new(outbound_tx, Some(WorkerApprovalMode::FullAccess));
+    let provider = WorkerInteractiveApproval::new(WorkerApprovalModeState::new(Some(
+        WorkerApprovalMode::Deny,
+    )));
+    let request = colossus_policy::effect_request(
+        colossus_policy::system_actor("worker-mode-test"),
+        "shell.run",
+        "workspace",
+        json!({"command": "cargo test"}),
+    );
+    let decision = PolicyDecision {
+        decision_id: "decision-mode-test".into(),
+        policy_revision: "test-v1".into(),
+        outcome: colossus_contracts::DecisionOutcome::RequireApproval,
+        reason: "operator must approve".into(),
+        obligations: colossus_contracts::PolicyObligations::default(),
+    };
+
+    let proof = ACTIVE_INTERACTIVE_RUN
+        .scope(
+            bridge,
+            provider.request_approval(&request, "request-hash", &decision),
+        )
+        .await
+        .expect("client-scoped full access");
+    assert!(proof.is_some());
+    assert!(outbound_rx.try_recv().is_err());
+
+    let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge::new(outbound_tx, Some(WorkerApprovalMode::RiskAuto));
+    assert!(
+        ACTIVE_INTERACTIVE_RUN
+            .scope(bridge, async { provider.risk_auto_enabled() })
+            .await
+    );
+}
+
+#[tokio::test]
+async fn worker_wide_approval_mode_changes_apply_without_a_restart() {
+    let mode = WorkerApprovalModeState::new(Some(WorkerApprovalMode::Deny));
+    assert_eq!(
+        colossus_api_runtime::PublicApprovalModeProvider::public_approval_mode(&mode),
+        colossus_api_runtime::PublicApprovalMode::Deny
+    );
+    let provider = WorkerInteractiveApproval::new(mode.clone());
+    let request = colossus_policy::effect_request(
+        colossus_policy::system_actor("worker-live-mode-test"),
+        "shell.run",
+        "workspace",
+        json!({"command": "cargo test"}),
+    );
+    let decision = PolicyDecision {
+        decision_id: "decision-live-mode-test".into(),
+        policy_revision: "test-v1".into(),
+        outcome: colossus_contracts::DecisionOutcome::RequireApproval,
+        reason: "operator must approve".into(),
+        obligations: colossus_contracts::PolicyObligations::default(),
+    };
+
+    assert!(
+        provider
+            .request_approval(&request, "deny-hash", &decision)
+            .await
+            .expect("deny mode")
+            .is_none()
+    );
+    assert!(mode.set(WorkerApprovalMode::FullAccess));
+    assert_eq!(
+        colossus_api_runtime::PublicApprovalModeProvider::public_approval_mode(&mode),
+        colossus_api_runtime::PublicApprovalMode::FullAccess
+    );
+    assert!(
+        provider
+            .request_approval(&request, "allow-hash", &decision)
+            .await
+            .expect("full access mode")
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn interactive_worker_forwards_risk_review_fallback_without_prompting() {
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge::new(outbound_tx);
-    let provider = WorkerInteractiveApproval {
-        mode: WorkerApprovalMode::RiskAuto,
-    };
+    let bridge = InteractiveRunBridge::new(outbound_tx, None);
+    let provider = WorkerInteractiveApproval::new(WorkerApprovalModeState::new(Some(
+        WorkerApprovalMode::RiskAuto,
+    )));
     let notice = RiskReviewFallbackNotice {
         action: "web.search".into(),
         resource: "configured search provider".into(),
@@ -1266,10 +1374,10 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
             notice: queued.clone(),
         })
         .expect("fill worker notice queue");
-    let bridge = InteractiveRunBridge::new(outbound_tx.clone());
-    let provider = WorkerInteractiveApproval {
-        mode: WorkerApprovalMode::RiskAuto,
-    };
+    let bridge = InteractiveRunBridge::new(outbound_tx.clone(), None);
+    let provider = WorkerInteractiveApproval::new(WorkerApprovalModeState::new(Some(
+        WorkerApprovalMode::RiskAuto,
+    )));
 
     tokio::time::timeout(
         Duration::from_millis(100),
@@ -1299,7 +1407,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(PROTOCOL_VERSION, 10);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
