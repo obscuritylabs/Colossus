@@ -13,6 +13,14 @@ pub(super) fn build_security_posture(
             remediation: "Create a fresh configuration and storage path with storage.keys.kind set to platform or environment.".into(),
         });
     }
+    if config.sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend() {
+        findings.push(SecurityPostureFinding {
+            code: "sandbox.danger_full_access".into(),
+            severity: SecurityPostureSeverity::Warning,
+            summary: "Danger full access is enabled: process execution has ambient runtime access without an isolation boundary.".into(),
+            remediation: "Use an isolating native, windows_job, or oci sandbox backend, or use external only when a trusted host enforces the required filesystem and network isolation.".into(),
+        });
+    }
     let has_oauth = mcp.servers.values().any(|server| server.oauth.is_some());
     let plaintext_oauth = matches!(
         mcp.oauth_credential_store,

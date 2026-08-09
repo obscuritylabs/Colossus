@@ -43,14 +43,15 @@ fn snapshot() -> InteractiveSnapshot {
 }
 
 #[test]
-fn plaintext_posture_adds_a_non_durable_card_and_persistent_footer_badge() {
+fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badge() {
     let mut source = snapshot();
     source.security_posture = SecurityPostureReport {
         findings: vec![SecurityPostureFinding {
-            code: "storage.plaintext".into(),
+            code: "sandbox.danger_full_access".into(),
             severity: SecurityPostureSeverity::Warning,
-            summary: "Journal payloads are plaintext.".into(),
-            remediation: "Use fresh protected storage.".into(),
+            summary: "Danger full access is enabled: process execution has ambient runtime access."
+                .into(),
+            remediation: "Use an isolating sandbox backend.".into(),
         }],
     };
     let state = TuiState::from_snapshot(source);
@@ -63,6 +64,17 @@ fn plaintext_posture_adds_a_non_durable_card_and_persistent_footer_badge() {
             ..
         })
     ));
+    let rendered = StyledDocumentRenderer::new(state.preferences.clone(), 80)
+        .render(&card.document)
+        .into_iter()
+        .map(|line| line.plain_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Danger full access is enabled"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("isolating sandbox backend"), "{rendered}");
 
     let backend = TestBackend::new(80, 1);
     let mut terminal = Terminal::new(backend).expect("test terminal");

@@ -778,6 +778,24 @@ fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
 }
 
 #[test]
+fn security_posture_reports_danger_full_access_even_when_acknowledged() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.use_platform_storage();
+    config.sandbox.backend = SandboxBoundaryMode::DangerFullAccess.as_backend().into();
+    config.sandbox.acknowledge_danger_full_access = true;
+
+    let report = config.security_posture();
+    assert_eq!(report.finding_count(), 1);
+    assert_eq!(report.findings[0].code, "sandbox.danger_full_access");
+    assert!(
+        report.findings[0]
+            .summary
+            .contains("ambient runtime access")
+    );
+    assert!(report.findings[0].remediation.contains("isolation"));
+}
+
+#[test]
 fn worker_authentication_path_is_adjacent_to_local_state() {
     let config = RuntimeConfig::offline_template(".colossus/state.redb");
     assert_eq!(

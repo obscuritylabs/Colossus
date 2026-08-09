@@ -23,6 +23,11 @@ review failed** cards before the explicit approval dock opens above the composer
 cards contain only a sanitized failure category, action, resource, and manual-fallback
 explanation.
 
+Security posture findings appear at startup as a non-durable **Security posture**
+warning card and remain visible as a warning count in the footer. This includes an
+explicit `danger_full_access` sandbox backend even when its boundary acknowledgement is
+already configured.
+
 Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
 current transcript visible and the composer draft preserved. **Summary** presents the
 released actor, action, resource, policy reason, and risk metadata as borderless rows so
