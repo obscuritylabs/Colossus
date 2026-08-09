@@ -27,7 +27,7 @@ pub(super) struct WorkerRequest {
 pub enum WorkerApprovalMode {
     /// Deny approval obligations without prompting.
     Deny,
-    /// Ask an attached protocol-v8 interactive client.
+    /// Ask an attached protocol-v9 interactive client.
     Ask,
     /// Preserve model-assisted low-risk auto-approval and ask otherwise.
     RiskAuto,

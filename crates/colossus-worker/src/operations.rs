@@ -125,7 +125,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v8 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v9 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -215,7 +215,7 @@ pub enum WorkerOperation {
     AuditVerify,
     /// Verify the journal and report whether secure anchors are enabled.
     AuditAnchorStatus,
-    /// Read bounded redacted event envelopes.
+    /// Read bounded ciphertext-free audit evidence.
     AuditRead {
         /// First global sequence.
         from: u64,
@@ -336,7 +336,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v8 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v9 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,

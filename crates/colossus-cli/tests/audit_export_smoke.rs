@@ -1,5 +1,8 @@
 //! End-to-end configured directory audit-export acceptance.
 
+#[path = "support/audit.rs"]
+mod audit_support;
+
 use serde_json::Value;
 use std::{
     fs,
@@ -117,6 +120,19 @@ sandbox:
         "{}",
         String::from_utf8_lossy(&source.stderr)
     );
+    let exported = run(
+        binary,
+        &config,
+        &["audit", "export", "--from", "2", "--limit", "2"],
+    );
+    audit_support::assert_audit_evidence_jsonl(&exported, "audit-test-journal-v1", 2, 2);
+    let shown = run(
+        binary,
+        &config,
+        &["audit", "show", "--from", "2", "--limit", "2"],
+    );
+    audit_support::assert_audit_evidence_array(&shown, "audit-test-journal-v1", 2, 2);
+
     let drained = run(binary, &config, &["audit", "exporter-drain"]);
     assert!(
         drained.status.success(),

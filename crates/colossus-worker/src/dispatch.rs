@@ -18,11 +18,9 @@ pub(super) async fn dispatch(
         })),
         WorkerOperation::AuditVerify => Ok(serde_json::to_value(runtime.journal().verify()?)?),
         WorkerOperation::AuditAnchorStatus => Ok(runtime.audit_anchor_status()?),
-        WorkerOperation::AuditRead { from, limit } => Ok(serde_json::to_value(
-            runtime
-                .journal()
-                .read_global(from.max(1), limit.clamp(1, 10_000))?,
-        )?),
+        WorkerOperation::AuditRead { from, limit } => {
+            Ok(serde_json::to_value(runtime.audit_evidence(from, limit)?)?)
+        }
         WorkerOperation::AuditExportStatus => {
             Ok(serde_json::to_value(runtime.audit_export_status()?)?)
         }

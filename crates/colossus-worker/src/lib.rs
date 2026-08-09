@@ -37,11 +37,10 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-// Version 8 replaced the storage-derived worker authentication key with the
-// independent `<storage.path>.worker-auth` secret. A version-7 worker and a
-// version-8 client cannot authenticate each other, so both sides must reject
-// the mismatch instead of silently failing the handshake tag.
-const PROTOCOL_VERSION: u16 = 8;
+// Version 9 changed audit reads from encrypted EventEnvelope values to ciphertext-free
+// AuditEvidence. A version-8 worker could otherwise violate the export contract for a
+// version-9 client, so both sides must reject the mismatch and require a worker restart.
+const PROTOCOL_VERSION: u16 = 9;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;

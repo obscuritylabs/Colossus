@@ -275,8 +275,11 @@ or status contract. Important roots are:
 
 Optional values are JSON `null`; enums and tagged states use documented lowercase
 snake-case strings. `config show` is the deliberate exception: it emits strict YAML so
-references can be reviewed intact. `audit export` emits one redacted JSON object per
-line. Do not parse human or TUI rendering.
+references can be reviewed intact. `audit show` returns an array of metadata-only
+`AuditEvidence` records, and `audit export` emits one such record per line. Evidence
+includes event identity and ordering, classification, actor/context, timestamps, key ID,
+algorithm, plaintext hash, previous hash, and record hash. It never includes the journal
+`payload`, nonce, or ciphertext. Do not parse human or TUI rendering.
 
 Provider and model Doctor commands remain status-only by default. With
 `--include-provider-response`, a failed or transport-incompatible check may add
