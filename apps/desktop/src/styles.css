@@ -2084,6 +2084,28 @@ p {
   gap: 8px;
 }
 
+.approval-mode-control {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: #7890aa;
+}
+
+.approval-mode-control select {
+  min-height: 27px;
+  padding: 3px 25px 3px 7px;
+  border-color: #283b54;
+  background-color: #0b1726;
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.approval-mode-control.mode-full_access {
+  color: var(--amber);
+}
+
 .composer-target {
   display: flex;
   max-width: 65%;

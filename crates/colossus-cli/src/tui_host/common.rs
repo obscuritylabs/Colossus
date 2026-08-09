@@ -272,13 +272,35 @@ impl TuiPromptRouter {
 /// Trusted approval provider that mints proof only after the TUI returns allow.
 pub(crate) struct TuiApprovalProvider {
     pub(crate) router: Arc<TuiPromptRouter>,
-    pub(crate) risk_auto: bool,
+    mode: AtomicU8,
+}
+
+impl TuiApprovalProvider {
+    pub(crate) fn new(router: Arc<TuiPromptRouter>, mode: ApprovalMode) -> Self {
+        Self {
+            router,
+            mode: AtomicU8::new(mode as u8),
+        }
+    }
+
+    pub(crate) fn mode(&self) -> ApprovalMode {
+        match self.mode.load(Ordering::Acquire) {
+            value if value == ApprovalMode::Deny as u8 => ApprovalMode::Deny,
+            value if value == ApprovalMode::RiskAuto as u8 => ApprovalMode::RiskAuto,
+            value if value == ApprovalMode::FullAccess as u8 => ApprovalMode::FullAccess,
+            _ => ApprovalMode::Ask,
+        }
+    }
+
+    pub(crate) fn set_mode(&self, mode: ApprovalMode) {
+        self.mode.store(mode as u8, Ordering::Release);
+    }
 }
 
 #[async_trait]
 impl ApprovalProvider for TuiApprovalProvider {
     fn risk_auto_enabled(&self) -> bool {
-        self.risk_auto
+        self.mode() == ApprovalMode::RiskAuto
     }
 
     async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
@@ -295,6 +317,21 @@ impl ApprovalProvider for TuiApprovalProvider {
         request_hash: &str,
         decision: &PolicyDecision,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
+        match self.mode() {
+            ApprovalMode::Deny => return Ok(None),
+            ApprovalMode::FullAccess => {
+                return ApprovalProvider::request_approval(
+                    &AllowApproval {
+                        approved_by: "terminal-user:full-access".into(),
+                    },
+                    request,
+                    request_hash,
+                    decision,
+                )
+                .await;
+            }
+            ApprovalMode::Ask | ApprovalMode::RiskAuto => {}
+        }
         let content = bounded_approval_content(&request.content)
             .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
         let mut details = vec![

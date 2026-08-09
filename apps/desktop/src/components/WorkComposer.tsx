@@ -4,10 +4,16 @@ import {
   IconFolder,
   IconPaperclip,
   IconSend2,
+  IconShieldCheck,
 } from "@tabler/icons-react";
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
 
-import type { ArtifactReference, CommandError, RunMode } from "../types";
+import type {
+  ApprovalMode,
+  ArtifactReference,
+  CommandError,
+  RunMode,
+} from "../types";
 
 interface WorkComposerProps {
   formRef: RefObject<HTMLFormElement | null>;
@@ -20,6 +26,10 @@ interface WorkComposerProps {
   maxTurns: number;
   maxTurnsLimit: number;
   mode: RunMode;
+  approvalMode: ApprovalMode;
+  approvalModeVisible: boolean;
+  approvalModeAvailable: boolean;
+  approvalModeChanging: boolean;
   targetLabel: string;
   canCompose: boolean;
   submitting: boolean;
@@ -35,6 +45,7 @@ interface WorkComposerProps {
   onRoleChange: (role: string) => void;
   onMaxTurnsChange: (maxTurns: number) => void;
   onModeChange: (mode: RunMode) => void;
+  onApprovalModeChange: (mode: ApprovalMode) => void;
   onCancelPlanRevision: () => void;
   onChooseAttachment: () => void;
   onRemoveAttachment: (artifactId: string) => void;
@@ -52,6 +63,10 @@ export function WorkComposer({
   maxTurns,
   maxTurnsLimit,
   mode,
+  approvalMode,
+  approvalModeVisible,
+  approvalModeAvailable,
+  approvalModeChanging,
   targetLabel,
   canCompose,
   submitting,
@@ -67,6 +82,7 @@ export function WorkComposer({
   onRoleChange,
   onMaxTurnsChange,
   onModeChange,
+  onApprovalModeChange,
   onCancelPlanRevision,
   onChooseAttachment,
   onRemoveAttachment,
@@ -116,6 +132,27 @@ export function WorkComposer({
           <IconAt size={15} stroke={1.8} aria-hidden="true" />
           {targetLabel}
         </span>
+        {approvalModeVisible ? (
+          <label className={`approval-mode-control mode-${approvalMode}`}>
+            <IconShieldCheck size={15} stroke={1.7} aria-hidden="true" />
+            <span className="sr-only">Permission mode</span>
+            <select
+              aria-label="Permission mode"
+              value={approvalMode}
+              disabled={
+                !approvalModeAvailable || approvalModeChanging || submitting
+              }
+              onChange={(event) =>
+                onApprovalModeChange(event.target.value as ApprovalMode)
+              }
+            >
+              <option value="deny">Deny</option>
+              <option value="ask">Ask</option>
+              <option value="risk_auto">Risk auto</option>
+              <option value="full_access">Full access</option>
+            </select>
+          </label>
+        ) : null}
         <details className="run-controls">
           <summary
             className={roleMissing ? "run-controls-invalid" : undefined}
@@ -290,7 +327,15 @@ export function WorkComposer({
             ? planRevision === null
               ? "Plan creates a new durable draft; implementation and external mutation are blocked."
               : "This prompt revises the selected draft; implementation and external mutation remain blocked."
-            : "Effects remain policy-bound and may require approval."}
+            : !approvalModeVisible
+              ? "Effects remain policy-bound and may require approval."
+              : approvalMode === "deny"
+                ? "Approval-required effects are denied. Policy and sandbox boundaries remain active."
+                : approvalMode === "ask"
+                  ? "Approval-required effects pause and ask before continuing."
+                  : approvalMode === "risk_auto"
+                    ? "Eligible low-risk approvals may proceed automatically; other effects ask."
+                    : "Approval obligations proceed without asking; policy and sandbox boundaries remain active."}
         </span>
         <span className={promptOverLimit ? "counter-over-limit" : undefined}>
           {promptBytes.toLocaleString()} / {promptByteLimit.toLocaleString()}{" "}

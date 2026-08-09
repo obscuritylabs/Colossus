@@ -428,7 +428,15 @@ For ordinary CLI-started workers, the server creates or loads a versioned random
 from the owner-only, no-follow regular file at `<storage.path>.worker-auth`; clients
 never create or repair that file. This key is independent of journal encryption,
 checkpoint signing, permit MACs, and sandbox job authentication. Managed Local instead
-retains inherited-channel delivery and never persists its worker bootstrap key.
+retains inherited-channel delivery and never persists its worker bootstrap key. The
+native Desktop backend may use that same memory-only key through the narrow
+`colossus-worker-protocol` control client to read or change the worker-wide approval
+mode. The renderer receives only the four-value mode DTO and cannot access the key,
+endpoint, or generic worker operations. Elevation to `risk-auto` or `full-access`
+requires a fixed operating-system confirmation, and native code rejects mode changes
+while a managed run is active. This control changes only satisfaction of later approval
+obligations; policy denials, tool grants, permits, and sandbox boundaries remain
+unchanged.
 
 Skill discovery is part of model input and therefore uses the same object-bound
 discipline. On Unix, repository skill roots are traversed relative to the retained

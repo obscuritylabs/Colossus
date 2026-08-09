@@ -4,6 +4,7 @@ import type {
   CancelRunRequest,
   CommandError,
   ApplyManagedModelConfigurationRequest,
+  ApprovalMode,
   ArtifactContent,
   ArtifactReference,
   ConfigureManagedRuntimeRequest,
@@ -194,6 +195,12 @@ export function applyManagedModelConfiguration(
 
 export function restartManagedRuntime(): Promise<DesktopStatus> {
   return call("restart_managed_runtime");
+}
+
+export function setApprovalMode(
+  approvalMode: ApprovalMode,
+): Promise<DesktopStatus> {
+  return call("set_approval_mode", { approvalMode });
 }
 
 export function runManagedSelfTest(): Promise<void> {

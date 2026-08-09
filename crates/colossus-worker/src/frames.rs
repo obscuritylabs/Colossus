@@ -22,19 +22,6 @@ pub(super) struct WorkerRequest {
     pub(super) authentication_tag: String,
 }
 
-/// Worker-side policy mode used by attached and headless clients.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorkerApprovalMode {
-    /// Deny approval obligations without prompting.
-    Deny,
-    /// Ask an attached protocol-v8 interactive client.
-    Ask,
-    /// Preserve model-assisted low-risk auto-approval and ask otherwise.
-    RiskAuto,
-    /// Mint approval obligations without a prompt.
-    FullAccess,
-}
-
 /// Kind of one authenticated worker-to-client prompt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -940,6 +940,7 @@ dependencies = [
  "colossus-update",
  "colossus-windows-native",
  "colossus-worker",
+ "colossus-worker-protocol",
  "colossus-workflow",
  "crossterm",
  "ed25519-dalek",
@@ -1402,6 +1403,7 @@ dependencies = [
  "colossus-tools",
  "colossus-windows-native",
  "colossus-work",
+ "colossus-worker-protocol",
  "colossus-workflow",
  "fs4",
  "getrandom 0.4.3",
@@ -1695,7 +1697,28 @@ dependencies = [
  "colossus-runtime",
  "colossus-testkit",
  "colossus-windows-native",
+ "colossus-worker-protocol",
  "colossus-workflow",
+ "getrandom 0.4.3",
+ "hex",
+ "hmac 0.12.1",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-worker-protocol"
+version = "0.10.5"
+dependencies = [
+ "base64",
  "getrandom 0.4.3",
  "hex",
  "hmac 0.12.1",

@@ -150,10 +150,13 @@ export interface DesktopStatus {
   provider: ProviderSummary;
   managedModelConfiguration: ManagedConfiguration;
   accessProfile: "minimal" | "development";
+  approvalMode: ApprovalMode;
   terminalEnabled: boolean;
   additionalCaBundle: CaBundleStatus;
   capabilities: DesktopCapabilities;
 }
+
+export type ApprovalMode = "deny" | "ask" | "risk_auto" | "full_access";
 
 export interface CaBundleStatus {
   configured: boolean;

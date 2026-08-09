@@ -1,5 +1,6 @@
 //! Cross-process single-writer worker and authenticated local IPC acceptance.
 
+use colossus_worker_protocol::{WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint};
 use hmac::{Hmac, Mac as _};
 use serde_json::Value;
 use sha2::Sha256;
@@ -299,7 +300,45 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 8);
+    assert_eq!(status["protocol_version"], 10);
+
+    let mut encoded_authentication =
+        fs::read_to_string(&worker_auth_path).expect("read worker control authentication");
+    let encoded_key = encoded_authentication
+        .strip_prefix("colossus-worker-auth-v1:")
+        .expect("worker authentication prefix");
+    let decoded_key = hex::decode(encoded_key).expect("worker authentication hex");
+    let authentication: [u8; 32] = decoded_key
+        .try_into()
+        .expect("worker authentication length");
+    zeroize::Zeroize::zeroize(&mut encoded_authentication);
+    let control = WorkerControlClient::new(
+        worker_ipc_endpoint(&state).expect("worker control endpoint"),
+        zeroize::Zeroizing::new(authentication),
+    )
+    .expect("worker control client");
+    tokio::runtime::Runtime::new()
+        .expect("control runtime")
+        .block_on(async {
+            assert_eq!(
+                control.approval_mode().await.expect("read approval mode"),
+                Some(WorkerApprovalMode::FullAccess)
+            );
+            assert_eq!(
+                control
+                    .set_approval_mode(WorkerApprovalMode::Deny)
+                    .await
+                    .expect("set deny mode"),
+                WorkerApprovalMode::Deny
+            );
+            assert_eq!(
+                control
+                    .set_approval_mode(WorkerApprovalMode::FullAccess)
+                    .await
+                    .expect("restore full access mode"),
+                WorkerApprovalMode::FullAccess
+            );
+        });
 
     let route = run(binary, &config, &["models", "route", "primary"]);
     assert!(

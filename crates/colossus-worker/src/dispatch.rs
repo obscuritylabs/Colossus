@@ -7,6 +7,7 @@ pub(super) async fn dispatch(
     runtime: &Arc<Runtime>,
     operation: WorkerOperation,
     maintenance: &tokio::sync::Mutex<()>,
+    approval_mode: &WorkerApprovalModeState,
 ) -> Result<Value, WorkerError> {
     match operation {
         WorkerOperation::Ping => Ok(json!({
@@ -14,8 +15,19 @@ pub(super) async fn dispatch(
             "protocol_version": PROTOCOL_VERSION,
             "pid": std::process::id(),
             "workspace": runtime.workspace(),
+            "approval_mode": approval_mode.get(),
             "security_posture": runtime.security_posture(),
         })),
+        WorkerOperation::SetApprovalMode {
+            approval_mode: mode,
+        } => {
+            if !approval_mode.set(mode) {
+                return Err(WorkerError::Protocol(
+                    "this worker does not expose approval-mode control".into(),
+                ));
+            }
+            Ok(json!({ "approval_mode": mode }))
+        }
         WorkerOperation::AuditVerify => Ok(serde_json::to_value(runtime.journal().verify()?)?),
         WorkerOperation::AuditAnchorStatus => Ok(runtime.audit_anchor_status()?),
         WorkerOperation::AuditRead { from, limit } => Ok(serde_json::to_value(

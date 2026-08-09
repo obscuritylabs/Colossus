@@ -8,6 +8,7 @@ pub struct WorkerServer {
     endpoint: String,
     listener: Option<platform::Listener>,
     authentication_key: WorkerAuthenticationKey,
+    approval_mode: WorkerApprovalModeState,
     runtime: Arc<Runtime>,
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
@@ -54,6 +55,7 @@ impl WorkerServer {
             endpoint,
             listener: None,
             authentication_key,
+            approval_mode: WorkerApprovalModeState::new(None),
             runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
@@ -62,7 +64,7 @@ impl WorkerServer {
         })
     }
 
-    /// Open a worker whose protocol-v8 attached clients own prompts, notices, and cancellation.
+    /// Open a worker whose protocol-v10 attached clients own prompts, notices, and cancellation.
     pub fn open_with_mode(
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,
@@ -119,15 +121,15 @@ impl WorkerServer {
         authentication_key: WorkerAuthenticationKey,
     ) -> Result<Self, WorkerError> {
         let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
-        let approvals: Arc<dyn ApprovalProvider> = Arc::new(WorkerInteractiveApproval {
-            mode: approval_mode,
-        });
+        let approval_mode = WorkerApprovalModeState::new(Some(approval_mode));
+        let approvals: Arc<dyn ApprovalProvider> =
+            Arc::new(WorkerInteractiveApproval::new(approval_mode.clone()));
         let user_prompts: Arc<dyn UserPromptProvider> = Arc::new(WorkerInteractiveUserPrompt);
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
-            approvals,
-            Some(user_prompts),
-        ));
+        let interactions = Arc::new(
+            colossus_api_runtime::PublicInteractionRouter::new(approvals, Some(user_prompts))
+                .with_public_approval_mode(Arc::new(approval_mode.clone())),
+        );
         let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
         let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
         let runtime = Arc::new(Runtime::open_with_provider_credentials(
@@ -141,6 +143,7 @@ impl WorkerServer {
             endpoint,
             listener: None,
             authentication_key,
+            approval_mode,
             runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
@@ -246,6 +249,7 @@ impl WorkerServer {
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
+        let approval_mode = self.approval_mode.clone();
         let key = self.authentication_key.clone();
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
         drain_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -344,6 +348,7 @@ impl WorkerServer {
                     let runtime = Arc::clone(&runtime);
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
+                    let approval_mode = approval_mode.clone();
                     let drain_requests = drain_request_tx.clone();
                     let shutdown = shutdown_tx.clone();
                     tasks.spawn(async move {
@@ -353,6 +358,7 @@ impl WorkerServer {
                             runtime,
                             replay.as_ref(),
                             maintenance.as_ref(),
+                            approval_mode,
                             &drain_requests,
                         )
                             .await
@@ -579,18 +585,17 @@ async fn dispatch_interactive(
 
 async fn handle_interactive_connection<S>(
     stream: S,
-    key: &[u8; 32],
     runtime: &Runtime,
-    request_id: &str,
-    connection_nonce: &str,
+    context: InteractiveConnectionContext<'_>,
     request: InteractiveWorkerRequest,
+    approval_mode: Option<WorkerApprovalMode>,
     sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(256);
-    let bridge = InteractiveRunBridge::new(outbound_tx.clone());
+    let bridge = InteractiveRunBridge::new(outbound_tx.clone(), approval_mode);
     let control = RunControl::default();
     let mut observer = ChannelWorkerObserver {
         sender: outbound_tx,
@@ -606,19 +611,7 @@ where
             }),
         ),
     );
-    drive_interactive_connection(
-        stream,
-        InteractiveConnectionContext {
-            key,
-            request_id,
-            connection_nonce,
-        },
-        outbound_rx,
-        bridge,
-        &control,
-        run,
-    )
-    .await
+    drive_interactive_connection(stream, context, outbound_rx, bridge, &control, run).await
 }
 
 pub(super) struct InteractiveConnectionContext<'a> {
@@ -772,6 +765,7 @@ async fn handle_connection<S>(
     runtime: Arc<Runtime>,
     replay: &Mutex<ReplayGuard>,
     maintenance: &tokio::sync::Mutex<()>,
+    approval_mode: WorkerApprovalModeState,
     drain_requests: &tokio::sync::mpsc::Sender<()>,
 ) -> Result<bool, WorkerError>
 where
@@ -823,15 +817,19 @@ where
     match request.operation {
         WorkerOperation::RunInteractive {
             request,
+            approval_mode,
             sandbox_boundary_acknowledgement,
         } => {
             handle_interactive_connection(
                 stream,
-                key,
                 runtime.as_ref(),
-                &request_id,
-                &connection_nonce,
+                InteractiveConnectionContext {
+                    key,
+                    request_id: &request_id,
+                    connection_nonce: &connection_nonce,
+                },
                 request,
+                approval_mode,
                 sandbox_boundary_acknowledgement,
             )
             .await
@@ -934,7 +932,7 @@ where
         }
         operation => {
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
-            let result = dispatch(&runtime, operation, maintenance).await;
+            let result = dispatch(&runtime, operation, maintenance, &approval_mode).await;
             let succeeded = result.is_ok();
             if succeeded && requests_drain {
                 // Durable work is committed at this point. Request its drain before

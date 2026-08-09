@@ -49,6 +49,7 @@ const desktop: DesktopStatus = {
     roles: { primary: "primary" },
   },
   accessProfile: "minimal",
+  approvalMode: "ask",
   terminalEnabled: false,
   additionalCaBundle: {
     configured: false,

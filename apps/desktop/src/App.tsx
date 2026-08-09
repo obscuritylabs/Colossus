@@ -36,6 +36,7 @@ import {
   respondInteraction,
   runManagedSelfTest,
   selectTarget,
+  setApprovalMode,
   setTerminalEnabled,
   showTerminalWindow,
   watchRun,
@@ -95,6 +96,7 @@ import {
 import type { TargetRoute } from "./target-routing";
 import type {
   ApplyManagedModelConfigurationRequest,
+  ApprovalMode,
   ArtifactReference,
   CommandError,
   ConfigureManagedRuntimeRequest,
@@ -202,6 +204,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
     roles: FIXTURE_MODE ? { primary: "primary" } : {},
   },
   accessProfile: "development",
+  approvalMode: "ask",
   terminalEnabled: false,
   additionalCaBundle: {
     configured: false,
@@ -455,6 +458,7 @@ export default function App() {
   );
   const [maxTurns, setMaxTurns] = useState(24);
   const [submitting, setSubmitting] = useState(false);
+  const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
   const [actionError, setActionError] = useState<CommandError | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -1861,6 +1865,26 @@ export default function App() {
     }
   }
 
+  async function handleSetApprovalMode(approvalMode: ApprovalMode) {
+    if (approvalModeChanging || submitting || connectingRef.current) {
+      return;
+    }
+    setApprovalModeChanging(true);
+    setActionError(null);
+    try {
+      const status = FIXTURE_MODE
+        ? { ...desktopRef.current, approvalMode }
+        : await setApprovalMode(approvalMode);
+      desktopRef.current = status;
+      setDesktop(status);
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      setApprovalModeChanging(false);
+    }
+  }
+
   async function handleImportCaBundle() {
     if (connectingRef.current || submitInFlight.current) {
       return;
@@ -1986,6 +2010,7 @@ export default function App() {
     connection.state === "connected" &&
     !connecting &&
     !submitting &&
+    !approvalModeChanging &&
     (activeRun === undefined || isTerminalStatus(activeRun.status));
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
@@ -2097,6 +2122,14 @@ export default function App() {
       maxTurns={maxTurns}
       maxTurnsLimit={MAX_TURNS}
       mode={mode}
+      approvalMode={desktop.approvalMode}
+      approvalModeVisible={selectedTarget?.kind === "managed_local"}
+      approvalModeAvailable={
+        selectedTarget?.kind === "managed_local" &&
+        connection.state === "connected" &&
+        (activeRun === undefined || isTerminalStatus(activeRun.status))
+      }
+      approvalModeChanging={approvalModeChanging}
       targetLabel={
         activeRun === undefined ? "Colossus" : agentRoleLabel(activeRun.role)
       }
@@ -2130,6 +2163,7 @@ export default function App() {
           setMode(nextMode);
         }
       }}
+      onApprovalModeChange={(nextMode) => void handleSetApprovalMode(nextMode)}
       onCancelPlanRevision={() => {
         setPlanRevision(null);
         setComposerError(null);

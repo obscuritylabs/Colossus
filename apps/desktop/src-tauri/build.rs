@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "run_managed_self_test",
     "restart_managed_runtime",
     "select_target",
+    "set_approval_mode",
     "set_terminal_enabled",
     "connect_colossus",
     "connection_status",

@@ -31,8 +31,8 @@ use colossus_tui::{
     sandbox_boundary_prompt,
 };
 use colossus_worker::{
-    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerClient, WorkerError,
-    WorkerOperation, WorkerPrompt, WorkerPromptHandler, WorkerPromptKind,
+    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerApprovalMode, WorkerClient,
+    WorkerError, WorkerOperation, WorkerPrompt, WorkerPromptHandler, WorkerPromptKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -41,7 +41,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -49,6 +49,33 @@ use tokio::sync::{mpsc, oneshot};
 
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const APPROVAL_CONTENT_PREVIEW_CHARACTERS: usize = 64 * 1024;
+
+fn approval_mode_document(mode: Option<ApprovalMode>, changed: bool) -> PresentationDocument {
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: if changed {
+            "Permissions updated".into()
+        } else {
+            "Permissions".into()
+        },
+        tone: if mode == Some(ApprovalMode::FullAccess) {
+            PresentationTone::Warning
+        } else {
+            PresentationTone::Neutral
+        },
+        body: vec![
+            PresentationBlock::KeyValue(vec![(
+                "Approval mode".into(),
+                mode.map(ApprovalMode::as_str)
+                    .unwrap_or("worker-default")
+                    .into(),
+            )]),
+            PresentationBlock::Markdown(
+                "Applies to subsequent interactive agent and plan operations from this TUI. Approval mode does not turn policy denials into allows, add tool authority, or change sandbox boundaries.\n\nUsage: `/permissions [deny|ask|risk-auto|full-access]`"
+                    .into(),
+            ),
+        ],
+    })
+}
 
 fn current_session_plan(
     plan: Option<PlanRecord>,

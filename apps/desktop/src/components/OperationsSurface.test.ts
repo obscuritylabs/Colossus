@@ -52,6 +52,7 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
     },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
+    approvalMode: "ask",
     terminalEnabled: false,
     additionalCaBundle: {
       configured: false,

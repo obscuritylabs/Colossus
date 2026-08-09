@@ -22,6 +22,7 @@ use colossus_runtime::{
     CredentialResolver, EnvironmentCredentialResolver, Runtime, RuntimeConfig, RuntimeError,
     RuntimeOpenOptions, format_provider_response_diagnostic,
 };
+use colossus_worker_protocol::PROTOCOL_VERSION;
 use hmac::{Hmac, Mac as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,7 +30,10 @@ use sha2::Sha256;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU8, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -37,11 +41,6 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-// Version 8 replaced the storage-derived worker authentication key with the
-// independent `<storage.path>.worker-auth` secret. A version-7 worker and a
-// version-8 client cannot authenticate each other, so both sides must reject
-// the mismatch instead of silently failing the handshake tag.
-const PROTOCOL_VERSION: u16 = 8;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -81,7 +80,8 @@ mod server;
 
 pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
-pub use frames::{WorkerApprovalMode, WorkerPrompt, WorkerPromptKind};
+pub use colossus_worker_protocol::WorkerApprovalMode;
+pub use frames::{WorkerPrompt, WorkerPromptKind};
 pub use operations::{
     InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerError, WorkerOperation,
 };
