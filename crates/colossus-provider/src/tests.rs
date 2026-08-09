@@ -167,6 +167,10 @@ fn provider_profiles_accept_only_valid_credential_references() {
     .expect("valid Codex profile");
     assert_eq!(codex.base_url.as_deref(), Some(CODEX_API_BASE_URL));
     assert_eq!(
+        codex.chat_completions_output_token_parameter,
+        ChatCompletionsOutputTokenParameter::MaxTokens
+    );
+    assert_eq!(
         codex.generation_endpoint().expect("Codex endpoint"),
         "https://chatgpt.com/backend-api/codex/responses"
     );
@@ -224,6 +228,36 @@ fn provider_profiles_accept_only_valid_credential_references() {
             );
         }
     }
+
+    let compatible = ProviderProfile::new(
+        "compatible",
+        ProviderKind::OpenAiCompatible,
+        Some("https://api.example.com/v1".into()),
+        None,
+        1_000,
+    )
+    .expect("compatible profile");
+    assert_eq!(
+        compatible.chat_completions_output_token_parameter,
+        ChatCompletionsOutputTokenParameter::MaxTokens
+    );
+    assert_eq!(
+        compatible
+            .with_chat_completions_output_token_parameter(
+                ChatCompletionsOutputTokenParameter::MaxCompletionTokens,
+            )
+            .expect("modern Chat Completions profile")
+            .chat_completions_output_token_parameter,
+        ChatCompletionsOutputTokenParameter::MaxCompletionTokens
+    );
+    assert!(
+        codex
+            .with_chat_completions_output_token_parameter(
+                ChatCompletionsOutputTokenParameter::Omit,
+            )
+            .is_err(),
+        "Responses profile accepted a Chat Completions-only setting"
+    );
 }
 
 fn test_jwt(claims: Value) -> String {
@@ -982,8 +1016,16 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
     assert_eq!(responses["input"][1]["type"], "function_call_output");
     assert_eq!(responses["input"][1]["call_id"], "call-1");
 
-    let chat = chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
-        .expect("chat payload");
+    let chat = chat_payload(
+        &request,
+        "unit-model",
+        4_096,
+        ChatCompletionsOutputTokenParameter::MaxTokens,
+        None,
+        false,
+        &tool_names,
+    )
+    .expect("chat payload");
     assert_eq!(chat["model"], "unit-model");
     assert_eq!(chat["max_tokens"], 4_096);
     assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
@@ -992,6 +1034,54 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         "workspace_inspect"
     );
     assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
+}
+
+#[test]
+fn chat_output_token_parameter_modes_normalize_streaming_and_non_streaming_requests() {
+    let request = model_request_with_tools(&[]);
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+
+    for streaming in [false, true] {
+        for (parameter, expected_field) in [
+            (
+                ChatCompletionsOutputTokenParameter::MaxTokens,
+                Some("max_tokens"),
+            ),
+            (
+                ChatCompletionsOutputTokenParameter::MaxCompletionTokens,
+                Some("max_completion_tokens"),
+            ),
+            (ChatCompletionsOutputTokenParameter::Omit, None),
+        ] {
+            let payload = chat_payload(
+                &request,
+                "unit-model",
+                4_096,
+                parameter,
+                None,
+                streaming,
+                &tool_names,
+            )
+            .expect("Chat Completions payload");
+
+            assert_eq!(payload["stream"], streaming);
+            for field in ["max_tokens", "max_completion_tokens"] {
+                if expected_field == Some(field) {
+                    assert_eq!(payload[field], 4_096);
+                } else {
+                    assert!(
+                        payload.get(field).is_none(),
+                        "unexpected {field} for {parameter:?} with streaming={streaming}"
+                    );
+                }
+            }
+            assert_eq!(
+                payload.get("stream_options").is_some(),
+                streaming,
+                "stream options did not match streaming={streaming}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1024,8 +1114,16 @@ fn provider_payloads_reject_dangling_tool_calls_before_dispatch() {
             &tool_names,
         )
         .expect_err("Responses must reject dangling calls"),
-        chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
-            .expect_err("Chat Completions must reject dangling calls"),
+        chat_payload(
+            &request,
+            "unit-model",
+            4_096,
+            ChatCompletionsOutputTokenParameter::MaxTokens,
+            None,
+            false,
+            &tool_names,
+        )
+        .expect_err("Chat Completions must reject dangling calls"),
     ] {
         assert!(matches!(
             error,
@@ -1075,6 +1173,7 @@ fn reasoning_effort_uses_each_provider_protocol_shape_and_is_optional() {
         &request,
         "unit-model",
         4_096,
+        ChatCompletionsOutputTokenParameter::MaxTokens,
         Some(ReasoningEffort::Ultra),
         false,
         &tool_names,
@@ -1147,8 +1246,16 @@ fn openai_tool_projection_is_compatible_without_mutating_the_canonical_schema() 
     };
 
     let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
-    let chat = chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
-        .expect("chat payload");
+    let chat = chat_payload(
+        &request,
+        "unit-model",
+        4_096,
+        ChatCompletionsOutputTokenParameter::MaxTokens,
+        None,
+        false,
+        &tool_names,
+    )
+    .expect("chat payload");
     assert_eq!(chat["tools"][0]["function"]["name"], "workspace_inspect");
     let projected = &chat["tools"][0]["function"]["parameters"];
     for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
@@ -1246,8 +1353,16 @@ fn representative_builtin_schemas_project_to_openai_compatible_roots() {
             &tool_names,
         )
         .expect("Responses payload");
-        let chat = chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
-            .expect("Chat Completions payload");
+        let chat = chat_payload(
+            &request,
+            "unit-model",
+            4_096,
+            ChatCompletionsOutputTokenParameter::MaxTokens,
+            None,
+            false,
+            &tool_names,
+        )
+        .expect("Chat Completions payload");
 
         for projected in [
             &responses["tools"][0]["parameters"],

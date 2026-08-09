@@ -394,6 +394,7 @@ impl Default for ProvidersConfig {
                     base_url: None,
                     credential_reference: None,
                     timeout_ms: None,
+                    chat_completions_output_token_parameter: None,
                 },
             )]),
         }
@@ -413,6 +414,9 @@ pub struct ProviderProfileConfig {
     /// Optional provider transport timeout override. Omission selects a host-aware default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Optional Chat Completions output-token wire parameter. Omission uses `max_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_completions_output_token_parameter: Option<ChatCompletionsOutputTokenParameter>,
 }
 
 /// Explicit model profiles and role routing.
@@ -1412,14 +1416,20 @@ pub(super) fn provider_profile(
     name: &str,
     config: &ProviderProfileConfig,
 ) -> Result<ProviderProfile, RuntimeError> {
-    ProviderProfile::new(
+    let profile = ProviderProfile::new(
         name,
         config.kind,
         config.base_url.clone(),
         config.credential_reference.clone(),
         config.effective_timeout_ms(),
     )
-    .map_err(Into::into)
+    .map_err(RuntimeError::from)?;
+    match config.chat_completions_output_token_parameter {
+        Some(parameter) => profile
+            .with_chat_completions_output_token_parameter(parameter)
+            .map_err(Into::into),
+        None => Ok(profile),
+    }
 }
 
 pub(super) fn provider_registry(

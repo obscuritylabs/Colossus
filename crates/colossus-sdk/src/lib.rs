@@ -84,12 +84,13 @@ pub use native_sidecar::verify_macos_executable_identity;
 pub use secret::{CredentialProvider, Secret};
 #[cfg(feature = "sidecar")]
 pub use sidecar::{
-    MANAGED_CONFIG_FILENAME, ManagedAccessProfile, ManagedModelCapabilities, ManagedModelConfig,
-    ManagedProviderConfig, ManagedProviderKind, ManagedRuntimeConfig, NativeSidecarFailure,
-    NativeSidecarStatus, REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle,
-    SidecarOptions, WorkspaceIdentity, default_managed_provider_timeout_ms,
-    validate_managed_model_identifier, validate_managed_provider_base_url,
+    MANAGED_CONFIG_FILENAME, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
+    ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
+    ManagedRuntimeConfig, NativeSidecarFailure, NativeSidecarStatus, REMOTE_PROVIDER_TIMEOUT_MS,
+    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    SidecarHostCredential, SidecarLifecycle, SidecarOptions, WorkspaceIdentity,
+    default_managed_provider_timeout_ms, validate_managed_model_identifier,
+    validate_managed_provider_base_url,
 };
 pub use stream::RunUpdates;
 pub use types::{

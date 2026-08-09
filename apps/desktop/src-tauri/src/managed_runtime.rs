@@ -424,6 +424,9 @@ fn managed_bootstrap(
                 base_url: Some(provider.base_url.clone()),
                 credential_id: provider.credential_id.clone(),
                 timeout_ms: provider.effective_timeout_ms(),
+                // Desktop settings do not expose the Chat Completions output-token wire
+                // parameter yet, so managed desktop providers keep the `max_tokens` default.
+                chat_completions_output_token_parameter: None,
             })
             .collect(),
         models: settings

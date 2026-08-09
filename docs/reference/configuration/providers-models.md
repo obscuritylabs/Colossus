@@ -13,7 +13,7 @@ different providers without duplicating connection settings.
 
 | Layer | Answers | Examples |
 | --- | --- | --- |
-| Provider profile | Where and how does Colossus connect? | Adapter kind, base URL, credential reference, timeout |
+| Provider profile | Where and how does Colossus connect? | Adapter kind, base URL, credential reference, Chat Completions token parameter, timeout |
 | Model profile | Which model is used and what may Colossus send? | Model ID, token limits, reasoning effort, tool calls, streaming |
 | Model role | Which model profile handles this job? | Primary agent, summarizer, subagent, research worker |
 
@@ -51,6 +51,7 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://models.example.com/v1
       credentialReference: env:COLOSSUS_MODEL_TOKEN
+      chatCompletionsOutputTokenParameter: max_completion_tokens
 models:
   profiles:
     primary-model:
@@ -166,6 +167,47 @@ validation. A conflicting response media type remains an error.
 Provider credentials are resolved by the in-process provider adapter. They do not need
 an entry in `sandbox.environment` unless a separate sandboxed process also needs that
 variable.
+
+### `chatCompletionsOutputTokenParameter`
+
+`chatCompletionsOutputTokenParameter` selects how an `open_ai_compatible` profile
+projects the model profile's canonical `maxOutputTokens` limit onto Chat Completions
+requests:
+
+| Value | Request behavior |
+| --- | --- |
+| `max_tokens` | Send the limit as `max_tokens`; this legacy-compatible mode is the default when the field is omitted |
+| `max_completion_tokens` | Send the limit as `max_completion_tokens` for models that require the modern field |
+| `omit` | Send neither output-token parameter; use only when the endpoint rejects both fields or owns the limit itself |
+
+The setting applies equally to streaming and non-streaming requests. Colossus never
+sends both fields, does not infer the mode from a model name, and does not retry a
+rejected request with another parameter. The `open_ai_responses` adapter continues to
+send `max_output_tokens`; the subscription-backed `open_ai_codex` adapter keeps its
+separately defined Responses contract. Setting this field on either Responses adapter
+or on `echo` is a configuration error.
+
+Keep one canonical token budget under the model profile:
+
+```yaml
+providers:
+  profiles:
+    modern-chat:
+      kind: open_ai_compatible
+      baseUrl: https://models.example.com/v1
+      credentialReference: env:COLOSSUS_MODEL_TOKEN
+      chatCompletionsOutputTokenParameter: max_completion_tokens
+models:
+  profiles:
+    primary:
+      providerProfile: modern-chat
+      model: example-model
+      contextWindowTokens: 128000
+      maxOutputTokens: 16000
+      capabilities:
+        toolCalls: true
+        streaming: true
+```
 
 ### `timeoutMs`
 

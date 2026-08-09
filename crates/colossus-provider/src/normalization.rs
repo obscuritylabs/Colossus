@@ -243,6 +243,7 @@ pub(super) fn chat_payload(
     request: &ModelRequest,
     model: &str,
     max_output_tokens: u64,
+    output_token_parameter: ChatCompletionsOutputTokenParameter,
     reasoning_effort: Option<ReasoningEffort>,
     streaming: bool,
     tool_names: &ProviderToolNames,
@@ -267,9 +268,17 @@ pub(super) fn chat_payload(
     let mut payload = json!({
         "model": model,
         "messages": messages,
-        "max_tokens": max_output_tokens,
         "stream": streaming
     });
+    match output_token_parameter {
+        ChatCompletionsOutputTokenParameter::MaxTokens => {
+            payload["max_tokens"] = Value::from(max_output_tokens);
+        }
+        ChatCompletionsOutputTokenParameter::MaxCompletionTokens => {
+            payload["max_completion_tokens"] = Value::from(max_output_tokens);
+        }
+        ChatCompletionsOutputTokenParameter::Omit => {}
+    }
     if streaming {
         payload["stream_options"] = json!({"include_usage": true});
     }

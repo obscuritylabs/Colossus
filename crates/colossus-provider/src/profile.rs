@@ -36,6 +36,19 @@ impl ProviderKind {
     }
 }
 
+/// Chat Completions field used to carry the canonical output-token limit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatCompletionsOutputTokenParameter {
+    /// Legacy and broadly compatible `max_tokens` field.
+    #[default]
+    MaxTokens,
+    /// Modern `max_completion_tokens` field required by newer models.
+    MaxCompletionTokens,
+    /// Do not send an output-token limit field.
+    Omit,
+}
+
 /// Strict normalized provider profile composed by the runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderProfile {
@@ -49,6 +62,8 @@ pub struct ProviderProfile {
     pub credential_reference: Option<String>,
     /// Adapter transport timeout.
     pub timeout_ms: u64,
+    /// Output-token wire parameter for OpenAI-compatible Chat Completions requests.
+    pub chat_completions_output_token_parameter: ChatCompletionsOutputTokenParameter,
 }
 
 impl ProviderProfile {
@@ -107,7 +122,23 @@ impl ProviderProfile {
             base_url,
             credential_reference,
             timeout_ms,
+            chat_completions_output_token_parameter: ChatCompletionsOutputTokenParameter::default(),
         })
+    }
+
+    /// Select the exact Chat Completions output-token wire parameter.
+    pub fn with_chat_completions_output_token_parameter(
+        mut self,
+        parameter: ChatCompletionsOutputTokenParameter,
+    ) -> Result<Self, ProviderError> {
+        if self.kind != ProviderKind::OpenAiCompatible {
+            return Err(ProviderError::Configuration(
+                "chatCompletionsOutputTokenParameter is supported only by open_ai_compatible profiles"
+                    .into(),
+            ));
+        }
+        self.chat_completions_output_token_parameter = parameter;
+        Ok(self)
     }
 
     /// Exact endpoint for generation.
