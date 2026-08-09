@@ -1407,7 +1407,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 10);
+    assert_eq!(PROTOCOL_VERSION, 11);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
@@ -1435,6 +1435,38 @@ async fn protocol_version_mismatch_has_restart_guidance() {
         Err(WorkerError::Protocol(message)) if message.contains("restart the worker")
     ));
     writer.await.expect("hello writer").expect("hello");
+}
+
+#[tokio::test]
+async fn stale_worker_that_closes_the_handshake_is_reported_as_incompatible() {
+    let key = [17_u8; 32];
+    let (mut client, mut server) = tokio::io::duplex(1024);
+    // A worker from the previous protocol rejects this client's hello and drops
+    // the stream before it writes any ServerHello.
+    let stale_worker = tokio::spawn(async move {
+        let _hello: ClientHello = read_message(&mut server, 1024).await.expect("client hello");
+        drop(server);
+    });
+
+    let error = client_handshake(&mut client, &key)
+        .await
+        .expect_err("stale worker must fail the client handshake");
+    assert!(matches!(error, WorkerError::Io(_)));
+    let outcome = handshake_failure_outcome("worker-endpoint", error);
+    assert!(
+        matches!(&outcome, WorkerError::Incompatible(endpoint) if endpoint == "worker-endpoint")
+    );
+    assert!(outcome.to_string().contains("restart the worker"));
+    stale_worker.await.expect("stale worker task");
+}
+
+#[tokio::test]
+async fn client_handshake_protocol_rejection_is_not_reported_as_incompatible() {
+    let outcome = handshake_failure_outcome(
+        "worker-endpoint",
+        WorkerError::Protocol("invalid handshake".into()),
+    );
+    assert!(matches!(outcome, WorkerError::Protocol(message) if message.contains("invalid")));
 }
 
 #[tokio::test]

@@ -117,7 +117,7 @@ pub enum WorkerError {
     Unavailable(String),
     /// A live endpoint belongs to a worker that cannot speak this protocol version.
     #[error(
-        "worker at {0} is listening without a protocol-v{PROTOCOL_VERSION} authentication secret; stop that worker and start it again with this build"
+        "worker at {0} cannot complete the protocol-v{PROTOCOL_VERSION} handshake; stop that worker and restart the worker with this Colossus build"
     )]
     Incompatible(String),
     /// A live worker could not accept another connection before the bounded deadline.
@@ -125,7 +125,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v10 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v11 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -220,7 +220,7 @@ pub enum WorkerOperation {
     AuditVerify,
     /// Verify the journal and report whether secure anchors are enabled.
     AuditAnchorStatus,
-    /// Read bounded redacted event envelopes.
+    /// Read bounded ciphertext-free audit evidence.
     AuditRead {
         /// First global sequence.
         from: u64,
@@ -341,7 +341,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v10 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v11 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,

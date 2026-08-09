@@ -340,7 +340,7 @@ pub(super) struct AuditCommand {
 pub(super) enum AuditAction {
     /// Fully verify payloads, chain, indexes, and any configured checkpoint/anchor.
     Verify,
-    /// Show bounded envelope metadata without decrypted payload content.
+    /// Show bounded metadata-only audit evidence.
     Show {
         /// First global sequence.
         #[arg(long, default_value_t = 1)]
@@ -349,7 +349,7 @@ pub(super) enum AuditAction {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    /// Stream bounded redacted envelopes as JSON Lines to stdout.
+    /// Stream bounded metadata-only audit evidence as JSON Lines to stdout.
     Export {
         /// First global sequence.
         #[arg(long, default_value_t = 1)]

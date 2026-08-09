@@ -94,7 +94,7 @@ pub use server::WorkerServer;
 
 use authentication::*;
 #[cfg(test)]
-use client::{handshake_timeout_error, missing_secret_outcome};
+use client::{handshake_failure_outcome, handshake_timeout_error, missing_secret_outcome};
 use dispatch::*;
 use frames::*;
 use handshake::*;

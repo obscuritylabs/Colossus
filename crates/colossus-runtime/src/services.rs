@@ -6,6 +6,18 @@ impl Runtime {
         Arc::clone(&self.journal)
     }
 
+    /// Read bounded ciphertext-free evidence from the authoritative journal.
+    pub fn audit_evidence(
+        &self,
+        from: u64,
+        limit: usize,
+    ) -> Result<Vec<AuditEvidence>, RuntimeError> {
+        self.journal
+            .read_global(from.max(1), limit.clamp(1, 10_000))
+            .map(|events| events.iter().map(evidence).collect())
+            .map_err(Into::into)
+    }
+
     /// Durable audit-export consumer readiness and retry state.
     pub fn audit_export_status(&self) -> Result<AuditExportStatus, RuntimeError> {
         self.audit_exports.status().map_err(Into::into)

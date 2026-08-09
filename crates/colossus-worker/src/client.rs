@@ -91,12 +91,7 @@ impl WorkerClient {
     /// Execute a non-streaming worker operation.
     pub async fn call(&self, operation: WorkerOperation) -> Result<Value, WorkerError> {
         let mut stream = self.connect().await?;
-        let connection_nonce = tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            client_handshake(&mut stream, self.authentication_key.expose()),
-        )
-        .await
-        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
+        let connection_nonce = self.handshake(&mut stream).await?;
         let request = signed_request(
             self.authentication_key.expose(),
             operation,
@@ -141,12 +136,7 @@ impl WorkerClient {
             ));
         }
         let mut stream = self.connect().await?;
-        let connection_nonce = tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            client_handshake(&mut stream, self.authentication_key.expose()),
-        )
-        .await
-        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
+        let connection_nonce = self.handshake(&mut stream).await?;
         let request = signed_request(
             self.authentication_key.expose(),
             operation,
@@ -187,7 +177,7 @@ impl WorkerClient {
         }
     }
 
-    /// Execute one protocol-v10 interactive operation with authenticated prompts,
+    /// Execute one protocol-v11 interactive operation with authenticated prompts,
     /// notices, released events, and cooperative cancellation.
     pub async fn call_interactive<T>(
         &self,
@@ -208,12 +198,7 @@ impl WorkerClient {
             return Err(WorkerError::Cancelled);
         }
         let mut stream = self.connect().await?;
-        let connection_nonce = tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            client_handshake(&mut stream, self.authentication_key.expose()),
-        )
-        .await
-        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
+        let connection_nonce = self.handshake(&mut stream).await?;
         if control.is_cancelled() {
             return Err(WorkerError::Cancelled);
         }
@@ -238,7 +223,7 @@ impl WorkerClient {
     /// Execute an interactive model or Plan Mode run.
     ///
     /// This compatibility convenience keeps callers that expect an agent outcome
-    /// concise while all protocol-v10 operations share [`Self::call_interactive`].
+    /// concise while all protocol-v11 operations share [`Self::call_interactive`].
     pub async fn run_model_controlled(
         &self,
         operation: WorkerOperation,
@@ -248,6 +233,16 @@ impl WorkerClient {
     ) -> Result<AgentRunOutcome, WorkerError> {
         self.call_interactive(operation, observer, prompts, control)
             .await
+    }
+
+    async fn handshake(&self, stream: &mut platform::ClientStream) -> Result<String, WorkerError> {
+        tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            client_handshake(stream, self.authentication_key.expose()),
+        )
+        .await
+        .map_err(|_| handshake_timeout_error(&self.endpoint))?
+        .map_err(|error| handshake_failure_outcome(&self.endpoint, error))
     }
 
     async fn connect(&self) -> Result<platform::ClientStream, WorkerError> {
@@ -446,6 +441,32 @@ pub(super) fn missing_secret_outcome(endpoint: &str) -> Result<(), WorkerError> 
         return Err(WorkerError::Incompatible(endpoint.to_owned()));
     }
     Ok(())
+}
+
+/// Classify a handshake that a connected worker ended without a usable reply.
+///
+/// A worker from an older protocol rejects this client's `ClientHello` before it
+/// writes a `ServerHello` and then drops the stream, so the client observes an
+/// early end of stream instead of a version it can compare. The endpoint accepted
+/// the connection, so this is an incompatible worker that must be restarted rather
+/// than an opaque transport fault.
+pub(super) fn handshake_failure_outcome(endpoint: &str, error: WorkerError) -> WorkerError {
+    match error {
+        WorkerError::Io(error) if peer_closed_handshake(&error) => {
+            WorkerError::Incompatible(endpoint.to_owned())
+        }
+        error => error,
+    }
+}
+
+fn peer_closed_handshake(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+    )
 }
 
 pub(super) fn handshake_timeout_error(endpoint: &str) -> WorkerError {

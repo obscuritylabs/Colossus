@@ -292,11 +292,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             }
             AuditAction::AnchorStatus => print_json(&runtime.audit_anchor_status()?)?,
             AuditAction::Show { from, limit } => {
-                print_json(&runtime.journal().read_global(from, limit)?)?;
+                print_json(&runtime.audit_evidence(from, limit)?)?;
             }
             AuditAction::Export { from, limit } => {
-                for event in runtime.journal().read_global(from, limit)? {
-                    println!("{}", serde_json::to_string(&event)?);
+                for evidence in runtime.audit_evidence(from, limit)? {
+                    println!("{}", serde_json::to_string(&evidence)?);
                 }
             }
             AuditAction::ExporterStatus => print_json(&runtime.audit_export_status()?)?,

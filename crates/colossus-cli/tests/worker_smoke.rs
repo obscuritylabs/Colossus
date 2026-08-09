@@ -1,5 +1,8 @@
 //! Cross-process single-writer worker and authenticated local IPC acceptance.
 
+#[path = "support/audit.rs"]
+mod audit_support;
+
 use colossus_worker_protocol::{WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint};
 use hmac::{Hmac, Mac as _};
 use serde_json::Value;
@@ -300,7 +303,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 10);
+    assert_eq!(status["protocol_version"], 11);
 
     let mut encoded_authentication =
         fs::read_to_string(&worker_auth_path).expect("read worker control authentication");
@@ -393,6 +396,18 @@ sandbox:
     let result: Value = serde_json::from_slice(&streamed.stdout).expect("run JSON");
     assert_eq!(result["output"], "worker-stream");
     assert_eq!(result["profile"], "echo");
+    let exported = run(
+        binary,
+        &config,
+        &["audit", "export", "--from", "2", "--limit", "2"],
+    );
+    audit_support::assert_audit_evidence_jsonl(&exported, "worker-test-journal-v1", 2, 2);
+    let shown = run(
+        binary,
+        &config,
+        &["audit", "show", "--from", "2", "--limit", "2"],
+    );
+    audit_support::assert_audit_evidence_array(&shown, "worker-test-journal-v1", 2, 2);
 
     let state_status = run(binary, &config, &["state", "doctor"]);
     assert!(state_status.status.success());
