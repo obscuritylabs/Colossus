@@ -247,6 +247,7 @@ pub(crate) struct AppState {
     managed_lifecycle: StdMutex<Option<ManagedLifecycleObservation>>,
     managed_worker: RwLock<Option<WorkerControlClient>>,
     approval_mode: AtomicU8,
+    approval_mode_synchronized: AtomicBool,
     external_health: RwLock<HashMap<String, ExternalHealth>>,
     external_health_generation: AtomicU64,
     external_probe_slots: Arc<Semaphore>,
@@ -287,6 +288,7 @@ impl Default for AppState {
             managed_lifecycle: StdMutex::new(None),
             managed_worker: RwLock::new(None),
             approval_mode: AtomicU8::new(DesktopApprovalModeDto::Ask as u8),
+            approval_mode_synchronized: AtomicBool::new(false),
             external_health: RwLock::new(HashMap::new()),
             external_health_generation: AtomicU64::new(0),
             external_probe_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXTERNAL_PROBES)),
@@ -456,7 +458,7 @@ impl AppState {
     }
 
     pub(crate) fn begin_managed_lifecycle(&self) -> u64 {
-        self.set_approval_mode(DesktopApprovalModeDto::Ask);
+        self.reset_approval_mode();
         let generation = self
             .managed_lifecycle_generation
             .fetch_add(1, Ordering::AcqRel)
@@ -564,12 +566,12 @@ impl AppState {
 
     pub(crate) async fn configure_managed_worker(&self, client: WorkerControlClient) {
         self.managed_worker.write().await.replace(client);
-        self.set_approval_mode(DesktopApprovalModeDto::Ask);
+        self.reset_approval_mode();
     }
 
     pub(crate) async fn clear_managed_worker(&self) {
         self.managed_worker.write().await.take();
-        self.set_approval_mode(DesktopApprovalModeDto::Ask);
+        self.reset_approval_mode();
     }
 
     pub(crate) async fn managed_worker(&self) -> Option<WorkerControlClient> {
@@ -587,19 +589,40 @@ impl AppState {
 
     pub(crate) fn set_approval_mode(&self, mode: DesktopApprovalModeDto) {
         self.approval_mode.store(mode as u8, Ordering::Release);
+        self.approval_mode_synchronized
+            .store(true, Ordering::Release);
+    }
+
+    fn reset_approval_mode(&self) {
+        self.approval_mode
+            .store(DesktopApprovalModeDto::Ask as u8, Ordering::Release);
+        self.approval_mode_synchronized
+            .store(false, Ordering::Release);
     }
 
     pub(crate) async fn refresh_approval_mode(&self) {
         let Some(worker) = self.managed_worker().await else {
-            self.set_approval_mode(DesktopApprovalModeDto::Ask);
+            self.reset_approval_mode();
             return;
         };
         let Ok(mode) = worker.approval_mode().await else {
             return;
         };
-        if let Some(mode) = mode {
-            self.set_approval_mode(DesktopApprovalModeDto::from_worker_mode(mode));
+        match mode {
+            Some(mode) => self.set_approval_mode(DesktopApprovalModeDto::from_worker_mode(mode)),
+            None => self
+                .approval_mode_synchronized
+                .store(true, Ordering::Release),
         }
+    }
+
+    /// Probe the worker only until the runtime-local mode is known, so idle
+    /// status polling does not append an authenticated worker audit event.
+    pub(crate) async fn ensure_approval_mode_synchronized(&self) {
+        if self.approval_mode_synchronized.load(Ordering::Acquire) {
+            return;
+        }
+        self.refresh_approval_mode().await;
     }
 
     pub(crate) async fn begin_external_probe(&self, target_id: &str) -> u64 {
@@ -1091,6 +1114,26 @@ mod tests {
         assert_eq!(state.approval_mode(), DesktopApprovalModeDto::FullAccess);
 
         state.begin_managed_lifecycle();
+        assert_eq!(state.approval_mode(), DesktopApprovalModeDto::Ask);
+    }
+
+    #[tokio::test]
+    async fn status_polling_reuses_the_cached_mode_instead_of_probing_the_worker() {
+        let state = AppState::default();
+        state.set_approval_mode(DesktopApprovalModeDto::FullAccess);
+
+        // A synchronized cache answers polls without a worker round trip, so the
+        // mode survives even though no worker client is configured.
+        state.ensure_approval_mode_synchronized().await;
+        assert_eq!(state.approval_mode(), DesktopApprovalModeDto::FullAccess);
+
+        // A worker-probing refresh, and any lifecycle change, resynchronizes.
+        state.refresh_approval_mode().await;
+        assert_eq!(state.approval_mode(), DesktopApprovalModeDto::Ask);
+
+        state.set_approval_mode(DesktopApprovalModeDto::RiskAuto);
+        state.begin_managed_lifecycle();
+        state.ensure_approval_mode_synchronized().await;
         assert_eq!(state.approval_mode(), DesktopApprovalModeDto::Ask);
     }
 

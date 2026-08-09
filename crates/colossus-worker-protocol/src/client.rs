@@ -20,6 +20,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(65);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(windows)]
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(windows))]
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Narrow authenticated client for worker readiness and live approval-mode control.
 #[derive(Clone)]
@@ -87,8 +91,12 @@ impl WorkerControlClient {
             operation,
             &connection_nonce,
         )?;
-        write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
-        let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
+        let frame: WorkerFrame = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
+            read_message(&mut stream, MAX_FRAME_BYTES).await
+        })
+        .await
+        .map_err(|_| WorkerControlError::Busy)??;
         validate_frame(
             self.authentication_key.as_ref(),
             &request.request_id,
@@ -214,6 +222,76 @@ fn validate_frame(
         &frame.authentication_tag,
         "worker response",
     )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{fs, os::unix::fs::PermissionsExt as _};
+    use tokio::net::UnixListener;
+
+    use super::{REQUEST_TIMEOUT, WorkerControlClient};
+    use crate::{
+        WorkerControlError,
+        wire::{
+            ClientHello, PROTOCOL_VERSION, ServerHello, UnsignedServerHello, now_ms, read_message,
+            request_tag, write_message,
+        },
+    };
+
+    #[tokio::test]
+    async fn a_worker_that_stalls_after_the_handshake_does_not_block_forever() {
+        let key = zeroize::Zeroizing::new([7_u8; 32]);
+        let directory = tempfile::tempdir().expect("temporary directory");
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("owner-only directory");
+        let endpoint = directory.path().join("control.sock");
+        let listener = UnixListener::bind(&endpoint).expect("listener");
+        fs::set_permissions(&endpoint, fs::Permissions::from_mode(0o600))
+            .expect("owner-only socket");
+        let server_key = key.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accepted connection");
+            let hello: ClientHello = read_message(&mut stream, 1024).await.expect("client hello");
+            let server_nonce = hex::encode([9_u8; 32]);
+            let timestamp_ms = now_ms();
+            let authentication_tag = request_tag(
+                &server_key,
+                &UnsignedServerHello {
+                    version: PROTOCOL_VERSION,
+                    challenge: &hello.challenge,
+                    server_nonce: &server_nonce,
+                    timestamp_ms,
+                },
+            )
+            .expect("server hello tag");
+            write_message(
+                &mut stream,
+                &ServerHello {
+                    version: PROTOCOL_VERSION,
+                    challenge: hello.challenge,
+                    server_nonce,
+                    timestamp_ms,
+                    authentication_tag,
+                },
+                1024,
+            )
+            .await
+            .expect("server hello");
+            // Never answer the request, holding the connection open.
+            std::future::pending::<()>().await;
+        });
+
+        let client =
+            WorkerControlClient::new(endpoint.to_string_lossy().into_owned(), key).expect("client");
+        let started = std::time::Instant::now();
+        let error = client
+            .approval_mode()
+            .await
+            .expect_err("stalled worker response");
+        assert!(matches!(error, WorkerControlError::Busy), "{error:?}");
+        assert!(started.elapsed() < REQUEST_TIMEOUT * 4);
+        server.abort();
+    }
 }
 
 #[cfg(unix)]

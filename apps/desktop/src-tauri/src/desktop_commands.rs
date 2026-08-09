@@ -1647,7 +1647,7 @@ async fn desktop_status_from(
     };
     let selected_managed = selected.as_deref() == Some(MANAGED_TARGET_ID) && managed_ready;
     if managed_ready {
-        state.refresh_approval_mode().await;
+        state.ensure_approval_mode_synchronized().await;
     }
     let advertised = if connection.state == ConnectionStateDto::Connected {
         match selected.as_deref() {
