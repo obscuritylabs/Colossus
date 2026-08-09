@@ -72,6 +72,39 @@ pub(super) fn message_from_event(
     })
 }
 
+pub(super) fn pending_tool_turn_from_events(
+    journal: &dyn EventJournal,
+    events: &[colossus_contracts::EventEnvelope],
+) -> Result<Option<PendingSessionToolTurn>, StoreError> {
+    let mut pending = None::<PendingSessionToolTurn>;
+    for event in events.iter().filter(|event| {
+        matches!(
+            event.event_type.as_str(),
+            TOOL_TURN_PENDING_EVENT | TOOL_TURN_COMPLETED_EVENT
+        )
+    }) {
+        let record: PendingSessionToolTurn =
+            serde_json::from_value(journal.decrypt_payload(event)?)
+                .map_err(|error| StoreError::Verification(error.to_string()))?;
+        validate_pending_tool_turn(&record)
+            .map_err(|error| StoreError::Verification(error.to_string()))?;
+        if event.event_type == TOOL_TURN_PENDING_EVENT {
+            if pending.replace(record).is_some() {
+                return Err(StoreError::Verification(
+                    "session contains overlapping pending tool turns".into(),
+                ));
+            }
+        } else if pending.as_ref() != Some(&record) {
+            return Err(StoreError::Verification(
+                "session tool-turn completion does not match its pending marker".into(),
+            ));
+        } else {
+            pending = None;
+        }
+    }
+    Ok(pending)
+}
+
 pub(super) fn validate_session_id(id: &str) -> Result<(), StoreError> {
     if id.is_empty()
         || id.len() > 128
@@ -129,6 +162,24 @@ pub(super) fn validate_message(message: &ModelMessage) -> Result<(), StoreError>
     {
         return Err(StoreError::Adapter(
             "assistant tool calls require ids, names, and object arguments".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_pending_tool_turn(
+    pending: &PendingSessionToolTurn,
+) -> Result<(), StoreError> {
+    let unique = pending.call_ids.iter().collect::<BTreeSet<_>>();
+    if pending.run_id.is_empty()
+        || pending.turn == 0
+        || pending.call_ids.is_empty()
+        || pending.call_ids.len() > 128
+        || pending.call_ids.iter().any(String::is_empty)
+        || unique.len() != pending.call_ids.len()
+    {
+        return Err(StoreError::Adapter(
+            "pending tool turns require a run, turn, and 1..=128 unique call ids".into(),
         ));
     }
     Ok(())

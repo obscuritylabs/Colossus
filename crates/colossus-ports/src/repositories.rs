@@ -50,6 +50,29 @@ pub trait SessionRepository: Send + Sync {
         messages: Vec<SessionMessageAppend>,
     ) -> Result<Vec<SessionMessage>, StoreError>;
 
+    /// Return an unsettled provider tool turn that blocks safe session continuation.
+    fn pending_tool_turn(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<PendingSessionToolTurn>, StoreError>;
+
+    /// Durably record provider tool-call intent before any tool effect begins.
+    fn begin_tool_turn(
+        &self,
+        session_id: &str,
+        pending: PendingSessionToolTurn,
+        actor: Actor,
+    ) -> Result<(), StoreError>;
+
+    /// Atomically append every call/result message and settle its write-ahead marker.
+    fn complete_tool_turn(
+        &self,
+        session_id: &str,
+        pending: &PendingSessionToolTurn,
+        messages: Vec<SessionMessageAppend>,
+        actor: Actor,
+    ) -> Result<Vec<SessionMessage>, StoreError>;
+
     /// Reconstruct every append-only message in sequence order.
     fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError>;
 

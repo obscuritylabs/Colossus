@@ -78,6 +78,17 @@ impl AgentService {
             }),
             ..ExecutionContext::default()
         };
+        if let Some(pending) = self.sessions.pending_tool_turn(&session_id)? {
+            return Err(AgentError::SessionIntegrity {
+                session_id: session_id.clone(),
+                message: format!(
+                    "run {} turn {} may have executed tool calls [{}] without committing their provider transcript; repair from durable effect evidence or start a new session",
+                    pending.run_id,
+                    pending.turn,
+                    pending.call_ids.join(", ")
+                ),
+            });
+        }
         let mut messages = self
             .sessions
             .list_messages(&session_id)?
@@ -649,6 +660,18 @@ impl AgentService {
                     "provider returned an invalid tool transcript: {error}"
                 ))
             })?;
+            let mut next_messages = messages.clone();
+            next_messages.push(assistant_message.clone());
+            let pending_tool_turn = PendingSessionToolTurn {
+                run_id: run_id.clone(),
+                turn,
+                call_ids: calls.iter().map(|call| call.call_id.clone()).collect(),
+            };
+            self.sessions.begin_tool_turn(
+                &session_id,
+                pending_tool_turn.clone(),
+                system_actor(),
+            )?;
             let mut tool_messages = Vec::with_capacity(calls.len());
             let mut post_commit_events = Vec::<RunEvent>::new();
             let mut terminal = None::<(AgentError, String, String, &'static str, Value)>;
@@ -1057,8 +1080,6 @@ impl AgentService {
                 tool_messages.push(tool_message);
             }
 
-            let mut next_messages = messages.clone();
-            next_messages.push(assistant_message.clone());
             next_messages.extend(tool_messages.iter().cloned());
             validate_model_transcript(&next_messages).map_err(|error| {
                 AgentError::Configuration(format!(
@@ -1081,8 +1102,12 @@ impl AgentService {
                         actor: system_actor(),
                     }),
             );
-            self.sessions
-                .append_messages(&session_id, &run_id, appends)?;
+            self.sessions.complete_tool_turn(
+                &session_id,
+                &pending_tool_turn,
+                appends,
+                system_actor(),
+            )?;
             messages = next_messages;
 
             for event in post_commit_events {

@@ -2,7 +2,7 @@ use super::*;
 use async_trait::async_trait;
 use colossus_contracts::{
     ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderResponseDiagnostic,
-    ProviderRoute, ProviderTurn,
+    ProviderRoute, ProviderTurn, SessionMessage, SessionSummary,
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -311,6 +311,70 @@ enum TerminalToolKind {
 struct TerminalTools {
     calls: AtomicUsize,
     kind: TerminalToolKind,
+}
+
+struct RejectingToolTurnCompletionRepository {
+    inner: Arc<EventSourcedSessionRepository>,
+}
+
+impl SessionRepository for RejectingToolTurnCompletionRepository {
+    fn create_session(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        actor: Actor,
+    ) -> Result<SessionSummary, StoreError> {
+        self.inner.create_session(id, title, actor)
+    }
+
+    fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError> {
+        self.inner.get_session(id)
+    }
+
+    fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
+        self.inner.list_sessions(limit)
+    }
+
+    fn append_messages(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        messages: Vec<SessionMessageAppend>,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        self.inner.append_messages(session_id, run_id, messages)
+    }
+
+    fn pending_tool_turn(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<PendingSessionToolTurn>, StoreError> {
+        self.inner.pending_tool_turn(session_id)
+    }
+
+    fn begin_tool_turn(
+        &self,
+        session_id: &str,
+        pending: PendingSessionToolTurn,
+        actor: Actor,
+    ) -> Result<(), StoreError> {
+        self.inner.begin_tool_turn(session_id, pending, actor)
+    }
+
+    fn complete_tool_turn(
+        &self,
+        _session_id: &str,
+        _pending: &PendingSessionToolTurn,
+        _messages: Vec<SessionMessageAppend>,
+        _actor: Actor,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        Err(StoreError::Adapter(
+            "injected tool-turn completion failure".into(),
+        ))
+    }
+
+    fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError> {
+        self.inner.list_messages(session_id)
+    }
 }
 
 #[async_trait]
@@ -1667,6 +1731,159 @@ async fn outcome_unknown_single_tool_call_is_durably_settled() {
 #[tokio::test]
 async fn outcome_unknown_multi_tool_call_survives_restart_in_same_session() {
     assert_terminal_tool_turn_is_settled(TerminalToolKind::OutcomeUnknown, 2).await;
+}
+
+#[tokio::test]
+async fn duplicate_provider_call_ids_fail_before_any_tool_execution() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "duplicate".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "one"}),
+        },
+        ProviderEvent::ToolCallRequested {
+            call_id: "duplicate".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "two"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("duplicate-calls", None, test_actor())
+        .expect("session");
+    let tools = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        journal,
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "reject duplicate calls",
+            2,
+            Some("duplicate-calls"),
+        )
+        .await
+        .expect_err("duplicate call ids");
+    assert!(matches!(
+        error,
+        AgentError::Configuration(ref message) if message.contains("reused tool call id duplicate")
+    ));
+    assert_eq!(tools.calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        sessions
+            .list_messages("duplicate-calls")
+            .expect("messages")
+            .len(),
+        1
+    );
+    assert_eq!(
+        sessions
+            .pending_tool_turn("duplicate-calls")
+            .expect("no write-ahead marker"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn failed_tool_turn_commit_leaves_a_durable_replay_guard() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "effect-call".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "mutate"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("guarded-effect", None, test_actor())
+        .expect("session");
+    let rejecting = Arc::new(RejectingToolTurnCompletionRepository {
+        inner: Arc::clone(&sessions),
+    });
+    let tools = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+        rejecting,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "perform one effect",
+            2,
+            Some("guarded-effect"),
+        )
+        .await
+        .expect_err("injected completion failure");
+    assert!(matches!(
+        error,
+        AgentError::Store(StoreError::Adapter(ref message))
+            if message == "injected tool-turn completion failure"
+    ));
+    assert_eq!(tools.calls.load(Ordering::Acquire), 1);
+    let pending = sessions
+        .pending_tool_turn("guarded-effect")
+        .expect("pending turn")
+        .expect("durable replay guard");
+    assert_eq!(pending.call_ids, ["effect-call"]);
+    assert_eq!(
+        sessions
+            .list_messages("guarded-effect")
+            .expect("messages")
+            .len(),
+        1,
+        "assistant calls are not partially committed"
+    );
+
+    let resumed_provider = Arc::new(ScriptedProvider::new(Vec::new()));
+    let resumed = AgentService::new(
+        journal,
+        Arc::clone(&resumed_provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    )
+    .run_in_session(
+        "primary",
+        "test",
+        "must not replay",
+        2,
+        Some("guarded-effect"),
+    )
+    .await
+    .expect_err("pending effect blocks continuation");
+    assert!(matches!(resumed, AgentError::SessionIntegrity { .. }));
+    assert!(
+        resumed_provider
+            .requests
+            .lock()
+            .expect("requests")
+            .is_empty()
+    );
+    assert_eq!(
+        sessions
+            .list_messages("guarded-effect")
+            .expect("messages")
+            .len(),
+        1,
+        "blocked continuation does not append another user message"
+    );
 }
 
 #[tokio::test]

@@ -555,9 +555,13 @@ interrupted effects exist. No generic layer automatically retries an uncertain e
 
 Provider-visible tool turns preserve the same certainty boundary. The agent stages an
 assistant tool-call message with exactly one terminal tool-result message per emitted call
-and commits the complete turn to the session in one journal transaction. Denial,
-cancellation, calls skipped after an earlier terminal error, and outcome-unknown execution
-use distinct non-retryable results; an uncertain external effect remains explicitly
+and commits the complete turn to the session in one journal transaction. Before any tool
+effect begins, the session records a pending-turn marker with the exact provider call IDs;
+pre-effect validation rejects duplicate or reused IDs. The atomic message batch also settles
+that marker. A crash or uncertain batch commit therefore leaves a durable replay guard that
+blocks later provider dispatch until an operator reconciles the turn from effect evidence.
+Denial, cancellation, calls skipped after an earlier terminal error, and outcome-unknown
+execution use distinct non-retryable results; an uncertain external effect remains explicitly
 `outcome_unknown`. Session continuation and both OpenAI-compatible request projections
 validate exact call/result pairing before provider dispatch. Legacy sessions with dangling
 calls fail locally before a new user message is appended and require explicit recovery from

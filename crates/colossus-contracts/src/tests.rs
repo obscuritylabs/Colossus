@@ -222,10 +222,15 @@ fn model_transcript_requires_exact_tool_call_settlement() {
             .contains("non-pending")
     );
     assert!(
-        validate_model_transcript(&[call.clone(), result("call-1"), result("call-2"), call,])
-            .expect_err("duplicate call ids")
-            .detail
-            .contains("reused")
+        validate_model_transcript(&[
+            call.clone(),
+            result("call-1"),
+            result("call-2"),
+            call.clone(),
+        ])
+        .expect_err("duplicate call ids")
+        .detail
+        .contains("reused")
     );
 }
 

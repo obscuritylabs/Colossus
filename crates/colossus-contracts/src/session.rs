@@ -39,6 +39,18 @@ pub struct SessionMessageAppend {
     pub actor: Actor,
 }
 
+/// A provider-emitted tool turn durably recorded before any tool effect begins.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingSessionToolTurn {
+    /// Run that received the provider tool calls.
+    pub run_id: String,
+    /// One-based model turn within the run.
+    pub turn: u16,
+    /// Exact provider call identifiers that must be settled together.
+    pub call_ids: Vec<String>,
+}
+
 /// A provider-visible conversation violates tool call/result ordering.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelTranscriptIntegrityError {
