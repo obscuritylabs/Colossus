@@ -347,6 +347,19 @@ pub enum ManagedProviderKind {
     OpenAiCompatible,
 }
 
+/// Chat Completions field used by an app-managed OpenAI-compatible provider to carry
+/// the canonical output-token limit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedChatCompletionsOutputTokenParameter {
+    /// Legacy and broadly compatible `max_tokens` field.
+    MaxTokens,
+    /// Modern `max_completion_tokens` field required by newer models.
+    MaxCompletionTokens,
+    /// Do not send an output-token limit field.
+    Omit,
+}
+
 /// Compact provider connection settings that contain references but never credential values.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -361,6 +374,10 @@ pub struct ManagedProviderConfig {
     pub credential_id: Option<String>,
     /// Per-request transport timeout.
     pub timeout_ms: u64,
+    /// Optional Chat Completions output-token wire parameter for an OpenAI-compatible
+    /// provider. Omission keeps the migration-safe `max_tokens` default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_completions_output_token_parameter: Option<ManagedChatCompletionsOutputTokenParameter>,
 }
 
 impl ManagedProviderConfig {
@@ -369,6 +386,13 @@ impl ManagedProviderConfig {
         if !valid_token(&self.profile)
             || self.timeout_ms == 0
             || self.base_url.as_ref().is_some_and(|url| url.len() > 2_048)
+        {
+            return Err(ProtocolError::InvalidFrame);
+        }
+        // The output-token wire parameter shapes Chat Completions requests only, so any
+        // other adapter must leave it unset rather than carry an inert setting.
+        if self.chat_completions_output_token_parameter.is_some()
+            && !matches!(self.kind, ManagedProviderKind::OpenAiCompatible)
         {
             return Err(ProtocolError::InvalidFrame);
         }
@@ -531,6 +555,7 @@ impl ManagedRuntimeConfig {
                 base_url: None,
                 credential_id: None,
                 timeout_ms: 120_000,
+                chat_completions_output_token_parameter: None,
             }],
             models: vec![ManagedModelConfig {
                 profile: "echo".into(),
@@ -1194,6 +1219,7 @@ mod tests {
                     base_url: Some("https://provider.example/v1".into()),
                     credential_id: Some("provider-main".into()),
                     timeout_ms: 120_000,
+                    chat_completions_output_token_parameter: None,
                 }],
                 models: vec![ManagedModelConfig {
                     profile: "main".into(),
@@ -1475,6 +1501,46 @@ mod tests {
             Ok(REMOTE_PROVIDER_TIMEOUT_MS),
             "private network hosts must retain the remote default"
         );
+    }
+
+    #[test]
+    fn chat_completions_output_token_parameter_is_optional_and_chat_scoped() {
+        let mut request = request();
+        let encoded = serde_json::to_string(&request.runtime.providers[0]).expect("encode");
+        assert!(
+            !encoded.contains("chat_completions_output_token_parameter"),
+            "omitted parameter must stay off the wire: {encoded}"
+        );
+        assert_eq!(
+            serde_json::from_str::<ManagedProviderConfig>(&encoded).expect("decode"),
+            request.runtime.providers[0],
+            "hosts that predate the field must round-trip unchanged"
+        );
+
+        for parameter in [
+            ManagedChatCompletionsOutputTokenParameter::MaxTokens,
+            ManagedChatCompletionsOutputTokenParameter::MaxCompletionTokens,
+            ManagedChatCompletionsOutputTokenParameter::Omit,
+        ] {
+            request.runtime.providers[0].chat_completions_output_token_parameter = Some(parameter);
+            request.validate().expect("chat completions parameter");
+        }
+        assert!(
+            serde_json::to_string(&request.runtime.providers[0])
+                .expect("encode")
+                .contains("\"chat_completions_output_token_parameter\":\"omit\"")
+        );
+
+        request.runtime.providers[0].kind = ManagedProviderKind::OpenAiResponses;
+        assert_eq!(
+            request.validate(),
+            Err(ProtocolError::InvalidFrame),
+            "the parameter shapes Chat Completions requests only"
+        );
+        request.runtime.providers[0].chat_completions_output_token_parameter = None;
+        request
+            .validate()
+            .expect("responses provider without the parameter");
     }
 
     #[test]

@@ -4,7 +4,7 @@ use colossus_access::AccessProfile;
 use colossus_api::{ApiScope, ApplicationKind};
 use colossus_grpc::{TlsIdentity, TlsKeySeed};
 use colossus_ports::StoreError;
-use colossus_provider::ProviderKind;
+use colossus_provider::{ChatCompletionsOutputTokenParameter, ProviderKind};
 use colossus_runtime::{
     HostCredentialResolver, KeyConfig, ModelCapabilities, ModelProfileConfig, ModelsConfig,
     ProviderProfileConfig, ProvidersConfig, RuntimeConfig, RuntimeError, RuntimeOpenOptions,
@@ -12,10 +12,10 @@ use colossus_runtime::{
 };
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
-    FailureResponse, ManagedAccessProfile, ManagedProviderKind, ManagedRuntimeConfig,
-    PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
-    WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication, read_frame,
-    write_frame,
+    FailureResponse, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
+    ManagedProviderKind, ManagedRuntimeConfig, PROTOCOL_VERSION, ParentFrame, ReadyResponse,
+    SecretString, WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication,
+    read_frame, write_frame,
 };
 use colossus_worker::{
     ApplicationGrant, PublicApiAuthenticationKey, PublicApiDeploymentMode, PublicApiHostOptions,
@@ -360,6 +360,22 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     serve_result.map_err(|_| FailureCode::RuntimeFailed)
 }
 
+const fn chat_completions_output_token_parameter(
+    parameter: ManagedChatCompletionsOutputTokenParameter,
+) -> ChatCompletionsOutputTokenParameter {
+    match parameter {
+        ManagedChatCompletionsOutputTokenParameter::MaxTokens => {
+            ChatCompletionsOutputTokenParameter::MaxTokens
+        }
+        ManagedChatCompletionsOutputTokenParameter::MaxCompletionTokens => {
+            ChatCompletionsOutputTokenParameter::MaxCompletionTokens
+        }
+        ManagedChatCompletionsOutputTokenParameter::Omit => {
+            ChatCompletionsOutputTokenParameter::Omit
+        }
+    }
+}
+
 fn managed_runtime_config(
     managed: &ManagedRuntimeConfig,
     instance_id: Uuid,
@@ -409,7 +425,9 @@ fn managed_runtime_config(
                             .as_ref()
                             .map(|identifier| format!("host:{identifier}")),
                         timeout_ms: Some(provider.timeout_ms),
-                        chat_completions_output_token_parameter: None,
+                        chat_completions_output_token_parameter: provider
+                            .chat_completions_output_token_parameter
+                            .map(chat_completions_output_token_parameter),
                     },
                 )
             })
@@ -1223,6 +1241,60 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn managed_chat_completions_output_token_parameter_reaches_the_provider_profile() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = ManagedRuntimeConfig {
+            access_profile: ManagedAccessProfile::Development,
+            providers: vec![ManagedProviderConfig {
+                profile: "openrouter".into(),
+                kind: ManagedProviderKind::OpenAiCompatible,
+                base_url: Some("https://openrouter.ai/api/v1".into()),
+                credential_id: Some("provider-main".into()),
+                timeout_ms: 120_000,
+                chat_completions_output_token_parameter: Some(
+                    ManagedChatCompletionsOutputTokenParameter::MaxCompletionTokens,
+                ),
+            }],
+            models: vec![colossus_sidecar_protocol::ManagedModelConfig {
+                profile: "main".into(),
+                provider_profile: "openrouter".into(),
+                model: "deepseek/deepseek-v4-flash".into(),
+                context_window_tokens: 64_000,
+                max_output_tokens: 8_000,
+                capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
+                    tool_calls: true,
+                    streaming: true,
+                },
+            }],
+            roles: BTreeMap::from([("primary".into(), "main".into())]),
+        };
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("managed config");
+        assert_eq!(
+            config.providers.profiles["openrouter"].chat_completions_output_token_parameter,
+            Some(ChatCompletionsOutputTokenParameter::MaxCompletionTokens)
+        );
+
+        managed.providers[0].chat_completions_output_token_parameter =
+            Some(ManagedChatCompletionsOutputTokenParameter::Omit);
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("managed config");
+        assert_eq!(
+            config.providers.profiles["openrouter"].chat_completions_output_token_parameter,
+            Some(ChatCompletionsOutputTokenParameter::Omit)
+        );
+
+        managed.providers[0].chat_completions_output_token_parameter = None;
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("managed config");
+        assert_eq!(
+            config.providers.profiles["openrouter"].chat_completions_output_token_parameter, None,
+            "omission keeps the migration-safe max_tokens default"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn generated_config_is_owner_private_and_contains_only_host_reference() {
@@ -1235,6 +1307,7 @@ mod tests {
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 credential_id: Some("provider-main".into()),
                 timeout_ms: 120_000,
+                chat_completions_output_token_parameter: None,
             }],
             models: vec![colossus_sidecar_protocol::ManagedModelConfig {
                 profile: "main".into(),
