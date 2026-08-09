@@ -995,6 +995,48 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
 }
 
 #[test]
+fn provider_payloads_reject_dangling_tool_calls_before_dispatch() {
+    let request = ModelRequest {
+        instructions: "test".into(),
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ModelToolCall {
+                call_id: "dangling".into(),
+                name: "workspace.inspect".into(),
+                arguments: json!({}),
+            }],
+        }],
+        tools: Vec::new(),
+        max_output_tokens: None,
+    };
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+
+    for error in [
+        responses_payload(
+            &request,
+            ProviderKind::OpenAiResponses,
+            "unit-model",
+            4_096,
+            None,
+            false,
+            &tool_names,
+        )
+        .expect_err("Responses must reject dangling calls"),
+        chat_payload(&request, "unit-model", 4_096, None, false, &tool_names)
+            .expect_err("Chat Completions must reject dangling calls"),
+    ] {
+        assert!(matches!(
+            error,
+            ProviderError::Configuration(message)
+                if message.contains("model transcript integrity failed")
+                    && message.contains("dangling")
+        ));
+    }
+}
+
+#[test]
 fn codex_responses_payload_omits_unsupported_output_token_parameter() {
     let request = model_request_with_tools(&[]);
     let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");

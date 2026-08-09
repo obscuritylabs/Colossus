@@ -2,7 +2,7 @@ use super::*;
 use async_trait::async_trait;
 use colossus_contracts::{
     ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderResponseDiagnostic,
-    ProviderRoute, ProviderTurn,
+    ProviderRoute, ProviderTurn, SessionMessage, SessionSummary,
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -300,6 +300,98 @@ impl ToolExecutor for EchoTools {
 
 struct CountingTools {
     calls: AtomicUsize,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalToolKind {
+    Denied,
+    OutcomeUnknown,
+}
+
+struct TerminalTools {
+    calls: AtomicUsize,
+    kind: TerminalToolKind,
+}
+
+struct RejectingToolTurnCompletionRepository {
+    inner: Arc<EventSourcedSessionRepository>,
+}
+
+impl SessionRepository for RejectingToolTurnCompletionRepository {
+    fn create_session(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        actor: Actor,
+    ) -> Result<SessionSummary, StoreError> {
+        self.inner.create_session(id, title, actor)
+    }
+
+    fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError> {
+        self.inner.get_session(id)
+    }
+
+    fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
+        self.inner.list_sessions(limit)
+    }
+
+    fn append_messages(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        messages: Vec<SessionMessageAppend>,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        self.inner.append_messages(session_id, run_id, messages)
+    }
+
+    fn pending_tool_turn(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<PendingSessionToolTurn>, StoreError> {
+        self.inner.pending_tool_turn(session_id)
+    }
+
+    fn begin_tool_turn(
+        &self,
+        session_id: &str,
+        pending: PendingSessionToolTurn,
+        actor: Actor,
+    ) -> Result<(), StoreError> {
+        self.inner.begin_tool_turn(session_id, pending, actor)
+    }
+
+    fn complete_tool_turn(
+        &self,
+        _session_id: &str,
+        _pending: &PendingSessionToolTurn,
+        _messages: Vec<SessionMessageAppend>,
+        _actor: Actor,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        Err(StoreError::Adapter(
+            "injected tool-turn completion failure".into(),
+        ))
+    }
+
+    fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError> {
+        self.inner.list_messages(session_id)
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for TerminalTools {
+    async fn execute(
+        &self,
+        _call: ToolCall,
+        _context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        match self.kind {
+            TerminalToolKind::Denied => Err(ToolError::Denied("test policy denial".into())),
+            TerminalToolKind::OutcomeUnknown => {
+                Err(ToolError::OutcomeUnknown("test uncertain effect".into()))
+            }
+        }
+    }
 }
 
 struct RecordingPlanTools {
@@ -1118,9 +1210,22 @@ async fn text_only_models_omit_tools_and_reject_structured_tool_history() {
                     arguments: json!({"text": "hello"}),
                 }],
             },
-            actor,
+            actor.clone(),
         )
         .expect("structured history");
+    sessions
+        .append_message(
+            "structured-session",
+            "earlier-run",
+            ModelMessage {
+                role: ModelMessageRole::Tool,
+                content: "hello".into(),
+                tool_call_id: Some("call-1".into()),
+                tool_calls: Vec::new(),
+            },
+            actor,
+        )
+        .expect("settled structured history");
     let error = service
         .run_in_session("primary", "test", "continue", 1, Some("structured-session"))
         .await
@@ -1422,6 +1527,434 @@ async fn goal_tools_are_visible_only_on_goal_lineage_runs() {
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
         ["echo"]
+    );
+}
+
+async fn assert_terminal_tool_turn_is_settled(kind: TerminalToolKind, call_count: usize) {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(
+        (0..call_count)
+            .map(|index| ProviderEvent::ToolCallRequested {
+                call_id: format!("call-{}", index + 1),
+                name: "echo".into(),
+                arguments: json!({"text": format!("value-{index}")}),
+            })
+            .collect(),
+    )]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("terminal-session", Some("terminal"), test_actor())
+        .expect("session");
+    let executor = Arc::new(TerminalTools {
+        calls: AtomicUsize::new(0),
+        kind,
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "run terminal tool",
+            2,
+            Some("terminal-session"),
+        )
+        .await
+        .expect_err("terminal tool error");
+    match kind {
+        TerminalToolKind::Denied => assert!(matches!(
+            error,
+            AgentError::Tool(ToolError::Denied(ref message)) if message == "test policy denial"
+        )),
+        TerminalToolKind::OutcomeUnknown => {
+            assert!(error.outcome_unknown());
+            assert!(matches!(
+                error,
+                AgentError::Tool(ToolError::OutcomeUnknown(ref message))
+                    if message == "test uncertain effect"
+            ));
+        }
+    }
+    assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+
+    let durable = sessions
+        .list_messages("terminal-session")
+        .expect("durable messages")
+        .into_iter()
+        .map(|record| record.message)
+        .collect::<Vec<_>>();
+    assert_eq!(durable.len(), call_count + 2);
+    validate_model_transcript(&durable).expect("settled durable transcript");
+    let results = durable
+        .iter()
+        .filter(|message| message.role == ModelMessageRole::Tool)
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), call_count);
+    match kind {
+        TerminalToolKind::Denied => {
+            assert!(results[0].content.contains("\"type\":\"denied\""));
+            assert!(
+                results[0]
+                    .content
+                    .contains("\"outcome_certainty\":\"not_executed\"")
+            );
+        }
+        TerminalToolKind::OutcomeUnknown => {
+            assert!(results[0].content.contains("\"type\":\"outcome_unknown\""));
+            assert!(
+                results[0]
+                    .content
+                    .contains("\"outcome_certainty\":\"unknown\"")
+            );
+        }
+    }
+    for result in results.iter().skip(1) {
+        assert!(result.content.contains("\"type\":\"not_executed\""));
+        assert!(
+            result
+                .content
+                .contains("\"outcome_certainty\":\"not_executed\"")
+        );
+    }
+
+    if matches!(kind, TerminalToolKind::OutcomeUnknown) && call_count > 1 {
+        let resumed_provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+            ProviderEvent::FinalOutput {
+                text: "session recovered".into(),
+            },
+        ])]));
+        let resumed = AgentService::new(
+            journal,
+            Arc::clone(&resumed_provider) as Arc<dyn ModelProvider>,
+            Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+            Arc::new(EchoTools),
+            sessions,
+        )
+        .run_in_session(
+            "primary",
+            "test",
+            "continue after restart",
+            2,
+            Some("terminal-session"),
+        )
+        .await
+        .expect("same session continues after restart");
+        assert_eq!(resumed.output, "session recovered");
+        let requests = resumed_provider.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        validate_model_transcript(&requests[0].messages).expect("provider-visible transcript");
+    }
+}
+
+#[tokio::test]
+async fn duplicate_tool_call_ids_are_rejected_before_any_tool_executes() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "first"}),
+        },
+        ProviderEvent::ToolCallRequested {
+            call_id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "second"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("duplicate-session", Some("duplicate"), test_actor())
+        .expect("session");
+    let executor = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "run duplicate calls",
+            2,
+            Some("duplicate-session"),
+        )
+        .await
+        .expect_err("duplicate call ids are rejected");
+    assert!(matches!(
+        error,
+        AgentError::Configuration(ref message)
+            if message.contains("invalid tool transcript") && message.contains("reused")
+    ));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+    let durable = sessions
+        .list_messages("duplicate-session")
+        .expect("durable messages")
+        .into_iter()
+        .map(|record| record.message)
+        .collect::<Vec<_>>();
+    assert!(
+        durable
+            .iter()
+            .all(|message| message.role != ModelMessageRole::Assistant)
+    );
+    validate_model_transcript(&durable).expect("settled durable transcript");
+}
+
+#[tokio::test]
+async fn denied_single_tool_call_is_durably_settled() {
+    assert_terminal_tool_turn_is_settled(TerminalToolKind::Denied, 1).await;
+}
+
+#[tokio::test]
+async fn denied_multi_tool_call_settles_every_remaining_call() {
+    assert_terminal_tool_turn_is_settled(TerminalToolKind::Denied, 2).await;
+}
+
+#[tokio::test]
+async fn outcome_unknown_single_tool_call_is_durably_settled() {
+    assert_terminal_tool_turn_is_settled(TerminalToolKind::OutcomeUnknown, 1).await;
+}
+
+#[tokio::test]
+async fn outcome_unknown_multi_tool_call_survives_restart_in_same_session() {
+    assert_terminal_tool_turn_is_settled(TerminalToolKind::OutcomeUnknown, 2).await;
+}
+
+#[tokio::test]
+async fn duplicate_provider_call_ids_fail_before_any_tool_execution() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "duplicate".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "one"}),
+        },
+        ProviderEvent::ToolCallRequested {
+            call_id: "duplicate".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "two"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("duplicate-calls", None, test_actor())
+        .expect("session");
+    let tools = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        journal,
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "reject duplicate calls",
+            2,
+            Some("duplicate-calls"),
+        )
+        .await
+        .expect_err("duplicate call ids");
+    assert!(matches!(
+        error,
+        AgentError::Configuration(ref message) if message.contains("reused tool call id duplicate")
+    ));
+    assert_eq!(tools.calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        sessions
+            .list_messages("duplicate-calls")
+            .expect("messages")
+            .len(),
+        1
+    );
+    assert_eq!(
+        sessions
+            .pending_tool_turn("duplicate-calls")
+            .expect("no write-ahead marker"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn failed_tool_turn_commit_leaves_a_durable_replay_guard() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "effect-call".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "mutate"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("guarded-effect", None, test_actor())
+        .expect("session");
+    let rejecting = Arc::new(RejectingToolTurnCompletionRepository {
+        inner: Arc::clone(&sessions),
+    });
+    let tools = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+        rejecting,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "perform one effect",
+            2,
+            Some("guarded-effect"),
+        )
+        .await
+        .expect_err("injected completion failure");
+    assert!(matches!(
+        error,
+        AgentError::Store(StoreError::Adapter(ref message))
+            if message == "injected tool-turn completion failure"
+    ));
+    assert_eq!(tools.calls.load(Ordering::Acquire), 1);
+    let pending = sessions
+        .pending_tool_turn("guarded-effect")
+        .expect("pending turn")
+        .expect("durable replay guard");
+    assert_eq!(pending.call_ids, ["effect-call"]);
+    assert_eq!(
+        sessions
+            .list_messages("guarded-effect")
+            .expect("messages")
+            .len(),
+        1,
+        "assistant calls are not partially committed"
+    );
+
+    let resumed_provider = Arc::new(ScriptedProvider::new(Vec::new()));
+    let resumed = AgentService::new(
+        journal,
+        Arc::clone(&resumed_provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    )
+    .run_in_session(
+        "primary",
+        "test",
+        "must not replay",
+        2,
+        Some("guarded-effect"),
+    )
+    .await
+    .expect_err("pending effect blocks continuation");
+    assert!(matches!(resumed, AgentError::SessionIntegrity { .. }));
+    assert!(
+        resumed_provider
+            .requests
+            .lock()
+            .expect("requests")
+            .is_empty()
+    );
+    assert_eq!(
+        sessions
+            .list_messages("guarded-effect")
+            .expect("messages")
+            .len(),
+        1,
+        "blocked continuation does not append another user message"
+    );
+}
+
+#[tokio::test]
+async fn legacy_dangling_session_fails_locally_before_appending_new_input() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::FinalOutput {
+            text: "must not dispatch".into(),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("legacy-corrupt", Some("legacy"), test_actor())
+        .expect("session");
+    sessions
+        .append_message(
+            "legacy-corrupt",
+            "legacy-run",
+            ModelMessage {
+                role: ModelMessageRole::User,
+                content: "old input".into(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            },
+            test_actor(),
+        )
+        .expect("old user message");
+    sessions
+        .append_message(
+            "legacy-corrupt",
+            "legacy-run",
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ModelToolCall {
+                    call_id: "dangling".into(),
+                    name: "echo".into(),
+                    arguments: json!({}),
+                }],
+            },
+            test_actor(),
+        )
+        .expect("legacy dangling call");
+    let service = AgentService::new(
+        journal,
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session("primary", "test", "new input", 2, Some("legacy-corrupt"))
+        .await
+        .expect_err("legacy corruption must fail locally");
+    assert!(matches!(
+        error,
+        AgentError::SessionIntegrity {
+            ref session_id,
+            ref message,
+        } if session_id == "legacy-corrupt" && message.contains("dangling")
+    ));
+    assert!(provider.requests.lock().expect("requests").is_empty());
+    assert_eq!(
+        sessions
+            .list_messages("legacy-corrupt")
+            .expect("messages")
+            .len(),
+        2,
+        "new input must not be appended to a corrupt transcript"
     );
 }
 

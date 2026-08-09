@@ -12,6 +12,7 @@ use colossus_contracts::{
     ModelMessageRole, ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent,
     ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic,
     ProviderStreamItem, ProviderTurn, ProviderUsage, QuarantinedEffectResult, ReasoningEffort,
+    validate_model_transcript,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{

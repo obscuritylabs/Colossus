@@ -78,12 +78,29 @@ impl AgentService {
             }),
             ..ExecutionContext::default()
         };
+        if let Some(pending) = self.sessions.pending_tool_turn(&session_id)? {
+            return Err(AgentError::SessionIntegrity {
+                session_id: session_id.clone(),
+                message: format!(
+                    "run {} turn {} may have executed tool calls [{}] without committing their provider transcript; repair from durable effect evidence or start a new session",
+                    pending.run_id,
+                    pending.turn,
+                    pending.call_ids.join(", ")
+                ),
+            });
+        }
         let mut messages = self
             .sessions
             .list_messages(&session_id)?
             .into_iter()
             .map(|record| record.message)
             .collect::<Vec<_>>();
+        validate_model_transcript(&messages).map_err(|error| AgentError::SessionIntegrity {
+            session_id: session_id.clone(),
+            message: format!(
+                "{error}; start a new session or repair this legacy session from durable effect evidence"
+            ),
+        })?;
         if !route.capabilities.tool_calls
             && messages.iter().any(|message| {
                 message.role == ModelMessageRole::Tool || !message.tool_calls.is_empty()
@@ -635,27 +652,33 @@ impl AgentService {
                     })
                     .collect(),
             };
-            self.sessions.append_message(
+            // Reject malformed call identifiers before the executor can apply any external
+            // effect. The settled-transcript check below can only run once every call owns a
+            // terminal result, which is after the effects would already have happened.
+            validate_assistant_tool_call_turn(&messages, &assistant_message).map_err(|error| {
+                AgentError::Configuration(format!(
+                    "provider returned an invalid tool transcript: {error}"
+                ))
+            })?;
+            let mut next_messages = messages.clone();
+            next_messages.push(assistant_message.clone());
+            let pending_tool_turn = PendingSessionToolTurn {
+                run_id: run_id.clone(),
+                turn,
+                call_ids: calls.iter().map(|call| call.call_id.clone()).collect(),
+            };
+            self.sessions.begin_tool_turn(
                 &session_id,
-                &run_id,
-                assistant_message.clone(),
-                Actor {
-                    actor_type: ActorType::Model,
-                    id: route.model_profile.clone(),
-                },
+                pending_tool_turn.clone(),
+                system_actor(),
             )?;
-            messages.push(assistant_message);
+            let mut tool_messages = Vec::with_capacity(calls.len());
+            let mut post_commit_events = Vec::<RunEvent>::new();
+            let mut terminal = None::<(AgentError, String, String, &'static str, Value)>;
             for (call_index, call) in calls.iter().cloned().enumerate() {
                 if control.is_some_and(RunControl::is_cancelled) {
                     for pending in calls.iter().skip(call_index) {
-                        let output = json!({
-                            "error": {
-                                "code": "operator_cancelled",
-                                "message": "tool execution was cancelled before the effect began",
-                                "recoverable": false,
-                            }
-                        })
-                        .to_string();
+                        let result = cancelled_tool_result(pending);
                         self.append(
                             &stream_id,
                             &mut stream_version,
@@ -666,46 +689,18 @@ impl AgentService {
                                 "turn": turn,
                                 "call_id": pending.call_id,
                                 "name": pending.name,
+                                "reason": "operator_cancelled",
+                                "outcome_certainty": "not_executed",
                             }),
                         )?;
-                        emit_run_event(
-                            &mut released_observer,
-                            &run_id,
-                            &session_id,
-                            RunEvent::ToolCancelled {
-                                turn,
-                                call: pending.clone(),
-                                elapsed_seconds: started.elapsed().as_secs_f64(),
-                            },
-                        )
-                        .await?;
-                        let tool_message = ModelMessage {
-                            role: ModelMessageRole::Tool,
-                            content: output,
-                            tool_call_id: Some(pending.call_id.clone()),
-                            tool_calls: Vec::new(),
-                        };
-                        self.sessions.append_message(
-                            &session_id,
-                            &run_id,
-                            tool_message.clone(),
-                            system_actor(),
-                        )?;
-                        messages.push(tool_message);
-                    }
-                    return self
-                        .finish_cancelled_run(
-                            &stream_id,
-                            &mut stream_version,
-                            &context,
-                            &mut released_observer,
-                            &run_id,
-                            &session_id,
+                        post_commit_events.push(RunEvent::ToolCancelled {
                             turn,
-                            written_plan.as_ref(),
-                            &started,
-                        )
-                        .await;
+                            call: pending.clone(),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        });
+                        tool_messages.push(tool_result_message(&result));
+                    }
+                    break;
                 }
                 let tool_started = Instant::now();
                 let validation = if turn_offered_tools.contains(call.name.as_str()) {
@@ -730,34 +725,45 @@ impl AgentService {
                     let message = format!(
                         "Plan Mode cannot complete until {required_tool} succeeds exactly once"
                     );
-                    self.append(
-                        &stream_id,
-                        &mut stream_version,
+                    for (offset, pending) in calls.iter().skip(call_index).enumerate() {
+                        let result = if offset == 0 {
+                            blocked_tool_result(pending, "plan.write_required", &message)
+                        } else {
+                            unexecuted_tool_result(pending, &call.call_id, "plan.write_required")
+                        };
+                        self.append(
+                            &stream_id,
+                            &mut stream_version,
+                            "tool.call.cancelled.v1",
+                            system_actor(),
+                            &context,
+                            json!({
+                                "turn": turn,
+                                "call_id": pending.call_id,
+                                "name": pending.name,
+                                "reason": "plan_write_required",
+                                "outcome_certainty": "not_executed",
+                            }),
+                        )?;
+                        post_commit_events.push(RunEvent::ToolCancelled {
+                            turn,
+                            call: pending.clone(),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        });
+                        tool_messages.push(tool_result_message(&result));
+                    }
+                    terminal = Some((
+                        AgentError::PlanWriteRequired,
+                        "plan.write_required".into(),
+                        message,
                         "plan.write.required.v1",
-                        system_actor(),
-                        &context,
                         json!({
                             "turn": turn,
                             "required_tool": required_tool,
                             "recoverable": false,
                         }),
-                    )?;
-                    emit_run_event(
-                        &mut released_observer,
-                        &run_id,
-                        &session_id,
-                        RunEvent::Error {
-                            code: "plan.write_required".into(),
-                            message,
-                            recoverable: false,
-                            http_status: None,
-                            retry_after_ms: None,
-                            turn: Some(turn),
-                            elapsed_seconds: started.elapsed().as_secs_f64(),
-                        },
-                    )
-                    .await?;
-                    return Err(AgentError::PlanWriteRequired);
+                    ));
+                    break;
                 }
                 if validation.is_ok() {
                     self.append(
@@ -777,7 +783,7 @@ impl AgentService {
                                 .unwrap_or_default(),
                         }),
                     )?;
-                    emit_run_event(
+                    if let Err(error) = emit_run_event(
                         &mut released_observer,
                         &run_id,
                         &session_id,
@@ -787,7 +793,52 @@ impl AgentService {
                             elapsed_seconds: started.elapsed().as_secs_f64(),
                         },
                     )
-                    .await?;
+                    .await
+                    {
+                        let message = error.to_string();
+                        for (offset, pending) in calls.iter().skip(call_index).enumerate() {
+                            let result = if offset == 0 {
+                                blocked_tool_result(
+                                    pending,
+                                    "provider.observer_failed",
+                                    "run event observer rejected tool start before execution",
+                                )
+                            } else {
+                                unexecuted_tool_result(
+                                    pending,
+                                    &call.call_id,
+                                    "provider.observer_failed",
+                                )
+                            };
+                            self.append(
+                                &stream_id,
+                                &mut stream_version,
+                                "tool.call.cancelled.v1",
+                                system_actor(),
+                                &context,
+                                json!({
+                                    "turn": turn,
+                                    "call_id": pending.call_id,
+                                    "name": pending.name,
+                                    "reason": "observer_failed_before_execution",
+                                    "outcome_certainty": "not_executed",
+                                }),
+                            )?;
+                            tool_messages.push(tool_result_message(&result));
+                        }
+                        terminal = Some((
+                            error,
+                            "provider.failed".into(),
+                            message.clone(),
+                            "error.v1",
+                            json!({
+                                "code": "provider.failed",
+                                "message": message,
+                                "recoverable": false,
+                            }),
+                        ));
+                        break;
+                    }
                 }
                 let result = match validation {
                     Ok(_) => match self.executor.execute(call.clone(), context.clone()).await {
@@ -800,30 +851,64 @@ impl AgentService {
                         }
                         Err(error @ (ToolError::Denied(_) | ToolError::OutcomeUnknown(_))) => {
                             let message = error.to_string();
+                            let code = tool_error_code(&error);
+                            let result = terminal_tool_error_result(&call, &error);
                             self.append(
                                 &stream_id,
                                 &mut stream_version,
-                                "error.v1",
+                                "tool.call.completed.v1",
                                 system_actor(),
                                 &context,
-                                json!({"message": &message, "recoverable": false}),
+                                json!({
+                                    "call_id": result.call_id,
+                                    "name": result.name,
+                                    "output": result.output,
+                                    "exit_code": result.exit_code,
+                                    "outcome_certainty": if matches!(&error, ToolError::OutcomeUnknown(_)) {
+                                        "unknown"
+                                    } else {
+                                        "not_executed"
+                                    },
+                                }),
                             )?;
-                            emit_run_event(
-                                &mut released_observer,
-                                &run_id,
-                                &session_id,
-                                RunEvent::Error {
-                                    code: tool_error_code(&error).into(),
-                                    message,
-                                    recoverable: false,
-                                    http_status: None,
-                                    retry_after_ms: None,
-                                    turn: Some(turn),
+                            tool_messages.push(tool_result_message(&result));
+                            for pending in calls.iter().skip(call_index.saturating_add(1)) {
+                                let skipped = unexecuted_tool_result(pending, &call.call_id, code);
+                                self.append(
+                                    &stream_id,
+                                    &mut stream_version,
+                                    "tool.call.cancelled.v1",
+                                    system_actor(),
+                                    &context,
+                                    json!({
+                                        "turn": turn,
+                                        "call_id": pending.call_id,
+                                        "name": pending.name,
+                                        "reason": "prior_terminal_tool_error",
+                                        "cause_call_id": call.call_id,
+                                        "cause_code": code,
+                                        "outcome_certainty": "not_executed",
+                                    }),
+                                )?;
+                                post_commit_events.push(RunEvent::ToolCancelled {
+                                    turn,
+                                    call: pending.clone(),
                                     elapsed_seconds: started.elapsed().as_secs_f64(),
-                                },
-                            )
-                            .await?;
-                            return Err(error.into());
+                                });
+                                tool_messages.push(tool_result_message(&skipped));
+                            }
+                            terminal = Some((
+                                error.into(),
+                                code.into(),
+                                message.clone(),
+                                "error.v1",
+                                json!({
+                                    "code": code,
+                                    "message": message,
+                                    "recoverable": false,
+                                }),
+                            ));
+                            break;
                         }
                     },
                     Err(ToolError::Unknown(message)) => {
@@ -832,8 +917,44 @@ impl AgentService {
                     Err(ToolError::InvalidArguments { message, .. }) => {
                         tool_error_result(&call, "invalid_arguments", &message)
                     }
-                    Err(error) => return Err(error.into()),
+                    Err(ToolError::Failed(message)) => {
+                        tool_error_result(&call, "validation_error", &message)
+                    }
+                    Err(error @ (ToolError::Denied(_) | ToolError::OutcomeUnknown(_))) => {
+                        let message = error.to_string();
+                        let code = tool_error_code(&error);
+                        let result = terminal_tool_error_result(&call, &error);
+                        tool_messages.push(tool_result_message(&result));
+                        for pending in calls.iter().skip(call_index.saturating_add(1)) {
+                            let skipped = unexecuted_tool_result(pending, &call.call_id, code);
+                            post_commit_events.push(RunEvent::ToolCancelled {
+                                turn,
+                                call: pending.clone(),
+                                elapsed_seconds: started.elapsed().as_secs_f64(),
+                            });
+                            tool_messages.push(tool_result_message(&skipped));
+                        }
+                        terminal = Some((
+                            error.into(),
+                            code.into(),
+                            message.clone(),
+                            "error.v1",
+                            json!({
+                                "code": code,
+                                "message": message,
+                                "recoverable": false,
+                            }),
+                        ));
+                        break;
+                    }
                 };
+                let completed_event = RunEvent::ToolCompleted {
+                    turn,
+                    result: result.clone(),
+                    duration_seconds: tool_started.elapsed().as_secs_f64(),
+                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                };
+                let tool_message = tool_result_message(&result);
                 if result.exit_code == 0
                     && let Some(target) = plan_target.as_ref()
                     && result.name
@@ -842,12 +963,40 @@ impl AgentService {
                             PlanDraftTarget::Update { .. } => "plan.update",
                         }
                 {
-                    let plan =
-                        serde_json::from_str::<PlanRecord>(&result.output).map_err(|error| {
-                            AgentError::Configuration(format!(
-                                "plan tool returned an invalid canonical record: {error}"
-                            ))
-                        })?;
+                    let plan = match serde_json::from_str::<PlanRecord>(&result.output) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            let message =
+                                format!("plan tool returned an invalid canonical record: {error}");
+                            tool_messages.push(tool_message);
+                            post_commit_events.push(completed_event);
+                            for pending in calls.iter().skip(call_index.saturating_add(1)) {
+                                let skipped = unexecuted_tool_result(
+                                    pending,
+                                    &call.call_id,
+                                    "agent.configuration",
+                                );
+                                post_commit_events.push(RunEvent::ToolCancelled {
+                                    turn,
+                                    call: pending.clone(),
+                                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                                });
+                                tool_messages.push(tool_result_message(&skipped));
+                            }
+                            terminal = Some((
+                                AgentError::Configuration(message.clone()),
+                                "agent.configuration".into(),
+                                message.clone(),
+                                "error.v1",
+                                json!({
+                                    "code": "agent.configuration",
+                                    "message": message,
+                                    "recoverable": false,
+                                }),
+                            ));
+                            break;
+                        }
+                    };
                     let valid_target = plan.session_id == session_id
                         && match target {
                             PlanDraftTarget::Create => {
@@ -862,9 +1011,36 @@ impl AgentService {
                             }
                         };
                     if !valid_target {
-                        return Err(AgentError::Configuration(
-                            "plan tool returned a record outside the bound Plan Mode target".into(),
+                        let message =
+                            "plan tool returned a record outside the bound Plan Mode target"
+                                .to_owned();
+                        tool_messages.push(tool_message);
+                        post_commit_events.push(completed_event);
+                        for pending in calls.iter().skip(call_index.saturating_add(1)) {
+                            let skipped = unexecuted_tool_result(
+                                pending,
+                                &call.call_id,
+                                "agent.configuration",
+                            );
+                            post_commit_events.push(RunEvent::ToolCancelled {
+                                turn,
+                                call: pending.clone(),
+                                elapsed_seconds: started.elapsed().as_secs_f64(),
+                            });
+                            tool_messages.push(tool_result_message(&skipped));
+                        }
+                        terminal = Some((
+                            AgentError::Configuration(message.clone()),
+                            "agent.configuration".into(),
+                            message.clone(),
+                            "error.v1",
+                            json!({
+                                "code": "agent.configuration",
+                                "message": message,
+                                "recoverable": false,
+                            }),
                         ));
+                        break;
                     }
 
                     // The plan tool has already committed at this point. Capture its canonical
@@ -885,13 +1061,7 @@ impl AgentService {
                             "revision": plan.revision,
                         }),
                     )?;
-                    emit_run_event(
-                        &mut released_observer,
-                        &run_id,
-                        &session_id,
-                        RunEvent::PlanWritten { plan: plan.clone() },
-                    )
-                    .await?;
+                    post_commit_events.push(RunEvent::PlanWritten { plan: plan.clone() });
                 }
                 self.append(
                     &stream_id,
@@ -906,31 +1076,68 @@ impl AgentService {
                         "exit_code": result.exit_code,
                     }),
                 )?;
+                post_commit_events.push(completed_event);
+                tool_messages.push(tool_message);
+            }
+
+            next_messages.extend(tool_messages.iter().cloned());
+            validate_model_transcript(&next_messages).map_err(|error| {
+                AgentError::Configuration(format!(
+                    "provider returned an invalid tool transcript: {error}"
+                ))
+            })?;
+            let mut appends = Vec::with_capacity(tool_messages.len().saturating_add(1));
+            appends.push(SessionMessageAppend {
+                message: assistant_message,
+                actor: Actor {
+                    actor_type: ActorType::Model,
+                    id: route.model_profile.clone(),
+                },
+            });
+            appends.extend(
+                tool_messages
+                    .into_iter()
+                    .map(|message| SessionMessageAppend {
+                        message,
+                        actor: system_actor(),
+                    }),
+            );
+            self.sessions.complete_tool_turn(
+                &session_id,
+                &pending_tool_turn,
+                appends,
+                system_actor(),
+            )?;
+            messages = next_messages;
+
+            for event in post_commit_events {
+                emit_run_event(&mut released_observer, &run_id, &session_id, event).await?;
+            }
+            if let Some((error, code, message, event_type, payload)) = terminal {
+                self.append(
+                    &stream_id,
+                    &mut stream_version,
+                    event_type,
+                    system_actor(),
+                    &context,
+                    payload,
+                )?;
                 emit_run_event(
                     &mut released_observer,
                     &run_id,
                     &session_id,
-                    RunEvent::ToolCompleted {
-                        turn,
-                        result: result.clone(),
-                        duration_seconds: tool_started.elapsed().as_secs_f64(),
+                    RunEvent::Error {
+                        code,
+                        message,
+                        recoverable: false,
+                        http_status: None,
+                        retry_after_ms: None,
+                        turn: Some(turn),
                         elapsed_seconds: started.elapsed().as_secs_f64(),
                     },
                 )
                 .await?;
-                let tool_message = ModelMessage {
-                    role: ModelMessageRole::Tool,
-                    content: result.output,
-                    tool_call_id: Some(result.call_id),
-                    tool_calls: Vec::new(),
-                };
-                self.sessions.append_message(
-                    &session_id,
-                    &run_id,
-                    tool_message.clone(),
-                    system_actor(),
-                )?;
-                messages.push(tool_message);
+                return Err(error);
             }
             if control.is_some_and(RunControl::is_cancelled) {
                 return self

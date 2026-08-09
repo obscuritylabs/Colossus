@@ -32,7 +32,46 @@ pub trait SessionRepository: Send + Sync {
         run_id: &str,
         message: colossus_contracts::ModelMessage,
         actor: Actor,
-    ) -> Result<SessionMessage, StoreError>;
+    ) -> Result<SessionMessage, StoreError> {
+        self.append_messages(
+            session_id,
+            run_id,
+            vec![SessionMessageAppend { message, actor }],
+        )?
+        .pop()
+        .ok_or_else(|| StoreError::Adapter("session append returned no message".into()))
+    }
+
+    /// Atomically append an ordered message batch using one journal transaction.
+    fn append_messages(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        messages: Vec<SessionMessageAppend>,
+    ) -> Result<Vec<SessionMessage>, StoreError>;
+
+    /// Return an unsettled provider tool turn that blocks safe session continuation.
+    fn pending_tool_turn(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<PendingSessionToolTurn>, StoreError>;
+
+    /// Durably record provider tool-call intent before any tool effect begins.
+    fn begin_tool_turn(
+        &self,
+        session_id: &str,
+        pending: PendingSessionToolTurn,
+        actor: Actor,
+    ) -> Result<(), StoreError>;
+
+    /// Atomically append every call/result message and settle its write-ahead marker.
+    fn complete_tool_turn(
+        &self,
+        session_id: &str,
+        pending: &PendingSessionToolTurn,
+        messages: Vec<SessionMessageAppend>,
+        actor: Actor,
+    ) -> Result<Vec<SessionMessage>, StoreError>;
 
     /// Reconstruct every append-only message in sequence order.
     fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError>;

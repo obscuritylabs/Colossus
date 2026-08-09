@@ -1,4 +1,5 @@
 use super::*;
+use std::{collections::BTreeSet, error::Error, fmt};
 
 /// Provider-neutral message role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,6 +28,157 @@ pub struct ModelMessage {
     /// Strict assistant tool calls preserved for provider continuation.
     #[serde(default)]
     pub tool_calls: Vec<ModelToolCall>,
+}
+
+/// One message and its immutable durable actor for an atomic session append.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionMessageAppend {
+    /// Provider-neutral message content and tool correlation.
+    pub message: ModelMessage,
+    /// Actor responsible for the durable message.
+    pub actor: Actor,
+}
+
+/// A provider-emitted tool turn durably recorded before any tool effect begins.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingSessionToolTurn {
+    /// Run that received the provider tool calls.
+    pub run_id: String,
+    /// One-based model turn within the run.
+    pub turn: u16,
+    /// Exact provider call identifiers that must be settled together.
+    pub call_ids: Vec<String>,
+}
+
+/// A provider-visible conversation violates tool call/result ordering.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelTranscriptIntegrityError {
+    /// Zero-based message index where validation failed.
+    pub message_index: usize,
+    /// Bounded structural failure detail.
+    pub detail: String,
+}
+
+impl fmt::Display for ModelTranscriptIntegrityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "message {} violates tool transcript integrity: {}",
+            self.message_index, self.detail
+        )
+    }
+}
+
+impl Error for ModelTranscriptIntegrityError {}
+
+/// Validate exact assistant tool call and tool-result pairing before provider dispatch.
+pub fn validate_model_transcript(
+    messages: &[ModelMessage],
+) -> Result<(), ModelTranscriptIntegrityError> {
+    let mut pending = BTreeSet::<String>::new();
+    let mut seen = BTreeSet::<String>::new();
+
+    for (message_index, message) in messages.iter().enumerate() {
+        match message.role {
+            ModelMessageRole::Tool => {
+                let call_id = message
+                    .tool_call_id
+                    .as_deref()
+                    .ok_or_else(|| transcript_error(message_index, "tool result has no call id"))?;
+                if !pending.remove(call_id) {
+                    return Err(transcript_error(
+                        message_index,
+                        format!("tool result references non-pending call {call_id}"),
+                    ));
+                }
+            }
+            ModelMessageRole::Assistant => {
+                if !pending.is_empty() {
+                    return Err(unsettled_error(message_index, &pending));
+                }
+                for call in &message.tool_calls {
+                    if !seen.insert(call.call_id.clone()) {
+                        return Err(transcript_error(
+                            message_index,
+                            format!("assistant reused tool call id {}", call.call_id),
+                        ));
+                    }
+                    pending.insert(call.call_id.clone());
+                }
+            }
+            ModelMessageRole::System | ModelMessageRole::User => {
+                if !pending.is_empty() {
+                    return Err(unsettled_error(message_index, &pending));
+                }
+            }
+        }
+    }
+
+    if pending.is_empty() {
+        Ok(())
+    } else {
+        Err(unsettled_error(messages.len(), &pending))
+    }
+}
+
+/// Validate a newly emitted assistant tool-call turn before any tool executes.
+///
+/// The full transcript check can only run once every call has a terminal result, so
+/// call-identifier reuse would otherwise be detected after the executor already applied
+/// external effects. This rejects empty, duplicated, and previously used call
+/// identifiers against the settled transcript that precedes the turn.
+pub fn validate_assistant_tool_call_turn(
+    messages: &[ModelMessage],
+    assistant: &ModelMessage,
+) -> Result<(), ModelTranscriptIntegrityError> {
+    let message_index = messages.len();
+    let mut seen = BTreeSet::<String>::new();
+    for message in messages {
+        for call in &message.tool_calls {
+            seen.insert(call.call_id.clone());
+        }
+    }
+
+    for call in &assistant.tool_calls {
+        if call.call_id.is_empty() {
+            return Err(transcript_error(
+                message_index,
+                "assistant emitted a tool call without a call id",
+            ));
+        }
+        if !seen.insert(call.call_id.clone()) {
+            return Err(transcript_error(
+                message_index,
+                format!("assistant reused tool call id {}", call.call_id),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn transcript_error(
+    message_index: usize,
+    detail: impl Into<String>,
+) -> ModelTranscriptIntegrityError {
+    ModelTranscriptIntegrityError {
+        message_index,
+        detail: detail.into(),
+    }
+}
+
+fn unsettled_error(
+    message_index: usize,
+    pending: &BTreeSet<String>,
+) -> ModelTranscriptIntegrityError {
+    transcript_error(
+        message_index,
+        format!(
+            "message arrived before tool calls [{}] were settled",
+            pending.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    )
 }
 
 /// Durable reconstructed local session summary.

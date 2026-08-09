@@ -141,6 +141,7 @@ pub(super) fn responses_payload(
     streaming: bool,
     tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
+    validate_request_transcript(request)?;
     if !matches!(
         provider_kind,
         ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex
@@ -246,6 +247,7 @@ pub(super) fn chat_payload(
     streaming: bool,
     tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
+    validate_request_transcript(request)?;
     let mut messages = Vec::new();
     if !request.instructions.is_empty() {
         messages.push(json!({"role": "system", "content": request.instructions}));
@@ -278,6 +280,12 @@ pub(super) fn chat_payload(
         payload["tools"] = Value::Array(tools);
     }
     Ok(payload)
+}
+
+fn validate_request_transcript(request: &ModelRequest) -> Result<(), ProviderError> {
+    validate_model_transcript(&request.messages).map_err(|error| {
+        ProviderError::Configuration(format!("model transcript integrity failed: {error}"))
+    })
 }
 
 pub(super) fn chat_message(

@@ -42,6 +42,14 @@ pub enum AgentError {
     /// Context preparation could not safely fit or persist model-visible history.
     #[error(transparent)]
     Context(#[from] ContextError),
+    /// Durable session history cannot be projected to a provider safely.
+    #[error("session {session_id} has invalid tool transcript history: {message}")]
+    SessionIntegrity {
+        /// Session requiring explicit recovery or replacement.
+        session_id: String,
+        /// Specific call/result ordering failure.
+        message: String,
+    },
     /// Malformed tool-call recovery was exhausted without executing a tool.
     #[error("provider tool-call argument recovery exhausted after {attempts} attempts")]
     ToolArgumentRecoveryExhausted {
@@ -82,6 +90,7 @@ impl AgentError {
             | Self::Tool(_)
             | Self::Store(_)
             | Self::Context(_)
+            | Self::SessionIntegrity { .. }
             | Self::ToolArgumentRecoveryExhausted { .. }
             | Self::MaxTurns { .. }
             | Self::EmptyTurn
