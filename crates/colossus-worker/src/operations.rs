@@ -125,7 +125,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v10 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v11 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -341,7 +341,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v10 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v11 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,

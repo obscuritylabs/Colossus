@@ -303,7 +303,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 10);
+    assert_eq!(status["protocol_version"], 11);
 
     let mut encoded_authentication =
         fs::read_to_string(&worker_auth_path).expect("read worker control authentication");

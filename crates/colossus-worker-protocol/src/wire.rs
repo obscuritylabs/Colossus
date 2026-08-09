@@ -7,7 +7,12 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
-pub const PROTOCOL_VERSION: u16 = 10;
+///
+/// Version 11 changed audit reads from encrypted `EventEnvelope` values to
+/// ciphertext-free `AuditEvidence`. A version-10 worker would otherwise violate
+/// the export contract for a version-11 client, so both sides must reject the
+/// mismatch and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 11;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
