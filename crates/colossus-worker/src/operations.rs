@@ -117,7 +117,7 @@ pub enum WorkerError {
     Unavailable(String),
     /// A live endpoint belongs to a worker that cannot speak this protocol version.
     #[error(
-        "worker at {0} is listening without a protocol-v{PROTOCOL_VERSION} authentication secret; stop that worker and start it again with this build"
+        "worker at {0} cannot complete the protocol-v{PROTOCOL_VERSION} handshake; stop that worker and restart the worker with this Colossus build"
     )]
     Incompatible(String),
     /// A live worker could not accept another connection before the bounded deadline.

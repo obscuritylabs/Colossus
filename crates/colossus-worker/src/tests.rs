@@ -1330,6 +1330,38 @@ async fn protocol_version_mismatch_has_restart_guidance() {
 }
 
 #[tokio::test]
+async fn stale_worker_that_closes_the_handshake_is_reported_as_incompatible() {
+    let key = [17_u8; 32];
+    let (mut client, mut server) = tokio::io::duplex(1024);
+    // A worker from the previous protocol rejects this client's hello and drops
+    // the stream before it writes any ServerHello.
+    let stale_worker = tokio::spawn(async move {
+        let _hello: ClientHello = read_message(&mut server, 1024).await.expect("client hello");
+        drop(server);
+    });
+
+    let error = client_handshake(&mut client, &key)
+        .await
+        .expect_err("stale worker must fail the client handshake");
+    assert!(matches!(error, WorkerError::Io(_)));
+    let outcome = handshake_failure_outcome("worker-endpoint", error);
+    assert!(
+        matches!(&outcome, WorkerError::Incompatible(endpoint) if endpoint == "worker-endpoint")
+    );
+    assert!(outcome.to_string().contains("restart the worker"));
+    stale_worker.await.expect("stale worker task");
+}
+
+#[tokio::test]
+async fn client_handshake_protocol_rejection_is_not_reported_as_incompatible() {
+    let outcome = handshake_failure_outcome(
+        "worker-endpoint",
+        WorkerError::Protocol("invalid handshake".into()),
+    );
+    assert!(matches!(outcome, WorkerError::Protocol(message) if message.contains("invalid")));
+}
+
+#[tokio::test]
 async fn oversized_client_prompt_response_is_rejected_before_write() {
     let key = [12_u8; 32];
     let (mut writer, _reader) = tokio::io::duplex(64);
