@@ -94,6 +94,12 @@ impl HardenedStreamableHttpClient {
             builder = builder.bearer_auth(token);
         }
         for (name, value) in custom_headers {
+            if matches!(name.as_str(), "traceparent" | "tracestate" | "baggage") {
+                continue;
+            }
+            builder = builder.header(name, value);
+        }
+        for (name, value) in colossus_observability::current_trace_headers() {
             builder = builder.header(name, value);
         }
         Ok(builder)

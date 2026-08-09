@@ -610,6 +610,8 @@ impl Runtime {
             } else {
                 AgentRunMode::Execute
             },
+            None,
+            None,
             initiator,
             observer,
             control,
@@ -631,6 +633,8 @@ impl Runtime {
         explicit_skills: &[String],
         allowed_tools: &[String],
         mode: AgentRunMode,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         initiator: Actor,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
@@ -660,6 +664,8 @@ impl Runtime {
                 &[],
                 allowed_tools,
                 mode,
+                end_user_id,
+                remote_trace_context,
                 initiator,
                 observer,
                 control,

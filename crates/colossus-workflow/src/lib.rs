@@ -21,12 +21,14 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
     },
+    time::Instant,
 };
 use thiserror::Error;
 use time::{
     Duration as TimeDuration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339,
 };
 use tokio::sync::Semaphore;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 const MAX_WORKFLOW_BYTES: usize = 1024 * 1024;

@@ -45,6 +45,46 @@ pub struct WorkflowService {
     pub(super) repository: Arc<dyn WorkflowRepository>,
     pub(super) effects: Arc<dyn WorkflowEffectRunner>,
     pub(super) event_writer: Mutex<()>,
+    pub(super) observability_spans: Mutex<BTreeMap<String, WorkflowObservation>>,
+}
+
+#[derive(Clone)]
+pub(super) struct WorkflowObservation {
+    pub(super) span: tracing::Span,
+    pub(super) started: Instant,
+    pub(super) prior_elapsed_seconds: f64,
+}
+
+pub(super) struct WorkflowObservationLease<'a> {
+    owner: &'a Mutex<BTreeMap<String, WorkflowObservation>>,
+    run_id: String,
+    observation: WorkflowObservation,
+    retain: bool,
+}
+
+impl WorkflowObservationLease<'_> {
+    pub(super) fn span(&self) -> &tracing::Span {
+        &self.observation.span
+    }
+
+    pub(super) fn elapsed_seconds(&self) -> f64 {
+        self.observation.prior_elapsed_seconds + self.observation.started.elapsed().as_secs_f64()
+    }
+
+    pub(super) fn retain(&mut self) {
+        self.retain = true;
+    }
+}
+
+impl Drop for WorkflowObservationLease<'_> {
+    fn drop(&mut self) {
+        if !self.retain {
+            let _ = self
+                .owner
+                .lock()
+                .map(|mut observations| observations.remove(&self.run_id));
+        }
+    }
 }
 
 impl WorkflowService {
@@ -59,6 +99,7 @@ impl WorkflowService {
             repository,
             effects,
             event_writer: Mutex::new(()),
+            observability_spans: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -121,6 +162,12 @@ impl WorkflowService {
             .ok_or_else(|| WorkflowError::NotFound(format!("{name}:{version}")))?;
         validate_call_graph(self.repository.as_ref(), &definition, true)?;
         validate_instance(&definition.inputs, &inputs, "input")?;
+        let observation = WorkflowObservation {
+            span: workflow_span(name, run_id, "active"),
+            started: Instant::now(),
+            prior_elapsed_seconds: 0.0,
+        };
+        let trace_context = colossus_observability::trace_context_for_span(&observation.span);
         self.append_run_event(
             run_id,
             "workflow.run.queued.v1",
@@ -133,9 +180,15 @@ impl WorkflowService {
                 "parent_step_id": parent_step_id,
                 "parent_execution_id": parent_execution_id,
                 "call_depth": call_depth,
+                "trace_context": trace_context,
             }),
         )?;
-        self.get_run(run_id)
+        let run = self.get_run(run_id)?;
+        self.observability_spans
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?
+            .insert(run_id.into(), observation);
+        Ok(run)
     }
 
     /// Start and drive a run until it waits or reaches a terminal state.
@@ -156,6 +209,7 @@ impl WorkflowService {
                 "run {run_id} is not queued"
             )));
         }
+        let mut observation = self.workflow_observation(&run, "active")?;
         let (definition, current_hash) = self
             .repository
             .definition(&run.workflow_name, &run.workflow_version)?
@@ -171,9 +225,88 @@ impl WorkflowService {
             "workflow.run.started.v1",
             json!({"from_status": "queued"}),
         )?;
-        self.drive(run_id, definition, current_hash, run.inputs, 0)
-            .await?;
-        self.get_run(run_id)
+        if let Err(error) = self
+            .drive(run_id, definition, current_hash, run.inputs, 0)
+            .instrument(observation.span().clone())
+            .await
+        {
+            observation.span().record("otel.status_code", "ERROR");
+            observation.span().record("error.type", "workflow.failed");
+            colossus_observability::record_workflow(
+                &run.workflow_name,
+                observation.elapsed_seconds(),
+                Some("workflow.failed"),
+            );
+            return Err(error);
+        }
+        let result = self.get_run(run_id)?;
+        if result.status == WorkflowStatus::Waiting {
+            observation.retain();
+        } else {
+            observation.span().record("otel.status_code", "OK");
+            colossus_observability::record_workflow(
+                &run.workflow_name,
+                observation.elapsed_seconds(),
+                None,
+            );
+        }
+        Ok(result)
+    }
+
+    pub(super) fn workflow_observation<'a>(
+        &'a self,
+        run: &WorkflowRun,
+        segment: &str,
+    ) -> Result<WorkflowObservationLease<'a>, WorkflowError> {
+        let existing = self
+            .observability_spans
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?
+            .get(&run.run_id)
+            .cloned();
+        let observation = if let Some(existing) = existing {
+            existing
+        } else {
+            let span = workflow_span(&run.workflow_name, &run.run_id, segment);
+            let events = self
+                .journal
+                .read_stream(&format!("workflow-run:{}", run.run_id))?;
+            let queued = events
+                .iter()
+                .find(|event| event.event_type == "workflow.run.queued.v1");
+            let trace_context = queued
+                .map(|event| self.journal.decrypt_payload(event))
+                .transpose()?
+                .and_then(|payload| payload.get("trace_context").cloned())
+                .and_then(|value| serde_json::from_value(value).ok());
+            if let Some(trace_context) = trace_context.as_ref() {
+                let _ = colossus_observability::add_remote_link(&span, trace_context);
+            }
+            let prior_elapsed_seconds = queued
+                .and_then(|event| OffsetDateTime::parse(&event.occurred_at, &Rfc3339).ok())
+                .map(|started| {
+                    (OffsetDateTime::now_utc() - started)
+                        .as_seconds_f64()
+                        .max(0.0)
+                })
+                .unwrap_or_default();
+            let recovered = WorkflowObservation {
+                span,
+                started: Instant::now(),
+                prior_elapsed_seconds,
+            };
+            self.observability_spans
+                .lock()
+                .map_err(|error| StoreError::Adapter(error.to_string()))?
+                .insert(run.run_id.clone(), recovered.clone());
+            recovered
+        };
+        Ok(WorkflowObservationLease {
+            owner: &self.observability_spans,
+            run_id: run.run_id.clone(),
+            observation,
+            retain: false,
+        })
     }
 
     /// Reconstruct one durable run.
@@ -187,4 +320,19 @@ impl WorkflowService {
     pub fn list_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>, WorkflowError> {
         self.repository.runs(limit).map_err(Into::into)
     }
+}
+
+fn workflow_span(name: &str, run_id: &str, segment: &str) -> tracing::Span {
+    tracing::info_span!(
+        target: "colossus.gen_ai",
+        "invoke_workflow",
+        otel.name = %format_args!("invoke_workflow {name}"),
+        otel.kind = "internal",
+        otel.status_code = tracing::field::Empty,
+        error.type = tracing::field::Empty,
+        gen_ai.operation.name = "invoke_workflow",
+        gen_ai.workflow.name = name,
+        colossus.workflow.run.id = run_id,
+        colossus.workflow.segment = segment,
+    )
 }

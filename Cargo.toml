@@ -36,6 +36,7 @@ members = [
     "crates/colossus-memory-chroma",
     "crates/colossus-research",
     "crates/colossus-telemetry",
+    "crates/colossus-observability",
     "crates/colossus-skills",
     "crates/colossus-integrations",
     "crates/colossus-mcp",
@@ -124,6 +125,14 @@ url = "2.5.8"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
 pulldown-cmark = "0.13.4"
+opentelemetry = { version = "0.32.0", features = ["logs", "metrics", "trace"] }
+opentelemetry-appender-tracing = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic", "http-proto", "logs", "metrics", "reqwest-client", "reqwest-rustls", "tls-webpki-roots", "trace"] }
+opentelemetry_sdk = { version = "0.32.0", features = ["logs", "metrics", "rt-tokio", "spec_unstable_metrics_views", "trace"] }
+tracing = "0.1.44"
+tracing-appender = "0.2.4"
+tracing-opentelemetry = "0.33.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "registry"] }
 inkjet = { version = "0.11.1", default-features = false, features = [
     "language-bash",
     "language-c",
@@ -175,6 +184,7 @@ colossus-memory-chroma = { version = "=0.10.5", path = "crates/colossus-memory-c
 colossus-network = { version = "=0.10.5", path = "crates/colossus-network" }
 colossus-research = { version = "=0.10.5", path = "crates/colossus-research" }
 colossus-telemetry = { version = "=0.10.5", path = "crates/colossus-telemetry" }
+colossus-observability = { version = "=0.10.5", path = "crates/colossus-observability" }
 colossus-testkit = { version = "=0.10.5", path = "crates/colossus-testkit" }
 colossus-fuzzing = { version = "=0.10.5", path = "crates/colossus-fuzzing" }
 colossus-skills = { version = "=0.10.5", path = "crates/colossus-skills" }

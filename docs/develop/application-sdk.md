@@ -404,6 +404,14 @@ an explicit allowed-skill ceiling and recovery can prove that the same ceiling i
 preserved. This prevents an application from discovering private installed skill
 metadata or expanding its instructions and tool context indirectly.
 
+`CreateRunRequest.end_user_id` is optional caller-asserted correlation data. It uses
+the bounded public token grammar, may contain PII, and is neither an authenticated
+principal nor an authorization input. It is included in the idempotency fingerprint so
+one key cannot replay a request attributed to another asserted end user. An accepted
+W3C `traceparent`/`tracestate` is deliberately excluded from that fingerprint, allowing
+a retry from a new calling span to remain a valid replay. See
+[Live observability](../reference/configuration/observability.md).
+
 The installed Unix worker provides the first-party bootstrap path: perform
 `worker --public-api-dir ... --enroll-application ...` while the worker is stopped,
 then start `worker --public-api-dir ...`. Enrollment requires exact scope and role

@@ -107,6 +107,8 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 && worker.enroll_application.is_none()
                 && worker.revoke_credential.is_none() =>
         {
+            let observability =
+                colossus_observability::ObservabilityGuard::install(&config.observability)?;
             let mode = match cli.approval_mode.unwrap_or(ApprovalMode::Ask) {
                 ApprovalMode::Deny => WorkerApprovalMode::Deny,
                 ApprovalMode::Ask => WorkerApprovalMode::Ask,
@@ -133,6 +135,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             eprintln!("worker listening on {}", server.endpoint());
             let result = server.serve().await;
             drop(public_environment);
+            if let Some(observability) = observability {
+                observability.shutdown();
+            }
             result?;
             return Ok(());
         }

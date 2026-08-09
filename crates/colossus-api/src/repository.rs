@@ -43,6 +43,7 @@ const MAX_RELEASED_BYTES_PER_RUN: usize = 16 * 1_048_576;
 struct CreateFingerprint<'request> {
     input: &'request [crate::ContentPart],
     session_id: &'request Option<String>,
+    end_user_id: &'request Option<String>,
     role: &'request Option<String>,
     mode: crate::RunMode,
     skill_ids: Vec<&'request str>,
@@ -280,6 +281,7 @@ impl EventSourcedRunRepository {
         let canonical = serde_json::to_vec(&CreateFingerprint {
             input: &request.input,
             session_id: &request.session_id,
+            end_user_id: &request.end_user_id,
             role: &request.role,
             mode: request.mode,
             skill_ids,

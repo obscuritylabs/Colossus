@@ -21,6 +21,18 @@ pub(super) fn build_security_posture(
             remediation: "Use an isolating native, windows_job, or oci sandbox backend, or use external only when a trusted host enforces the required filesystem and network isolation.".into(),
         });
     }
+    if config.observability.logs.journal_payloads
+        == colossus_observability::JournalPayloadMode::Full
+    {
+        findings.push(SecurityPostureFinding {
+            code: "observability.sensitive_journal_payloads".into(),
+            severity: SecurityPostureSeverity::Warning,
+            summary: "Live observability exports complete plaintext durable journal payloads."
+                .into(),
+            remediation: "Use logs.journalPayloads: metadata unless the collector and stdout retention boundary are approved for prompts, outputs, tool data, artifacts, reasoning summaries, and PII."
+                .into(),
+        });
+    }
     let has_oauth = mcp.servers.values().any(|server| server.oauth.is_some());
     let plaintext_oauth = matches!(
         mcp.oauth_credential_store,

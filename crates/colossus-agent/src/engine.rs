@@ -11,9 +11,73 @@ impl AgentService {
         requested_session_id: Option<&str>,
         scope: RunScope<'_>,
         initiator: Actor,
+        released_observer: Option<&mut dyn RunEventObserver>,
+        control: Option<&RunControl>,
+    ) -> Result<AgentRunResult, AgentError> {
+        let span = tracing::info_span!(
+            target: "colossus.gen_ai",
+            "invoke_agent",
+            otel.name = %format_args!("invoke_agent {role}"),
+            otel.kind = "internal",
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+            gen_ai.operation.name = "invoke_agent",
+            gen_ai.agent.name = role,
+            gen_ai.conversation.id = tracing::field::Empty,
+            colossus.run.id = tracing::field::Empty,
+            colossus.workflow.run.id = tracing::field::Empty,
+            colossus.workflow.step.id = tracing::field::Empty,
+            colossus.subagent.id = tracing::field::Empty,
+            colossus.application.id = tracing::field::Empty,
+            enduser.id = tracing::field::Empty,
+        );
+        if let Some(remote_trace_context) = scope.remote_trace_context {
+            let _ = colossus_observability::set_remote_parent(&span, remote_trace_context);
+        }
+        if initiator.actor_type == ActorType::Application {
+            span.record("colossus.application.id", &initiator.id);
+        }
+        if let Some(end_user_id) = scope.end_user_id {
+            span.record("enduser.id", end_user_id);
+        }
+        if let Some(workflow_id) = scope.workflow_id {
+            span.record("colossus.workflow.run.id", workflow_id);
+        }
+        if let Some(step_id) = scope.step_id {
+            span.record("colossus.workflow.step.id", step_id);
+        }
+        if let Some(subagent_id) = scope.subagent_id {
+            span.record("colossus.subagent.id", subagent_id);
+        }
+        self.run_with_lineage_inner(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            scope,
+            initiator,
+            released_observer,
+            control,
+        )
+        .instrument(span)
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_lineage_inner(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        scope: RunScope<'_>,
+        initiator: Actor,
         mut released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
     ) -> Result<AgentRunResult, AgentError> {
+        let mut agent_observation = colossus_observability::AgentObservation::start(role);
         if role.is_empty() || initiator.id.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
                 "role and initiator id are required and max_turns must be in 1..={MAX_TURNS}"
@@ -24,10 +88,20 @@ impl AgentService {
             .requested_run_id
             .map(str::to_owned)
             .unwrap_or_else(|| Uuid::now_v7().to_string());
+        tracing::Span::current().record("colossus.run.id", &run_id);
         let plan_target = match &scope.mode {
             AgentRunMode::Execute => None,
             AgentRunMode::Plan(target) => Some(target.clone()),
         };
+        let mut plan_observation = plan_target
+            .as_ref()
+            .map(|_| colossus_observability::PlanObservation::start(role));
+        if let Some(plan_observation) = plan_observation.as_ref() {
+            plan_observation.record_identity(
+                (initiator.actor_type == ActorType::Application).then_some(initiator.id.as_str()),
+                scope.end_user_id,
+            );
+        }
         let mut written_plan = None::<PlanRecord>;
         let mut plan_write_recovery_attempted = false;
         let session_id = match requested_session_id {
@@ -54,6 +128,10 @@ impl AgentService {
                 id
             }
         };
+        tracing::Span::current().record("gen_ai.conversation.id", &session_id);
+        if let Some(plan_observation) = plan_observation.as_ref() {
+            plan_observation.record_correlation(&run_id, &session_id);
+        }
         let stream_id = format!("run:{run_id}");
         let route = self.provider.route(role)?;
         let mut context = ExecutionContext {
@@ -328,6 +406,42 @@ impl AgentService {
             )
             .await?;
             let provider_result = {
+                agent_observation.inference_call();
+                let model_started = Instant::now();
+                let mut first_chunk_seconds = None;
+                let mut last_output_chunk = None;
+                let mut output_chunk_intervals = Vec::new();
+                let create_model_span = || {
+                    tracing::info_span!(
+                        target: "colossus.gen_ai",
+                        "chat",
+                        otel.name = %format_args!("chat {}", route.model),
+                        otel.kind = "client",
+                        otel.status_code = tracing::field::Empty,
+                        error.type = tracing::field::Empty,
+                        gen_ai.operation.name = "chat",
+                        gen_ai.provider.name = %route.provider,
+                        gen_ai.request.model = %route.model,
+                        gen_ai.response.model = tracing::field::Empty,
+                        gen_ai.response.id = tracing::field::Empty,
+                        gen_ai.conversation.id = %session_id,
+                        colossus.run.id = %run_id,
+                        colossus.message.sequence = turn,
+                        colossus.application.id = tracing::field::Empty,
+                        enduser.id = tracing::field::Empty,
+                    )
+                };
+                let model_span = plan_observation
+                    .as_ref()
+                    .map_or_else(create_model_span, |plan| {
+                        plan.span().in_scope(create_model_span)
+                    });
+                if initiator.actor_type == ActorType::Application {
+                    model_span.record("colossus.application.id", &initiator.id);
+                }
+                if let Some(end_user_id) = scope.end_user_id {
+                    model_span.record("enduser.id", end_user_id);
+                }
                 let downstream = released_observer
                     .as_mut()
                     .map(|observer| &mut **observer as &mut dyn RunEventObserver);
@@ -341,8 +455,13 @@ impl AgentService {
                     started: &started,
                     turn,
                     responding_emitted: false,
+                    model_started: &model_started,
+                    first_chunk_seconds: &mut first_chunk_seconds,
+                    last_output_chunk: &mut last_output_chunk,
+                    output_chunk_intervals: &mut output_chunk_intervals,
                 };
-                self.provider
+                let result = self
+                    .provider
                     .turn_stream_with_options(
                         role,
                         request,
@@ -353,7 +472,63 @@ impl AgentService {
                         },
                         &mut observer,
                     )
-                    .await
+                    .instrument(model_span.clone())
+                    .await;
+                let duration_seconds = model_started.elapsed().as_secs_f64();
+                match &result {
+                    Ok(turn) => {
+                        model_span.record("otel.status_code", "OK");
+                        model_span.record("gen_ai.response.model", &turn.model);
+                        if let Some(response_id) = turn.response_id.as_deref() {
+                            model_span.record("gen_ai.response.id", response_id);
+                        }
+                        let usage = turn.events.iter().find_map(|event| match event {
+                            ProviderEvent::Usage { usage } => Some(usage),
+                            _ => None,
+                        });
+                        colossus_observability::record_model(
+                            &colossus_observability::ModelMetric {
+                                provider: &turn.provider,
+                                request_model: &route.model,
+                                response_model: Some(&turn.model),
+                                error_type: None,
+                                duration_seconds,
+                                first_chunk_seconds: if route.capabilities.streaming {
+                                    first_chunk_seconds
+                                } else {
+                                    None
+                                },
+                                output_chunk_intervals: &output_chunk_intervals,
+                                tokens: colossus_observability::ModelTokenUsage {
+                                    input: usage.map(|usage| usage.input_tokens),
+                                    output: usage.map(|usage| usage.output_tokens),
+                                },
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let error_type = provider_error_code(error);
+                        model_span.record("otel.status_code", "ERROR");
+                        model_span.record("error.type", error_type);
+                        colossus_observability::record_model(
+                            &colossus_observability::ModelMetric {
+                                provider: &route.provider,
+                                request_model: &route.model,
+                                response_model: None,
+                                error_type: Some(error_type),
+                                duration_seconds,
+                                first_chunk_seconds: if route.capabilities.streaming {
+                                    first_chunk_seconds
+                                } else {
+                                    None
+                                },
+                                output_chunk_intervals: &output_chunk_intervals,
+                                tokens: colossus_observability::ModelTokenUsage::default(),
+                            },
+                        );
+                    }
+                }
+                result
             };
             let provider_turn = match provider_result {
                 Ok(provider_turn) => provider_turn,
@@ -598,6 +773,10 @@ impl AgentService {
                         },
                     )
                     .await?;
+                    agent_observation.success();
+                    if let Some(plan_observation) = plan_observation.as_mut() {
+                        plan_observation.success();
+                    }
                     return Ok(AgentRunResult {
                         run_id,
                         session_id: Some(session_id),
@@ -676,6 +855,7 @@ impl AgentService {
             let mut post_commit_events = Vec::<RunEvent>::new();
             let mut terminal = None::<(AgentError, String, String, &'static str, Value)>;
             for (call_index, call) in calls.iter().cloned().enumerate() {
+                agent_observation.tool_call();
                 if control.is_some_and(RunControl::is_cancelled) {
                     for pending in calls.iter().skip(call_index) {
                         let result = cancelled_tool_result(pending);
@@ -703,6 +883,37 @@ impl AgentService {
                     break;
                 }
                 let tool_started = Instant::now();
+                let create_tool_span = || {
+                    tracing::info_span!(
+                        target: "colossus.gen_ai",
+                        "execute_tool",
+                        otel.name = %format_args!("execute_tool {}", call.name),
+                        otel.kind = "internal",
+                        otel.status_code = tracing::field::Empty,
+                        error.type = tracing::field::Empty,
+                        gen_ai.operation.name = "execute_tool",
+                        gen_ai.agent.name = role,
+                        gen_ai.tool.name = %call.name,
+                        gen_ai.tool.call.id = %call.call_id,
+                        gen_ai.tool.type = "function",
+                        gen_ai.conversation.id = %session_id,
+                        colossus.run.id = %run_id,
+                        colossus.message.sequence = turn,
+                        colossus.application.id = tracing::field::Empty,
+                        enduser.id = tracing::field::Empty,
+                    )
+                };
+                let tool_span = plan_observation
+                    .as_ref()
+                    .map_or_else(create_tool_span, |plan| {
+                        plan.span().in_scope(create_tool_span)
+                    });
+                if initiator.actor_type == ActorType::Application {
+                    tool_span.record("colossus.application.id", &initiator.id);
+                }
+                if let Some(end_user_id) = scope.end_user_id {
+                    tool_span.record("enduser.id", end_user_id);
+                }
                 let validation = if turn_offered_tools.contains(call.name.as_str()) {
                     self.tools.validate(&call).and_then(|_| {
                         validate_plan_write_once(&call, plan_target.as_ref(), written_plan.as_ref())
@@ -841,7 +1052,12 @@ impl AgentService {
                     }
                 }
                 let result = match validation {
-                    Ok(_) => match self.executor.execute(call.clone(), context.clone()).await {
+                    Ok(_) => match self
+                        .executor
+                        .execute(call.clone(), context.clone())
+                        .instrument(tool_span.clone())
+                        .await
+                    {
                         Ok(result) => result,
                         Err(ToolError::Unknown(_) | ToolError::InvalidArguments { .. }) => {
                             unreachable!("validated call became unknown or invalid")
@@ -850,6 +1066,14 @@ impl AgentService {
                             tool_error_result(&call, "execution_error", &message)
                         }
                         Err(error @ (ToolError::Denied(_) | ToolError::OutcomeUnknown(_))) => {
+                            let error_type = tool_error_code(&error);
+                            tool_span.record("otel.status_code", "ERROR");
+                            tool_span.record("error.type", error_type);
+                            colossus_observability::record_tool(
+                                &call.name,
+                                tool_started.elapsed().as_secs_f64(),
+                                Some(error_type),
+                            );
                             let message = error.to_string();
                             let code = tool_error_code(&error);
                             let result = terminal_tool_error_result(&call, &error);
@@ -955,6 +1179,23 @@ impl AgentService {
                     elapsed_seconds: started.elapsed().as_secs_f64(),
                 };
                 let tool_message = tool_result_message(&result);
+                let tool_error_type = (result.exit_code != 0).then_some("tool.failed");
+                tool_span.record(
+                    "otel.status_code",
+                    if tool_error_type.is_some() {
+                        "ERROR"
+                    } else {
+                        "OK"
+                    },
+                );
+                if let Some(error_type) = tool_error_type {
+                    tool_span.record("error.type", error_type);
+                }
+                colossus_observability::record_tool(
+                    &call.name,
+                    tool_started.elapsed().as_secs_f64(),
+                    tool_error_type,
+                );
                 if result.exit_code == 0
                     && let Some(target) = plan_target.as_ref()
                     && result.name

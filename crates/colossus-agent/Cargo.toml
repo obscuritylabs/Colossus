@@ -9,16 +9,22 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 colossus-contracts.workspace = true
+colossus-observability.workspace = true
 colossus-ports.workspace = true
 colossus-tools.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 colossus-testkit.workspace = true
 colossus-session.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tokio.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

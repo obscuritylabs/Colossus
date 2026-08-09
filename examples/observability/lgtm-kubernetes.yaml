@@ -1,0 +1,178 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: colossus-observability-dev
+  labels:
+    app.kubernetes.io/part-of: colossus-observability-dev
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: colossus-config
+  namespace: colossus-observability-dev
+data:
+  config.yaml: |
+    schemaVersion: 2
+    access:
+      profile: development
+      tools:
+        include: []
+        exclude: []
+      actions:
+        allow: []
+        requireApproval: []
+        deny: []
+    storage:
+      path: /var/lib/colossus/state.redb
+      startupVerification: incremental
+      keys:
+        kind: none
+    network:
+      caBundlePath: null
+    policy:
+      kind: built_in
+      require_post_effect: false
+    workflows:
+      repository: /workspace/.colossus/workflows
+      user: /workspace/workflows
+    providers:
+      profiles:
+        echo:
+          kind: echo
+          baseUrl: null
+          credentialReference: null
+    models:
+      profiles:
+        echo:
+          providerProfile: echo
+          model: echo
+          contextWindowTokens: 32768
+          maxOutputTokens: 4096
+          capabilities:
+            toolCalls: true
+            streaming: true
+      roles:
+        primary: echo
+    sandbox:
+      backend: native
+      profile: offline-default
+      allowBrokerFallback: false
+      acknowledgeExternalBoundary: false
+      acknowledgeDangerFullAccess: false
+      filesystem: []
+      executables: []
+      environment: []
+      networkDestinations: []
+      timeoutMs: 30000
+      maxOutputBytes: 1048576
+      maxProcesses: 16
+      maxMemoryBytes: 268435456
+      maxConcurrency: 1
+    observability:
+      enabled: true
+      serviceName: colossus-dev
+      resourceAttributes:
+        deployment.environment.name: development
+      traces:
+        enabled: true
+        sampleRatio: 1.0
+      metrics:
+        enabled: true
+        exportIntervalMs: 5000
+      logs:
+        otlp: true
+        stdoutJson: true
+        journalPayloads: metadata
+        acknowledgeSensitiveContent: false
+      otlp:
+        endpoint: http://127.0.0.1:4317
+        protocol: grpc
+        timeoutMs: 5000
+        acknowledgeInsecureTransport: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: colossus-lgtm
+  namespace: colossus-observability-dev
+  labels:
+    app: colossus-lgtm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: colossus-lgtm
+  template:
+    metadata:
+      labels:
+        app: colossus-lgtm
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: colossus
+          image: colossus:dev
+          imagePullPolicy: Never
+          args:
+            - --workspace
+            - /workspace
+            - --config
+            - /etc/colossus/config.yaml
+            - worker
+            - --public-api-dir
+            - /var/run/colossus-public
+          volumeMounts:
+            - name: config
+              mountPath: /etc/colossus
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/colossus
+            - name: workspace
+              mountPath: /workspace
+            - name: public-api
+              mountPath: /var/run/colossus-public
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+        - name: lgtm
+          image: docker.io/grafana/otel-lgtm:0.29.0
+          ports:
+            - name: grafana
+              containerPort: 3000
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: colossus-config
+        - name: state
+          emptyDir: {}
+        - name: workspace
+          emptyDir: {}
+        - name: public-api
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: colossus-lgtm
+  namespace: colossus-observability-dev
+spec:
+  selector:
+    app: colossus-lgtm
+  ports:
+    - name: grafana
+      port: 3000
+      targetPort: grafana

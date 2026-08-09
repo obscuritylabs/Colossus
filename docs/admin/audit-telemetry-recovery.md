@@ -35,6 +35,10 @@ external effect is uncertain.
     colossus --config .colossus/config.yaml telemetry runs
     ```
 
+   These commands derive historical analytics from the authoritative journal. Optional
+   live OpenTelemetry export is a separate fail-open plane and does not replay history;
+   configure it under [Live observability](../reference/configuration/observability.md).
+
 3. If configured, inspect and drain the durable exporter queue:
 
     ```bash

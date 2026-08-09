@@ -171,6 +171,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text("managed sidecar self-test".into())],
             session_id: None,
+            end_user_id: None,
             role: "primary".into(),
             mode: RunMode::Plan,
             selected_skills: Vec::new(),

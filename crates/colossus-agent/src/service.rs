@@ -308,6 +308,8 @@ impl AgentService {
             } else {
                 AgentRunMode::Execute
             },
+            None,
+            None,
             initiator,
             observer,
             control,
@@ -332,6 +334,8 @@ impl AgentService {
         active_skills: &[String],
         allowed_tools: &[String],
         mode: AgentRunMode,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         initiator: Actor,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
@@ -348,6 +352,8 @@ impl AgentService {
                     active_skills,
                     allowed_tools: Some(allowed_tools),
                     mode,
+                    end_user_id,
+                    remote_trace_context,
                     create_requested_session: create_session,
                     ..RunScope::default()
                 },

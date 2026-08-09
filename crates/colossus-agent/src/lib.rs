@@ -19,6 +19,7 @@ use colossus_tools::model_definitions;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 use thiserror::Error;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 mod types;

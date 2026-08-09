@@ -10,11 +10,25 @@ pub(super) struct RunProviderObserver<'local, 'downstream> {
     pub(super) started: &'local Instant,
     pub(super) turn: u16,
     pub(super) responding_emitted: bool,
+    pub(super) model_started: &'local Instant,
+    pub(super) first_chunk_seconds: &'local mut Option<f64>,
+    pub(super) last_output_chunk: &'local mut Option<Instant>,
+    pub(super) output_chunk_intervals: &'local mut Vec<f64>,
 }
 
 #[async_trait]
 impl ProviderEventObserver for RunProviderObserver<'_, '_> {
     async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
+        if self.first_chunk_seconds.is_none() {
+            *self.first_chunk_seconds = Some(self.model_started.elapsed().as_secs_f64());
+        }
+        if matches!(event, ProviderEvent::ModelDelta { .. }) {
+            let now = Instant::now();
+            if let Some(previous) = self.last_output_chunk.replace(now) {
+                self.output_chunk_intervals
+                    .push(now.duration_since(previous).as_secs_f64());
+            }
+        }
         let (event_type, payload) = provider_event_payload(&event);
         self.journal
             .append(NewEvent {

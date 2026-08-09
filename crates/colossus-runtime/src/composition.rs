@@ -259,6 +259,10 @@ impl Runtime {
                 }
             }
         };
+        let journal: Arc<dyn EventJournal> = Arc::new(ObservedEventJournal::new(
+            journal,
+            config.observability.logs.journal_payloads,
+        ));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
