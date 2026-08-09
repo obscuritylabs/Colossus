@@ -2,7 +2,7 @@
 
 use colossus_contracts::{
     Actor, EventClassification, ExecutionContext, ModelMessage, ModelMessageRole, NewEvent,
-    SessionMessage, SessionSummary,
+    SessionMessage, SessionMessageAppend, SessionSummary,
 };
 use colossus_ports::{EventJournal, SessionRepository, StoreError, collect_stream_ids};
 use serde_json::{Value, json};

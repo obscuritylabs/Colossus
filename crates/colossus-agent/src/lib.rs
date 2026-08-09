@@ -7,7 +7,8 @@ use colossus_contracts::{
     Actor, ActorType, AgentRunCancellation, AgentRunMode, AgentRunOutcome, AgentRunResult,
     EventClassification, ExecutionContext, ModelMessage, ModelMessageRole, ModelRequest,
     ModelToolCall, NewEvent, PlanDraftTarget, PlanRecord, ProviderEvent, RunEvent,
-    RunEventEnvelope, RunPhase, ToolCall, ToolResult,
+    RunEventEnvelope, RunPhase, SessionMessageAppend, ToolCall, ToolResult,
+    validate_model_transcript,
 };
 use colossus_ports::{
     ContextError, ContextPreparationRequest, ContextPreparer, EventJournal, ModelProvider,

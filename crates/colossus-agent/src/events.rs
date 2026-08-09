@@ -261,6 +261,104 @@ pub(super) fn tool_error_result(call: &ToolCall, category: &str, message: &str) 
     }
 }
 
+pub(super) fn terminal_tool_error_result(call: &ToolCall, error: &ToolError) -> ToolResult {
+    let (category, code, certainty) = match error {
+        ToolError::Denied(_) => ("denied", "tool.denied", "not_executed"),
+        ToolError::OutcomeUnknown(_) => ("outcome_unknown", "tool.outcome_unknown", "unknown"),
+        ToolError::Unknown(_) | ToolError::InvalidArguments { .. } | ToolError::Failed(_) => {
+            unreachable!("only terminal tool errors are settled through this helper")
+        }
+    };
+    ToolResult {
+        call_id: call.call_id.clone(),
+        name: call.name.clone(),
+        output: json!({
+            "error": {
+                "type": category,
+                "code": code,
+                "message": error.to_string(),
+                "tool": call.name,
+                "recoverable": false,
+                "outcome_certainty": certainty,
+            }
+        })
+        .to_string(),
+        exit_code: 1,
+    }
+}
+
+pub(super) fn unexecuted_tool_result(
+    call: &ToolCall,
+    cause_call_id: &str,
+    cause_code: &str,
+) -> ToolResult {
+    ToolResult {
+        call_id: call.call_id.clone(),
+        name: call.name.clone(),
+        output: json!({
+            "error": {
+                "type": "not_executed",
+                "code": "tool.not_executed",
+                "message": "tool execution did not begin because an earlier call terminated the run",
+                "tool": call.name,
+                "cause_call_id": cause_call_id,
+                "cause_code": cause_code,
+                "recoverable": false,
+                "outcome_certainty": "not_executed",
+            }
+        })
+        .to_string(),
+        exit_code: 1,
+    }
+}
+
+pub(super) fn blocked_tool_result(call: &ToolCall, code: &str, message: &str) -> ToolResult {
+    ToolResult {
+        call_id: call.call_id.clone(),
+        name: call.name.clone(),
+        output: json!({
+            "error": {
+                "type": "not_executed",
+                "code": code,
+                "message": message,
+                "tool": call.name,
+                "recoverable": false,
+                "outcome_certainty": "not_executed",
+            }
+        })
+        .to_string(),
+        exit_code: 1,
+    }
+}
+
+pub(super) fn cancelled_tool_result(call: &ToolCall) -> ToolResult {
+    ToolResult {
+        call_id: call.call_id.clone(),
+        name: call.name.clone(),
+        output: json!({
+            "error": {
+                "type": "operator_cancelled",
+                "code": "operator_cancelled",
+                "message": "tool execution was cancelled before the effect began",
+                "tool": call.name,
+                "recoverable": false,
+                "outcome_certainty": "not_executed",
+            }
+        })
+        .to_string(),
+        exit_code: 1,
+    }
+}
+
+pub(super) fn tool_result_message(result: &ToolResult) -> ModelMessage {
+    ModelMessage {
+        role: ModelMessageRole::Tool,
+        content: result.output.clone(),
+        tool_call_id: Some(result.call_id.clone()),
+        tool_calls: Vec::new(),
+    }
+}
+
 pub(super) fn system_actor() -> Actor {
     Actor {
         actor_type: ActorType::System,

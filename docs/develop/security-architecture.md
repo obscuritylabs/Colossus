@@ -553,6 +553,16 @@ derives the interruption from the canonical indexed effect stream and records
 `effect.outcome_unknown`. A replaceable projection cursor cannot prove that no
 interrupted effects exist. No generic layer automatically retries an uncertain effect.
 
+Provider-visible tool turns preserve the same certainty boundary. The agent stages an
+assistant tool-call message with exactly one terminal tool-result message per emitted call
+and commits the complete turn to the session in one journal transaction. Denial,
+cancellation, calls skipped after an earlier terminal error, and outcome-unknown execution
+use distinct non-retryable results; an uncertain external effect remains explicitly
+`outcome_unknown`. Session continuation and both OpenAI-compatible request projections
+validate exact call/result pairing before provider dispatch. Legacy sessions with dangling
+calls fail locally before a new user message is appended and require explicit recovery from
+durable effect evidence or a new session; they are never silently truncated or guessed.
+
 Security-boundary changes require focused negative tests, permit-claim/replay tests,
 adapter quarantine tests, journal evidence tests, and the relevant live platform
 acceptance suite.

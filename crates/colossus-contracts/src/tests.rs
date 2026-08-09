@@ -1,6 +1,7 @@
 use super::{
-    Actor, ActorType, AgentRunMode, ExecutionContext, PlanDraftTarget, PlanExecutionStrategy,
-    PlanRecord, PolicyDecision, RunEvent, ThemeName, ThemeSpinner,
+    Actor, ActorType, AgentRunMode, ExecutionContext, ModelMessage, ModelMessageRole,
+    ModelToolCall, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PolicyDecision, RunEvent,
+    ThemeName, ThemeSpinner, validate_model_transcript,
 };
 
 #[test]
@@ -158,5 +159,72 @@ fn theme_names_are_stable_and_plain_migrates_to_mono() {
     assert_eq!(
         serde_json::from_str::<ThemeSpinner>("\"bouncing_bar\"").expect("legacy spinner spelling"),
         ThemeSpinner::BouncingBar
+    );
+}
+
+#[test]
+fn model_transcript_requires_exact_tool_call_settlement() {
+    let call = ModelMessage {
+        role: ModelMessageRole::Assistant,
+        content: String::new(),
+        tool_call_id: None,
+        tool_calls: vec![
+            ModelToolCall {
+                call_id: "call-1".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({}),
+            },
+            ModelToolCall {
+                call_id: "call-2".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({}),
+            },
+        ],
+    };
+    let result = |call_id: &str| ModelMessage {
+        role: ModelMessageRole::Tool,
+        content: "done".into(),
+        tool_call_id: Some(call_id.into()),
+        tool_calls: Vec::new(),
+    };
+    let user = ModelMessage {
+        role: ModelMessageRole::User,
+        content: "continue".into(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    };
+
+    assert!(
+        validate_model_transcript(&[
+            call.clone(),
+            result("call-2"),
+            result("call-1"),
+            user.clone(),
+        ])
+        .is_ok()
+    );
+    assert!(
+        validate_model_transcript(&[call.clone(), result("call-1"), user.clone()])
+            .expect_err("missing result")
+            .detail
+            .contains("call-2")
+    );
+    assert!(
+        validate_model_transcript(&[result("orphan")])
+            .expect_err("orphan result")
+            .detail
+            .contains("non-pending")
+    );
+    assert!(
+        validate_model_transcript(&[call.clone(), result("call-1"), result("call-1")])
+            .expect_err("duplicate result")
+            .detail
+            .contains("non-pending")
+    );
+    assert!(
+        validate_model_transcript(&[call.clone(), result("call-1"), result("call-2"), call,])
+            .expect_err("duplicate call ids")
+            .detail
+            .contains("reused")
     );
 }

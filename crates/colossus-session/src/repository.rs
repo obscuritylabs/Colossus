@@ -92,18 +92,22 @@ impl SessionRepository for EventSourcedSessionRepository {
         Ok(sessions)
     }
 
-    fn append_message(
+    fn append_messages(
         &self,
         session_id: &str,
         run_id: &str,
-        message: ModelMessage,
-        actor: Actor,
-    ) -> Result<SessionMessage, StoreError> {
+        messages: Vec<SessionMessageAppend>,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
         validate_session_id(session_id)?;
         if run_id.is_empty() {
             return Err(StoreError::Adapter("message run id is required".into()));
         }
-        validate_message(&message)?;
+        for message in &messages {
+            validate_message(&message.message)?;
+        }
+        if messages.is_empty() {
+            return Ok(Vec::new());
+        }
         let stream_id = Self::stream(session_id);
         let events = self.journal.read_stream(&stream_id)?;
         if events
@@ -112,40 +116,64 @@ impl SessionRepository for EventSourcedSessionRepository {
         {
             return Err(StoreError::NotFound(format!("session {session_id}")));
         }
-        let sequence = events
+        let first_sequence = events
             .iter()
             .filter(|event| event.event_type == MESSAGE_EVENT)
             .count()
             .saturating_add(1);
-        let sequence =
-            u64::try_from(sequence).map_err(|error| StoreError::Adapter(error.to_string()))?;
-        let expected_stream_version = events.last().map_or(0, |event| event.stream_version);
-        let envelope = self.journal.append(NewEvent {
-            event_version: 1,
-            stream_id,
-            expected_stream_version,
-            classification: EventClassification::Domain,
-            event_type: MESSAGE_EVENT.into(),
-            actor,
-            context: ExecutionContext {
-                correlation_id: run_id.into(),
-                session_id: Some(session_id.into()),
-                run_id: Some(run_id.into()),
-                ..ExecutionContext::default()
-            },
-            payload: json!({
-                "run_id": run_id,
-                "sequence": sequence,
-                "message": message,
-            }),
-        })?;
-        Ok(SessionMessage {
-            session_id: session_id.into(),
-            run_id: run_id.into(),
-            sequence,
-            message,
-            created_at: envelope.occurred_at,
-        })
+        let first_sequence = u64::try_from(first_sequence)
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let first_stream_version = events.last().map_or(0, |event| event.stream_version);
+        let pending = messages
+            .iter()
+            .enumerate()
+            .map(|(index, append)| {
+                let offset =
+                    u64::try_from(index).map_err(|error| StoreError::Adapter(error.to_string()))?;
+                let sequence = first_sequence.saturating_add(offset);
+                Ok(NewEvent {
+                    event_version: 1,
+                    stream_id: stream_id.clone(),
+                    expected_stream_version: first_stream_version.saturating_add(offset),
+                    classification: EventClassification::Domain,
+                    event_type: MESSAGE_EVENT.into(),
+                    actor: append.actor.clone(),
+                    context: ExecutionContext {
+                        correlation_id: run_id.into(),
+                        session_id: Some(session_id.into()),
+                        run_id: Some(run_id.into()),
+                        ..ExecutionContext::default()
+                    },
+                    payload: json!({
+                        "run_id": run_id,
+                        "sequence": sequence,
+                        "message": append.message,
+                    }),
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let envelopes = self.journal.append_batch(pending)?;
+        if envelopes.len() != messages.len() {
+            return Err(StoreError::Adapter(
+                "session batch append returned an unexpected event count".into(),
+            ));
+        }
+        messages
+            .into_iter()
+            .zip(envelopes)
+            .enumerate()
+            .map(|(index, (append, envelope))| {
+                let offset =
+                    u64::try_from(index).map_err(|error| StoreError::Adapter(error.to_string()))?;
+                Ok(SessionMessage {
+                    session_id: session_id.into(),
+                    run_id: run_id.into(),
+                    sequence: first_sequence.saturating_add(offset),
+                    message: append.message,
+                    created_at: envelope.occurred_at,
+                })
+            })
+            .collect()
     }
 
     fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError> {

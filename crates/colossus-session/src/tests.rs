@@ -65,6 +65,86 @@ fn sessions_and_messages_reconstruct_after_repository_restart() {
 }
 
 #[test]
+fn message_batches_commit_all_or_none_in_order() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedSessionRepository::new(Arc::clone(&journal));
+    repository
+        .create_session("batched", None, actor())
+        .expect("create");
+    let assistant = ModelMessage {
+        role: ModelMessageRole::Assistant,
+        content: String::new(),
+        tool_call_id: None,
+        tool_calls: vec![ModelToolCall {
+            call_id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({}),
+        }],
+    };
+    let tool = ModelMessage {
+        role: ModelMessageRole::Tool,
+        content: "done".into(),
+        tool_call_id: Some("call-1".into()),
+        tool_calls: Vec::new(),
+    };
+    let appended = repository
+        .append_messages(
+            "batched",
+            "run-1",
+            vec![
+                SessionMessageAppend {
+                    message: assistant,
+                    actor: actor(),
+                },
+                SessionMessageAppend {
+                    message: tool,
+                    actor: actor(),
+                },
+            ],
+        )
+        .expect("atomic batch");
+    assert_eq!(
+        appended
+            .iter()
+            .map(|message| message.sequence)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+
+    let invalid = ModelMessage {
+        role: ModelMessageRole::User,
+        content: "bad".into(),
+        tool_call_id: None,
+        tool_calls: vec![ModelToolCall {
+            call_id: "invalid".into(),
+            name: "echo".into(),
+            arguments: json!({}),
+        }],
+    };
+    repository
+        .append_messages(
+            "batched",
+            "run-2",
+            vec![
+                SessionMessageAppend {
+                    message: message(ModelMessageRole::User, "would be partial"),
+                    actor: actor(),
+                },
+                SessionMessageAppend {
+                    message: invalid,
+                    actor: actor(),
+                },
+            ],
+        )
+        .expect_err("invalid batch");
+    assert_eq!(
+        repository.list_messages("batched").expect("messages").len(),
+        2,
+        "validation must happen before the journal transaction"
+    );
+}
+
+#[test]
 fn list_is_recent_first_bounded_and_missing_session_rejects_messages() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let repository = EventSourcedSessionRepository::new(journal);

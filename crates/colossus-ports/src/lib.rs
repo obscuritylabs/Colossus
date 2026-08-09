@@ -11,12 +11,12 @@ use colossus_contracts::{
     PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderEvent,
     ProviderResponseDiagnostic, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun,
     ResearchSource, RiskReviewFallbackNotice, RunEventEnvelope, SearchProfileSummary,
-    SearchRequest, SearchResponse, SearchRoute, SecureAnchor, SessionMessage, SessionMessagePage,
-    SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord, SkillResourceEntry,
-    SkillResourceRead, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences,
-    ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition,
-    WorkflowRun, WorkflowSchedule, WorkflowSubscription, WorkflowSubscriptionDelivery,
-    WorkflowWebhook, WorkflowWebhookDelivery,
+    SearchRequest, SearchResponse, SearchRoute, SecureAnchor, SessionMessage, SessionMessageAppend,
+    SessionMessagePage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord,
+    SkillResourceEntry, SkillResourceRead, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
+    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowSubscription,
+    WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
