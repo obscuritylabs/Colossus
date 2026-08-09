@@ -963,6 +963,8 @@ impl RuntimeAgentRunApi {
                         strategy,
                         max_turns,
                         &run.id,
+                        request.end_user_id.as_deref(),
+                        caller.remote_trace_context(),
                         &mut observer,
                         &control,
                     );

@@ -521,6 +521,8 @@ impl AgentService {
         session_id: &str,
         plan_id: &str,
         run_id: &str,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
@@ -534,6 +536,8 @@ impl AgentService {
                 RunScope {
                     requested_run_id: Some(run_id),
                     plan_id: Some(plan_id),
+                    end_user_id,
+                    remote_trace_context,
                     ..RunScope::default()
                 },
                 terminal_actor(),
@@ -592,6 +596,8 @@ impl AgentService {
         session_id: &str,
         goal_id: &str,
         plan_id: Option<&str>,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
@@ -605,6 +611,8 @@ impl AgentService {
                 requested_run_id: Some(run_id),
                 goal_id: Some(goal_id),
                 plan_id,
+                end_user_id,
+                remote_trace_context,
                 ..RunScope::default()
             },
             terminal_actor(),

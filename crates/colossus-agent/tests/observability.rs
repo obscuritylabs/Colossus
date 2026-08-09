@@ -3,10 +3,14 @@
 use async_trait::async_trait;
 use colossus_agent::AgentService;
 use colossus_contracts::{
-    ExecutionContext, ModelCapabilities, ModelLimits, ModelRequest, ProviderEvent, ProviderRoute,
-    ProviderTurn, ProviderUsage, ToolCall, ToolResult,
+    Actor, ActorType, ExecutionContext, ModelCapabilities, ModelLimits, ModelRequest,
+    ProviderEvent, ProviderRoute, ProviderTurn, ProviderUsage, RemoteTraceContext,
+    RunEventEnvelope, ToolCall, ToolResult,
 };
-use colossus_ports::{EventJournal, ModelProvider, ModelProviderError, ToolError, ToolExecutor};
+use colossus_ports::{
+    EventJournal, ModelProvider, ModelProviderError, RunControl, RunEventObserver,
+    SessionRepository, ToolError, ToolExecutor,
+};
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
 use colossus_tools::StaticToolRegistry;
@@ -69,15 +73,17 @@ impl ToolExecutor for NoopTools {
     }
 }
 
-#[tokio::test]
-async fn genai_trace_contains_parented_agent_and_model_spans_without_content() {
-    let exporter = InMemorySpanExporter::default();
-    let provider = SdkTracerProvider::builder()
-        .with_simple_exporter(exporter.clone())
-        .build();
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("agent-trace-test")));
-    let response = ProviderTurn {
+struct SilentRunObserver;
+
+#[async_trait]
+impl RunEventObserver for SilentRunObserver {
+    async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        Ok(())
+    }
+}
+
+fn scripted_turn() -> ProviderTurn {
+    ProviderTurn {
         profile: "scripted".into(),
         model_profile: "scripted".into(),
         provider_profile: "scripted-provider".into(),
@@ -98,11 +104,94 @@ async fn genai_trace_contains_parented_agent_and_model_spans_without_content() {
                 text: "released output must not become a span attribute".into(),
             },
         ],
+    }
+}
+
+#[tokio::test]
+async fn approved_plan_execution_keeps_the_accepted_trace_and_end_user() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("approved-plan-test")));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session(
+            "plan-session",
+            Some("approved plan"),
+            Actor {
+                actor_type: ActorType::Application,
+                id: "application-under-test".into(),
+            },
+        )
+        .expect("session");
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::new(OneTurnProvider(scripted_turn())),
+        Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
+        Arc::new(NoopTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+    let remote = RemoteTraceContext {
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+        tracestate: None,
     };
+    let mut observer = SilentRunObserver;
+    let control = RunControl::default();
+
+    let subscriber_guard = tracing::subscriber::set_default(subscriber);
+    service
+        .run_approved_plan_stream_controlled(
+            "primary",
+            "test instructions",
+            "execute the approved plan",
+            1,
+            "plan-session",
+            "plan-under-execution",
+            "public-run",
+            Some("end-user-42"),
+            Some(&remote),
+            &mut observer,
+            &control,
+        )
+        .await
+        .expect("approved plan run");
+    drop(subscriber_guard);
+    provider.force_flush().expect("flush spans");
+
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let agent = spans
+        .iter()
+        .find(|span| span.name == "invoke_agent primary")
+        .expect("agent span");
+    assert_eq!(
+        agent.span_context.trace_id().to_string(),
+        "4bf92f3577b34da6a3ce929d0e0e4736",
+        "approved plan execution must continue the accepted trace"
+    );
+    assert_eq!(agent.parent_span_id.to_string(), "00f067aa0ba902b7");
+    assert!(
+        agent.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "enduser.id" && attribute.value.as_str() == "end-user-42"
+        }),
+        "approved plan execution must retain the accepted end user"
+    );
+}
+
+#[tokio::test]
+async fn genai_trace_contains_parented_agent_and_model_spans_without_content() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("agent-trace-test")));
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let service = AgentService::new(
         Arc::clone(&journal),
-        Arc::new(OneTurnProvider(response)),
+        Arc::new(OneTurnProvider(scripted_turn())),
         Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
         Arc::new(NoopTools),
         Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),

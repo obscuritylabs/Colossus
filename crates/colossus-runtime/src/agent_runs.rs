@@ -880,6 +880,8 @@ impl Runtime {
             max_turns,
             None,
             true,
+            None,
+            None,
             observer,
             control,
         )
@@ -901,6 +903,8 @@ impl Runtime {
         strategy: PlanExecutionStrategy,
         max_turns: Option<u16>,
         public_run_id: &str,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<PlanExecutionOutcome, RuntimeError> {
@@ -924,6 +928,8 @@ impl Runtime {
             max_turns,
             Some(public_run_id),
             false,
+            end_user_id,
+            remote_trace_context,
             observer,
             control,
         )
@@ -941,6 +947,8 @@ impl Runtime {
         max_turns: Option<u16>,
         public_run_id: Option<&str>,
         cancel_before_consumption: bool,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<PlanExecutionOutcome, RuntimeError> {
@@ -1007,6 +1015,8 @@ impl Runtime {
                     &consumed.session_id,
                     &consumed.id,
                     &run_id,
+                    end_user_id,
+                    remote_trace_context,
                     observer,
                     control,
                 );
@@ -1139,7 +1149,14 @@ impl Runtime {
                         }
                     };
                 let terminal = self
-                    .run_existing_goal_stream_controlled(role, goal, observer, control)
+                    .run_existing_goal_stream_controlled(
+                        role,
+                        goal,
+                        end_user_id,
+                        remote_trace_context,
+                        observer,
+                        control,
+                    )
                     .await;
                 Ok(PlanExecutionOutcome::Goal {
                     plan: consumed,
@@ -1164,14 +1181,17 @@ impl Runtime {
             .ok_or_else(|| StoreError::NotFound(format!("goal {goal_id}")))?;
         validate_goal_resume_selection(&goal, expected_session_id)?;
         Ok(self
-            .run_existing_goal_stream_controlled(role, goal, observer, control)
+            .run_existing_goal_stream_controlled(role, goal, None, None, observer, control)
             .await)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_existing_goal_stream_controlled(
         &self,
         role: &str,
         goal: GoalRecord,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> GoalRunOutcome {
@@ -1258,6 +1278,8 @@ impl Runtime {
                 &current.session_id,
                 &current.id,
                 current.source_plan_id.as_deref(),
+                end_user_id,
+                remote_trace_context,
                 observer,
                 control,
             );
@@ -1785,6 +1807,8 @@ mod plan_mode_instruction_tests {
                         PlanExecutionStrategy::Direct,
                         Some(1),
                         "public-run-before-approval",
+                        None,
+                        None,
                         &mut observer,
                         &cancelled,
                     )
@@ -1826,6 +1850,8 @@ mod plan_mode_instruction_tests {
                         PlanExecutionStrategy::Direct,
                         Some(1),
                         "public-run-after-approval",
+                        None,
+                        None,
                         &mut observer,
                         &approval_control,
                     )
