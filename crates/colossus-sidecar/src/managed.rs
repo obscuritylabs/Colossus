@@ -409,6 +409,7 @@ fn managed_runtime_config(
                             .as_ref()
                             .map(|identifier| format!("host:{identifier}")),
                         timeout_ms: Some(provider.timeout_ms),
+                        chat_completions_output_token_parameter: None,
                     },
                 )
             })

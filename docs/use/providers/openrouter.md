@@ -43,6 +43,7 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://openrouter.ai/api/v1
       credentialReference: env:OPENROUTER_API_KEY
+      chatCompletionsOutputTokenParameter: max_tokens
 models:
   profiles:
     openrouter:
@@ -64,6 +65,12 @@ sandbox:
 The API path remains in `baseUrl`; the sandbox receives only the exact origin. This
 guide uses the adapter's standard bearer authentication. Do not add provider-specific
 headers that are not fields in the current Colossus provider schema.
+
+The example explicitly selects the legacy-compatible `max_tokens` request field. If
+the exact routed model rejects that field and requires the modern Chat Completions
+name, change only `chatCompletionsOutputTokenParameter` to `max_completion_tokens` and
+rerun the model diagnostic. Colossus retains `maxOutputTokens` as the one canonical
+model budget and never probes by resubmitting a failed generation.
 
 ### 3. Confirm model visibility and readiness
 
@@ -101,7 +108,8 @@ contains only the environment reference, exact model ID, API prefix, and sandbox
 - **A model is not visible:** run `provider models openrouter-provider` and use an exact
   catalog identifier that the account can access.
 - **The provider works but generation fails:** correct the selected model's limits and
-  `toolCalls` or `streaming` declarations, then rerun `models doctor openrouter`.
+  `chatCompletionsOutputTokenParameter`, `toolCalls`, or `streaming` declarations, then
+  rerun `models doctor openrouter`.
 - **The origin is denied:** keep `/api/v1` in `baseUrl` and grant only
   `https://openrouter.ai` in the sandbox.
 

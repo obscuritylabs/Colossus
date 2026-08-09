@@ -10,7 +10,7 @@ use super::{
     SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
     SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
     configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
-    model_workspace_path, recover_interrupted_subagents, recover_unknown_effects,
+    model_workspace_path, provider_profile, recover_interrupted_subagents, recover_unknown_effects,
     redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
     shell_command_arguments, terminal_actor,
 };
@@ -38,7 +38,7 @@ use colossus_ports::{
 };
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::EFFECT_RECOVERY_PROJECTION;
-use colossus_provider::ProviderKind;
+use colossus_provider::{ChatCompletionsOutputTokenParameter, ProviderKind};
 use colossus_skills::{
     FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
 };
@@ -1100,6 +1100,7 @@ fn public_wildcard_config_allows_public_origins_but_not_loopback_routes() {
             base_url: Some("https://api.example.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(30_000),
+            chat_completions_output_token_parameter: None,
         },
     );
     configure_primary_model(&mut config, "public", "public", "test");
@@ -1635,6 +1636,7 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
             base_url: Some("http://127.0.0.1:12434/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            chat_completions_output_token_parameter: None,
         },
     );
     configure_primary_model(&mut config, "local", "local", "local-model");
@@ -1669,6 +1671,7 @@ fn provider_timeout_defaults_are_host_aware_and_explicit_values_win() {
         base_url: Some("https://models.example.test/v1".into()),
         credential_reference: None,
         timeout_ms: None,
+        chat_completions_output_token_parameter: None,
     };
     let loopback = ProviderProfileConfig {
         base_url: Some("http://[::1]:11434/v1".into()),
@@ -1694,6 +1697,57 @@ fn provider_timeout_defaults_are_host_aware_and_explicit_values_win() {
 }
 
 #[test]
+fn chat_completions_output_token_parameter_is_explicit_and_kind_scoped() {
+    let legacy = ProviderProfileConfig {
+        kind: ProviderKind::OpenAiCompatible,
+        base_url: Some("https://models.example.test/v1".into()),
+        credential_reference: None,
+        timeout_ms: None,
+        chat_completions_output_token_parameter: None,
+    };
+    assert_eq!(
+        provider_profile("legacy", &legacy)
+            .expect("legacy-compatible provider profile")
+            .chat_completions_output_token_parameter,
+        ChatCompletionsOutputTokenParameter::MaxTokens
+    );
+    assert!(
+        !serde_json::to_string(&legacy)
+            .expect("provider configuration")
+            .contains("chatCompletionsOutputTokenParameter"),
+        "default wire mode should remain omitted from canonical configuration"
+    );
+
+    let modern = ProviderProfileConfig {
+        chat_completions_output_token_parameter: Some(
+            ChatCompletionsOutputTokenParameter::MaxCompletionTokens,
+        ),
+        ..legacy.clone()
+    };
+    assert_eq!(
+        provider_profile("modern", &modern)
+            .expect("modern provider profile")
+            .chat_completions_output_token_parameter,
+        ChatCompletionsOutputTokenParameter::MaxCompletionTokens
+    );
+    assert!(
+        serde_json::to_string(&modern)
+            .expect("provider configuration")
+            .contains("\"chatCompletionsOutputTokenParameter\":\"max_completion_tokens\"")
+    );
+
+    let responses = ProviderProfileConfig {
+        kind: ProviderKind::OpenAiResponses,
+        chat_completions_output_token_parameter: Some(ChatCompletionsOutputTokenParameter::Omit),
+        ..legacy
+    };
+    assert!(
+        provider_profile("responses", &responses).is_err(),
+        "Responses profile accepted a Chat Completions-only field"
+    );
+}
+
+#[test]
 fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.providers.profiles.insert(
@@ -1703,6 +1757,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: Some("http://example.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            chat_completions_output_token_parameter: None,
         },
     );
     configure_primary_model(&mut config, "remote", "remote", "remote-model");
@@ -1722,6 +1777,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            chat_completions_output_token_parameter: None,
         },
     );
     config.sandbox.network_destinations = vec!["https://api.openai.com".into()];
@@ -1738,6 +1794,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: None,
             credential_reference: Some("codex:default".into()),
             timeout_ms: Some(5_000),
+            chat_completions_output_token_parameter: None,
         },
     );
     config.sandbox.network_destinations = vec![
@@ -1762,6 +1819,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            chat_completions_output_token_parameter: None,
         },
     );
     config.sandbox.network_destinations = vec!["https://api.openai.com".into()];

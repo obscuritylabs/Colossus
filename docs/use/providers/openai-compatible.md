@@ -52,6 +52,7 @@ providers:
       kind: open_ai_compatible
       baseUrl: https://models.example.com/v1
       credentialReference: env:COLOSSUS_MODEL_TOKEN
+      chatCompletionsOutputTokenParameter: max_completion_tokens
 models:
   profiles:
     compatible:
@@ -75,6 +76,13 @@ but not either operation path. The sandbox destination is the exact origin only.
 `timeoutMs` is omitted, catalog and generation requests use 5 minutes for remote hosts
 and 15 minutes for `localhost`, IPv4 loopback, or IPv6 loopback. Set a positive
 `timeoutMs` only when the connection needs an explicit override.
+
+The example selects the modern `max_completion_tokens` Chat Completions field. Use
+`max_tokens` for a legacy endpoint, or `omit` only when the endpoint rejects both token
+limit fields. Omitting `chatCompletionsOutputTokenParameter` defaults to `max_tokens` so
+existing compatible-provider profiles keep their current wire contract. This provider
+setting only changes how the model profile's single `maxOutputTokens` value is named on
+the request; Colossus never sends both fields or retries with a different one.
 
 Set `toolCalls` and `streaming` from observed support for the exact server and model.
 Current provider profiles use bearer credentials and do not expose arbitrary custom
@@ -116,8 +124,9 @@ reference and CA bundle path, never the token or certificate private keys.
 - **TLS validation fails:** correct `network.caBundlePath` and the PEM certificate chain,
   then rerun `provider doctor compatible-provider`.
 - **The provider catalog works but generation fails:** verify the exact model ID,
-  timeout, response format, tool-call support, and streaming support. Correct the
-  capability flags and rerun `models doctor compatible`.
+  timeout, response format, `chatCompletionsOutputTokenParameter`, tool-call support,
+  and streaming support. Correct the profile and capability fields, then rerun
+  `models doctor compatible`.
 - **The origin is denied:** grant the exact scheme, host, and effective port without the
   API path.
 

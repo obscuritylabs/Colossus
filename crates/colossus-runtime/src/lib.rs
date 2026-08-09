@@ -85,7 +85,8 @@ use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
 };
 pub use colossus_provider::{
-    CredentialResolver, EnvironmentCredentialResolver, HostCredentialResolver,
+    ChatCompletionsOutputTokenParameter, CredentialResolver, EnvironmentCredentialResolver,
+    HostCredentialResolver,
 };
 use colossus_provider::{
     ModelProfile, ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind,

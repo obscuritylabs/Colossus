@@ -46,6 +46,7 @@ providers:
       kind: open_ai_compatible
       baseUrl: http://127.0.0.1:11434/v1
       credentialReference: null
+      chatCompletionsOutputTokenParameter: max_tokens
 models:
   profiles:
     local:
@@ -72,6 +73,11 @@ This is a CLI-managed loopback connection: you start the server, and
 `credentialReference: null` means no authentication. A desktop or other embedding host
 may instead manage server lifecycle and inject a `host:IDENTIFIER` credential. The
 standard CLI does not resolve `host:` credentials.
+
+The example uses the backward-compatible `max_tokens` request field. Select
+`max_completion_tokens` when the exact server and model require the modern field, or
+`omit` when the server rejects both limit parameters. The configured model
+`maxOutputTokens` remains Colossus's canonical output reservation in every mode.
 
 ### 3. Inspect routing and readiness
 
@@ -108,8 +114,9 @@ then explicitly resubmit the smoke test.
   `models doctor local`, and explicitly resubmit the turn. Colossus reports this as
   recoverable but does not retry implicitly.
 - **HTTP 400 or malformed response:** verify the exact model ID and the server's model
-  catalog, Chat Completions, tool-call, and streaming compatibility. Disable unsupported
-  capability flags and rerun `models doctor local`.
+  catalog, Chat Completions token parameter, tool-call, and streaming compatibility.
+  Correct `chatCompletionsOutputTokenParameter`, disable unsupported capability flags,
+  and rerun `models doctor local`.
 - **The sandbox denies loopback:** grant the exact scheme, address, and port shown in
   `baseUrl`, without its `/v1` path.
 
