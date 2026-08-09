@@ -226,6 +226,7 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text("offline self-test".into())],
             session_id: None,
+            end_user_id: None,
             role: "primary".into(),
             mode: RunMode::Plan,
             selected_skills: Vec::new(),
