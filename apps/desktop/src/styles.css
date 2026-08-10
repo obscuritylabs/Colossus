@@ -2169,6 +2169,12 @@ p {
   line-height: 1.35;
 }
 
+.run-control-hint {
+  color: #71869f;
+  font-size: 0.6rem;
+  line-height: 1.35;
+}
+
 input,
 select,
 textarea {

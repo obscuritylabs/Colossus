@@ -69,10 +69,6 @@ models:
         streaming: true
   roles:
     primary: echo
-agent:
-  maxTurns: 24
-subagents:
-  maxConcurrent: 10
 sandbox:
   backend: native
   profile: workspace-development
@@ -110,7 +106,7 @@ process launch. YAML contains names and identities, never the values.
 | `workflows` | Yes | Repository and user workflow roots | [Skills, packs, and workflows](configuration/extensions.md) |
 | `providers` | No | Named provider connections; defaults to `echo` | [Providers and models](configuration/providers-models.md) |
 | `models` | No | Named model limits, capabilities, and role routes; defaults to `echo` | [Providers and models](configuration/providers-models.md) |
-| `agent` | No | Agent turn bound; defaults to `24` | [Runtime limits](configuration/limits.md) |
+| `agent` | No | Agent turn bound; defaults to `100` | [Runtime limits](configuration/limits.md) |
 | `subagents` | No | Child concurrency bound; defaults to `10` | [Runtime limits](configuration/limits.md) |
 | `sandbox` | No | Resource obligations and platform isolation defaults | [Sandbox](configuration/sandbox.md) |
 | `context` | No | Long-session compaction controls | [Context, memory, and research](configuration/context-memory-research.md) |

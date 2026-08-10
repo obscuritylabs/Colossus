@@ -472,6 +472,9 @@ export interface RunPage {
   nextPageToken: string;
 }
 
+/** Create-run API sentinel that selects the server's configured turn bound. */
+export const USE_CONFIGURED_MAX_TURNS = 0;
+
 export interface CreateRunRequest {
   prompt: string;
   artifactIds?: string[];
@@ -479,6 +482,7 @@ export interface CreateRunRequest {
   role: string;
   mode: RunMode;
   planAction?: PlanRunAction;
+  /** Positive override, or USE_CONFIGURED_MAX_TURNS for the server default. */
   maxTurns: number;
   idempotencyKey: string;
 }

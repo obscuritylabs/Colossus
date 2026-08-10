@@ -211,7 +211,7 @@ Every normal agent run MUST perform the following sequence:
 11. Stop on final visible output, a non-recoverable error, or the model-turn limit.
 12. Persist the final assistant message and return run metadata including elapsed time.
 
-The default maximum is 24 model turns per run. The configured value MUST be at least 1
+The default maximum is 100 model turns per run. The configured value MUST be at least 1
 and MUST NOT exceed 100. Reaching the turn limit MUST be distinguishable from provider
 failure in audit and telemetry.
 

@@ -434,7 +434,8 @@ transport limits are advertised through
 the TLS 1.3-only contract even if a future server configuration regresses. The
 deterministic local leaf uses P-256 so the same pinned identity works with the Rust,
 Python gRPC C-core, Node.js, and Go SDK transports. Run input is limited to 128 parts
-and 1 MiB, and `max_turns` cannot exceed 100.
+and 1 MiB, and `max_turns` cannot exceed 100. Zero selects the configured positive
+default; it does not request an unlimited run.
 
 Preview applications enrolled against the earlier Ed25519-derived leaf must perform
 one authenticated re-enrollment after upgrading and store the newly reported

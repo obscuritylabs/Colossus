@@ -40,17 +40,12 @@ ceiling to authorize an otherwise denied effect.
 | Large tool output | Raise the relevant adapter cap only after raising and reviewing the sandbox byte ceiling |
 | Slow database or tool | Change that operation's timeout; do not assume a larger agent turn count adds time |
 
-The default agent and child-scheduler blocks are:
+The generated configuration omits the agent and child-scheduler blocks so defaults can
+evolve without pinning old generated values. Omitting either block currently selects
+`agent.maxTurns: 100` and `subagents.maxConcurrent: 10`.
 
-```yaml
-agent:
-  maxTurns: 24
-subagents:
-  maxConcurrent: 10
-```
-
-Omitting either block selects those defaults. For a small automation worker, a more
-deliberate starting point might be:
+Add the blocks only to override those defaults. For example, a small automation worker
+might use:
 
 ```yaml
 agent:
@@ -69,7 +64,7 @@ final settings.
 
 | Property | Value |
 | --- | --- |
-| Default | `24` |
+| Default | `100` |
 | Valid range | `1..=100` |
 | Scope | Model/provider rounds in one agent run |
 | Exhaustion result | Terminal `agent.max_turns` error and durable `run.max_turns.v1` event |
@@ -96,6 +91,10 @@ colossus --config .colossus/config.yaml run --max-turns 8 \
 The override must still be in `1..=100`; it can be higher or lower than the configured
 value. Durable child-agent jobs use the configured `agent.maxTurns`, not the parent's
 one-off CLI override.
+
+The create-run API reserves zero as a transport sentinel for the configured positive
+default, and Desktop uses that sentinel while its override field is blank. Zero is not
+an unlimited mode and is not valid for `agent.maxTurns` in YAML.
 
 Increasing this value can multiply provider usage because each turn may make another
 generation request. Raise it when runs genuinely need more model/tool continuations,
@@ -281,7 +280,7 @@ for adapter-specific limits.
 
 | Field | Valid value | Default |
 | --- | --- | ---: |
-| `agent.maxTurns` | `1..=100` | `24` |
+| `agent.maxTurns` | `1..=100` | `100` |
 | `subagents.maxConcurrent` | At least `1` | `10` |
 | `models.profiles.*.contextWindowTokens` | At least `1024` | Profile-specific |
 | `models.profiles.*.maxOutputTokens` | Positive with remaining input budget | Profile-specific |

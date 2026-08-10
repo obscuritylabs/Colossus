@@ -23,6 +23,7 @@ import {
   withBoundedEntry,
 } from "./state";
 import type { Interaction, Run, RunUpdate } from "./types";
+import { USE_CONFIGURED_MAX_TURNS } from "./types";
 
 const baseRun: Run = {
   runId: "run-1",
@@ -521,8 +522,11 @@ describe("stableIdempotentAttempt", () => {
 });
 
 describe("clampMaxTurns", () => {
-  it("keeps composer turn limits within the public API contract", () => {
-    expect(clampMaxTurns(0)).toBe(1);
+  it("preserves the configured-default sentinel and bounds explicit overrides", () => {
+    expect(clampMaxTurns(USE_CONFIGURED_MAX_TURNS)).toBe(
+      USE_CONFIGURED_MAX_TURNS,
+    );
+    expect(clampMaxTurns(-1)).toBe(1);
     expect(clampMaxTurns(24)).toBe(24);
     expect(clampMaxTurns(8.7)).toBe(8);
     expect(clampMaxTurns(128)).toBe(100);

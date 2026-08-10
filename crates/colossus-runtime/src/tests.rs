@@ -731,6 +731,29 @@ fn storage_keys_default_to_explicit_plaintext_none() {
 }
 
 #[test]
+fn default_runtime_limits_are_implicit_in_serialized_configuration() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    let yaml = config.to_yaml().expect("configuration YAML");
+    let document: Value = serde_saphyr::from_str(&yaml).expect("configuration value");
+    let root = document.as_object().expect("configuration mapping");
+
+    assert!(!root.contains_key("agent"));
+    assert!(!root.contains_key("subagents"));
+
+    let parsed = RuntimeConfig::from_yaml(&yaml).expect("configuration with implicit limits");
+    assert_eq!(parsed.agent, super::AgentConfig::default());
+    assert_eq!(parsed.subagents, super::SubagentConfig::default());
+
+    config.agent.max_turns = 7;
+    config.subagents.max_concurrent = 3;
+    let overridden_yaml = config.to_yaml().expect("configuration YAML");
+    let overridden: Value = serde_saphyr::from_str(&overridden_yaml).expect("configuration value");
+    let root = overridden.as_object().expect("configuration mapping");
+    assert!(root.contains_key("agent"));
+    assert!(root.contains_key("subagents"));
+}
+
+#[test]
 fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     assert_eq!(
@@ -930,10 +953,7 @@ fn access_is_required_and_removed_fields_are_rejected() {
         .expect("configuration value");
     {
         let root = document.as_object_mut().expect("configuration mapping");
-        root.get_mut("agent")
-            .and_then(Value::as_object_mut)
-            .expect("agent mapping")
-            .insert("tools".into(), json!(["echo", "task.list"]));
+        root.insert("agent".into(), json!({"tools": ["echo", "task.list"]}));
         let policy = root
             .get_mut("policy")
             .and_then(Value::as_object_mut)
@@ -951,10 +971,7 @@ fn access_is_required_and_removed_fields_are_rejected() {
     {
         let root = document.as_object_mut().expect("configuration mapping");
         root.remove("access");
-        root.get_mut("agent")
-            .and_then(Value::as_object_mut)
-            .expect("agent mapping")
-            .remove("tools");
+        root.remove("agent");
         let policy = root
             .get_mut("policy")
             .and_then(Value::as_object_mut)
@@ -1375,7 +1392,7 @@ fn agent_config_rejects_unbounded_turns_and_invalid_runtime_limits() {
         "unbounded model turn count was accepted"
     );
 
-    config.agent.max_turns = 24;
+    config.agent.max_turns = super::DEFAULT_MAX_TURNS;
     config.memory.retrieval_limit = 0;
     assert!(
         RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),

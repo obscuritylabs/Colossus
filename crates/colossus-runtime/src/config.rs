@@ -27,10 +27,10 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub models: ModelsConfig,
     /// Agent model-turn and active-tool limits.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "AgentConfig::is_default")]
     pub agent: AgentConfig,
     /// Durable child-agent scheduler limits.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "SubagentConfig::is_default")]
     pub subagents: SubagentConfig,
     /// Long-session budgeting and immutable snapshot settings.
     #[serde(default)]
@@ -102,7 +102,7 @@ pub enum AuditExporterConfig {
 }
 
 /// Bounded agent-loop configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
     /// Maximum provider turns in one run.
@@ -117,8 +117,14 @@ impl Default for AgentConfig {
     }
 }
 
+impl AgentConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Bounded durable child-agent scheduler configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubagentConfig {
     /// Maximum child runs executing concurrently in one runtime.
@@ -128,6 +134,12 @@ pub struct SubagentConfig {
 impl Default for SubagentConfig {
     fn default() -> Self {
         Self { max_concurrent: 10 }
+    }
+}
+
+impl SubagentConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
     }
 }
 

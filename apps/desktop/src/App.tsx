@@ -110,7 +110,7 @@ import type {
   RunStatus,
   TerminalKind,
 } from "./types";
-import { isTerminalStatus } from "./types";
+import { USE_CONFIGURED_MAX_TURNS, isTerminalStatus } from "./types";
 import {
   listFixtureWorkspaceDirectory,
   readFixtureWorkspaceFile,
@@ -456,7 +456,7 @@ export default function App() {
   const [planRevision, setPlanRevision] = useState<PlanRevisionTarget | null>(
     null,
   );
-  const [maxTurns, setMaxTurns] = useState(24);
+  const [maxTurns, setMaxTurns] = useState(USE_CONFIGURED_MAX_TURNS);
   const [submitting, setSubmitting] = useState(false);
   const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);

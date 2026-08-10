@@ -8,7 +8,7 @@ import type {
   RunUpdate,
   TokenUsage,
 } from "./types";
-import { isTerminalStatus } from "./types";
+import { USE_CONFIGURED_MAX_TURNS, isTerminalStatus } from "./types";
 
 export const MAX_FEED_ITEMS = 200;
 export const MAX_FEED_TEXT_CHARACTERS = 65_536;
@@ -783,6 +783,9 @@ export function operationFingerprint(parts: readonly unknown[]): string {
 
 export function clampMaxTurns(value: number): number {
   const integer = Number.isFinite(value) ? Math.trunc(value) : 1;
+  if (integer === USE_CONFIGURED_MAX_TURNS) {
+    return USE_CONFIGURED_MAX_TURNS;
+  }
   return Math.min(MAX_TURNS, Math.max(1, integer));
 }
 
