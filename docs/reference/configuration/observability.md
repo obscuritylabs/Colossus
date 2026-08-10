@@ -116,6 +116,24 @@ Only the long-running `worker` installs the process-global subscriber. An embedd
 by its host. The worker drains public work before bounded provider flush and process
 exit.
 
+CLI and TUI clients automatically use the worker when its authenticated endpoint exists
+for the same canonical workspace. Runs submitted by those clients are therefore traced
+and exported by the worker. Start the worker before the TUI when local OTLP export is
+required:
+
+```bash
+colossus --config .colossus/config.yaml worker
+# In another terminal:
+colossus --config .colossus/config.yaml tui
+```
+
+Without an active worker, the standalone CLI and TUI use an embedded runtime. The stock
+CLI host does not install an OTLP subscriber for that fallback, so it does not export
+live signals even when `observability.enabled` is `true`. An embedding application may
+install its own compatible `tracing` subscriber. Worker startup spans measure database
+and recovery work when the worker opens; attaching a TUI to an already-running worker
+does not open another runtime or emit another startup trace.
+
 See [OpenTelemetry implementation](../../develop/observability.md) for the signal and
 propagation contract and the [LGTM example](https://github.com/obscuritylabs/Colossus/tree/main/examples/observability)
 for a development-only collector.
