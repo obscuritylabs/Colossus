@@ -12,7 +12,9 @@ use opentelemetry_sdk::{
 };
 use std::time::Duration;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
+use tracing_subscriber::{
+    Layer as _, filter::filter_fn, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+};
 
 /// Host-owned OpenTelemetry SDK providers and non-blocking stdout guard.
 ///
@@ -61,12 +63,18 @@ impl ObservabilityGuard {
         }
         install_trace_context_propagator();
 
+        // Keep exporter transport diagnostics out of the signals they are exporting.
         let trace_layer = tracer_provider.as_ref().map(|provider| {
-            tracing_opentelemetry::layer().with_tracer(provider.tracer("colossus.gen_ai"))
+            tracing_opentelemetry::layer()
+                .with_tracer(provider.tracer("colossus.gen_ai"))
+                .with_filter(filter_fn(|metadata| {
+                    is_colossus_trace_target(metadata.target())
+                }))
         });
         let log_layer = logger_provider
             .as_ref()
-            .map(OpenTelemetryTracingBridge::new);
+            .map(OpenTelemetryTracingBridge::new)
+            .map(|layer| layer.with_filter(filter_fn(is_colossus_log_metadata)));
         let (stdout_writer, stdout_guard) = if config.logs.stdout_json {
             let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
             (Some(writer), Some(guard))
@@ -80,6 +88,7 @@ impl ObservabilityGuard {
                 .with_current_span(true)
                 .with_span_list(false)
                 .with_writer(writer)
+                .with_filter(filter_fn(is_colossus_log_metadata))
         });
 
         tracing_subscriber::registry()
@@ -114,6 +123,24 @@ impl ObservabilityGuard {
             let _ = provider.shutdown_with_timeout(self.shutdown_timeout);
         }
         drop(self.stdout_guard.take());
+    }
+}
+
+fn is_colossus_trace_target(target: &str) -> bool {
+    matches!(target, "colossus.gen_ai" | "colossus.rpc")
+}
+
+fn is_colossus_journal_target(target: &str) -> bool {
+    target == "colossus.journal"
+}
+
+fn is_colossus_log_metadata(metadata: &tracing::Metadata<'_>) -> bool {
+    // Per-layer filters are contextual, so parent spans must be admitted even though
+    // the log sinks only emit the journal events nested inside them.
+    if metadata.is_span() {
+        is_colossus_trace_target(metadata.target())
+    } else {
+        is_colossus_journal_target(metadata.target())
     }
 }
 
@@ -323,5 +350,80 @@ fn configured_sampler(config: &ObservabilityConfig) -> Sampler {
         Ok("parentbased_traceidratio") | Err(_) | Ok(_) => {
             Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(ratio)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_colossus_journal_target, is_colossus_log_metadata, is_colossus_trace_target};
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+    use opentelemetry_sdk::{
+        logs::{InMemoryLogExporter, SdkLoggerProvider},
+        trace::{InMemorySpanExporter, SdkTracerProvider},
+    };
+    use tracing_subscriber::{Layer as _, layer::SubscriberExt as _};
+
+    #[test]
+    fn exporter_layers_only_accept_owned_signal_targets() {
+        assert!(is_colossus_trace_target("colossus.gen_ai"));
+        assert!(is_colossus_trace_target("colossus.rpc"));
+        assert!(!is_colossus_trace_target("colossus.journal"));
+        assert!(!is_colossus_trace_target("h2::proto::streams"));
+        assert!(!is_colossus_trace_target("opentelemetry_otlp"));
+
+        assert!(is_colossus_journal_target("colossus.journal"));
+        assert!(!is_colossus_journal_target("colossus.gen_ai"));
+        assert!(!is_colossus_journal_target("tonic::transport"));
+    }
+
+    #[test]
+    fn journal_log_filter_preserves_events_inside_agent_spans() {
+        let exporter = InMemoryLogExporter::default();
+        let provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(tracer_exporter.clone())
+            .build();
+        let trace_layer = tracing_opentelemetry::layer()
+            .with_tracer(tracer_provider.tracer("colossus.gen_ai"))
+            .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+                is_colossus_trace_target(metadata.target())
+            }));
+        let log_layer = OpenTelemetryTracingBridge::new(&provider).with_filter(
+            tracing_subscriber::filter::filter_fn(is_colossus_log_metadata),
+        );
+        let subscriber = tracing_subscriber::registry()
+            .with(trace_layer)
+            .with(log_layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(target: "colossus.gen_ai", "invoke_agent");
+            let _entered = span.enter();
+            tracing::info!(
+                target: "colossus.journal",
+                event_name = "colossus.journal.appended",
+                message = "metadata"
+            );
+            tracing::info!(target: "h2::proto::streams", message = "must be dropped");
+        });
+
+        provider.force_flush().expect("flush logs");
+        tracer_provider.force_flush().expect("flush spans");
+        let records = exporter.get_emitted_logs().expect("exported logs");
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].record.target().map(ToString::to_string),
+            Some("colossus.journal".into())
+        );
+        assert_eq!(
+            tracer_exporter
+                .get_finished_spans()
+                .expect("exported spans")
+                .len(),
+            1
+        );
     }
 }
