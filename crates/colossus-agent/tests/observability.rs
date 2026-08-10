@@ -3,10 +3,11 @@
 use async_trait::async_trait;
 use colossus_agent::AgentService;
 use colossus_contracts::{
-    Actor, ActorType, ExecutionContext, ModelCapabilities, ModelLimits, ModelRequest,
-    ProviderEvent, ProviderRoute, ProviderTurn, ProviderUsage, RemoteTraceContext,
-    RunEventEnvelope, ToolCall, ToolResult,
+    Actor, ActorType, ExecutionContext, ModelCapabilities, ModelLimits, ModelRequest, PlanRecord,
+    PlanStatus, PlanStep, ProviderEvent, ProviderRoute, ProviderTurn, ProviderUsage,
+    RemoteTraceContext, RunEventEnvelope, ToolCall, ToolResult,
 };
+use colossus_observability::{JournalPayloadMode, ObservedEventJournal};
 use colossus_ports::{
     EventJournal, ModelProvider, ModelProviderError, RunControl, RunEventObserver,
     SessionRepository, ToolError, ToolExecutor,
@@ -14,10 +15,23 @@ use colossus_ports::{
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
 use colossus_tools::StaticToolRegistry;
-use opentelemetry::trace::{SpanKind, TracerProvider as _};
+use opentelemetry::{
+    Value as OtelValue,
+    trace::{SpanKind, TracerProvider as _},
+};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
-use std::sync::Arc;
-use tracing_subscriber::layer::SubscriberExt as _;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+use tracing::{
+    Subscriber,
+    field::{Field, Visit},
+};
+use tracing_subscriber::{Layer, layer::SubscriberExt as _, registry::LookupSpan};
 
 struct OneTurnProvider(ProviderTurn);
 
@@ -79,6 +93,139 @@ struct SilentRunObserver;
 impl RunEventObserver for SilentRunObserver {
     async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
         Ok(())
+    }
+}
+
+struct PlanProvider(AtomicUsize);
+
+#[async_trait]
+impl ModelProvider for PlanProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        OneTurnProvider(scripted_turn()).route(role)
+    }
+
+    async fn turn(
+        &self,
+        _role: &str,
+        _request: ModelRequest,
+        _context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        let events = match self.0.fetch_add(1, Ordering::AcqRel) {
+            0 => vec![ProviderEvent::ToolCallRequested {
+                call_id: "plan-call".into(),
+                name: "plan.create".into(),
+                arguments: serde_json::json!({
+                    "prompt": "Verify observability",
+                    "content": "# Plan",
+                    "steps": [{
+                        "title": "Verify",
+                        "detail": "Assert the trace tree.",
+                        "requires_mutation": false,
+                    }],
+                }),
+            }],
+            1 => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                vec![ProviderEvent::FinalOutput {
+                    text: "Plan saved.".into(),
+                }]
+            }
+            _ => panic!("unexpected provider turn"),
+        };
+        Ok(ProviderTurn {
+            profile: "scripted".into(),
+            model_profile: "scripted".into(),
+            provider_profile: "scripted-provider".into(),
+            provider: "test".into(),
+            model: "test-model".into(),
+            response_id: None,
+            events,
+        })
+    }
+}
+
+struct PlanTools;
+
+#[async_trait]
+impl ToolExecutor for PlanTools {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        let plan = PlanRecord {
+            id: "observability-plan".into(),
+            session_id: context.session_id.expect("plan session"),
+            prompt: "Verify observability".into(),
+            status: PlanStatus::Draft,
+            revision: 1,
+            content: "# Plan".into(),
+            steps: vec![PlanStep {
+                index: 1,
+                title: "Verify".into(),
+                detail: "Assert the trace tree.".into(),
+                requires_mutation: false,
+            }],
+            created_at: "2026-08-10T00:00:00Z".into(),
+            updated_at: "2026-08-10T00:00:01Z".into(),
+            approved_at: None,
+            executed_run_id: None,
+        };
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: serde_json::to_string(&plan).expect("plan JSON"),
+            exit_code: 0,
+        })
+    }
+}
+
+type JournalScopes = Vec<(String, Vec<String>)>;
+
+#[derive(Clone, Default)]
+struct JournalScopeRecorder(Arc<Mutex<JournalScopes>>);
+
+#[derive(Default)]
+struct EventTypeVisitor(Option<String>);
+
+impl Visit for EventTypeVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "event_type" {
+            self.0 = Some(format!("{value:?}").trim_matches('"').to_owned());
+        }
+    }
+}
+
+impl<S> Layer<S> for JournalScopeRecorder
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().target() != "colossus.journal" {
+            return;
+        }
+        let mut visitor = EventTypeVisitor::default();
+        event.record(&mut visitor);
+        let Some(event_type) = visitor.0 else {
+            return;
+        };
+        let scope = context
+            .event_scope(event)
+            .map(|scope| {
+                scope
+                    .from_root()
+                    .map(|span| span.metadata().name().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.0
+            .lock()
+            .expect("journal scopes")
+            .push((event_type, scope));
     }
 }
 
@@ -220,7 +367,100 @@ async fn genai_trace_contains_parented_agent_and_model_spans_without_content() {
         attribute.key.as_str() == "gen_ai.response.id"
             && attribute.value.as_str() == "response-test"
     }));
+    assert!(model.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "gen_ai.usage.input_tokens"
+            && attribute.value == OtelValue::I64(12)
+    }));
+    assert!(model.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "gen_ai.usage.output_tokens"
+            && attribute.value == OtelValue::I64(3)
+    }));
+    assert!(model.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "gen_ai.response.time_to_first_chunk"
+            && matches!(attribute.value, OtelValue::F64(value) if value >= 0.0)
+    }));
     let debug = format!("{spans:?}");
     assert!(!debug.contains("sensitive prompt"));
     assert!(!debug.contains("released output must not become a span attribute"));
+}
+
+#[tokio::test]
+async fn plan_children_and_tool_journal_records_stay_inside_their_spans() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let scopes = JournalScopeRecorder::default();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("plan-trace-test")))
+        .with(scopes.clone());
+    let inner: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let journal: Arc<dyn EventJournal> = Arc::new(ObservedEventJournal::new(
+        inner,
+        JournalPayloadMode::Metadata,
+    ));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::new(PlanProvider(AtomicUsize::new(0))),
+        Arc::new(StaticToolRegistry::builtins(&["plan.create".into()]).expect("catalog")),
+        Arc::new(PlanTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = SilentRunObserver;
+
+    let subscriber_guard = tracing::subscriber::set_default(subscriber);
+    service
+        .run_plan_in_session_with_skills_stream(
+            "primary",
+            "Plan only.",
+            "Verify observability",
+            3,
+            None,
+            &[],
+            &mut observer,
+        )
+        .await
+        .expect("plan run");
+    drop(subscriber_guard);
+    provider.force_flush().expect("flush spans");
+
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let plan = spans
+        .iter()
+        .find(|span| span.name == "plan primary")
+        .expect("plan span");
+    let children = spans
+        .iter()
+        .filter(|span| span.parent_span_id == plan.span_context.span_id())
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 3, "two model calls and one plan tool");
+    for child in children {
+        assert!(
+            child.start_time >= plan.start_time,
+            "{} starts before plan",
+            child.name
+        );
+        assert!(
+            child.end_time <= plan.end_time,
+            "{} outlives plan",
+            child.name
+        );
+    }
+
+    let scopes = scopes.0.lock().expect("journal scopes");
+    for event_type in [
+        "tool.call.started.v1",
+        "plan.written.v1",
+        "tool.call.completed.v1",
+    ] {
+        let (_, scope) = scopes
+            .iter()
+            .find(|(candidate, _)| candidate == event_type)
+            .unwrap_or_else(|| panic!("missing journal event {event_type}"));
+        assert_eq!(
+            scope.last().map(String::as_str),
+            Some("execute_tool"),
+            "{event_type} must correlate to the tool span"
+        );
+    }
 }

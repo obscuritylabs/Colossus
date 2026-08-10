@@ -40,7 +40,8 @@ The span tree uses:
   creation calls.
 
 Model spans include provider/request/response model, response ID when returned, token
-counts, streaming first-chunk and inter-chunk timing, and a bounded error class. Tool
+counts, streaming first-chunk timing, and a bounded error class. Inter-chunk timing is
+reported by the standard client metric rather than copied into span attributes. Tool
 spans include tool name, type, call ID, and terminal status. Metrics use the upstream
 names, units, recommended explicit buckets, allowed-attribute views, and a cardinality
 limit. Correlation IDs, response IDs, tool-call IDs, session IDs, workflow-run IDs, and
@@ -65,6 +66,20 @@ span handle. A process restart cannot make a span object durable; recovered exec
 starts a new recovery segment linked to the stored normalized context. Durable workflow
 identity remains available as span/log correlation even where a backend presents those
 segments separately.
+
+## Runtime startup
+
+The worker installs its subscriber before runtime construction, so synchronous startup
+work is visible in the same trace export without making embedded `Runtime` consumers
+install a global subscriber. `colossus.runtime.open` measures total composition time and
+parents bounded internal phase spans for workspace ownership, storage open and startup
+verification, projection catch-up, uncertain-effect recovery, research recovery, and
+workflow recovery. Storage spans record only the adapter and verification mode; paths,
+repository identities, key references, and credentials are deliberately excluded.
+
+These spans are emitted whenever a caller has installed a compatible `tracing`
+subscriber. They are not emitted by direct CLI commands that intentionally run without
+the worker-owned OTLP host.
 
 ## Failure and disclosure boundary
 

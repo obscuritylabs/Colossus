@@ -18,6 +18,12 @@ pub mod attributes {
     pub const RESPONSE_MODEL: &str = "gen_ai.response.model";
     /// Provider response identifier.
     pub const RESPONSE_ID: &str = "gen_ai.response.id";
+    /// Time from request issuance until the first streaming response chunk, in seconds.
+    pub const RESPONSE_TIME_TO_FIRST_CHUNK: &str = "gen_ai.response.time_to_first_chunk";
+    /// Number of tokens used in the GenAI input.
+    pub const USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
+    /// Number of tokens used in the GenAI output.
+    pub const USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
     /// Conversation or thread identifier.
     pub const CONVERSATION_ID: &str = "gen_ai.conversation.id";
     /// Human-readable in-process agent name.
@@ -99,6 +105,15 @@ mod tests {
         assert_eq!(operations::INVOKE_AGENT, "invoke_agent");
         assert_eq!(operations::INVOKE_WORKFLOW, "invoke_workflow");
         assert_eq!(operations::EXECUTE_TOOL, "execute_tool");
+        assert_eq!(
+            attributes::RESPONSE_TIME_TO_FIRST_CHUNK,
+            "gen_ai.response.time_to_first_chunk"
+        );
+        assert_eq!(attributes::USAGE_INPUT_TOKENS, "gen_ai.usage.input_tokens");
+        assert_eq!(
+            attributes::USAGE_OUTPUT_TOKENS,
+            "gen_ai.usage.output_tokens"
+        );
         assert_eq!(instruments::CLIENT_TOKEN_USAGE, "gen_ai.client.token.usage");
         assert_eq!(
             instruments::INVOKE_AGENT_DURATION,

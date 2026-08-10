@@ -61,17 +61,22 @@ impl PlanObservation {
 
 impl Drop for PlanObservation {
     fn drop(&mut self) {
-        self.span.record(
-            "otel.status_code",
-            if self.error_type.is_some() {
-                "ERROR"
-            } else {
-                "OK"
-            },
-        );
-        if let Some(error_type) = self.error_type {
-            self.span.record("error.type", error_type);
-        }
+        // `tracing-opentelemetry` updates a span's end timestamp on exit. Plan spans
+        // are used as explicit parents rather than held entered across async work, so
+        // enter once at the terminal boundary to keep every child temporally contained.
+        self.span.in_scope(|| {
+            self.span.record(
+                "otel.status_code",
+                if self.error_type.is_some() {
+                    "ERROR"
+                } else {
+                    "OK"
+                },
+            );
+            if let Some(error_type) = self.error_type {
+                self.span.record("error.type", error_type);
+            }
+        });
     }
 }
 

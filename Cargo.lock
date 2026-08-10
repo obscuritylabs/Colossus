@@ -1442,6 +1442,8 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "ignore",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rustix",
  "serde",
  "serde-saphyr",
@@ -1451,6 +1453,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]

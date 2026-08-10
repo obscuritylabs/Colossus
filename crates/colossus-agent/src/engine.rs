@@ -424,6 +424,9 @@ impl AgentService {
                         gen_ai.request.model = %route.model,
                         gen_ai.response.model = tracing::field::Empty,
                         gen_ai.response.id = tracing::field::Empty,
+                        gen_ai.response.time_to_first_chunk = tracing::field::Empty,
+                        gen_ai.usage.input_tokens = tracing::field::Empty,
+                        gen_ai.usage.output_tokens = tracing::field::Empty,
                         gen_ai.conversation.id = %session_id,
                         colossus.run.id = %run_id,
                         colossus.message.sequence = turn,
@@ -486,6 +489,22 @@ impl AgentService {
                             ProviderEvent::Usage { usage } => Some(usage),
                             _ => None,
                         });
+                        if let Some(first_chunk_seconds) = first_chunk_seconds
+                            && route.capabilities.streaming
+                        {
+                            model_span
+                                .record("gen_ai.response.time_to_first_chunk", first_chunk_seconds);
+                        }
+                        if let Some(usage) = usage {
+                            model_span.record(
+                                "gen_ai.usage.input_tokens",
+                                i64::try_from(usage.input_tokens).unwrap_or(i64::MAX),
+                            );
+                            model_span.record(
+                                "gen_ai.usage.output_tokens",
+                                i64::try_from(usage.output_tokens).unwrap_or(i64::MAX),
+                            );
+                        }
                         colossus_observability::record_model(
                             &colossus_observability::ModelMetric {
                                 provider: &turn.provider,
@@ -977,23 +996,25 @@ impl AgentService {
                     break;
                 }
                 if validation.is_ok() {
-                    self.append(
-                        &stream_id,
-                        &mut stream_version,
-                        "tool.call.started.v1",
-                        system_actor(),
-                        &context,
-                        json!({
-                            "turn": turn,
-                            "call_id": call.call_id,
-                            "name": call.name,
-                            "argument_fields": call
-                                .arguments
-                                .as_object()
-                                .map(|arguments| arguments.keys().cloned().collect::<Vec<_>>())
-                                .unwrap_or_default(),
-                        }),
-                    )?;
+                    tool_span.in_scope(|| {
+                        self.append(
+                            &stream_id,
+                            &mut stream_version,
+                            "tool.call.started.v1",
+                            system_actor(),
+                            &context,
+                            json!({
+                                "turn": turn,
+                                "call_id": call.call_id,
+                                "name": call.name,
+                                "argument_fields": call
+                                    .arguments
+                                    .as_object()
+                                    .map(|arguments| arguments.keys().cloned().collect::<Vec<_>>())
+                                    .unwrap_or_default(),
+                            }),
+                        )
+                    })?;
                     if let Err(error) = emit_run_event(
                         &mut released_observer,
                         &run_id,
@@ -1077,24 +1098,26 @@ impl AgentService {
                             let message = error.to_string();
                             let code = tool_error_code(&error);
                             let result = terminal_tool_error_result(&call, &error);
-                            self.append(
-                                &stream_id,
-                                &mut stream_version,
-                                "tool.call.completed.v1",
-                                system_actor(),
-                                &context,
-                                json!({
-                                    "call_id": result.call_id,
-                                    "name": result.name,
-                                    "output": result.output,
-                                    "exit_code": result.exit_code,
-                                    "outcome_certainty": if matches!(&error, ToolError::OutcomeUnknown(_)) {
-                                        "unknown"
-                                    } else {
-                                        "not_executed"
-                                    },
-                                }),
-                            )?;
+                            tool_span.in_scope(|| {
+                                self.append(
+                                    &stream_id,
+                                    &mut stream_version,
+                                    "tool.call.completed.v1",
+                                    system_actor(),
+                                    &context,
+                                    json!({
+                                        "call_id": result.call_id,
+                                        "name": result.name,
+                                        "output": result.output,
+                                        "exit_code": result.exit_code,
+                                        "outcome_certainty": if matches!(&error, ToolError::OutcomeUnknown(_)) {
+                                            "unknown"
+                                        } else {
+                                            "not_executed"
+                                        },
+                                    }),
+                                )
+                            })?;
                             tool_messages.push(tool_result_message(&result));
                             for pending in calls.iter().skip(call_index.saturating_add(1)) {
                                 let skipped = unexecuted_tool_result(pending, &call.call_id, code);
@@ -1290,33 +1313,37 @@ impl AgentService {
                     // therefore retain the exact persisted plan.
                     written_plan = Some(plan);
                     let plan = written_plan.as_ref().expect("plan was just captured");
+                    tool_span.in_scope(|| {
+                        self.append(
+                            &stream_id,
+                            &mut stream_version,
+                            "plan.written.v1",
+                            system_actor(),
+                            &context,
+                            json!({
+                                "turn": turn,
+                                "plan_id": &plan.id,
+                                "revision": plan.revision,
+                            }),
+                        )
+                    })?;
+                    post_commit_events.push(RunEvent::PlanWritten { plan: plan.clone() });
+                }
+                tool_span.in_scope(|| {
                     self.append(
                         &stream_id,
                         &mut stream_version,
-                        "plan.written.v1",
+                        "tool.call.completed.v1",
                         system_actor(),
                         &context,
                         json!({
-                            "turn": turn,
-                            "plan_id": &plan.id,
-                            "revision": plan.revision,
+                            "call_id": result.call_id,
+                            "name": result.name,
+                            "output": result.output,
+                            "exit_code": result.exit_code,
                         }),
-                    )?;
-                    post_commit_events.push(RunEvent::PlanWritten { plan: plan.clone() });
-                }
-                self.append(
-                    &stream_id,
-                    &mut stream_version,
-                    "tool.call.completed.v1",
-                    system_actor(),
-                    &context,
-                    json!({
-                        "call_id": result.call_id,
-                        "name": result.name,
-                        "output": result.output,
-                        "exit_code": result.exit_code,
-                    }),
-                )?;
+                    )
+                })?;
                 post_commit_events.push(completed_event);
                 tool_messages.push(tool_message);
             }

@@ -127,7 +127,10 @@ impl ObservabilityGuard {
 }
 
 fn is_colossus_trace_target(target: &str) -> bool {
-    matches!(target, "colossus.gen_ai" | "colossus.rpc")
+    matches!(
+        target,
+        "colossus.gen_ai" | "colossus.rpc" | "colossus.startup"
+    )
 }
 
 fn is_colossus_journal_target(target: &str) -> bool {
@@ -368,6 +371,7 @@ mod tests {
     fn exporter_layers_only_accept_owned_signal_targets() {
         assert!(is_colossus_trace_target("colossus.gen_ai"));
         assert!(is_colossus_trace_target("colossus.rpc"));
+        assert!(is_colossus_trace_target("colossus.startup"));
         assert!(!is_colossus_trace_target("colossus.journal"));
         assert!(!is_colossus_trace_target("h2::proto::streams"));
         assert!(!is_colossus_trace_target("opentelemetry_otlp"));
