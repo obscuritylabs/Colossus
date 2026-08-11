@@ -14,7 +14,7 @@ concurrency:
 jobs:
   classify:
     name: Classify PR changes
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       rust_required: ${{ steps.changes.outputs.rust_required }}
@@ -97,6 +97,9 @@ jobs:
     name: Rust PR validation
     if: needs.classify.outputs.rust_required == 'true'
     needs: classify
+    # The workspace suite installs an exact-path AppArmor profile, which needs a kernel
+    # that exposes the AppArmor securityfs interface. Blacksmith's microVM kernel does
+    # not, so this lane stays on the GitHub-hosted larger runner.
     runs-on: ubuntu-latest-m
     timeout-minutes: 45
     env:
@@ -190,7 +193,7 @@ jobs:
     name: Documentation PR build
     if: needs.classify.outputs.docs_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -212,7 +215,7 @@ jobs:
     name: Dependency policy
     if: needs.classify.outputs.dependency_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -236,7 +239,7 @@ jobs:
     name: Colossus PR gate
     if: always()
     needs: [classify, rust, documentation, dependency-policy]
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Check out gate contract

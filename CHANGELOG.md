@@ -8,6 +8,13 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Changed
+
+- Moved pull-request, pre-merge, documentation, release orchestration, and SDK
+  publication jobs onto Blacksmith runners, keeping the release artifact matrix on the
+  GitHub-hosted images that match each published target and keeping the two
+  AppArmor-dependent Linux lanes on the GitHub-hosted larger runner.
+
 ## [0.10.7] - 2026-08-11
 
 ### Fixed

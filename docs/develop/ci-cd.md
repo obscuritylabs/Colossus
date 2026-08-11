@@ -62,18 +62,21 @@ flowchart LR
 | Tier | Trigger | Hosted coverage | Stable gate | Planning ceiling |
 |---|---|---|---|---:|
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
-| Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
+| Pre-merge acceptance | Apply `ci:full` | macOS 15 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
 | Release | Push an annotated stable or approved prerelease tag | Six CLI targets; stable SDK candidate or macOS/Windows Developer Preview packages | `Colossus release gate` | $4.50 per release |
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
-The four-core `ubuntu-latest-m` larger runner is reserved for the longest CPU-bound x64
-Linux lane in each tier: complete PR validation, live OCI/OPA acceptance, release
-readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
-dependency inspection, service-backed integration tests, and bounded single-process
-fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
-does not materially shorten the critical path. The repository's
-`.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
+Most hosted jobs run on Blacksmith runners: `blacksmith-4vcpu-ubuntu-2404` for Linux
+lanes, `blacksmith-6vcpu-macos-15` for macOS ARM acceptance and Desktop packaging, and
+`blacksmith-8vcpu-windows-2025` for Windows acceptance and the Windows Developer
+Preview. Two Linux lanes stay on the GitHub-hosted `ubuntu-latest-m` larger runner:
+complete PR validation and release readiness both install an exact-path AppArmor
+profile, and that requires a kernel exposing the AppArmor securityfs interface, which
+the Blacksmith microVM kernel does not provide. The six-target release artifact matrix
+also keeps the GitHub-hosted images that match each published target, so
+cross-compilation stays out of the release path. The repository's
+`.github/actionlint.yaml` registers every non-standard runner label so local workflow
 linting recognizes it.
 
 ## Steps

@@ -20,6 +20,9 @@ concurrency:
 jobs:
   validate:
     name: Validate release request
+    # Release readiness installs an exact-path AppArmor profile, which needs a kernel
+    # that exposes the AppArmor securityfs interface. Blacksmith's microVM kernel does
+    # not, so this lane stays on the GitHub-hosted larger runner.
     runs-on: ubuntu-latest-m
     timeout-minutes: 45
     env:
@@ -277,7 +280,7 @@ jobs:
   bootstrap_installers:
     name: Package repository-owned bootstrap installers
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Check out repository bootstrap sources
@@ -335,7 +338,7 @@ jobs:
     name: Build immutable stable SDK candidate
     if: needs.validate.outputs.target_channel == 'stable'
     needs: validate
-    runs-on: ubuntu-latest-m
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
       SDK_BASE_TAG: ${{ needs.validate.outputs.sdk_base_tag }}
@@ -405,7 +408,7 @@ jobs:
     name: Build unsigned Colossus Desktop aarch64-apple-darwin
     if: needs.validate.outputs.target_channel != 'stable'
     needs: validate
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -487,7 +490,7 @@ jobs:
     name: Package Colossus Desktop aarch64-apple-darwin
     if: needs.validate.outputs.target_channel != 'stable'
     needs: [validate, desktop_macos_build]
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
@@ -626,7 +629,7 @@ jobs:
     name: Package unsigned Windows Desktop Developer Preview
     if: needs.validate.outputs.target_channel != 'stable'
     needs: validate
-    runs-on: windows-latest-l
+    runs-on: blacksmith-8vcpu-windows-2025
     timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
@@ -850,7 +853,7 @@ jobs:
         desktop_macos,
         desktop_windows_preview,
       ]
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
@@ -886,7 +889,7 @@ jobs:
     name: Create draft GitHub Release
     if: ${{ !cancelled() && needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success' }}
     needs: [validate, gate]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: write
