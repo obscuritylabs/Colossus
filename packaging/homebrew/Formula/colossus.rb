@@ -1,16 +1,16 @@
 class Colossus < Formula
   desc "Auditable runtime for agent work and durable automation"
   homepage "https://github.com/obscuritylabs/Colossus"
-  version "0.10.5"
+  version "0.10.7"
   license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.10.5/colossus-0.10.5-aarch64-apple-darwin.tar.gz"
-      sha256 "115aaa6dffb1647b3e6e00757b5b136eb710975bad04ac72409e3ed60f012856"
+      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.10.7/colossus-0.10.7-aarch64-apple-darwin.tar.gz"
+      sha256 "035d66323a2d07026266838a0799077e16e16e1f3d8d1f803a9f5f81ee2b7d5a"
     else
-      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.10.5/colossus-0.10.5-x86_64-apple-darwin.tar.gz"
-      sha256 "6d768d4204bf8854eb7edfc4c67a528501b0c6d75f4e586f3186b0e36dcbc9dd"
+      url "https://github.com/obscuritylabs/Colossus/releases/download/v0.10.7/colossus-0.10.7-x86_64-apple-darwin.tar.gz"
+      sha256 "f5ccbce846efe485e411dd9dd7bc878d847719fc6012e001f84ea8c6142b68cc"
     end
   end
 
