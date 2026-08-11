@@ -77,21 +77,33 @@ async fn install_embedded(
     let staging = staging_directory()?;
     let bootstrap = staging.path().join("install.sh");
     stage_private_file(&bootstrap, BOOTSTRAP)?;
-    let mut child = tokio::process::Command::new("/bin/sh")
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command
         .arg(&bootstrap)
         .args(["--version", &format!("v{}", request.version)])
         .args(["--prefix", &request.prefix])
         .args(["--channel", "stable", "--no-modify-path", "--yes"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    run_bootstrap(command, UPDATE_TIMEOUT).await
+}
+
+/// Run one staged bootstrap in its own process group so a timeout can stop every descendant.
+#[cfg(unix)]
+async fn run_bootstrap(
+    mut command: tokio::process::Command,
+    timeout: Duration,
+) -> Result<DirectUpdateOutcome, DirectUpdateFailure> {
+    let mut child = command
+        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| DirectUpdateFailure::LaunchFailed)?;
-    let status = match tokio::time::timeout(UPDATE_TIMEOUT, child.wait()).await {
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(result) => result.map_err(|_| DirectUpdateFailure::InstallFailed)?,
         Err(_) => {
-            let _ = child.kill().await;
+            terminate_process_group(&mut child).await;
             return Err(DirectUpdateFailure::TimedOut);
         }
     };
@@ -100,6 +112,24 @@ async fn install_embedded(
     } else {
         Err(DirectUpdateFailure::InstallFailed)
     }
+}
+
+/// Kill and reap the bootstrap process group, leaving no `curl`, `tar`, or installer descendant behind.
+///
+/// The group is only signalled when the child leads its own group, so a failed
+/// `process_group` setup can never widen the signal to this process's own group.
+#[cfg(unix)]
+async fn terminate_process_group(child: &mut tokio::process::Child) {
+    use rustix::process::{Pid, Signal, getpgid, kill_process_group};
+
+    if let Some(raw) = child.id()
+        && let Ok(raw) = i32::try_from(raw)
+        && let Some(pid) = Pid::from_raw(raw)
+        && getpgid(Some(pid)).is_ok_and(|group| group == pid)
+    {
+        let _ = kill_process_group(pid, Signal::KILL);
+    }
+    let _ = child.kill().await;
 }
 
 #[cfg(windows)]
@@ -181,5 +211,39 @@ mod tests {
         assert!(source.contains("--noproxy '*'"));
         #[cfg(windows)]
         assert!(source.contains("$handler.UseProxy = $false"));
+    }
+
+    /// A timed-out bootstrap must not leave a descendant behind that can still replace the
+    /// executable and receipt after the caller is told the prior installation was preserved.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timing_out_terminates_every_bootstrap_descendant() {
+        let (reader, writer) = std::io::pipe().expect("anonymous pipe");
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("sleep 120 & wait")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::null());
+
+        let failure = run_bootstrap(command, Duration::from_millis(200))
+            .await
+            .expect_err("the bootstrap must exceed its deadline");
+        assert_eq!(failure, DirectUpdateFailure::TimedOut);
+
+        // The grandchild inherited the pipe, so it only reaches end of file once every
+        // descendant of the bootstrap shell is gone.
+        let mut reader = tokio::net::unix::pipe::Receiver::from_owned_fd(reader.into())
+            .expect("wrap the inherited pipe");
+        let mut buffer = Vec::new();
+        let read = tokio::time::timeout(
+            Duration::from_secs(20),
+            tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buffer),
+        )
+        .await
+        .expect("descendants must be terminated with the process group")
+        .expect("read the inherited pipe");
+        assert_eq!(read, 0);
     }
 }
