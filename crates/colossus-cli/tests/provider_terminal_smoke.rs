@@ -1176,7 +1176,7 @@ sandbox:
         String::from_utf8_lossy(&terminal.stderr)
     );
     let terminal_output = String::from_utf8_lossy(&terminal.stdout);
-    assert!(terminal_output.contains("Colossus Rust 0.10.6."));
+    assert!(terminal_output.contains("Colossus Rust 0.10.7."));
     assert!(terminal_output.contains("unknown terminal command: /session bogus"));
     assert!(terminal_output.contains("Choose a session to resume:"));
     assert!(terminal_output.contains("terminal-connected"));

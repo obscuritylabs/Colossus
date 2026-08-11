@@ -8,7 +8,7 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.10.6 is the active repository-root stable core release line. The latest published
+Rust 0.10.7 is the active repository-root stable core release line. The latest published
 Desktop proof remains the separate 0.10.2-preview.10 Developer Preview. The Rust runtime
 uses Rust 1.96, edition 2024, strict schema-version-2 YAML configuration, and encrypted
 redb state. It never imports Python configuration or SQLite state. Python 0.5 remains

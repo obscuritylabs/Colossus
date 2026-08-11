@@ -102,7 +102,7 @@ if [ -n "$requested_version" ]; then
         fail "version must be vX.Y.Z or vX.Y.Z-preview.N"
 fi
 
-for command_name in curl tar sed grep sort uniq cmp head wc mktemp; do
+for command_name in curl tar sed grep sort uniq cmp head wc mktemp awk; do
     command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
 done
 
@@ -127,6 +127,69 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+write_json_fields() {
+    input_path=$1
+    output_path=$2
+    if ! awk '
+        function flush_field() {
+            gsub(/^[[:space:]]+/, "", field)
+            gsub(/[[:space:]]+$/, "", field)
+            if (field != "") {
+                print field
+            }
+            field = ""
+        }
+        {
+            for (position = 1; position <= length($0); position++) {
+                character = substr($0, position, 1)
+                if (in_string) {
+                    field = field character
+                    if (escaped) {
+                        escaped = 0
+                    } else if (character == "\\") {
+                        escaped = 1
+                    } else if (character == "\"") {
+                        in_string = 0
+                    }
+                } else if (character == "\"") {
+                    in_string = 1
+                    field = field character
+                } else if (character == "{" || character == "[") {
+                    flush_field()
+                    depth++
+                    delimiter[depth] = character
+                } else if (character == "}" || character == "]") {
+                    flush_field()
+                    expected = character == "}" ? "{" : "["
+                    if (depth == 0 || delimiter[depth] != expected) {
+                        invalid = 1
+                    } else {
+                        delete delimiter[depth]
+                        depth--
+                    }
+                } else if (character == ",") {
+                    flush_field()
+                } else {
+                    field = field character
+                }
+            }
+            if (in_string) {
+                invalid = 1
+            } else {
+                field = field " "
+            }
+        }
+        END {
+            flush_field()
+            if (invalid || in_string || escaped || depth != 0) {
+                exit 1
+            }
+        }
+    ' "$input_path" > "$output_path"; then
+        fail "release metadata is not valid bounded JSON"
+    fi
+}
+
 fetch_metadata() {
     metadata_url=$1
     metadata_path=$2
@@ -149,17 +212,18 @@ fetch_metadata() {
     [ "$effective_url" = "$metadata_url" ] || fail "release metadata redirected unexpectedly"
     metadata_size=$(wc -c < "$metadata_path" | tr -d ' ')
     [ "$metadata_size" -le "$maximum_metadata_bytes" ] || fail "release metadata is too large"
+    write_json_fields "$metadata_path" "${metadata_path}.fields"
 }
 
 metadata_tag() {
-    sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*,*[[:space:]]*$/\1/p' "$1" |
+    sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "${1}.fields" |
         sed -n '1p'
 }
 
 metadata_boolean() {
     field_name=$1
     metadata_path=$2
-    sed -n "s/^[[:space:]]*\"$field_name\"[[:space:]]*:[[:space:]]*\([a-z][a-z]*\)[[:space:]]*,*[[:space:]]*$/\1/p" "$metadata_path" |
+    sed -n "s/^[[:space:]]*\"$field_name\"[[:space:]]*:[[:space:]]*\([a-z][a-z]*\)[[:space:]]*$/\1/p" "${metadata_path}.fields" |
         sed -n '1p'
 }
 
@@ -195,8 +259,8 @@ else
     release_list=$temporary_root/releases.json
     candidates=$temporary_root/candidates.txt
     fetch_metadata "$api_origin/repos/$repository/releases?per_page=20" "$release_list"
-    sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*,*[[:space:]]*$/\1/p' \
-        "$release_list" > "$candidates"
+    sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' \
+        "${release_list}.fields" > "$candidates"
     release_tag=
     while IFS= read -r candidate; do
         if printf '%s\n' "$candidate" | grep -Eq \
@@ -218,8 +282,8 @@ version=${release_tag#v}
 archive=colossus-$version-$target.tar.gz
 checksum=$archive.sha256
 asset_names=$temporary_root/asset-names.txt
-sed -n 's/^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*,*[[:space:]]*$/\1/p' \
-    "$release_metadata" > "$asset_names"
+sed -n 's/^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' \
+    "${release_metadata}.fields" > "$asset_names"
 grep -Fx "$archive" "$asset_names" >/dev/null || fail "release metadata omits $archive"
 grep -Fx "$checksum" "$asset_names" >/dev/null || fail "release metadata omits $checksum"
 

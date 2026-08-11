@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api-proto"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "prost",
  "prost-types",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-contracts"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-darwin-process"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "libc",
 ]
@@ -735,11 +735,11 @@ dependencies = [
 
 [[package]]
 name = "colossus-domain"
-version = "0.10.6"
+version = "0.10.7"
 
 [[package]]
 name = "colossus-grpc"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "base64 0.22.1",
  "colossus-api",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-network"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "hex",
  "reqwest 0.12.28",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-observability"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sdk"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "async-trait",
  "colossus-api",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sidecar-protocol"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-windows-native"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "thiserror 2.0.19",
  "tokio",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-worker-protocol"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",

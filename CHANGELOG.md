@@ -8,6 +8,13 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-08-11
+
+### Fixed
+
+- Accepted GitHub's compact versioned-API JSON in the Unix bootstrap installer while
+  retaining bounded metadata, release identity, channel, and asset-name validation.
+
 ## [0.10.6] - 2026-08-10
 
 ### Added

@@ -350,6 +350,49 @@ fn bootstrap_maps_supported_unix_hosts_and_honors_dry_run_flags() {
 }
 
 #[test]
+fn bootstrap_accepts_compact_github_release_json() {
+    let fixture = Fixture::new();
+    let release_path = fixture.root.join("release.json");
+    let release: Value =
+        serde_json::from_slice(&fs::read(&release_path).expect("read pretty release fixture"))
+            .expect("release fixture JSON");
+    fs::write(
+        &release_path,
+        serde_json::to_vec(&release).expect("compact release JSON"),
+    )
+    .expect("write compact release fixture");
+
+    let prefix = fixture.root.join("compact-json-prefix");
+    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let output = fixture.run(
+        &[
+            "--version",
+            &version,
+            "--channel",
+            release_channel(),
+            "--prefix",
+            prefix.to_str().expect("UTF-8 prefix"),
+            "--dry-run",
+            "--no-modify-path",
+            "--yes",
+        ],
+        &prefix,
+    );
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("dry run complete"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!prefix.exists());
+}
+
+#[test]
 fn bootstrap_verifies_then_installs_and_records_direct_ownership() {
     let fixture = Fixture::new();
     let prefix = fixture.root.join("prefix");
