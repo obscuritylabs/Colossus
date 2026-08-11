@@ -402,6 +402,29 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
 }
 
 #[test]
+fn windows_installer_compares_owner_sids_for_elevated_tokens() {
+    let installer = fs::read_to_string(repository_root().join("release/install.ps1"))
+        .expect("read Windows package installer");
+    assert!(
+        installer.contains("[Security.Principal.WindowsIdentity]::GetCurrent()"),
+        "Windows package installer must inspect the current token"
+    );
+    assert!(
+        installer.contains("$currentIdentity.Owner"),
+        "Windows package installer must use the token owner SID"
+    );
+    assert!(
+        installer.contains(".GetOwner(")
+            && installer.contains("[Security.Principal.SecurityIdentifier]"),
+        "Windows package installer must compare the directory owner as a SID"
+    );
+    assert!(
+        !installer.contains("[Security.Principal.WindowsIdentity]::GetCurrent().Name"),
+        "the account name is not the effective owner for elevated Windows tokens"
+    );
+}
+
+#[test]
 fn published_stable_releases_are_installed_anonymously_on_all_host_classes() {
     let workflow = workflow("public-distribution.yml");
     let distribution_jobs = jobs(&workflow);
