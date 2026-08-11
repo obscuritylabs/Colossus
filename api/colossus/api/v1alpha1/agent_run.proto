@@ -268,6 +268,10 @@ message CreateRunRequest {
 
   // plan_action optionally continues the exact Plan released by a caller-owned run.
   PlanRunAction plan_action = 8;
+
+  // end_user_id is optional caller-asserted correlation data. It is not an
+  // authenticated principal or authorization input and may contain PII.
+  optional string end_user_id = 9;
 }
 
 // PlanRunAction continues the exact Plan released by a caller-owned source run.

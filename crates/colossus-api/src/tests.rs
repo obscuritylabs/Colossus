@@ -159,6 +159,7 @@ fn create_request(key: &str, text: &str) -> CreateRunRequest {
     CreateRunRequest {
         input: vec![ContentPart::Text { text: text.into() }],
         session_id: None,
+        end_user_id: None,
         role: Some("assistant".into()),
         mode: RunMode::Execute,
         skill_ids: Vec::new(),
@@ -580,6 +581,35 @@ fn create_request_rejects_more_than_the_bounded_number_of_input_parts() {
     assert_eq!(error.code, ApiErrorCode::InvalidArgument);
     assert_eq!(error.reason, ApiErrorReason::InvalidArgument);
     assert_eq!(error.violations[0].field, "input");
+}
+
+#[test]
+fn create_request_validates_end_user_id_and_binds_it_to_idempotency() {
+    let legacy = serde_json::to_value(create_request("legacy-end-user", "hello"))
+        .expect("serialize request without end-user correlation");
+    assert!(legacy.get("end_user_id").is_none());
+    serde_json::from_value::<CreateRunRequest>(legacy)
+        .expect("requests persisted before end_user_id remain readable");
+
+    let mut invalid = create_request("end-user-invalid", "hello");
+    invalid.end_user_id = Some("contains spaces".into());
+    let error = invalid
+        .validate()
+        .expect_err("end-user correlation must use the bounded token grammar");
+    assert_eq!(error.violations[0].field, "end_user_id");
+
+    let (_, repository, caller) = fixture();
+    let mut first = create_request("end-user-key", "hello");
+    first.end_user_id = Some("tenant:user-a".into());
+    create_run(&repository, &caller, &first, "run-user-a", "session-user-a");
+    let mut changed = create_request("end-user-key", "hello");
+    changed.end_user_id = Some("tenant:user-b".into());
+    let new_run = NewRun::from_request("run-user-b", "session-user-b", "assistant", &changed)
+        .expect("new run");
+    let error = repository
+        .create_run(&caller, &changed, &new_run)
+        .expect_err("end-user changes must not replay another identity's request");
+    assert_eq!(error.reason, ApiErrorReason::IdempotencyKeyReused);
 }
 
 #[test]

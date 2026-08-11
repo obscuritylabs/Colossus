@@ -133,6 +133,8 @@ pub struct CreateRunRequest {
     ///
     /// Cancellation before execution starts can leave only that run-owned identity.
     pub session_id: Option<String>,
+    /// Optional caller-asserted end-user correlation identifier, never authorization.
+    pub end_user_id: Option<String>,
     /// Logical role; an empty string selects the server default.
     pub role: String,
     /// Requested execution mode.

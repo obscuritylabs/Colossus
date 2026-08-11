@@ -8,6 +8,63 @@ pub(super) struct StorageComposition {
     pub(super) diagnostic: Value,
 }
 
+struct StartupObservation {
+    span: tracing::Span,
+    succeeded: bool,
+}
+
+impl StartupObservation {
+    fn new(span: tracing::Span) -> Self {
+        Self {
+            span,
+            succeeded: false,
+        }
+    }
+
+    fn success(&mut self) {
+        self.succeeded = true;
+    }
+}
+
+impl Drop for StartupObservation {
+    fn drop(&mut self) {
+        self.span.record(
+            "otel.status_code",
+            if self.succeeded { "OK" } else { "ERROR" },
+        );
+        if !self.succeeded {
+            self.span.record("error.type", "_OTHER");
+        }
+    }
+}
+
+fn observe_startup_phase<T, E>(
+    otel_name: &'static str,
+    phase: &'static str,
+    operation: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let span = tracing::info_span!(
+        target: "colossus.startup",
+        "startup_phase",
+        otel.name = otel_name,
+        otel.kind = "internal",
+        otel.status_code = tracing::field::Empty,
+        error.type = tracing::field::Empty,
+        colossus.startup.phase = phase,
+    );
+    span.in_scope(|| {
+        let result = operation();
+        span.record(
+            "otel.status_code",
+            if result.is_ok() { "OK" } else { "ERROR" },
+        );
+        if result.is_err() {
+            span.record("error.type", "_OTHER");
+        }
+        result
+    })
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
     pub(super) workspace: PathBuf,
@@ -127,6 +184,27 @@ impl Runtime {
         options: RuntimeOpenOptions,
         provider_credentials: Arc<dyn CredentialResolver>,
     ) -> Result<Self, RuntimeError> {
+        let storage_adapter = match config.storage.adapter {
+            StorageAdapter::Redb => "redb",
+            StorageAdapter::Postgres => "postgresql",
+        };
+        let startup_verification = match config.storage.startup_verification {
+            StartupVerificationMode::Incremental => "incremental",
+            StartupVerificationMode::Full => "full",
+        };
+        let startup_span = tracing::info_span!(
+            target: "colossus.startup",
+            "runtime_open",
+            otel.name = "colossus.runtime.open",
+            otel.kind = "internal",
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+            colossus.storage.adapter = storage_adapter,
+            colossus.storage.startup_verification = startup_verification,
+            colossus.runtime.recovery_mode = tracing::field::Empty,
+        );
+        let _startup_guard = startup_span.enter();
+        let mut startup_observation = StartupObservation::new(startup_span.clone());
         let workspace = fs::canonicalize(&options.workspace)?;
         if !workspace.is_dir() {
             return Err(RuntimeError::Config(format!(
@@ -148,9 +226,15 @@ impl Runtime {
                 RuntimeError::Config(format!("network.caBundlePath is invalid: {error}"))
             })?
             .unwrap_or_default();
-        let workspace_lease = workspace_lease::WorkspaceOwnershipLease::acquire_expected(
-            &workspace,
-            options.expected_workspace_identity.as_ref(),
+        let workspace_lease = observe_startup_phase(
+            "colossus.runtime.workspace.acquire",
+            "workspace_acquire",
+            || {
+                workspace_lease::WorkspaceOwnershipLease::acquire_expected(
+                    &workspace,
+                    options.expected_workspace_identity.as_ref(),
+                )
+            },
         )?;
         let workspace_identity = workspace_lease.identity();
         workspace_identity.revalidate()?;
@@ -201,64 +285,78 @@ impl Runtime {
                     )
                 }
             };
+        let storage = observe_startup_phase(
+            "colossus.runtime.storage.open",
+            "storage_open",
+            || -> Result<StorageComposition, RuntimeError> {
+                Ok(match config.storage.adapter {
+                    StorageAdapter::Redb => {
+                        let lease = RedbWriterLease::acquire(&storage_path)?;
+                        let redb = Arc::new(RedbEventJournal::open_with_startup_verification(
+                            &storage_path,
+                            Arc::clone(&keys),
+                            signer.clone(),
+                            config.storage.startup_verification,
+                        )?);
+                        let recovery_reason = redb.recovery_reason()?;
+                        let startup_verification = redb.startup_verification_report()?;
+                        StorageComposition {
+                            writer_lease: Some(lease),
+                            journal: redb.clone(),
+                            projections: redb,
+                            recovery_reason,
+                            diagnostic: json!({
+                                "adapter": "redb",
+                                "path": storage_path,
+                                "payload_protection": config.storage.keys.protection_label(),
+                                "startup_verification": startup_verification,
+                            }),
+                        }
+                    }
+                    StorageAdapter::Postgres => {
+                        let postgres_config = config.storage.postgres.clone().ok_or_else(|| {
+                            RuntimeError::Config(
+                                "storage.postgres is required when storage.adapter is postgres"
+                                    .into(),
+                            )
+                        })?;
+                        let postgres = Arc::new(
+                            PostgresEventJournal::open_with_tls_roots_and_startup_verification(
+                                postgres_config,
+                                Arc::clone(&keys),
+                                signer,
+                                &tls_roots,
+                                config.storage.startup_verification,
+                            )?,
+                        );
+                        let recovery_reason = postgres.recovery_reason()?;
+                        let mut diagnostic = postgres.diagnostic();
+                        diagnostic["startup_verification"] =
+                            json!(postgres.startup_verification_report()?);
+                        diagnostic["payload_protection"] =
+                            json!(config.storage.keys.protection_label());
+                        StorageComposition {
+                            writer_lease: None,
+                            journal: postgres.clone(),
+                            projections: postgres,
+                            recovery_reason,
+                            diagnostic,
+                        }
+                    }
+                })
+            },
+        )?;
         let StorageComposition {
             writer_lease,
             journal,
             projections: projection_store,
             recovery_reason,
             diagnostic: storage_diagnostic,
-        } = match config.storage.adapter {
-            StorageAdapter::Redb => {
-                let lease = RedbWriterLease::acquire(&storage_path)?;
-                let redb = Arc::new(RedbEventJournal::open_with_startup_verification(
-                    &storage_path,
-                    Arc::clone(&keys),
-                    signer.clone(),
-                    config.storage.startup_verification,
-                )?);
-                let recovery_reason = redb.recovery_reason()?;
-                let startup_verification = redb.startup_verification_report()?;
-                StorageComposition {
-                    writer_lease: Some(lease),
-                    journal: redb.clone(),
-                    projections: redb,
-                    recovery_reason,
-                    diagnostic: json!({
-                        "adapter": "redb",
-                        "path": storage_path,
-                        "payload_protection": config.storage.keys.protection_label(),
-                        "startup_verification": startup_verification,
-                    }),
-                }
-            }
-            StorageAdapter::Postgres => {
-                let postgres_config = config.storage.postgres.clone().ok_or_else(|| {
-                    RuntimeError::Config(
-                        "storage.postgres is required when storage.adapter is postgres".into(),
-                    )
-                })?;
-                let postgres = Arc::new(
-                    PostgresEventJournal::open_with_tls_roots_and_startup_verification(
-                        postgres_config,
-                        Arc::clone(&keys),
-                        signer,
-                        &tls_roots,
-                        config.storage.startup_verification,
-                    )?,
-                );
-                let recovery_reason = postgres.recovery_reason()?;
-                let mut diagnostic = postgres.diagnostic();
-                diagnostic["startup_verification"] = json!(postgres.startup_verification_report()?);
-                diagnostic["payload_protection"] = json!(config.storage.keys.protection_label());
-                StorageComposition {
-                    writer_lease: None,
-                    journal: postgres.clone(),
-                    projections: postgres,
-                    recovery_reason,
-                    diagnostic,
-                }
-            }
-        };
+        } = storage;
+        let journal: Arc<dyn EventJournal> = Arc::new(ObservedEventJournal::new(
+            journal,
+            config.observability.logs.journal_payloads,
+        ));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
@@ -372,21 +470,36 @@ impl Runtime {
         );
         let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
         if !journal.is_recovery_mode() {
-            recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
-            let report = projections.drain(256, 16_384)?;
-            if report.projections.iter().any(|status| !status.ready) {
-                return Err(StoreError::Adapter(
-                    "startup projections did not catch up within the configured bound".into(),
-                )
-                .into());
-            }
+            observe_startup_phase(
+                "colossus.runtime.projections.catch_up",
+                "projection_catch_up",
+                || -> Result<(), RuntimeError> {
+                    recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
+                    let report = projections.drain(256, 16_384)?;
+                    if report.projections.iter().any(|status| !status.ready) {
+                        return Err(StoreError::Adapter(
+                            "startup projections did not catch up within the configured bound"
+                                .into(),
+                        )
+                        .into());
+                    }
+                    Ok(())
+                },
+            )?;
         }
         let memory_repository: Arc<dyn MemoryRepository> =
             Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
         let research: Arc<dyn ResearchRepository> =
             Arc::new(EventSourcedResearchRepository::new(Arc::clone(&journal)));
         if !journal.is_recovery_mode() {
-            recover_unknown_effects(journal.as_ref())?;
+            observe_startup_phase(
+                "colossus.runtime.effects.recover",
+                "effect_recovery",
+                || -> Result<(), RuntimeError> {
+                    recover_unknown_effects(journal.as_ref())?;
+                    Ok(())
+                },
+            )?;
         }
         let providers = Arc::new(provider_registry(
             &config.providers,
@@ -868,7 +981,14 @@ impl Runtime {
             },
         )?);
         if !journal.is_recovery_mode() {
-            research_service.recover_interrupted(system_actor("research-recovery"))?;
+            observe_startup_phase(
+                "colossus.runtime.research.recover",
+                "research_recovery",
+                || -> Result<(), RuntimeError> {
+                    research_service.recover_interrupted(system_actor("research-recovery"))?;
+                    Ok(())
+                },
+            )?;
         }
         let research_executor = Arc::new(ResearchEffectExecutor {
             service: research_service,
@@ -978,10 +1098,19 @@ impl Runtime {
             effects,
         ));
         if !journal.is_recovery_mode() {
-            workflows.recover_interrupted()?;
-            projections.drain(256, 16_384)?;
+            observe_startup_phase(
+                "colossus.runtime.workflows.recover",
+                "workflow_recovery",
+                || -> Result<(), RuntimeError> {
+                    workflows.recover_interrupted()?;
+                    projections.drain(256, 16_384)?;
+                    Ok(())
+                },
+            )?;
         }
         workspace_identity.revalidate()?;
+        startup_span.record("colossus.runtime.recovery_mode", journal.is_recovery_mode());
+        startup_observation.success();
         Ok(Self {
             workspace,
             writer_lease,

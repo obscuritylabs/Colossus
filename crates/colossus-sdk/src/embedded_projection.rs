@@ -23,6 +23,7 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
             })
             .collect(),
         session_id: value.session_id,
+        end_user_id: value.end_user_id,
         role: (!value.role.is_empty()).then_some(value.role),
         mode: match value.mode {
             RunMode::Execute => core::RunMode::Execute,

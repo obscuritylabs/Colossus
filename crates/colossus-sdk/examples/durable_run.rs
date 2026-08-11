@@ -75,6 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .create_run(colossus_sdk::CreateRunRequest {
             input,
             session_id: None,
+            end_user_id: None,
             role: "primary".to_owned(),
             mode: options.mode,
             selected_skills: Vec::new(),

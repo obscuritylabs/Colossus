@@ -2,7 +2,7 @@ use crate::{
     ApiError, ApiErrorReason, ApiResult,
     validation::{MAX_IDENTIFIER_BYTES, MAX_ROLE_BYTES, MAX_TOOL_BYTES, token},
 };
-use colossus_contracts::{Actor, ActorType};
+use colossus_contracts::{Actor, ActorType, RemoteTraceContext};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -284,6 +284,7 @@ impl ApplicationPrincipal {
 pub struct CallerContext {
     principal: ApplicationPrincipal,
     request_id: RequestId,
+    remote_trace_context: Option<RemoteTraceContext>,
 }
 
 impl CallerContext {
@@ -292,7 +293,14 @@ impl CallerContext {
         Self {
             principal,
             request_id,
+            remote_trace_context: None,
         }
+    }
+
+    /// Attach transport-validated W3C Trace Context for durable asynchronous work.
+    pub fn with_remote_trace_context(mut self, context: Option<RemoteTraceContext>) -> Self {
+        self.remote_trace_context = context;
+        self
     }
 
     /// Authenticated application principal.
@@ -303,6 +311,11 @@ impl CallerContext {
     /// Correlation identifier for this API request.
     pub fn request_id(&self) -> &RequestId {
         &self.request_id
+    }
+
+    /// Validated remote parent context, excluding baggage.
+    pub fn remote_trace_context(&self) -> Option<&RemoteTraceContext> {
+        self.remote_trace_context.as_ref()
     }
 
     /// Durable application actor derived only from authenticated server state.

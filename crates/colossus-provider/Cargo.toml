@@ -11,6 +11,7 @@ async-trait.workspace = true
 colossus-codex-auth.workspace = true
 colossus-contracts.workspace = true
 colossus-network.workspace = true
+colossus-observability.workspace = true
 colossus-policy.workspace = true
 futures.workspace = true
 reqwest.workspace = true

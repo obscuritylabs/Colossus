@@ -989,6 +989,7 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
     Ok(proto::CreateRunRequest {
         input,
         session_id: value.session_id,
+        end_user_id: value.end_user_id,
         role: value.role,
         mode: proto_run_mode(value.mode) as i32,
         selected_skills: value.selected_skills,
