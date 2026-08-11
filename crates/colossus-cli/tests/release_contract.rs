@@ -529,6 +529,43 @@ fn release_readiness_verifier_is_evergreen_and_pinned() {
 }
 
 #[test]
+fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
+    const ADVISORY: &str = "RUSTSEC-2026-0253";
+    let root = repository_root();
+    let deny = fs::read_to_string(root.join("deny.toml")).expect("read deny policy");
+    let verifier = fs::read_to_string(root.join("release/verify-release-readiness.sh"))
+        .expect("read release verifier");
+    let xtask = fs::read_to_string(root.join("xtask/src/checks/surfaces.rs"))
+        .expect("read xtask dependency checks");
+    let ci_docs =
+        fs::read_to_string(root.join("docs/develop/ci-cd.md")).expect("read CI documentation");
+    let lock = fs::read_to_string(root.join("Cargo.lock")).expect("read root lockfile");
+
+    for (name, source) in [
+        ("release verifier", verifier.as_str()),
+        ("xtask", xtask.as_str()),
+        ("CI documentation", ci_docs.as_str()),
+    ] {
+        assert!(
+            source.contains(ADVISORY),
+            "{name} must carry the exact temporary advisory ID"
+        );
+    }
+    assert!(
+        deny.contains("[advisories]\nignore = []"),
+        "cargo-deny must retain its fail-closed empty advisory ignore list"
+    );
+    for required in ["LruCache<usize, Block>", "Tantivy PR #3034", "`lru` 0.18.2"] {
+        assert!(
+            ci_docs.contains(required),
+            "CI documentation is missing the exception rationale {required}"
+        );
+    }
+    assert!(lock.contains("name = \"lru\"\nversion = \"0.18.2\""));
+    assert!(!lock.contains("name = \"lru\"\nversion = \"0.18.1\""));
+}
+
+#[test]
 fn linux_profile_and_release_package_remain_hardened() {
     let template = fs::read_to_string(repository_root().join("release/colossus.apparmor.in"))
         .expect("read AppArmor template");

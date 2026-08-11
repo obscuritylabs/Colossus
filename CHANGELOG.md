@@ -30,6 +30,9 @@ include breaking changes while the public API is still settling.
 
 - Disabled ambient proxy use explicitly in the Unix bootstrap metadata and asset
   downloads while retaining exact HTTPS origin and redirect checks.
+- Updated Ratatui's cache dependency to patched `lru` 0.18.2 and documented a narrow,
+  reachability-reviewed `RUSTSEC-2026-0253` exception for Tantivy 0.26.1 until its
+  already-merged `lru` 0.18.2 update is published.
 
 ## [0.10.5] - 2026-08-08
 

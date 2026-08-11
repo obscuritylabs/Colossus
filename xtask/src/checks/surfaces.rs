@@ -2,6 +2,13 @@ use std::{env, ffi::OsString};
 
 use crate::repository::Repository;
 
+// Tantivy 0.26.1 stores `usize` keys in its lru cache, so the panicking key
+// destructor required by this advisory is unreachable. Upstream has merged
+// lru 0.18.2 for its next registry release. Keep this cargo-audit exception
+// exact and documented, and remove it with that upgrade. cargo-deny does not
+// report this informational advisory and retains an empty ignore list.
+const TANTIVY_LRU_PANIC_SAFETY_ADVISORY: &str = "RUSTSEC-2026-0253";
+
 pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
     repository
         .task(cargo_program())
@@ -78,7 +85,15 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
     )?;
     cargo(
         repository,
-        ["audit", "-D", "warnings", "--file", "Cargo.lock"],
+        [
+            "audit",
+            "-D",
+            "warnings",
+            "--ignore",
+            TANTIVY_LRU_PANIC_SAFETY_ADVISORY,
+            "--file",
+            "Cargo.lock",
+        ],
     )?;
     cargo(
         repository,

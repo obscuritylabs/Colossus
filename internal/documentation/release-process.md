@@ -33,6 +33,14 @@ a reintroduced root Python runtime or tracked Python source outside the maintain
 SDK and its credential-free SDK fixtures, and runs formatting, Clippy, the complete
 workspace suite, fuzz compilation, and production/fuzz supply-chain policy.
 
+The root `cargo-audit` invocation temporarily ignores only `RUSTSEC-2026-0253` for
+Tantivy 0.26.1. Tantivy uses `usize` keys in the affected cache, so the advisory's
+required panicking key destructor is unreachable, and its next unreleased version
+already uses patched `lru` 0.18.2. `cargo-deny` does not report this informational
+advisory and retains an empty ignore list. Confirm that the `cargo-audit` exception
+remains exact during release review and remove it as soon as the merged
+[Tantivy fix](https://github.com/quickwit-oss/tantivy/pull/3034) is published on crates.io.
+
 ## Dry-run artifacts
 
 Before tagging, the release operator may exercise all six package jobs without publishing:
