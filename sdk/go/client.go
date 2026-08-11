@@ -72,7 +72,7 @@ func Dial(
 		grpc.WithNoProxy(),
 		grpc.WithDisableRetry(),
 		grpc.WithDisableServiceConfig(),
-		grpc.WithUserAgent("colossus-go-sdk/0.10.5"),
+		grpc.WithUserAgent("colossus-go-sdk/0.10.6"),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(4*1024*1024),
 			grpc.MaxCallSendMsgSize(4*1024*1024),

@@ -214,7 +214,7 @@ class ColossusClient:
             ("grpc.enable_retries", 0),
             ("grpc.max_receive_message_length", 4 * 1024 * 1024),
             ("grpc.max_send_message_length", 4 * 1024 * 1024),
-            ("grpc.primary_user_agent", "colossus-python-sdk/0.10.5"),
+            ("grpc.primary_user_agent", "colossus-python-sdk/0.10.6"),
         ]
         channel = grpc.aio.secure_channel(
             descriptor.target,

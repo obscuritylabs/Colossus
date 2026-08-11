@@ -81,8 +81,9 @@ file_owner() {
 
 require_private_write_directory() {
     checked_directory=$1
-    [ -d "$checked_directory" ] && [ ! -L "$checked_directory" ] ||
+    if ! { [ -d "$checked_directory" ] && [ ! -L "$checked_directory" ]; }; then
         fail "installation directory is missing, linked, or not a directory: $checked_directory"
+    fi
     [ "$(file_owner "$checked_directory")" = "$(id -u)" ] ||
         fail "installation directory is not owned by the current user: $checked_directory"
     mode=$(directory_mode "$checked_directory") || fail "could not inspect directory permissions"
@@ -97,10 +98,12 @@ require_private_write_directory() {
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 source_binary=$script_dir/colossus
 metadata=$script_dir/install-metadata
-[ -f "$source_binary" ] && [ ! -L "$source_binary" ] && [ -x "$source_binary" ] ||
+if ! { [ -f "$source_binary" ] && [ ! -L "$source_binary" ] && [ -x "$source_binary" ]; }; then
     fail "package colossus binary is missing, linked, or not executable"
-[ -f "$metadata" ] && [ ! -L "$metadata" ] ||
+fi
+if ! { [ -f "$metadata" ] && [ ! -L "$metadata" ]; }; then
     fail "package installation metadata is missing or linked"
+fi
 [ "$(wc -l < "$metadata" | tr -d ' ')" -eq 6 ] || fail "package metadata must contain six fields"
 
 metadata_value() {
@@ -173,14 +176,22 @@ require_private_write_directory "$receipt_dir"
 target_binary=$bin_dir/colossus
 receipt=$receipt_dir/install.json
 if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
-    [ -f "$target_binary" ] && [ ! -L "$target_binary" ] &&
-        [ "$(file_owner "$target_binary")" = "$(id -u)" ] ||
+    if ! {
+        [ -f "$target_binary" ] &&
+            [ ! -L "$target_binary" ] &&
+            [ "$(file_owner "$target_binary")" = "$(id -u)" ]
+    }; then
         fail "existing installation is linked, non-regular, or not owned by the current user"
+    fi
 fi
 if [ -e "$receipt" ] || [ -L "$receipt" ]; then
-    [ -f "$receipt" ] && [ ! -L "$receipt" ] &&
-        [ "$(file_owner "$receipt")" = "$(id -u)" ] ||
+    if ! {
+        [ -f "$receipt" ] &&
+            [ ! -L "$receipt" ] &&
+            [ "$(file_owner "$receipt")" = "$(id -u)" ]
+    }; then
         fail "existing installation receipt is linked, non-regular, or not owned by the current user"
+    fi
 fi
 
 temporary_binary=$(mktemp "$bin_dir/.colossus.install.XXXXXX")

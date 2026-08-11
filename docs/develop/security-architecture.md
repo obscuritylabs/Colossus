@@ -196,7 +196,25 @@ session, credential, header, or response-body data. Checks are throttled for 24 
 including failures. DNS, connection, timeout, rate-limit, service, and validation
 failures become typed `unavailable` results: they cannot stop normal CLI or TUI use,
 and the TUI remains silent unless a newer stable version was validated. Discovery does
-not download or replace an executable; installation remains operator-owned.
+not download or replace an executable.
+
+The operator-only `update` command also enters before runtime construction and reuses
+that validated stable discovery result, or accepts one exact newer stable `vX.Y.Z`. It
+can replace only a direct installation whose owner-private receipt matches the running
+version, target, fixed origin, canonical executable, and exact
+`PREFIX/bin/colossus[.exe]` location. Unknown, source, Homebrew, Nix, stale, preview,
+and downgrade cases fail closed without replacement. Package-manager wrappers may set
+one bounded advisory marker so check/refusal output names the owning upgrade command;
+the marker is never accepted as direct ownership or replacement authority.
+
+The release build embeds the exact reviewed fixed-origin bootstrap source rather than
+downloading mutable code. Unix runs it from a private temporary directory with bounded
+execution time; Windows stages it with a literal launcher and waits for the parent
+image to exit before replacing the locked executable. The bootstrap performs the same
+bounded metadata, redirect, archive, checksum, layout, and version validation as a new
+install, then delegates to the packaged same-directory atomic installer. Failed
+download, validation, extraction, launch, replacement, or receipt commit preserves the
+prior executable. Unix `curl` and Windows `HttpClient` both disable ambient proxies.
 
 Configured stdio MCP remains a process effect. Streamable HTTP MCP is a network effect
 and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and redirect

@@ -36,9 +36,19 @@ function Assert-OwnedDirectory([string]$Path) {
         ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         Throw-InstallerError "installation directory is missing, linked, or not a directory: $Path"
     }
-    $currentOwner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $owner = (Get-Acl -LiteralPath $Path).Owner
-    if ($owner -cne $currentOwner) {
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $currentOwnerSid = $currentIdentity.Owner
+    } finally {
+        $currentIdentity.Dispose()
+    }
+    if ($null -eq $currentOwnerSid) {
+        Throw-InstallerError "current Windows token has no owner SID"
+    }
+    $ownerSid = (Get-Acl -LiteralPath $Path).GetOwner(
+        [Security.Principal.SecurityIdentifier]
+    )
+    if (-not $ownerSid.Equals($currentOwnerSid)) {
         Throw-InstallerError "installation directory is not owned by the current user: $Path"
     }
 }

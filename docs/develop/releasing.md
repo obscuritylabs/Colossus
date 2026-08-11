@@ -40,9 +40,8 @@ Complete these account-owned steps before publishing the first stable draft:
    - allowed action: `npm publish`
 
    After a trusted publication succeeds, disallow token-based publication and revoke
-   any bootstrap automation token. The repository is currently private, so npm cannot
-   attach provenance to this public package; trusted OIDC publication still works and
-   the workflow explicitly disables the unsupported provenance request.
+   any bootstrap automation token. The public repository allows npm to attach a
+   provenance statement to each trusted OIDC publication; keep `--provenance` enabled.
 5. The normalized PyPI name `colossus-sdk` belongs to an unrelated project. Create a
    **pending trusted publisher** for the unclaimed project
    `obscuritylabs-colossus-sdk` with owner `obscuritylabs`, repository `Colossus`,
@@ -154,6 +153,36 @@ curl -fsSL \
   -o /tmp/colossus-install.sh
 sh /tmp/colossus-install.sh --version vX.Y.Z --dry-run --yes
 ```
+
+The `Verify public distribution` workflow also runs automatically when the stable draft
+is published. It uses no repository token, compares the exact-tag and `latest` bootstrap
+bytes, verifies the bootstrap sidecar, performs a clean direct install on macOS, Linux,
+and Windows, validates the receipt, and runs structured update discovery. Do not treat
+the release as installation-ready until all three jobs pass.
+
+Generate the exact Homebrew formula only from the published macOS checksum sidecars:
+
+```bash
+node scripts/ci/render-homebrew-formula.mjs \
+  --version X.Y.Z \
+  --assets PATH_TO_RELEASE_ASSETS \
+  --output colossus.rb
+```
+
+Review the generated formula, verify `brew test colossus`, and publish it to
+`obscuritylabs/homebrew-tap` only after the public-distribution workflow passes. The
+formula installs prebuilt upstream bytes and adds only an advisory Homebrew ownership
+marker; it never writes a direct-install receipt. Update the version and four platform
+hashes in `flake.nix` from the same published sidecars, refresh `flake.lock` only when
+the nixpkgs input changes, and run `nix flake check` before merging the package metadata.
+Package definitions in the release-preparation commit therefore continue to identify
+the latest already-published stable release; never guess the next release's hashes.
+
+After the public distribution jobs pass, update the root README and install guide only
+if the final commands differ from the reviewed bootstrap contract. Confirm that the
+README's `latest/download` commands, the review-before-running flow, the exact-version
+flags, `colossus update`, Nix ownership, manual archive verification, and uninstall
+guidance all remain represented before closing a distribution epic.
 
 ## Failure path
 

@@ -8,6 +8,32 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-08-10
+
+### Added
+
+- Added install-aware `colossus update` replacement for validated direct installations,
+  with exact-version selection, downgrade refusal, the reviewed fixed-origin bootstrap
+  embedded in the binary, and a detached Windows handoff for locked executables.
+- Added unauthenticated macOS, Linux, and Windows installation verification after every
+  published stable release.
+- Added a locked four-platform Nix flake plus a reviewed two-architecture Homebrew
+  formula and checksum-driven formula generator. Package-manager wrappers advertise
+  upgrade guidance without gaining direct self-update authority.
+
+### Changed
+
+- Enabled npm provenance for trusted SDK publication now that the source repository is
+  public.
+
+### Security
+
+- Disabled ambient proxy use explicitly in the Unix bootstrap metadata and asset
+  downloads while retaining exact HTTPS origin and redirect checks.
+- Updated Ratatui's cache dependency to patched `lru` 0.18.2 and documented a narrow,
+  reachability-reviewed `RUSTSEC-2026-0253` exception for Tantivy 0.26.1 until its
+  already-merged `lru` 0.18.2 update is published.
+
 ## [0.10.5] - 2026-08-08
 
 ### Added

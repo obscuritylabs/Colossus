@@ -636,6 +636,7 @@ sandbox:
                 "--disable",
                 "--fail",
                 "--silent",
+                "--show-error",
                 "--noproxy",
                 "",
                 "--output",

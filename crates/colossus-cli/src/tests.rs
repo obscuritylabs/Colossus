@@ -59,9 +59,32 @@ fn update_check_is_a_standalone_command() {
     assert!(matches!(
         cli.command,
         Command::Update(UpdateCommand {
-            command: UpdateAction::Check
+            command: Some(UpdateAction::Check),
+            version: None,
         })
     ));
+}
+
+#[test]
+fn update_defaults_to_apply_and_accepts_one_exact_version() {
+    let latest = Cli::try_parse_from(["colossus", "update"]).expect("latest update");
+    assert!(matches!(
+        latest.command,
+        Command::Update(UpdateCommand {
+            command: None,
+            version: None,
+        })
+    ));
+    let exact =
+        Cli::try_parse_from(["colossus", "update", "--version", "v0.10.6"]).expect("exact update");
+    assert!(matches!(
+        exact.command,
+        Command::Update(UpdateCommand {
+            command: None,
+            version: Some(ref version),
+        }) if version == "v0.10.6"
+    ));
+    assert!(Cli::try_parse_from(["colossus", "update", "check", "--version", "v0.10.6"]).is_err());
 }
 
 #[test]

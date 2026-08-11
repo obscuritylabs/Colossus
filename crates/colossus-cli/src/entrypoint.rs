@@ -12,13 +12,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
-    if matches!(
-        cli.command,
-        Command::Update(UpdateCommand {
-            command: UpdateAction::Check
-        })
-    ) {
-        run_update_check().await?;
+    if let Command::Update(update) = &cli.command {
+        match update.command.as_ref() {
+            Some(UpdateAction::Check) => run_update_check().await?,
+            None => run_update(update.version.as_deref()).await?,
+        }
         return Ok(());
     }
     if (cli.worker_required || cli.desktop_worker_auth)

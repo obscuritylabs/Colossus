@@ -60,7 +60,7 @@ model output.
 
 | Command | Purpose |
 | --- | --- |
-| `update` | Check the fixed stable release channel without opening a workspace |
+| `update` | Check or apply an install-aware stable release without opening a workspace |
 | `config` | Create and inspect strict YAML configuration |
 | `audit` | Verify, inspect, anchor, and export journal evidence |
 | `policy` | Diagnose built-in or OPA policy |
@@ -107,7 +107,7 @@ positional:
 
 | Group | Leaf routes |
 | --- | --- |
-| `update` | `check` |
+| `update` | `[--version vX.Y.Z]`, `check` |
 | `config` | `init [--access-profile PROFILE] [--sandbox-profile PROFILE]`, `show`, `effective` |
 | `audit` | `verify`, `show`, `export`, `anchor-status`, `exporter-status`, `exporter-drain`, `exporter-reset` |
 | `policy` | `doctor` |
@@ -154,6 +154,7 @@ positional:
 | Route | Default or constraint |
 | --- | --- |
 | `update check` | Read-only stable discovery; 8-second bound; successful and failed checks are throttled for 24 hours; offline is a successful `unavailable` result |
+| `update [--version vX.Y.Z]` | Replace only a validated direct installation through the embedded reviewed bootstrap; refuse unknown ownership and downgrades |
 | `audit show` | `--from 1`, `--limit 100` |
 | `audit export` | `--from 1`, `--limit 1000` |
 | `config init` | `--access-profile development`; `--storage-keys none`; sandbox defaults to `workspace-development` for development and `offline-default` otherwise |

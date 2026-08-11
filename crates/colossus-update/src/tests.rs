@@ -1,4 +1,5 @@
 use super::*;
+use crate::service::installer_kind_from_marker;
 use crate::version::SemanticVersion;
 use async_trait::async_trait;
 use std::{
@@ -33,6 +34,34 @@ struct FakeSource {
     result: Mutex<Result<ReleaseFetch, ReleaseSourceFailure>>,
     calls: AtomicUsize,
     etag: Mutex<Option<String>>,
+}
+
+struct FakeInstaller {
+    result: Result<DirectUpdateOutcome, DirectUpdateFailure>,
+    requests: Mutex<Vec<DirectUpdateRequest>>,
+}
+
+impl FakeInstaller {
+    fn new(result: Result<DirectUpdateOutcome, DirectUpdateFailure>) -> Self {
+        Self {
+            result,
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl DirectUpdateInstaller for FakeInstaller {
+    async fn install(
+        &self,
+        request: &DirectUpdateRequest,
+    ) -> Result<DirectUpdateOutcome, DirectUpdateFailure> {
+        self.requests
+            .lock()
+            .expect("installer requests lock")
+            .push(request.clone());
+        self.result
+    }
 }
 
 impl FakeSource {
@@ -135,7 +164,13 @@ fn make_owner_private(_path: &std::path::Path, _mode: u32) {}
 
 fn installed_executable(root: &std::path::Path) -> PathBuf {
     let directory = fs::canonicalize(root).expect("canonical installation root");
-    let binary = directory.join("colossus");
+    let bin = directory.join("bin");
+    fs::create_dir(&bin).expect("installation bin directory");
+    let binary = bin.join(if cfg!(windows) {
+        "colossus.exe"
+    } else {
+        "colossus"
+    });
     fs::write(&binary, b"executable").expect("installed executable");
     binary
 }
@@ -147,7 +182,8 @@ fn direct_receipt(binary_path: &std::path::Path) -> InstallationReceipt {
         target: TARGET.into(),
         prefix: binary_path
             .parent()
-            .expect("prefix")
+            .and_then(std::path::Path::parent)
+            .expect("installation prefix")
             .to_string_lossy()
             .into_owned(),
         binary_path: binary_path.to_string_lossy().into_owned(),
@@ -307,6 +343,116 @@ async fn direct_ownership_requires_a_receipt_naming_the_running_executable() {
 }
 
 #[tokio::test]
+async fn direct_update_selects_latest_stable_and_delegates_exact_prefix() {
+    let installation = tempdir().expect("installation directory");
+    let installed_binary = installed_executable(installation.path());
+    let state = Arc::new(MemoryState::default());
+    *state.receipt.lock().expect("receipt lock") = Some(direct_receipt(&installed_binary));
+    let source = Arc::new(FakeSource::new(Ok(ReleaseFetch::Modified(release(
+        "0.10.5",
+    )))));
+    let installer = Arc::new(FakeInstaller::new(Ok(DirectUpdateOutcome::Updated)));
+    let report = installed_service(
+        "0.10.4",
+        Some(installed_binary),
+        source,
+        state as Arc<dyn UpdateState>,
+    )
+    .with_installer(installer.clone())
+    .update(None)
+    .await;
+    assert_eq!(report.status, UpdateApplyStatus::Updated);
+    assert_eq!(report.selected_version.as_deref(), Some("0.10.5"));
+    assert_eq!(report.installer_kind, InstallerKind::Direct);
+    assert_eq!(
+        installer
+            .requests
+            .lock()
+            .expect("installer requests lock")
+            .as_slice(),
+        [DirectUpdateRequest {
+            version: "0.10.5".into(),
+            prefix: fs::canonicalize(installation.path())
+                .expect("canonical prefix")
+                .to_string_lossy()
+                .into_owned(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn explicit_update_rejects_invalid_versions_downgrades_and_unknown_ownership() {
+    let installation = tempdir().expect("installation directory");
+    let installed_binary = installed_executable(installation.path());
+    let installer = Arc::new(FakeInstaller::new(Ok(DirectUpdateOutcome::Updated)));
+    for (receipt, requested, expected) in [
+        (
+            Some(direct_receipt(&installed_binary)),
+            "0.10.5",
+            UpdateRefusalReason::InvalidVersion,
+        ),
+        (
+            Some(direct_receipt(&installed_binary)),
+            "v0.10.3",
+            UpdateRefusalReason::Downgrade,
+        ),
+        (None, "v0.10.5", UpdateRefusalReason::NotDirectInstallation),
+    ] {
+        let state = Arc::new(MemoryState::default());
+        *state.receipt.lock().expect("receipt lock") = receipt;
+        let report = installed_service(
+            "0.10.4",
+            Some(installed_binary.clone()),
+            Arc::new(FakeSource::new(Err(ReleaseSourceFailure::Offline))),
+            state,
+        )
+        .with_installer(installer.clone())
+        .update(Some(requested))
+        .await;
+        assert_eq!(report.status, UpdateApplyStatus::Refused);
+        assert_eq!(report.refusal_reason, Some(expected));
+    }
+    assert!(
+        installer
+            .requests
+            .lock()
+            .expect("installer requests lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn direct_update_preserves_typed_installer_failures() {
+    let installation = tempdir().expect("installation directory");
+    let installed_binary = installed_executable(installation.path());
+    for (failure, expected) in [
+        (
+            DirectUpdateFailure::LaunchFailed,
+            UpdateApplyFailure::LaunchFailed,
+        ),
+        (
+            DirectUpdateFailure::InstallFailed,
+            UpdateApplyFailure::InstallFailed,
+        ),
+        (DirectUpdateFailure::TimedOut, UpdateApplyFailure::TimedOut),
+    ] {
+        let state = Arc::new(MemoryState::default());
+        *state.receipt.lock().expect("receipt lock") = Some(direct_receipt(&installed_binary));
+        let report = installed_service(
+            "0.10.4",
+            Some(installed_binary.clone()),
+            Arc::new(FakeSource::new(Err(ReleaseSourceFailure::Offline))),
+            state,
+        )
+        .with_installer(Arc::new(FakeInstaller::new(Err(failure))))
+        .update(Some("v0.10.5"))
+        .await;
+        assert_eq!(report.status, UpdateApplyStatus::Unavailable);
+        assert_eq!(report.failure_reason, Some(expected));
+    }
+}
+
+#[tokio::test]
 async fn malformed_metadata_and_cache_fail_soft_without_claiming_an_update() {
     let mut metadata = release("0.10.5");
     metadata.asset_names.pop();
@@ -335,12 +481,29 @@ fn semantic_version_order_rejects_loose_or_downgrade_prone_values() {
 }
 
 #[test]
+fn package_manager_marker_is_advisory_and_cannot_claim_direct_ownership() {
+    assert_eq!(
+        installer_kind_from_marker(Some("homebrew")),
+        InstallerKind::Homebrew
+    );
+    assert_eq!(installer_kind_from_marker(Some("nix")), InstallerKind::Nix);
+    for marker in [Some("direct"), Some("Homebrew"), Some("unknown"), None] {
+        assert_eq!(installer_kind_from_marker(marker), InstallerKind::Unknown);
+    }
+}
+
+#[test]
 fn filesystem_state_is_bounded_strict_and_atomic() {
     let directory = tempdir().expect("state directory");
     let root = fs::canonicalize(directory.path()).expect("canonical state directory");
     let receipt = root.join("data/install.json");
     let cache_path = root.join("cache/update-check.json");
     fs::create_dir_all(receipt.parent().unwrap()).expect("receipt directory");
+    let binary_name = if cfg!(windows) {
+        "colossus.exe"
+    } else {
+        "colossus"
+    };
     fs::write(
         &receipt,
         format!(
@@ -348,7 +511,7 @@ fn filesystem_state_is_bounded_strict_and_atomic() {
             env!("CARGO_PKG_VERSION"),
             current_release_target().unwrap_or(TARGET),
             root.display(),
-            root.join("bin/colossus").display(),
+            root.join("bin").join(binary_name).display(),
         ),
     )
     .expect("receipt");

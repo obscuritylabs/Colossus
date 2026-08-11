@@ -1,8 +1,10 @@
 use crate::version::SemanticVersion;
 use crate::{
-    DEFAULT_UPDATE_CHECK_INTERVAL, GitHubReleaseSource, InstallationReceipt, InstallerKind,
-    ReleaseFetch, ReleaseMetadata, ReleaseSource, ReleaseSourceFailure, UpdateCache,
-    UpdateCheckReport, UpdateCheckSource, UpdateCheckStatus, UpdateChecker, UpdateFailureCache,
+    DEFAULT_UPDATE_CHECK_INTERVAL, DirectUpdateFailure, DirectUpdateInstaller, DirectUpdateOutcome,
+    DirectUpdateRequest, EmbeddedBootstrapInstaller, GitHubReleaseSource, InstallationReceipt,
+    InstallerKind, ReleaseFetch, ReleaseMetadata, ReleaseSource, ReleaseSourceFailure,
+    UpdateApplyFailure, UpdateApplyReport, UpdateApplyStatus, UpdateCache, UpdateCheckReport,
+    UpdateCheckSource, UpdateCheckStatus, UpdateChecker, UpdateFailureCache, UpdateRefusalReason,
     UpdateState, UpdateUnavailableReason,
 };
 use async_trait::async_trait;
@@ -34,7 +36,7 @@ impl UpdateClock for SystemClock {
     }
 }
 
-/// Read-only update discovery application service.
+/// Install-aware update discovery and direct-replacement application service.
 #[derive(Clone)]
 pub struct UpdateService {
     current_version: String,
@@ -42,6 +44,7 @@ pub struct UpdateService {
     executable_path: Option<PathBuf>,
     source: Arc<dyn ReleaseSource>,
     state: Arc<dyn UpdateState>,
+    installer: Arc<dyn DirectUpdateInstaller>,
     clock: Arc<dyn UpdateClock>,
     interval: Duration,
 }
@@ -55,6 +58,7 @@ impl UpdateService {
             executable_path: current_executable_path(),
             source: Arc::new(GitHubReleaseSource::new()),
             state: Arc::new(crate::FilesystemUpdateState::for_current_user()),
+            installer: Arc::new(EmbeddedBootstrapInstaller),
             clock: Arc::new(SystemClock),
             interval: DEFAULT_UPDATE_CHECK_INTERVAL,
         }
@@ -79,8 +83,201 @@ impl UpdateService {
             executable_path,
             source,
             state,
+            installer: Arc::new(EmbeddedBootstrapInstaller),
             clock,
             interval,
+        }
+    }
+
+    /// Replace the production installer adapter, primarily for deterministic tests.
+    pub fn with_installer(mut self, installer: Arc<dyn DirectUpdateInstaller>) -> Self {
+        self.installer = installer;
+        self
+    }
+
+    /// Apply the latest stable release, or one exact `vX.Y.Z`, to a validated direct install.
+    pub async fn update(&self, requested_version: Option<&str>) -> UpdateApplyReport {
+        if self.target.is_none() {
+            return self.apply_unavailable(
+                None,
+                InstallerKind::Unknown,
+                UpdateApplyFailure::UnsupportedHost,
+            );
+        }
+        let installer_kind = self.installer_kind();
+        let Some(receipt) = self.installation_receipt() else {
+            return self.apply_refused(
+                None,
+                installer_kind,
+                UpdateRefusalReason::NotDirectInstallation,
+            );
+        };
+        if receipt.channel != "stable" {
+            return self.apply_refused(
+                None,
+                receipt.installer_kind,
+                UpdateRefusalReason::PreviewInstallation,
+            );
+        }
+
+        let selected = if let Some(requested) = requested_version {
+            let Some(version) = requested.strip_prefix('v') else {
+                return self.apply_refused(
+                    None,
+                    receipt.installer_kind,
+                    UpdateRefusalReason::InvalidVersion,
+                );
+            };
+            let Ok(version_value) = version.parse::<SemanticVersion>() else {
+                return self.apply_refused(
+                    None,
+                    receipt.installer_kind,
+                    UpdateRefusalReason::InvalidVersion,
+                );
+            };
+            if !version_value.is_stable() {
+                return self.apply_refused(
+                    None,
+                    receipt.installer_kind,
+                    UpdateRefusalReason::InvalidVersion,
+                );
+            }
+            let Ok(current) = self.current_version.parse::<SemanticVersion>() else {
+                return self.apply_unavailable(
+                    Some(version.into()),
+                    receipt.installer_kind,
+                    UpdateApplyFailure::DiscoveryUnavailable,
+                );
+            };
+            match version_value.cmp(&current) {
+                Ordering::Less => {
+                    return self.apply_refused(
+                        Some(version.into()),
+                        receipt.installer_kind,
+                        UpdateRefusalReason::Downgrade,
+                    );
+                }
+                Ordering::Equal => {
+                    return self.apply_report(
+                        UpdateApplyStatus::UpToDate,
+                        Some(version.into()),
+                        receipt.installer_kind,
+                        None,
+                        None,
+                    );
+                }
+                Ordering::Greater => version.to_owned(),
+            }
+        } else {
+            let discovery = self.check_inner().await;
+            match discovery.status {
+                UpdateCheckStatus::UpdateAvailable => {
+                    let Some(version) = discovery.latest_version else {
+                        return self.apply_unavailable(
+                            None,
+                            receipt.installer_kind,
+                            UpdateApplyFailure::DiscoveryUnavailable,
+                        );
+                    };
+                    version
+                }
+                UpdateCheckStatus::UpToDate | UpdateCheckStatus::Ahead => {
+                    return self.apply_report(
+                        UpdateApplyStatus::UpToDate,
+                        discovery.latest_version,
+                        receipt.installer_kind,
+                        None,
+                        None,
+                    );
+                }
+                UpdateCheckStatus::Unavailable => {
+                    return self.apply_unavailable(
+                        discovery.latest_version,
+                        receipt.installer_kind,
+                        UpdateApplyFailure::DiscoveryUnavailable,
+                    );
+                }
+            }
+        };
+
+        let request = DirectUpdateRequest {
+            version: selected.clone(),
+            prefix: receipt.prefix,
+        };
+        match self.installer.install(&request).await {
+            Ok(DirectUpdateOutcome::Updated) => self.apply_report(
+                UpdateApplyStatus::Updated,
+                Some(selected),
+                receipt.installer_kind,
+                None,
+                None,
+            ),
+            Ok(DirectUpdateOutcome::Scheduled) => self.apply_report(
+                UpdateApplyStatus::Scheduled,
+                Some(selected),
+                receipt.installer_kind,
+                None,
+                None,
+            ),
+            Err(failure) => self.apply_unavailable(
+                Some(selected),
+                receipt.installer_kind,
+                match failure {
+                    DirectUpdateFailure::LaunchFailed => UpdateApplyFailure::LaunchFailed,
+                    DirectUpdateFailure::InstallFailed => UpdateApplyFailure::InstallFailed,
+                    DirectUpdateFailure::TimedOut => UpdateApplyFailure::TimedOut,
+                },
+            ),
+        }
+    }
+
+    fn apply_refused(
+        &self,
+        selected_version: Option<String>,
+        installer_kind: InstallerKind,
+        reason: UpdateRefusalReason,
+    ) -> UpdateApplyReport {
+        self.apply_report(
+            UpdateApplyStatus::Refused,
+            selected_version,
+            installer_kind,
+            Some(reason),
+            None,
+        )
+    }
+
+    fn apply_unavailable(
+        &self,
+        selected_version: Option<String>,
+        installer_kind: InstallerKind,
+        reason: UpdateApplyFailure,
+    ) -> UpdateApplyReport {
+        self.apply_report(
+            UpdateApplyStatus::Unavailable,
+            selected_version,
+            installer_kind,
+            None,
+            Some(reason),
+        )
+    }
+
+    fn apply_report(
+        &self,
+        status: UpdateApplyStatus,
+        selected_version: Option<String>,
+        installer_kind: InstallerKind,
+        refusal_reason: Option<UpdateRefusalReason>,
+        failure_reason: Option<UpdateApplyFailure>,
+    ) -> UpdateApplyReport {
+        UpdateApplyReport {
+            schema_version: 1,
+            status,
+            current_version: self.current_version.clone(),
+            selected_version,
+            target: self.target.clone(),
+            installer_kind,
+            refusal_reason,
+            failure_reason,
         }
     }
 
@@ -246,12 +443,16 @@ impl UpdateService {
     }
 
     fn installer_kind(&self) -> InstallerKind {
+        self.installation_receipt()
+            .map_or_else(advisory_installer_kind, |receipt| receipt.installer_kind)
+    }
+
+    fn installation_receipt(&self) -> Option<InstallationReceipt> {
         self.state
             .load_installation_receipt()
             .ok()
             .flatten()
             .filter(|receipt| self.valid_receipt(receipt))
-            .map_or(InstallerKind::Unknown, |receipt| receipt.installer_kind)
     }
 
     fn valid_receipt(&self, receipt: &InstallationReceipt) -> bool {
@@ -353,6 +554,20 @@ impl UpdateService {
             retry_after_seconds,
             cache_warning,
         }
+    }
+}
+
+/// Package-manager wrappers may provide refusal guidance, never replacement authority.
+fn advisory_installer_kind() -> InstallerKind {
+    installer_kind_from_marker(std::env::var("COLOSSUS_INSTALLER_KIND").ok().as_deref())
+}
+
+pub(crate) fn installer_kind_from_marker(marker: Option<&str>) -> InstallerKind {
+    match marker {
+        Some("homebrew") => InstallerKind::Homebrew,
+        Some("nix") => InstallerKind::Nix,
+        Some("source") => InstallerKind::Source,
+        _ => InstallerKind::Unknown,
     }
 }
 

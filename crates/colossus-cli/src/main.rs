@@ -30,8 +30,8 @@ use colossus_presentation::{
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_tui::{BackgroundNoticeProvider, BootstrapRequest, ScreenMode, TuiOptions, run_tui};
 use colossus_update::{
-    InstallerKind, UpdateCheckReport, UpdateCheckStatus, UpdateChecker, UpdateService,
-    UpdateUnavailableReason,
+    InstallerKind, UpdateApplyFailure, UpdateApplyReport, UpdateApplyStatus, UpdateCheckReport,
+    UpdateCheckStatus, UpdateChecker, UpdateRefusalReason, UpdateService, UpdateUnavailableReason,
 };
 use colossus_worker::{
     InteractiveWorkerRequest, WorkerApprovalMode, WorkerClient, WorkerError, WorkerOperation,

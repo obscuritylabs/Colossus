@@ -56,6 +56,9 @@ fn repository_research_crosses_gateway_and_reconstructs_citations() {
                 Err(error) => panic!("search connection: {error}"),
             }
         };
+        stream
+            .set_nonblocking(false)
+            .expect("blocking search stream");
         let mut request = [0_u8; 4096];
         let read = stream.read(&mut request).expect("search request");
         let request = String::from_utf8_lossy(&request[..read]);
