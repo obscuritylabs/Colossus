@@ -335,13 +335,17 @@ mkdir -m 0700 "$extract_root"
 tar --no-same-owner --no-same-permissions -xzf "$archive_path" -C "$extract_root" ||
     fail "archive extraction failed"
 package_root=$extract_root/$package
-[ -d "$package_root" ] && [ ! -L "$package_root" ] || fail "archive root is unsafe"
+if ! { [ -d "$package_root" ] && [ ! -L "$package_root" ]; }; then
+    fail "archive root is unsafe"
+fi
 for regular_file in LICENSE README.md colossus install-metadata install.sh; do
-    [ -f "$package_root/$regular_file" ] && [ ! -L "$package_root/$regular_file" ] ||
+    if ! { [ -f "$package_root/$regular_file" ] && [ ! -L "$package_root/$regular_file" ]; }; then
         fail "archive member is missing, linked, or not regular: $regular_file"
+    fi
 done
-[ -x "$package_root/colossus" ] && [ -x "$package_root/install.sh" ] ||
+if ! { [ -x "$package_root/colossus" ] && [ -x "$package_root/install.sh" ]; }; then
     fail "archive executables do not have the required mode"
+fi
 
 metadata=$package_root/install-metadata
 metadata_value() {
