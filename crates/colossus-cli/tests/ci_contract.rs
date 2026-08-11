@@ -508,7 +508,7 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         "--name colossus-sdk-release --dir dist/sdk-trusted",
         "node scripts/ci/check-sdk-registry-state.mjs npm",
         "node scripts/ci/check-sdk-registry-state.mjs pypi",
-        "--access public --provenance=false",
+        "--access public --provenance",
         "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
         "skip-existing: true",
         "GO_TAG: sdk/go/${{ needs.validate.outputs.tag }}",
@@ -533,6 +533,8 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
     for forbidden in [
         "NODE_AUTH_TOKEN",
         "NPM_TOKEN",
+        "NPM_CONFIG_PROVENANCE: \"false\"",
+        "--provenance=false",
         "PYPI_API_TOKEN",
         "password:",
     ] {

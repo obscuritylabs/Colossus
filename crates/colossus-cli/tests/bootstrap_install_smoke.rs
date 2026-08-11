@@ -151,7 +151,7 @@ while [ "$#" -gt 0 ]; do
             output=$2
             shift 2
             ;;
-        --proto|--proto-redir|--max-redirs|--connect-timeout|--max-time|--max-filesize|--header|--user-agent|--write-out)
+        --proto|--proto-redir|--noproxy|--max-redirs|--connect-timeout|--max-time|--max-filesize|--header|--user-agent|--write-out)
             shift 2
             ;;
         -fsS|--location)

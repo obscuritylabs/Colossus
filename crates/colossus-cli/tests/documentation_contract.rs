@@ -147,6 +147,47 @@ fn parse_frontmatter(path: &Path, document: &str) -> Frontmatter {
 }
 
 #[test]
+fn public_installation_docs_keep_the_complete_distribution_path() {
+    let readme = read("README.md");
+    for required in [
+        "releases/latest/download/colossus-install.sh | sh",
+        "releases/latest/download/colossus-install.ps1 | iex",
+        "[installation guide](docs/get-started/install.md)",
+        "colossus update check",
+        "colossus update",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README is missing public installation contract {required:?}"
+        );
+    }
+    assert!(
+        !readme.contains("Download the archive for your platform"),
+        "README must keep the direct installer as the primary installation path"
+    );
+
+    let install = read("docs/get-started/install.md");
+    for required in [
+        "curl -fSLo colossus-install.sh",
+        "--version vX.Y.Z",
+        "-Version vX.Y.Z",
+        "nix profile install github:obscuritylabs/Colossus",
+        "obscuritylabs/homebrew-tap",
+        "sha256sum --check",
+        "Get-FileHash $archive -Algorithm SHA256",
+        "colossus update check",
+        "colossus update --version vX.Y.Z",
+        "Installation receipt",
+        "Uninstall a direct installation",
+    ] {
+        assert!(
+            install.contains(required),
+            "installation guide is missing public distribution contract {required:?}"
+        );
+    }
+}
+
+#[test]
 fn zensical_site_is_pinned_searchable_and_complete() {
     assert!(
         !repository_root().join("book.toml").exists(),

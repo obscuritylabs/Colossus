@@ -123,8 +123,11 @@ Before publishing the draft:
    [`release/bundle-publisher.json`](https://github.com/obscuritylabs/Colossus/blob/main/release/bundle-publisher.json).
 
 Publishing a stable draft triggers the protected, OIDC-backed SDK publisher described in
-[Core release operations](/develop/releasing/). Never publish the disposable signing
-material used by CI smoke tests. Preserve the workflow run, gate status,
+[Core release operations](/develop/releasing/) and the credential-free public
+distribution workflow performs real anonymous installs on macOS, Linux, and Windows.
+Treat a failed public-distribution check as a release incident: the documented latest
+installer route is not ready until all three host checks pass. Never publish the
+disposable signing material used by CI smoke tests. Preserve the workflow run, gate status,
 secure-anchor/audit evidence, and artifact hashes with the release record. The frozen
 legacy Python runtime tag and branches are not rebuilt; the maintained public Python SDK
 is released from `sdk/python` with the coordinated stable core version.

@@ -177,6 +177,31 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).starts_with("colossus "));
 
+    let mut update = offline_command(&binary, &smoke);
+    #[cfg(unix)]
+    update.env("XDG_DATA_HOME", prefix.join("data"));
+    #[cfg(windows)]
+    update.env("LOCALAPPDATA", prefix.join("data"));
+    let update = update
+        .args([
+            "--output",
+            "json",
+            "update",
+            "--version",
+            &format!("v{}", env!("CARGO_PKG_VERSION")),
+        ])
+        .output()
+        .expect("same-version direct update");
+    assert!(
+        update.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&update.stdout),
+        String::from_utf8_lossy(&update.stderr)
+    );
+    let update: Value = serde_json::from_slice(&update.stdout).expect("update JSON");
+    assert_eq!(update["status"], "up_to_date");
+    assert_eq!(update["installerKind"], "direct");
+
     let config = offline_command(&binary, &smoke)
         .args(["--config", "config.yaml", "config", "show"])
         .output()

@@ -132,6 +132,7 @@ fetch_metadata() {
     metadata_path=$2
     effective_url=$(
         curl -fsS \
+            --noproxy '*' \
             --proto '=https' \
             --proto-redir '=https' \
             --max-redirs 0 \
@@ -235,6 +236,7 @@ download_asset() {
     maximum_bytes=$3
     effective_url=$(
         curl -fsS \
+            --noproxy '*' \
             --proto '=https' \
             --proto-redir '=https' \
             --location \

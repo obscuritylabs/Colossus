@@ -342,6 +342,7 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
         }
         assert!(!source.contains("COLOSSUS_DIST_ORIGIN"));
     }
+    assert!(unix.matches("--noproxy '*'").count() >= 2);
     for required in [
         "maximum_metadata_bytes=1048576",
         "maximum_archive_bytes=268435456",
@@ -398,6 +399,106 @@ fn public_bootstrap_installers_are_fixed_origin_bounded_and_release_owned() {
             );
         }
     }
+}
+
+#[test]
+fn published_stable_releases_are_installed_anonymously_on_all_host_classes() {
+    let workflow = workflow("public-distribution.yml");
+    let distribution_jobs = jobs(&workflow);
+    let unix = job(distribution_jobs, "unix");
+    let windows = job(distribution_jobs, "windows");
+    named_step(
+        unix,
+        "Download and verify the public Unix bootstrap anonymously",
+    );
+    named_step(
+        windows,
+        "Download and verify the public PowerShell bootstrap anonymously",
+    );
+    assert_eq!(field(unix, "timeout-minutes").as_u64(), Some(15));
+    assert_eq!(field(windows, "timeout-minutes").as_u64(), Some(15));
+
+    let source =
+        fs::read_to_string(repository_root().join(".github/workflows/public-distribution.yml"))
+            .expect("read public distribution workflow");
+    for required in [
+        "permissions: {}",
+        "types: [published]",
+        "ubuntu-latest",
+        "macos-latest",
+        "windows-latest",
+        "releases/latest/download",
+        "colossus-install.sh.sha256",
+        "colossus-install.ps1.sha256",
+        "--noproxy '*'",
+        "installerKind",
+        "--output json update check",
+    ] {
+        assert!(
+            source.contains(required),
+            "public distribution verification is missing {required}"
+        );
+    }
+    for forbidden in ["GH_TOKEN", "github.token", "Authorization"] {
+        assert!(
+            !source.contains(forbidden),
+            "anonymous distribution verification must not use {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn package_manager_definitions_pin_prebuilt_assets_and_refuse_self_ownership() {
+    let formula =
+        fs::read_to_string(repository_root().join("packaging/homebrew/Formula/colossus.rb"))
+            .expect("read Homebrew formula");
+    for required in [
+        "Hardware::CPU.arm?",
+        "aarch64-apple-darwin.tar.gz",
+        "x86_64-apple-darwin.tar.gz",
+        "sha256",
+        "COLOSSUS_INSTALLER_KIND: \"homebrew\"",
+        "colossus --version",
+    ] {
+        assert!(
+            formula.contains(required),
+            "Homebrew formula is missing {required}"
+        );
+    }
+    for forbidden in ["system \"cargo\"", "cargo install", "installerKind: direct"] {
+        assert!(
+            !formula.contains(forbidden),
+            "Homebrew formula must not contain {forbidden}"
+        );
+    }
+
+    let flake = fs::read_to_string(repository_root().join("flake.nix")).expect("read Nix flake");
+    for required in [
+        "aarch64-darwin",
+        "x86_64-darwin",
+        "aarch64-linux",
+        "x86_64-linux",
+        "COLOSSUS_INSTALLER_KIND nix",
+        "sourceProvenance",
+        "binaryNativeCode",
+        "--version",
+    ] {
+        assert!(flake.contains(required), "Nix flake is missing {required}");
+    }
+    for forbidden in ["cargo build", "cargo install", "installerKind = \"direct\""] {
+        assert!(
+            !flake.contains(forbidden),
+            "Nix package must not contain {forbidden}"
+        );
+    }
+    let lock: Value = serde_json::from_str(
+        &fs::read_to_string(repository_root().join("flake.lock")).expect("read flake lock"),
+    )
+    .expect("parse flake lock");
+    assert_eq!(
+        field(mapping(&lock, "flake lock"), "version").as_u64(),
+        Some(7)
+    );
 }
 
 #[test]

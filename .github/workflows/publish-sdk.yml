@@ -255,12 +255,11 @@ jobs:
       - name: Publish the exact npm tarball with trusted publishing
         if: steps.npm_state.outputs.publish == 'true'
         env:
-          NPM_CONFIG_PROVENANCE: "false"
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: >-
           npm publish
           "dist/sdk-release/obscuritylabs-colossus-sdk-${RELEASE_VERSION}.tgz"
-          --access public --provenance=false
+          --access public --provenance
 
       - name: Reconcile the PyPI release
         id: pypi_state

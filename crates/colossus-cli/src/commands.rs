@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
-    /// Check the fixed stable Colossus release channel.
+    /// Check or apply an install-aware stable Colossus update.
     Update(UpdateCommand),
     /// Create or inspect fresh YAML configuration.
     Config(ConfigCommand),
@@ -139,9 +139,13 @@ pub(super) enum Command {
 }
 
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub(super) struct UpdateCommand {
     #[command(subcommand)]
-    pub(super) command: UpdateAction,
+    pub(super) command: Option<UpdateAction>,
+    /// Install one exact newer stable release.
+    #[arg(long, value_name = "vX.Y.Z")]
+    pub(super) version: Option<String>,
 }
 
 #[derive(Subcommand)]

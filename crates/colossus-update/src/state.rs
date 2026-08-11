@@ -143,6 +143,12 @@ struct ReceiptDocument {
 
 impl ReceiptDocument {
     fn validate(self) -> Result<InstallationReceipt, UpdateStateError> {
+        let executable_name = if cfg!(windows) {
+            "colossus.exe"
+        } else {
+            "colossus"
+        };
+        let expected_binary = Path::new(&self.prefix).join("bin").join(executable_name);
         if self.schema_version != 1
             || !matches!(self.channel.as_str(), "stable" | "preview")
             || !bounded_token(&self.version, 64)
@@ -155,6 +161,7 @@ impl ReceiptDocument {
             || contains_control(&self.binary_path)
             || self.distribution_origin != DISTRIBUTION_ORIGIN
             || self.installer_kind != "direct"
+            || Path::new(&self.binary_path) != expected_binary
         {
             return Err(UpdateStateError::Unavailable);
         }

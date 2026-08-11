@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "obscuritylabs-colossus-sdk"
-version = "0.10.5"
+version = "0.10.6"
 description = "Security-focused Python SDK for the Colossus public gRPC API"
 readme = "README.md"
 requires-python = ">=3.10"
