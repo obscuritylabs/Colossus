@@ -44,6 +44,9 @@ The generated configuration omits the agent and child-scheduler blocks so defaul
 evolve without pinning old generated values. Omitting either block currently selects
 `agent.maxTurns: 100` and `subagents.maxConcurrent: 10`.
 
+`config show` states both limits even when the file omits them, so the resolved turn and
+concurrency bounds stay inspectable.
+
 Add the blocks only to override those defaults. For example, a small automation worker
 might use:
 

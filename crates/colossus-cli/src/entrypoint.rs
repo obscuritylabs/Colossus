@@ -94,7 +94,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             command: ConfigAction::Show
         })
     ) {
-        print!("{}", config.to_yaml()?);
+        print!("{}", config.to_resolved_yaml()?);
         return Ok(());
     }
     match &cli.command {

@@ -754,6 +754,35 @@ fn default_runtime_limits_are_implicit_in_serialized_configuration() {
 }
 
 #[test]
+fn resolved_configuration_yaml_states_default_runtime_limits() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    let yaml = config
+        .to_resolved_yaml()
+        .expect("resolved configuration YAML");
+    let document: Value = serde_saphyr::from_str(&yaml).expect("configuration value");
+    assert_eq!(
+        document["agent"]["maxTurns"].as_u64(),
+        Some(u64::from(super::DEFAULT_MAX_TURNS))
+    );
+    assert_eq!(document["subagents"]["maxConcurrent"].as_u64(), Some(10));
+    RuntimeConfig::from_yaml(&yaml).expect("resolved configuration parses");
+
+    config.agent.max_turns = 7;
+    config.subagents.max_concurrent = 3;
+    let overridden = config
+        .to_resolved_yaml()
+        .expect("resolved configuration YAML");
+    assert_eq!(
+        overridden,
+        config.to_yaml().expect("configuration YAML"),
+        "explicit overrides must not be restated"
+    );
+    let parsed = RuntimeConfig::from_yaml(&overridden).expect("overridden configuration parses");
+    assert_eq!(parsed.agent.max_turns, 7);
+    assert_eq!(parsed.subagents.max_concurrent, 3);
+}
+
+#[test]
 fn observability_is_disabled_by_default_and_full_payloads_require_acknowledgement() {
     let config = RuntimeConfig::offline_template("state.redb");
     assert!(!config.observability.enabled);
