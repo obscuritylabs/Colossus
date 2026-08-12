@@ -38,8 +38,9 @@ use windows_sys::Win32::{
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_INFO,
         FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
-        MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL,
+        FILE_STANDARD_INFO, FileAttributeTagInfo, FileIdInfo, FileStandardInfo,
+        GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        MoveFileExW, READ_CONTROL,
     },
     System::{
         Console::{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
@@ -958,6 +959,27 @@ fn file_identity(file: &File) -> Result<FileIdentity, WindowsNativeError> {
             file_id: info.FileId.Identifier,
         })
     }
+}
+
+pub(super) fn file_link_count(file: &File) -> Result<u64, WindowsNativeError> {
+    // SAFETY: the output points to an initialized fixed-size structure for the exact
+    // information class and the borrowed File keeps the HANDLE valid for the call.
+    let mut info: FILE_STANDARD_INFO = unsafe { zeroed() };
+    let result = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle().cast(),
+            FileStandardInfo,
+            (&raw mut info).cast(),
+            u32::try_from(size_of::<FILE_STANDARD_INFO>()).expect("structure size fits u32"),
+        )
+    };
+    if result == 0 {
+        return Err(last_error("query file link count"));
+    }
+    if info.NumberOfLinks == 0 {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    Ok(u64::from(info.NumberOfLinks))
 }
 
 pub(super) fn prompt_secret(

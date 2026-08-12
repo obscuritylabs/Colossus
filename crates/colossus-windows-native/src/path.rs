@@ -163,20 +163,7 @@ impl BoundPath {
     pub fn link_count(&self) -> Result<u64, WindowsNativeError> {
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt as _;
-
-            let metadata = self
-                .inner
-                .file
-                .metadata()
-                .map_err(|source| WindowsNativeError::Io {
-                    operation: "read retained file link count",
-                    source,
-                })?;
-            metadata
-                .number_of_links()
-                .map(u64::from)
-                .ok_or(WindowsNativeError::InvalidInput)
+            crate::windows::file_link_count(&self.inner.file)
         }
         #[cfg(not(windows))]
         {
