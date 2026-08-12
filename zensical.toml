@@ -71,6 +71,7 @@ nav = [
   ] },
   { "Reference" = [
     { "Overview" = "reference/index.md" },
+    { "Colossus home" = "reference/colossus-home.md" },
     { "CLI" = "reference/cli.md" },
     { "TUI commands and keys" = "reference/tui.md" },
     { "Configuration schema" = [

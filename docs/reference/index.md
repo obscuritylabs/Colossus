@@ -11,6 +11,7 @@ Use this section when you need an exact name, field, default, limit, or wire sha
 
 ## Interfaces
 
+- [Colossus home and workspace resolution](colossus-home.md)
 - [CLI](cli.md)
 - [TUI commands and keys](tui.md)
 

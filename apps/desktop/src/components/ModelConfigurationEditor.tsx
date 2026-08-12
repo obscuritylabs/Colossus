@@ -8,6 +8,7 @@ import type {
   ManagedModelConfiguration,
   ManagedProviderConfigurationInput,
   ProviderKind,
+  ReasoningEffort,
 } from "../types";
 import {
   REMOTE_PROVIDER_TIMEOUT_MS,
@@ -24,14 +25,34 @@ const ROLES = [
   "research_synthesizer",
 ] as const;
 
-type EditableProvider = ManagedProviderConfigurationInput & {
+const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
+export type EditableProvider = ManagedProviderConfigurationInput & {
   effectiveTimeoutMs: number;
 };
 
+interface EditableConfiguration {
+  providers: EditableProvider[];
+  models: ManagedModelConfiguration[];
+}
+
 function defaultBaseUrl(kind: ProviderKind): string {
-  return kind === "openai_responses"
-    ? "https://api.openai.com/v1"
-    : "https://openrouter.ai/api/v1";
+  if (kind === "open_ai_codex") {
+    return "https://chatgpt.com/backend-api/codex";
+  }
+  if (kind === "openai_responses") {
+    return "https://api.openai.com/v1";
+  }
+  return "https://openrouter.ai/api/v1";
 }
 
 function timeoutLabel(timeoutMs: number): string {
@@ -74,6 +95,7 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
         model: "deepseek/deepseek-v4-flash",
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,
+        reasoningEffort: null,
         capabilities: { toolCalls: true, streaming: true },
       },
     ];
@@ -81,10 +103,74 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
   return desktop.managedModelConfiguration.models;
 }
 
+export function changeProviderProtocol(
+  providers: EditableProvider[],
+  models: ManagedModelConfiguration[],
+  index: number,
+  providerKind: ProviderKind,
+): EditableConfiguration {
+  const previous = providers[index];
+  if (previous === undefined || previous.providerKind === providerKind) {
+    return { providers, models };
+  }
+
+  return {
+    providers: providers.map((provider, currentIndex) =>
+      currentIndex === index
+        ? {
+            ...provider,
+            providerKind,
+            baseUrl: defaultBaseUrl(providerKind),
+            credentialAction:
+              providerKind === "open_ai_codex"
+                ? "none"
+                : provider.credentialAction,
+            effectiveTimeoutMs: automaticProviderTimeoutMs(
+              defaultBaseUrl(providerKind),
+            ),
+          }
+        : provider,
+    ),
+    models: models.map((model) =>
+      model.providerProfile === previous.profile
+        ? { ...model, model: "" }
+        : model,
+    ),
+  };
+}
+
+export async function submitModelConfiguration(
+  workspaceId: string | null,
+  providers: EditableProvider[],
+  models: ManagedModelConfiguration[],
+  roles: Record<string, string>,
+  accessProfile: ApplyManagedModelConfigurationRequest["accessProfile"],
+  apply: (request: ApplyManagedModelConfigurationRequest) => Promise<boolean>,
+): Promise<boolean> {
+  if (
+    workspaceId === null ||
+    models.some((model) => model.model.trim() === "")
+  ) {
+    return false;
+  }
+
+  return apply({
+    workspaceId,
+    providers: providers.map(
+      ({ effectiveTimeoutMs: _, ...provider }) => provider,
+    ),
+    models,
+    roles,
+    accessProfile,
+  });
+}
+
 interface ModelConfigurationEditorProps {
   desktop: DesktopStatus;
   busy: boolean;
   onApply: (request: ApplyManagedModelConfigurationRequest) => Promise<boolean>;
+  onCodexLogin: () => Promise<void>;
+  onCodexLogout: () => Promise<void>;
   onBack: () => void;
 }
 
@@ -92,6 +178,8 @@ export function ModelConfigurationEditor({
   desktop,
   busy,
   onApply,
+  onCodexLogin,
+  onCodexLogout,
   onBack,
 }: ModelConfigurationEditorProps) {
   const [providers, setProviders] = useState(() => initialProviders(desktop));
@@ -133,22 +221,22 @@ export function ModelConfigurationEditor({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (desktop.workspace === null) {
-      return;
-    }
-    await onApply({
-      workspaceId: desktop.workspace.workspaceId,
-      providers: providers.map(
-        ({ effectiveTimeoutMs: _, ...provider }) => provider,
-      ),
+    await submitModelConfiguration(
+      desktop.workspace?.workspaceId ?? null,
+      providers,
       models,
       roles,
       accessProfile,
-    });
+      onApply,
+    );
   }
 
   const providerProfiles = providers.map((provider) => provider.profile);
   const modelProfiles = models.map((model) => model.profile);
+  const requiresCodexAuth = providers.some(
+    (provider) => provider.providerKind === "open_ai_codex",
+  );
+  const codexSignedIn = desktop.codexAuth.state === "signed_in";
 
   return (
     <form
@@ -159,7 +247,8 @@ export function ModelConfigurationEditor({
         <div>
           <strong>Provider connections</strong>
           <span>
-            Credentials are optional and are entered only in a native prompt.
+            API keys are entered only in a native prompt. ChatGPT authorization
+            uses the installed Codex CLI.
           </span>
         </div>
         <button
@@ -195,17 +284,21 @@ export function ModelConfigurationEditor({
               disabled={busy}
               onChange={(event) => {
                 const providerKind = event.target.value as ProviderKind;
-                updateProvider(index, {
+                const next = changeProviderProtocol(
+                  providers,
+                  models,
+                  index,
                   providerKind,
-                  baseUrl: defaultBaseUrl(providerKind),
-                  effectiveTimeoutMs: automaticProviderTimeoutMs(
-                    defaultBaseUrl(providerKind),
-                  ),
-                });
+                );
+                setProviders(next.providers);
+                setModels(next.models);
               }}
             >
               <option value="openai_compatible">OpenAI-compatible</option>
               <option value="openai_responses">OpenAI Responses</option>
+              <option value="open_ai_codex">
+                ChatGPT subscription (Codex)
+              </option>
             </select>
           </label>
           <label className="provider-wide-field">
@@ -215,7 +308,7 @@ export function ModelConfigurationEditor({
               maxLength={2048}
               required
               spellCheck={false}
-              disabled={busy}
+              disabled={busy || provider.providerKind === "open_ai_codex"}
               onChange={(event) => {
                 const baseUrl = event.target.value;
                 updateProvider(index, {
@@ -262,22 +355,42 @@ export function ModelConfigurationEditor({
               />
             </label>
           ) : null}
-          <label>
-            <span>Credential</span>
-            <select
-              value={provider.credentialAction}
-              disabled={busy}
-              onChange={(event) =>
-                updateProvider(index, {
-                  credentialAction: event.target.value as CredentialAction,
-                })
-              }
-            >
-              <option value="none">No credential</option>
-              <option value="reuse">Reuse stored credential</option>
-              <option value="replace">Enter or replace natively</option>
-            </select>
-          </label>
+          {provider.providerKind === "open_ai_codex" ? (
+            <div className="codex-provider-auth">
+              <span>
+                {desktop.codexAuth.state === "signed_in"
+                  ? "ChatGPT account connected"
+                  : desktop.codexAuth.message}
+              </span>
+              <button
+                className="button secondary"
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void (codexSignedIn ? onCodexLogout() : onCodexLogin())
+                }
+              >
+                {codexSignedIn ? "Sign out" : "Sign in with ChatGPT"}
+              </button>
+            </div>
+          ) : (
+            <label>
+              <span>Credential</span>
+              <select
+                value={provider.credentialAction}
+                disabled={busy}
+                onChange={(event) =>
+                  updateProvider(index, {
+                    credentialAction: event.target.value as CredentialAction,
+                  })
+                }
+              >
+                <option value="none">No credential</option>
+                <option value="reuse">Reuse stored credential</option>
+                <option value="replace">Enter or replace natively</option>
+              </select>
+            </label>
+          )}
           {providers.length > 1 ? (
             <button
               className="text-button"
@@ -393,6 +506,28 @@ export function ModelConfigurationEditor({
             />
           </label>
           <label>
+            <span>Reasoning effort</span>
+            <select
+              value={model.reasoningEffort ?? "provider-default"}
+              disabled={busy}
+              onChange={(event) =>
+                updateModel(index, {
+                  reasoningEffort:
+                    event.target.value === "provider-default"
+                      ? null
+                      : (event.target.value as ReasoningEffort),
+                })
+              }
+            >
+              <option value="provider-default">Provider default</option>
+              {REASONING_EFFORTS.map((effort) => (
+                <option key={effort} value={effort}>
+                  {effort === "xhigh" ? "Extra high" : effort}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             <input
               type="checkbox"
               checked={model.capabilities.toolCalls}
@@ -454,6 +589,7 @@ export function ModelConfigurationEditor({
                 model: "",
                 contextWindowTokens: 128_000,
                 maxOutputTokens: 16_000,
+                reasoningEffort: null,
                 capabilities: { toolCalls: true, streaming: true },
               },
             ])
@@ -513,7 +649,14 @@ export function ModelConfigurationEditor({
           Local runs before applying changes.
         </p>
       </div>
-      <button className="button primary onboarding-launch" disabled={busy}>
+      <button
+        className="button primary onboarding-launch"
+        disabled={
+          busy ||
+          models.some((model) => model.model.trim() === "") ||
+          (requiresCodexAuth && !codexSignedIn)
+        }
+      >
         {busy ? "Applying model configuration…" : "Apply model configuration"}
       </button>
     </form>

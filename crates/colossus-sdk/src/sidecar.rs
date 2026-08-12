@@ -15,9 +15,10 @@ use zeroize::Zeroizing;
 
 pub use colossus_sidecar_protocol::{
     ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter, ManagedModelCapabilities,
-    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedRuntimeConfig,
-    REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity, default_managed_provider_timeout_ms,
-    validate_managed_model_identifier, validate_managed_provider_base_url,
+    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
+    ManagedRuntimeConfig, REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity,
+    default_managed_provider_timeout_ms, validate_managed_model_identifier,
+    validate_managed_provider_base_url,
 };
 
 /// Fixed secret-free runtime configuration filename written inside the instance directory.
@@ -243,7 +244,10 @@ pub struct SidecarBootstrapConfig {
     runtime: ManagedRuntimeConfig,
     grant: SidecarApplicationGrant,
     expected_workspace_identity: Option<WorkspaceIdentity>,
+    colossus_home: Option<PathBuf>,
+    suppress_automatic_agent_instructions: bool,
     ca_bundle_path: Option<PathBuf>,
+    codex_auth_path: Option<PathBuf>,
     approval_broker_grant: Option<SidecarApprovalBrokerGrant>,
     host_credentials: Vec<SidecarHostCredential>,
     worker_ipc_authentication: Option<SecretString>,
@@ -267,7 +271,10 @@ impl SidecarBootstrapConfig {
             runtime,
             grant,
             expected_workspace_identity: None,
+            colossus_home: None,
+            suppress_automatic_agent_instructions: false,
             ca_bundle_path: None,
+            codex_auth_path: None,
             approval_broker_grant: None,
             host_credentials: Vec::new(),
             worker_ipc_authentication: None,
@@ -290,6 +297,34 @@ impl SidecarBootstrapConfig {
         Ok(self)
     }
 
+    /// Suppress home/workspace AGENTS.md for one dedicated internal diagnostic probe.
+    ///
+    /// Explicit probe instructions and immutable runtime-mode instructions remain active.
+    /// Normal managed runtimes must retain the default automatic loading behavior.
+    #[must_use]
+    pub fn without_automatic_agent_instructions_for_diagnostics(mut self) -> Self {
+        self.suppress_automatic_agent_instructions = true;
+        self
+    }
+
+    /// Supply the owner-private Colossus home used for bounded user instructions.
+    ///
+    /// The path crosses only inherited private bootstrap IPC and never enters the
+    /// generated managed runtime configuration.
+    pub fn with_colossus_home(mut self, path: impl Into<PathBuf>) -> SdkResult<Self> {
+        let path = path.into();
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || path.to_str().is_none_or(|path| path.len() > 4_096)
+        {
+            return Err(SdkError::InvalidConfiguration(
+                "Colossus home path is invalid",
+            ));
+        }
+        self.colossus_home = Some(path);
+        Ok(self)
+    }
+
     /// Add one native-copied private CA bundle to every managed-runtime network client.
     pub fn with_additional_ca_bundle_path(mut self, path: impl Into<PathBuf>) -> SdkResult<Self> {
         let path = path.into();
@@ -302,6 +337,24 @@ impl SidecarBootstrapConfig {
             ));
         }
         self.ca_bundle_path = Some(path);
+        Ok(self)
+    }
+
+    /// Bind a managed Codex provider to one explicit official Codex credential file.
+    ///
+    /// The path crosses only the inherited private bootstrap channel. Credential bytes
+    /// remain file-backed and are resolved by the permit-bearing provider adapter.
+    pub fn with_codex_auth_path(mut self, path: impl Into<PathBuf>) -> SdkResult<Self> {
+        let path = path.into();
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || path.to_str().is_none_or(|path| path.len() > 4_096)
+        {
+            return Err(SdkError::InvalidConfiguration(
+                "Codex credential path is invalid",
+            ));
+        }
+        self.codex_auth_path = Some(path);
         Ok(self)
     }
 
@@ -402,6 +455,18 @@ impl SidecarBootstrapConfig {
                 ))?
                 .to_owned(),
             workspace_identity,
+            colossus_home: self
+                .colossus_home
+                .as_ref()
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or(SdkError::InvalidConfiguration(
+                            "Colossus home path must be UTF-8",
+                        ))
+                })
+                .transpose()?,
+            suppress_automatic_agent_instructions: self.suppress_automatic_agent_instructions,
             ca_bundle_path: self
                 .ca_bundle_path
                 .as_ref()
@@ -410,6 +475,17 @@ impl SidecarBootstrapConfig {
                         .map(str::to_owned)
                         .ok_or(SdkError::InvalidConfiguration(
                             "additional CA bundle path must be UTF-8",
+                        ))
+                })
+                .transpose()?,
+            codex_auth_path: self
+                .codex_auth_path
+                .as_ref()
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or(SdkError::InvalidConfiguration(
+                            "Codex credential path must be UTF-8",
                         ))
                 })
                 .transpose()?,
@@ -500,7 +576,13 @@ impl fmt::Debug for SidecarBootstrapConfig {
                     .as_ref()
                     .map(|_| "[OPAQUE IDENTITY]"),
             )
+            .field("colossus_home_configured", &self.colossus_home.is_some())
+            .field(
+                "automatic_agent_instructions",
+                &!self.suppress_automatic_agent_instructions,
+            )
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
+            .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
             .field("approval_broker_grant", &self.approval_broker_grant)
@@ -635,6 +717,83 @@ mod tests {
             .with_additional_ca_bundle_path("../company-ca.pem")
             .is_err()
         );
+    }
+
+    #[test]
+    fn codex_auth_path_is_native_only_absolute_and_redacted() {
+        let path = if cfg!(windows) {
+            r"C:\private\codex\auth.json"
+        } else {
+            "/private/codex/auth.json"
+        };
+        let bootstrap = SidecarBootstrapConfig::new(
+            "/tmp/colossus-sdk-sidecar-workspace",
+            runtime(),
+            primary_grant(&[scopes::RUNS_READ]),
+        )
+        .expect("bootstrap")
+        .with_codex_auth_path(path)
+        .expect("Codex auth path");
+
+        let debug = format!("{bootstrap:?}");
+        assert!(debug.contains("codex_auth_configured: true"));
+        assert!(!debug.contains(path));
+        assert!(
+            SidecarBootstrapConfig::new(
+                "/tmp/colossus-sdk-sidecar-workspace",
+                runtime(),
+                primary_grant(&[scopes::RUNS_READ]),
+            )
+            .expect("bootstrap")
+            .with_codex_auth_path("../auth.json")
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn colossus_home_path_is_native_only_absolute_and_redacted() {
+        let path = if cfg!(windows) {
+            r"C:\private\.colossus"
+        } else {
+            "/private/.colossus"
+        };
+        let bootstrap = SidecarBootstrapConfig::new(
+            "/tmp/colossus-sdk-sidecar-workspace",
+            runtime(),
+            primary_grant(&[scopes::RUNS_READ]),
+        )
+        .expect("bootstrap")
+        .with_colossus_home(path)
+        .expect("Colossus home path");
+
+        let debug = format!("{bootstrap:?}");
+        assert!(debug.contains("colossus_home_configured: true"));
+        assert!(!debug.contains(path));
+        assert!(
+            SidecarBootstrapConfig::new(
+                "/tmp/colossus-sdk-sidecar-workspace",
+                runtime(),
+                primary_grant(&[scopes::RUNS_READ]),
+            )
+            .expect("bootstrap")
+            .with_colossus_home("../.colossus")
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn diagnostic_bootstrap_suppression_is_explicit_and_defaults_off() {
+        let bootstrap = SidecarBootstrapConfig::new(
+            "/tmp/colossus-sdk-sidecar-workspace",
+            runtime(),
+            primary_grant(&[scopes::RUNS_READ]),
+        )
+        .expect("bootstrap");
+        assert!(!bootstrap.suppress_automatic_agent_instructions);
+
+        let diagnostic = bootstrap.without_automatic_agent_instructions_for_diagnostics();
+        assert!(diagnostic.suppress_automatic_agent_instructions);
+        assert!(format!("{diagnostic:?}").contains("automatic_agent_instructions: false"));
     }
 
     #[test]

@@ -286,6 +286,9 @@ pub(super) enum PreferencesAction {
 pub(super) enum ConfigAction {
     /// Create a strict offline configuration without overwriting an existing file.
     Init {
+        /// Create repository-local `.colossus/config.yaml` instead of the global config.
+        #[arg(long)]
+        local: bool,
         /// Use isolated redb state for source development.
         #[arg(long)]
         development: bool,

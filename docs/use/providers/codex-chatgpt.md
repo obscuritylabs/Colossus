@@ -35,13 +35,20 @@ colossus codex status
 For a headless machine, use `colossus codex login --device-code`. If the executable is
 not on `PATH`, put `--codex-bin /absolute/path/to/codex` before `login`, `status`, or
 `logout`. Colossus delegates the account flow to the official CLI and reuses its
-file-backed credential; the token never enters YAML.
+file-backed credential; the token never enters YAML. If `CODEX_HOME` is set, it must be
+absolute. A successful `colossus codex status` means both
+that the official CLI completed and that Colossus can safely load the resulting
+file-backed credential. Colossus rejects an existing auth file that fails runtime
+safety validation before starting an official CLI account operation.
 
 Use `colossus codex logout` when you intentionally want to remove the current sign-in.
+It reports completion only after the credential is unavailable; an unsafe remaining
+store fails verification.
 
 ### 2. Configure the subscription route
 
-Keep the other required fields from your generated configuration. Replace its
+Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
+keep its other required fields. Replace its
 `schemaVersion`, `providers`, `models`, and `sandbox.networkDestinations` values with
 this validated overlay, then replace `YOUR_CODEX_MODEL_ID` and the limits with values
 for the selected catalog entry.
@@ -85,16 +92,16 @@ level.
 ### 3. Inspect routing and readiness
 
 ```bash
-colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider doctor codex-provider
-colossus --config .colossus/config.yaml provider models codex-provider
-colossus --config .colossus/config.yaml models doctor codex
+colossus -w . models route primary
+colossus -w . provider doctor codex-provider
+colossus -w . provider models codex-provider
+colossus -w . models doctor codex
 ```
 
 ### 4. Send one bounded model turn
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w . run \
   "Reply with exactly: connected"
 ```
 
@@ -105,8 +112,8 @@ The role resolves to `codex`, both diagnostics succeed, and the bounded run retu
 
 ## Verification
 
-Run `colossus codex status` again and inspect `colossus --config
-.colossus/config.yaml config show`. The configuration must contain only
+Run `colossus codex status` again and inspect `colossus -w . config show`. The
+configuration must contain only
 `credentialReference: codex:default`, never a token or ChatGPT account identifier.
 
 ## Failure path

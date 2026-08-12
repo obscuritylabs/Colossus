@@ -1333,6 +1333,7 @@ mod tests {
                 display_name: "Managed workspace".into(),
                 workspace: "/private/tmp/workspace".into(),
                 workspace_identity: test_workspace_identity(),
+                colossus_home: "/private/tmp/.colossus".into(),
                 config: Some("/private/tmp/config.yaml".into()),
                 worker_authentication: None,
             })
@@ -1358,6 +1359,7 @@ mod tests {
                 display_name: "Managed workspace".into(),
                 workspace: "/private/tmp/workspace".into(),
                 workspace_identity: test_workspace_identity(),
+                colossus_home: "/private/tmp/.colossus".into(),
                 config: Some("/private/tmp/config-2.yaml".into()),
                 worker_authentication: None,
             })

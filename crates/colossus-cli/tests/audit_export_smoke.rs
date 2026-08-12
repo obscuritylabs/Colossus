@@ -2,6 +2,8 @@
 
 #[path = "support/audit.rs"]
 mod audit_support;
+#[path = "support/process.rs"]
+mod process_support;
 
 use serde_json::Value;
 use std::{
@@ -15,7 +17,9 @@ const JOURNAL_KEY: &str = "77777777777777777777777777777777777777777777777777777
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    command
         .arg("--config")
         .arg(config)
         .args(arguments)

@@ -1,7 +1,10 @@
 use crate::WorkerError;
-#[cfg(not(windows))]
-use std::io::Write as _;
-use std::{fmt, fs, io::Read as _, path::Path, sync::Arc};
+use std::{
+    fmt, fs,
+    io::{Read as _, Seek as _, Write as _},
+    path::Path,
+    sync::Arc,
+};
 use zeroize::{Zeroize as _, Zeroizing};
 
 const FILE_PREFIX: &str = "colossus-worker-auth-v1:";
@@ -61,6 +64,30 @@ impl WorkerAuthenticationKey {
         }
     }
 
+    /// Load or initialize a key through an already no-follow, owner-validated file.
+    pub fn load_or_create_file(mut file: fs::File, was_created: bool) -> Result<Self, WorkerError> {
+        if !was_created {
+            return read_owner_only_file(file);
+        }
+        let mut key = [0_u8; 32];
+        getrandom::fill(&mut key)
+            .map_err(|_| WorkerError::Protocol("worker secret generation failed".into()))?;
+        let mut encoded = format!("{FILE_PREFIX}{}", hex::encode(key));
+        let result = (|| -> Result<(), WorkerError> {
+            file.seek(std::io::SeekFrom::Start(0))?;
+            file.write_all(encoded.as_bytes())?;
+            file.sync_all()?;
+            validate_metadata(&file.metadata()?)?;
+            Ok(())
+        })();
+        encoded.zeroize();
+        if let Err(error) = result {
+            key.zeroize();
+            return Err(error);
+        }
+        Ok(Self::new(key))
+    }
+
     pub(super) fn expose(&self) -> &[u8; 32] {
         self.0.as_ref()
     }
@@ -113,6 +140,23 @@ fn read_owner_only(path: &Path) -> Result<Vec<u8>, WorkerError> {
         ));
     }
     Ok(encoded)
+}
+
+fn read_owner_only_file(mut file: fs::File) -> Result<WorkerAuthenticationKey, WorkerError> {
+    let metadata = file.metadata()?;
+    validate_metadata(&metadata)?;
+    if metadata.len() != FILE_BYTES as u64 {
+        return Err(WorkerError::Protocol(
+            "worker secret file has an invalid length".into(),
+        ));
+    }
+    file.seek(std::io::SeekFrom::Start(0))?;
+    let mut encoded = Vec::with_capacity(FILE_BYTES);
+    file.take((FILE_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)?;
+    let result = parse_key(&encoded).map(WorkerAuthenticationKey::new);
+    encoded.zeroize();
+    result
 }
 
 /// Create the secret with an explicit current-user-only Windows ACL.

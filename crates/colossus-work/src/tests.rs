@@ -603,6 +603,7 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
                 task: "Review the tests".into(),
                 role: "subagent_default".into(),
                 allowed_tools: None,
+                instruction_snapshot_id: None,
             },
             user_actor(),
         )
@@ -616,6 +617,7 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
                 task: "Review one file".into(),
                 role: "subagent_default".into(),
                 allowed_tools: Some(vec!["filesystem.read".into(), "git.diff".into()]),
+                instruction_snapshot_id: Some("a".repeat(64)),
             },
             user_actor(),
         )
@@ -623,6 +625,29 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
     assert_eq!(
         bounded.allowed_tools,
         Some(vec!["filesystem.read".into(), "git.diff".into()])
+    );
+    assert_eq!(
+        repository
+            .subagent_instruction_snapshot_id(&bounded.id)
+            .expect("snapshot reference"),
+        Some("a".repeat(64))
+    );
+    assert!(
+        service
+            .create_subagent(
+                CreateSubagentRequest {
+                    session_id: "session-1".into(),
+                    parent_run_id: "run-invalid-snapshot".into(),
+                    parent_call_id: "call-invalid-snapshot".into(),
+                    task: "Review one file".into(),
+                    role: "subagent_default".into(),
+                    allowed_tools: None,
+                    instruction_snapshot_id: Some("not-a-snapshot".into()),
+                },
+                user_actor(),
+            )
+            .is_err(),
+        "invalid private snapshot references must fail before child creation"
     );
     assert!(
         service
@@ -634,6 +659,7 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
                     task: "Review one file".into(),
                     role: "subagent_default".into(),
                     allowed_tools: Some(vec!["filesystem.read".into(), "filesystem.read".into(),]),
+                    instruction_snapshot_id: None,
                 },
                 user_actor(),
             )
@@ -685,6 +711,7 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
                 task: "Long child task".into(),
                 role: "subagent_default".into(),
                 allowed_tools: None,
+                instruction_snapshot_id: None,
             },
             user_actor(),
         )

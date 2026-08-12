@@ -16,6 +16,8 @@ import {
   checkDesktopUpdate,
   chooseRunAttachment,
   chooseWorkspace,
+  codexAuthLogin,
+  codexAuthLogout,
   configureManagedRuntime,
   connectColossus,
   createRun,
@@ -176,6 +178,12 @@ const INITIAL_DESKTOP: DesktopStatus = {
         model: "fixture",
       }
     : { configured: false, kind: null, model: "" },
+  codexAuth: {
+    state: FIXTURE_MODE ? "signed_in" : "signed_out",
+    message: FIXTURE_MODE
+      ? "Fixture ChatGPT account connected."
+      : "Sign in with ChatGPT to use the Codex subscription provider.",
+  },
   managedModelConfiguration: {
     providers: FIXTURE_MODE
       ? [
@@ -197,6 +205,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
             model: "fixture",
             contextWindowTokens: 128_000,
             maxOutputTokens: 16_000,
+            reasoningEffort: null,
             capabilities: { toolCalls: true, streaming: true },
           },
         ]
@@ -1665,6 +1674,59 @@ export default function App() {
     }
   }
 
+  async function handleCodexLogin() {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      const codexAuth = FIXTURE_MODE
+        ? {
+            state: "signed_in" as const,
+            message: "Fixture ChatGPT account connected.",
+          }
+        : await codexAuthLogin();
+      const status = { ...desktopRef.current, codexAuth };
+      desktopRef.current = status;
+      setDesktop(status);
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleCodexLogout() {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      const codexAuth = FIXTURE_MODE
+        ? {
+            state: "signed_out" as const,
+            message:
+              "Sign in with ChatGPT to use the Codex subscription provider.",
+          }
+        : await codexAuthLogout();
+      const status = { ...desktopRef.current, codexAuth };
+      desktopRef.current = status;
+      setDesktop(status);
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
   async function handleManagedSelfTest() {
     if (FIXTURE_MODE) {
       return;
@@ -2249,6 +2311,8 @@ export default function App() {
           onChooseWorkspace={handleChooseWorkspace}
           onConfigure={handleConfigureManaged}
           onApplyConfiguration={handleApplyManagedModelConfiguration}
+          onCodexLogin={handleCodexLogin}
+          onCodexLogout={handleCodexLogout}
           onRunSelfTest={handleManagedSelfTest}
           onUseExternal={async () => {
             await handleAddExternalTarget();

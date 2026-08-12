@@ -1,6 +1,9 @@
 //! Credential-free end-to-end pack lifecycle and effect-audit smoke test.
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{BundleFileEntry, BundleManifest, PackSignature};
 use colossus_packs::canonical_bundle_signing_bytes;
@@ -14,7 +17,9 @@ const JOURNAL_KEY: &str = "99999999999999999999999999999999999999999999999999999
 const SIGNING_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, workspace);
+    command
         .current_dir(workspace)
         .arg("--config")
         .arg(config)

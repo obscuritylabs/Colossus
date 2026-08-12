@@ -85,11 +85,20 @@ export interface RuntimeTarget {
 
 export interface ProviderSummary {
   configured: boolean;
-  kind: "openai_responses" | "openai_compatible" | null;
+  kind: ProviderKind | null;
   model: string;
 }
 
-export type ProviderKind = "openai_responses" | "openai_compatible";
+export type ProviderKind =
+  "openai_responses" | "openai_compatible" | "open_ai_codex";
+
+export type ReasoningEffort =
+  "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+export interface CodexAuthStatus {
+  state: "signed_in" | "signed_out" | "unavailable";
+  message: string;
+}
 
 export interface ManagedProviderConfiguration {
   profile: string;
@@ -112,6 +121,7 @@ export interface ManagedModelConfiguration {
   contextWindowTokens: number;
   maxOutputTokens: number;
   capabilities: ManagedModelCapabilities;
+  reasoningEffort: ReasoningEffort | null;
 }
 
 export interface ManagedConfiguration {
@@ -148,6 +158,7 @@ export interface DesktopStatus {
   managedState: ManagedRuntimeState;
   workspace: WorkspaceSummary | null;
   provider: ProviderSummary;
+  codexAuth: CodexAuthStatus;
   managedModelConfiguration: ManagedConfiguration;
   accessProfile: "minimal" | "development";
   approvalMode: ApprovalMode;

@@ -8,6 +8,39 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Added the ChatGPT subscription-backed Codex provider to Desktop Managed Local,
+  including native official-CLI sign-in/sign-out status and per-model reasoning effort.
+- Added the shared owner-private Colossus home, opaque per-workspace CLI/Desktop state
+  partitions, `COLOSSUS_HOME`, and `storage.location: home_workspace`.
+- Added automatic bounded home and repository `AGENTS.md` instruction snapshots for
+  top-level user runs, Goal iterations, and delegated subagents.
+
+### Changed
+
+- `config init` now creates the user-level configuration, while `config init --local`
+  creates a complete repository replacement. Resolution is explicit, repository, then
+  home without merging.
+- Desktop Managed Local now starts fresh under the workspace's Desktop home partition;
+  earlier application-support data is preserved but ignored.
+- Codex CLI account commands now report completion only after Colossus verifies their
+  runtime credential postcondition; unsafe stores are rejected before the official CLI
+  is invoked, and logout must leave no usable credential behind.
+
+### Security
+
+- Kept Codex tokens and account identifiers out of the Desktop WebView, settings, and
+  generated runtime YAML; the native host passes only the validated owner-private auth
+  file path over inherited sidecar bootstrap IPC.
+- Open Codex auth files with no-follow, nonblocking Unix semantics so special files such
+  as FIFOs fail promptly instead of stalling credential readiness checks.
+- Required no-follow owner-private Colossus homes and confined home-workspace storage;
+  direct installers create only the empty root, and privileged Unix installs defer it
+  until an end-user launch.
+- Kept `AGENTS.md` outside authorization: it cannot widen tools, policy, approvals,
+  sandbox roots, network origins, or immutable runtime instructions.
+
 ## [0.10.7] - 2026-08-11
 
 ### Fixed

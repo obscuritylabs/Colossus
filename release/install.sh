@@ -95,6 +95,97 @@ require_private_write_directory() {
     fi
 }
 
+require_private_home_directory() {
+    checked_directory=$1
+    if ! { [ -d "$checked_directory" ] && [ ! -L "$checked_directory" ]; }; then
+        fail "Colossus home is missing, linked, or not a directory: $checked_directory"
+    fi
+    [ "$(file_owner "$checked_directory")" = "$(id -u)" ] ||
+        fail "Colossus home is not owned by the current user: $checked_directory"
+    mode=$(directory_mode "$checked_directory") ||
+        fail "could not inspect Colossus home permissions"
+    case "$mode" in
+        *[!0-7]*|'') fail "Colossus home permissions are invalid: $checked_directory" ;;
+    esac
+    if [ $((0$mode & 077)) -ne 0 ]; then
+        fail "Colossus home must not grant group or other access: $checked_directory"
+    fi
+}
+
+require_safe_home_ancestors() {
+    checked_path=$1
+    remainder=${checked_path#/}
+    current=
+    current_user=$(id -u)
+    old_ifs=$IFS
+    IFS=/
+    for component in $remainder; do
+        IFS=$old_ifs
+        [ -n "$component" ] || continue
+        current=$current/$component
+        if [ -e "$current" ]; then
+            if ! { [ -d "$current" ] && [ ! -L "$current" ]; }; then
+                fail "Colossus home ancestor is linked or not a directory: $current"
+            fi
+            ancestor_owner=$(file_owner "$current") ||
+                fail "could not inspect Colossus home ancestor owner: $current"
+            if [ "$ancestor_owner" != 0 ] && [ "$ancestor_owner" != "$current_user" ]; then
+                fail "Colossus home ancestor is owned by an untrusted user: $current"
+            fi
+            ancestor_mode=$(directory_mode "$current") ||
+                fail "could not inspect Colossus home ancestor permissions: $current"
+            case "$ancestor_mode" in
+                *[!0-7]*|'')
+                    fail "Colossus home ancestor permissions are invalid: $current"
+                    ;;
+            esac
+            if [ $((0$ancestor_mode & 022)) -ne 0 ] &&
+                [ $((0$ancestor_mode & 01000)) -eq 0 ]; then
+                fail "Colossus home ancestor is writable without sticky protection: $current"
+            fi
+        fi
+        IFS=/
+    done
+    IFS=$old_ifs
+}
+
+prepare_colossus_home() {
+    # A root-owned system installation has no unambiguous end-user home. Runtime
+    # startup creates the home later under the actual user's identity.
+    if [ "$(id -u)" -eq 0 ]; then
+        colossus_home=
+        return
+    fi
+
+    if [ "${COLOSSUS_HOME+x}" = x ]; then
+        [ -n "$COLOSSUS_HOME" ] || fail "COLOSSUS_HOME cannot be empty"
+        colossus_home=$COLOSSUS_HOME
+    else
+        [ -n "${HOME:-}" ] || fail "HOME must be set when COLOSSUS_HOME is omitted"
+        colossus_home=$HOME/.colossus
+    fi
+    case "$colossus_home" in
+        /*) ;;
+        *) fail "Colossus home must be absolute" ;;
+    esac
+    if printf '%s' "$colossus_home" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+        fail "Colossus home cannot contain control characters"
+    fi
+
+    ensure_no_link_components "$colossus_home"
+    require_safe_home_ancestors "$colossus_home"
+    if [ ! -e "$colossus_home" ]; then
+        old_umask=$(umask)
+        umask 077
+        mkdir -p -- "$colossus_home"
+        umask "$old_umask"
+        chmod 0700 "$colossus_home"
+    fi
+    ensure_no_link_components "$colossus_home"
+    require_safe_home_ancestors "$colossus_home"
+    require_private_home_directory "$colossus_home"
+}
+
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 source_binary=$script_dir/colossus
 metadata=$script_dir/install-metadata
@@ -147,6 +238,9 @@ binary_version=$(
     "$source_binary" --version
 ) || fail "package colossus binary did not report its version"
 [ "$binary_version" = "colossus $version" ] || fail "package binary version disagrees with metadata"
+
+colossus_home=
+prepare_colossus_home
 
 bin_dir=$prefix/bin
 ensure_no_link_components "$bin_dir"
@@ -274,3 +368,8 @@ trap - EXIT HUP INT TERM
 
 printf '%s\n' "installed $target_binary"
 printf '%s\n' "recorded direct installation receipt at $receipt"
+if [ -n "$colossus_home" ]; then
+    printf '%s\n' "prepared Colossus home at $colossus_home"
+else
+    printf '%s\n' "deferred Colossus home creation until first non-privileged user launch"
+fi

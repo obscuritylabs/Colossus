@@ -1,5 +1,8 @@
 //! Loopback-live provider terminal, credential, worker, and tool-loop acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -28,6 +31,10 @@ impl Drop for ChildGuard {
 
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
+    process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("provider test workspace"),
+    );
     command
         .current_dir(config.parent().expect("provider test workspace"))
         .arg("--config")

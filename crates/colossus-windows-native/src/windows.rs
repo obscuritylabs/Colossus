@@ -253,12 +253,18 @@ pub(super) fn replace_private_file(
         .parent()
         .ok_or(WindowsNativeError::InvalidInput)?;
     let parent = open_bound(parent_path, BoundKind::Directory)?;
+    parent.validate_ancestor_namespace_authority()?;
     parent.validate_private_owner_dacl()?;
+    parent.revalidate()?;
     let source = open_bound(source_path, BoundKind::File)?;
+    source.validate_ancestor_namespace_authority()?;
     source.validate_private_owner_dacl()?;
+    source.revalidate()?;
     if destination_path.exists() {
         let destination = open_bound(destination_path, BoundKind::File)?;
+        destination.validate_ancestor_namespace_authority()?;
         destination.validate_private_owner_dacl()?;
+        destination.revalidate()?;
     }
 
     let source_encoded = nul_terminated_path(source_path)?;
@@ -281,7 +287,8 @@ pub(super) fn replace_private_file(
         return Err(WindowsNativeError::IdentityChanged);
     }
     committed
-        .validate_private_owner_dacl()
+        .validate_ancestor_namespace_authority()
+        .and_then(|()| committed.validate_private_owner_dacl())
         .and_then(|()| committed.revalidate())
         .and_then(|()| parent.revalidate())
 }
@@ -331,7 +338,7 @@ pub(super) struct BoundPathInner {
     pub(super) file: File,
     pub(super) canonical_path: PathBuf,
     pub(super) identity: FileIdentity,
-    _ancestors: Vec<File>,
+    ancestors: Vec<File>,
     kind: BoundKind,
 }
 
@@ -526,17 +533,50 @@ impl BoundPathInner {
         if current.identity != self.identity || file_identity(&self.file)? != self.identity {
             return Err(WindowsNativeError::IdentityChanged);
         }
+        if current.ancestors.len() != self.ancestors.len() {
+            return Err(WindowsNativeError::IdentityChanged);
+        }
+        for (actual, expected) in current.ancestors.iter().zip(&self.ancestors) {
+            if file_identity(actual)? != file_identity(expected)? {
+                return Err(WindowsNativeError::IdentityChanged);
+            }
+        }
         Ok(())
     }
 
     pub(super) fn validate_private_owner_dacl(&self) -> Result<(), WindowsNativeError> {
         validate_private_owner_dacl(&self.file)
     }
+
+    pub(super) fn validate_ancestor_namespace_authority(&self) -> Result<(), WindowsNativeError> {
+        self.ancestors
+            .iter()
+            .try_for_each(validate_namespace_owner_dacl)
+    }
+
+    pub(super) fn validate_namespace_authority(&self) -> Result<(), WindowsNativeError> {
+        self.validate_ancestor_namespace_authority()?;
+        validate_namespace_owner_dacl(&self.file)
+    }
 }
 
 pub(super) fn open_bound(
     path: &Path,
     kind: BoundKind,
+) -> Result<BoundPathInner, WindowsNativeError> {
+    open_bound_with_access(path, kind, false)
+}
+
+pub(super) fn open_bound_file_read_write(
+    path: &Path,
+) -> Result<BoundPathInner, WindowsNativeError> {
+    open_bound_with_access(path, BoundKind::File, true)
+}
+
+fn open_bound_with_access(
+    path: &Path,
+    kind: BoundKind,
+    writable_file: bool,
 ) -> Result<BoundPathInner, WindowsNativeError> {
     if !path.is_absolute()
         || path.parent().is_none()
@@ -554,12 +594,12 @@ pub(super) fn open_bound(
     let components = path.components().collect::<Vec<_>>();
     for (index, component) in components.iter().enumerate() {
         candidate.push(component.as_os_str());
-        if !candidate.has_root() || candidate.parent().is_none() {
+        if !candidate.has_root() {
             continue;
         }
         let leaf = index + 1 == components.len();
         let component_kind = if leaf { kind } else { BoundKind::Directory };
-        let opened = open_exact(&candidate, component_kind)?;
+        let opened = open_exact(&candidate, component_kind, leaf && writable_file)?;
         if leaf {
             let canonical_path =
                 fs::canonicalize(path).map_err(|source| WindowsNativeError::Io {
@@ -571,7 +611,7 @@ pub(super) fn open_bound(
                 file: opened,
                 canonical_path,
                 identity,
-                _ancestors: ancestors,
+                ancestors,
                 kind,
             });
         }
@@ -580,10 +620,14 @@ pub(super) fn open_bound(
     Err(WindowsNativeError::InvalidInput)
 }
 
-fn open_exact(path: &Path, kind: BoundKind) -> Result<File, WindowsNativeError> {
+fn open_exact(
+    path: &Path,
+    kind: BoundKind,
+    writable_file: bool,
+) -> Result<File, WindowsNativeError> {
     let mut options = OpenOptions::new();
     let data_access = if matches!(kind, BoundKind::File) {
-        GENERIC_READ
+        GENERIC_READ | if writable_file { FILE_GENERIC_WRITE } else { 0 }
     } else {
         0
     };
@@ -643,7 +687,28 @@ impl Drop for LocalAcl {
     }
 }
 
+#[derive(Clone, Copy)]
+enum DaclValidation {
+    Private,
+    NamespaceAuthority,
+}
+
+const NAMESPACE_MUTATION_RIGHTS: u32 = 0x0000_0040 // FILE_DELETE_CHILD
+    | 0x0001_0000 // DELETE
+    | 0x0004_0000 // WRITE_DAC
+    | 0x0008_0000 // WRITE_OWNER
+    | 0x1000_0000; // GENERIC_ALL
+const INHERIT_ONLY_ACE_FLAG: u8 = 0x08;
+
 fn validate_private_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
+    validate_owner_dacl(file, DaclValidation::Private)
+}
+
+fn validate_namespace_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
+    validate_owner_dacl(file, DaclValidation::NamespaceAuthority)
+}
+
+fn validate_owner_dacl(file: &File, validation: DaclValidation) -> Result<(), WindowsNativeError> {
     let current_user_storage = current_user_sid()?;
     let current_user = current_user_storage.as_ptr().cast_mut().cast();
     let mut owner: PSID = null_mut();
@@ -672,18 +737,20 @@ fn validate_private_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
     let _descriptor = LocalSecurityDescriptor(descriptor);
     let local_system = well_known_sid(WinLocalSystemSid)?;
     let administrators = well_known_sid(WinBuiltinAdministratorsSid)?;
+    let trusted_installer = trusted_installer_sid();
     // Elevated Windows tokens can use BUILTIN\Administrators as the default owner
     // for newly inherited child objects. All accepted owners are already the only
     // principals permitted by the private DACL.
     if owner.is_null()
         || dacl.is_null()
         || unsafe { IsValidSid(owner) } == 0
-        || !sid_is_one_of(
+        || !(sid_is_one_of(
             owner,
             current_user,
             local_system.as_ptr().cast_mut().cast(),
             administrators.as_ptr().cast_mut().cast(),
-        )
+        ) || matches!(validation, DaclValidation::NamespaceAuthority)
+            && sid_matches(owner, trusted_installer.as_ptr().cast_mut().cast()))
     {
         return Err(WindowsNativeError::UnsafePermissions);
     }
@@ -698,6 +765,11 @@ fn validate_private_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
         }
         // SAFETY: a successful GetAce returns at least one ACE_HEADER.
         let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+        if matches!(validation, DaclValidation::NamespaceAuthority)
+            && header.AceFlags & INHERIT_ONLY_ACE_FLAG != 0
+        {
+            continue;
+        }
         match u32::from(header.AceType) {
             ACCESS_ALLOWED_ACE_TYPE => {
                 if usize::from(header.AceSize) < size_of::<ACCESS_ALLOWED_ACE>() {
@@ -707,13 +779,17 @@ fn validate_private_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
                 // SidStart is the documented start of its variable-size SID.
                 let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
                 let sid = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
-                if unsafe { IsValidSid(sid) } == 0
-                    || !sid_is_one_of(
+                let trusted = unsafe { IsValidSid(sid) } != 0
+                    && (sid_is_one_of(
                         sid,
                         current_user,
                         local_system.as_ptr().cast_mut().cast(),
                         administrators.as_ptr().cast_mut().cast(),
-                    )
+                    ) || matches!(validation, DaclValidation::NamespaceAuthority)
+                        && sid_matches(sid, trusted_installer.as_ptr().cast_mut().cast()));
+                if !trusted
+                    && (matches!(validation, DaclValidation::Private)
+                        || allowed.Mask & NAMESPACE_MUTATION_RIGHTS != 0)
                 {
                     return Err(WindowsNativeError::UnsafePermissions);
                 }
@@ -808,10 +884,39 @@ fn well_known_sid(
     Ok(sid)
 }
 
+fn trusted_installer_sid() -> [u8; 32] {
+    // NT SERVICE\TrustedInstaller is the fixed service SID
+    // S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464.
+    let mut sid = [0_u8; 32];
+    sid[0] = 1;
+    sid[1] = 6;
+    sid[7] = 5;
+    for (index, authority) in [
+        80_u32,
+        956_008_885,
+        3_418_522_649,
+        1_831_038_044,
+        1_853_292_631,
+        2_271_478_464,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = 8 + index * 4;
+        sid[start..start + 4].copy_from_slice(&authority.to_le_bytes());
+    }
+    sid
+}
+
+fn sid_matches(sid: PSID, candidate: PSID) -> bool {
+    // SAFETY: callers supply SIDs validated by Windows or the fixed TrustedInstaller SID.
+    unsafe { EqualSid(sid, candidate) != 0 }
+}
+
 fn sid_is_one_of(sid: PSID, first: PSID, second: PSID, third: PSID) -> bool {
     // SAFETY: every argument was validated or created by the Windows SID APIs and
     // remains alive for this comparison.
-    unsafe { EqualSid(sid, first) != 0 || EqualSid(sid, second) != 0 || EqualSid(sid, third) != 0 }
+    sid_matches(sid, first) || sid_matches(sid, second) || sid_matches(sid, third)
 }
 
 fn file_attributes(file: &File) -> Result<FILE_ATTRIBUTE_TAG_INFO, WindowsNativeError> {

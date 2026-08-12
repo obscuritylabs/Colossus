@@ -100,6 +100,20 @@ impl BoundPath {
         }
     }
 
+    /// Open and retain one regular file for read/write access while rejecting every
+    /// reparse-point component.
+    pub fn open_file_read_write(path: &Path) -> Result<Self, WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::open_bound_file_read_write(path).map(|inner| Self { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
     /// Canonical path captured after the exact object was opened.
     pub fn canonical_path(&self) -> &Path {
         #[cfg(windows)]
@@ -145,6 +159,31 @@ impl BoundPath {
         }
     }
 
+    /// Number of filesystem names linked to this exact retained object.
+    pub fn link_count(&self) -> Result<u64, WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+
+            let metadata = self
+                .inner
+                .file
+                .metadata()
+                .map_err(|source| WindowsNativeError::Io {
+                    operation: "read retained file link count",
+                    source,
+                })?;
+            metadata
+                .number_of_links()
+                .map(u64::from)
+                .ok_or(WindowsNativeError::InvalidInput)
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
     /// Reopen the canonical name and prove it still names the retained object.
     pub fn revalidate(&self) -> Result<(), WindowsNativeError> {
         #[cfg(windows)]
@@ -163,6 +202,31 @@ impl BoundPath {
         #[cfg(windows)]
         {
             self.inner.validate_private_owner_dacl()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Require every retained ancestor namespace to be owned by a trusted principal
+    /// and deny untrusted principals authority to replace or replay entries beneath it.
+    pub fn validate_ancestor_namespace_authority(&self) -> Result<(), WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            self.inner.validate_ancestor_namespace_authority()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+
+    /// Validate namespace authority for this directory and every retained ancestor.
+    pub fn validate_namespace_authority(&self) -> Result<(), WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            self.inner.validate_namespace_authority()
         }
         #[cfg(not(windows))]
         {

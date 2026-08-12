@@ -1,4 +1,5 @@
 mod bundle;
+mod codex_auth;
 mod commands;
 mod connection;
 mod desktop_commands;
@@ -16,6 +17,7 @@ mod terminal_protocol;
 mod updates;
 mod workspace_files;
 
+use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use commands::{
     cancel_run, choose_run_attachment, create_run, get_run, list_runs, read_artifact_content,
     respond_interaction, watch_run,
@@ -42,6 +44,8 @@ use workspace_files::{list_workspace_directory, read_workspace_file};
 ///
 /// Panics when Tauri cannot initialize or run the application event loop.
 pub fn run() {
+    desktop_settings::SettingsStore::open_application()
+        .expect("failed to initialize the private Colossus home");
     let application = tauri::Builder::default()
         .register_uri_scheme_protocol(terminal_protocol::SCHEME, |context, request| {
             terminal_protocol::respond(&context, &request)
@@ -57,6 +61,9 @@ pub fn run() {
             export_diagnostics,
             initialize_desktop,
             desktop_status,
+            codex_auth_status,
+            codex_auth_login,
+            codex_auth_logout,
             import_ca_bundle,
             remove_ca_bundle,
             add_external_target,

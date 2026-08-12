@@ -642,6 +642,15 @@ impl WorkRepository for EventSourcedWorkRepository {
     }
 
     fn create_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError> {
+        self.create_subagent_with_instruction_snapshot(job, None, actor)
+    }
+
+    fn create_subagent_with_instruction_snapshot(
+        &self,
+        job: SubagentJob,
+        instruction_snapshot_id: Option<String>,
+        actor: Actor,
+    ) -> Result<SubagentJob, StoreError> {
         validate_subagent(&job)?;
         if job.status != SubagentStatus::Queued {
             return Err(StoreError::Adapter("new subagents must be queued".into()));
@@ -652,7 +661,10 @@ impl WorkRepository for EventSourcedWorkRepository {
             SUBAGENT_CREATED,
             actor,
             &job.session_id,
-            json!({"record": &job}),
+            json!({
+                "record": &job,
+                "instruction_snapshot_id": instruction_snapshot_id,
+            }),
         ))?;
         Ok(job)
     }
@@ -707,6 +719,35 @@ impl WorkRepository for EventSourcedWorkRepository {
 
     fn get_subagent(&self, id: &str) -> Result<Option<SubagentJob>, StoreError> {
         self.record(&Self::subagent_stream(id), SUBAGENT_CREATED)
+    }
+
+    fn subagent_instruction_snapshot_id(&self, id: &str) -> Result<Option<String>, StoreError> {
+        let stream_id = Self::subagent_stream(id);
+        let events = self.journal.read_stream(&stream_id)?;
+        let Some(created) = events.first() else {
+            return Ok(None);
+        };
+        if created.event_type != SUBAGENT_CREATED {
+            return Err(StoreError::Verification(format!(
+                "work stream {stream_id} has no valid creation event"
+            )));
+        }
+        let payload = self.journal.decrypt_payload(created)?;
+        let reference = payload
+            .get("instruction_snapshot_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if reference.as_deref().is_some_and(|id| {
+            id.len() != 64
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            return Err(StoreError::Verification(
+                "subagent instruction snapshot reference is invalid".into(),
+            ));
+        }
+        Ok(reference)
     }
 
     fn list_subagents(

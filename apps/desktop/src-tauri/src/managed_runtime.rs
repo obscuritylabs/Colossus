@@ -1,10 +1,10 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedModelCapabilities,
-    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedRuntimeConfig,
-    NativeSidecarLifecycle, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
-    WorkspaceIdentity, scopes,
+    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
+    ManagedRuntimeConfig, NativeSidecarLifecycle, RunMode, RunStatus, SdkError, Secret,
+    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
 use std::{path::Path, str::FromStr as _};
@@ -13,8 +13,8 @@ use crate::{
     bundle::VerifiedBundle,
     desktop_dto::{ManagedRuntimeStateDto, RuntimeFailureCodeDto},
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, ProviderKindSetting, SettingsStore,
-        load_provider_secret, revalidate_workspace,
+        AccessProfileSetting, DesktopSettings, ProviderKindSetting, ReasoningEffortSetting,
+        SettingsStore, load_provider_secret, revalidate_workspace,
     },
     dto::CommandErrorDto,
     state::{AppState, MANAGED_TARGET_ID, ManagedHealth},
@@ -201,12 +201,18 @@ pub(crate) async fn self_test(
     )
     .map_err(CommandErrorDto::from_sdk)?;
     let runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal);
+    let colossus_home = store.home_root()?.to_owned();
+    // Keep this trusted diagnostic suppression explicit: the desktop security contract
+    // audits this exact call site rather than accepting an indirect function pointer.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     let bootstrap = SidecarBootstrapConfig::new(
         canonical_workspace,
         runtime,
         self_test_grant().map_err(CommandErrorDto::from_sdk)?,
     )
     .and_then(|bootstrap| bootstrap.with_expected_workspace_identity(workspace_identity))
+    .and_then(|bootstrap| bootstrap.with_colossus_home(colossus_home))
+    .map(|bootstrap| bootstrap.without_automatic_agent_instructions_for_diagnostics())
     .map_err(CommandErrorDto::from_sdk)?;
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     let client = Colossus::start_sidecar(&lifecycle, options)
@@ -302,6 +308,10 @@ async fn start_inner(
     let canonical_workspace = revalidate_workspace(workspace)
         .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
     let workspace_identity = expected_workspace_identity(workspace)?;
+    let colossus_home = store
+        .home_root()
+        .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?
+        .to_owned();
 
     // Executable identity is established before the keychain is touched, and is
     // rechecked by the SDK immediately before its no-shell spawn.
@@ -343,32 +353,15 @@ async fn start_inner(
         ApiMajor::new(1).map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
-    let host_credentials = provider_host_credentials(settings)?;
-    let ca_bundle_path = settings
-        .additional_ca_bundle
-        .as_ref()
-        .map(|bundle| store.ca_bundle_path(bundle))
-        .transpose()
-        .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
-    let approval_broker_grant = approval_broker_grant()
-        .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
-    let worker_authentication = TerminalWorkerAuthentication::random().map_err(|error| {
-        (
-            CommandErrorDto::from_terminal(error),
-            RuntimeFailureCodeDto::Internal,
-        )
-    })?;
-    let worker_bootstrap_secret = worker_authentication.copy_secret();
-    let bootstrap = managed_bootstrap(
+    let PreparedManagedBootstrap {
+        bootstrap,
+        worker_authentication,
+    } = prepare_managed_bootstrap(
         &canonical_workspace,
         workspace_identity.clone(),
+        store,
         settings,
-        host_credentials,
-        approval_broker_grant,
-        worker_bootstrap_secret.as_ref(),
-        ca_bundle_path.as_deref(),
-    )
-    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    )?;
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     install_managed_target(
         state,
@@ -380,6 +373,7 @@ async fn start_inner(
             display_name: workspace.display_name.clone(),
             workspace: canonical_workspace,
             workspace_identity,
+            colossus_home,
             config: None,
             worker_authentication: Some(worker_authentication),
         },
@@ -405,6 +399,63 @@ fn provider_host_credentials(
         .collect()
 }
 
+struct PreparedManagedBootstrap {
+    bootstrap: SidecarBootstrapConfig,
+    worker_authentication: TerminalWorkerAuthentication,
+}
+
+fn prepare_managed_bootstrap(
+    workspace: &Path,
+    workspace_identity: WorkspaceIdentity,
+    store: &SettingsStore,
+    settings: &DesktopSettings,
+) -> Result<PreparedManagedBootstrap, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    let host_credentials = provider_host_credentials(settings)?;
+    let codex_auth_path = codex_auth_path(settings)?;
+    let ca_bundle_path = settings
+        .additional_ca_bundle
+        .as_ref()
+        .map(|bundle| store.ca_bundle_path(bundle))
+        .transpose()
+        .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
+    let approval_broker_grant = approval_broker_grant()
+        .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    let worker_authentication = TerminalWorkerAuthentication::random().map_err(|error| {
+        (
+            CommandErrorDto::from_terminal(error),
+            RuntimeFailureCodeDto::Internal,
+        )
+    })?;
+    let worker_bootstrap_secret = worker_authentication.copy_secret();
+    let paths = ManagedBootstrapPaths {
+        ca_bundle: ca_bundle_path.as_deref(),
+        codex_auth: codex_auth_path.as_deref(),
+        colossus_home: store
+            .home_root()
+            .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?,
+    };
+    let bootstrap = managed_bootstrap(
+        workspace,
+        workspace_identity,
+        settings,
+        host_credentials,
+        approval_broker_grant,
+        worker_bootstrap_secret.as_ref(),
+        &paths,
+    )
+    .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
+    Ok(PreparedManagedBootstrap {
+        bootstrap,
+        worker_authentication,
+    })
+}
+
+struct ManagedBootstrapPaths<'a> {
+    ca_bundle: Option<&'a Path>,
+    codex_auth: Option<&'a Path>,
+    colossus_home: &'a Path,
+}
+
 fn managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
@@ -412,7 +463,7 @@ fn managed_bootstrap(
     host_credentials: Vec<SidecarHostCredential>,
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
-    ca_bundle_path: Option<&Path>,
+    paths: &ManagedBootstrapPaths<'_>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
     let runtime = ManagedRuntimeConfig {
         access_profile: access_profile(settings.access_profile),
@@ -422,7 +473,8 @@ fn managed_bootstrap(
             .map(|provider| ManagedProviderConfig {
                 profile: provider.profile.clone(),
                 kind: provider_kind(provider.kind),
-                base_url: Some(provider.base_url.clone()),
+                base_url: (provider.kind != ProviderKindSetting::Codex)
+                    .then(|| provider.base_url.clone()),
                 credential_id: provider.credential_id.clone(),
                 timeout_ms: provider.effective_timeout_ms(),
                 // Desktop settings do not expose the Chat Completions output-token wire
@@ -443,6 +495,7 @@ fn managed_bootstrap(
                     tool_calls: model.capabilities.tool_calls,
                     streaming: model.capabilities.streaming,
                 },
+                reasoning_effort: model.reasoning_effort.map(reasoning_effort),
             })
             .collect(),
         roles: settings.model_roles.clone(),
@@ -453,14 +506,33 @@ fn managed_bootstrap(
         application_grant(settings.access_profile)?,
     )?
     .with_expected_workspace_identity(workspace_identity)?
+    .with_colossus_home(paths.colossus_home)?
     .with_approval_broker_grant(approval_broker_grant)?
     .with_host_credentials(host_credentials)?
     .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
-    if let Some(path) = ca_bundle_path {
-        bootstrap.with_additional_ca_bundle_path(path)
-    } else {
-        Ok(bootstrap)
+    let bootstrap = match paths.ca_bundle {
+        Some(path) => bootstrap.with_additional_ca_bundle_path(path)?,
+        None => bootstrap,
+    };
+    match paths.codex_auth {
+        Some(path) => bootstrap.with_codex_auth_path(path),
+        None => Ok(bootstrap),
     }
+}
+
+fn codex_auth_path(
+    settings: &DesktopSettings,
+) -> Result<Option<std::path::PathBuf>, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    if !settings
+        .providers
+        .iter()
+        .any(|provider| provider.kind == ProviderKindSetting::Codex)
+    {
+        return Ok(None);
+    }
+    crate::codex_auth::require_codex_auth_path()
+        .map(Some)
+        .map_err(|error| (error, RuntimeFailureCodeDto::Provider))
 }
 
 fn expected_workspace_identity(
@@ -583,8 +655,22 @@ const fn access_profile(profile: AccessProfileSetting) -> ManagedAccessProfile {
 
 const fn provider_kind(kind: ProviderKindSetting) -> ManagedProviderKind {
     match kind {
-        ProviderKindSetting::OpenAiResponses => ManagedProviderKind::OpenAiResponses,
-        ProviderKindSetting::OpenAiCompatible => ManagedProviderKind::OpenAiCompatible,
+        ProviderKindSetting::Responses => ManagedProviderKind::OpenAiResponses,
+        ProviderKindSetting::Compatible => ManagedProviderKind::OpenAiCompatible,
+        ProviderKindSetting::Codex => ManagedProviderKind::OpenAiCodex,
+    }
+}
+
+const fn reasoning_effort(effort: ReasoningEffortSetting) -> ManagedReasoningEffort {
+    match effort {
+        ReasoningEffortSetting::None => ManagedReasoningEffort::None,
+        ReasoningEffortSetting::Minimal => ManagedReasoningEffort::Minimal,
+        ReasoningEffortSetting::Low => ManagedReasoningEffort::Low,
+        ReasoningEffortSetting::Medium => ManagedReasoningEffort::Medium,
+        ReasoningEffortSetting::High => ManagedReasoningEffort::High,
+        ReasoningEffortSetting::XHigh => ManagedReasoningEffort::XHigh,
+        ReasoningEffortSetting::Max => ManagedReasoningEffort::Max,
+        ReasoningEffortSetting::Ultra => ManagedReasoningEffort::Ultra,
     }
 }
 

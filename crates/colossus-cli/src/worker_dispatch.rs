@@ -6,6 +6,7 @@ pub(super) struct WorkerDispatchOptions {
     pub(super) alt_screen: bool,
     pub(super) worker_required: bool,
     pub(super) inherited_worker: Option<WorkerClient>,
+    pub(super) config_resolution: Value,
 }
 
 pub(super) async fn dispatch_to_worker_if_active(
@@ -21,6 +22,7 @@ pub(super) async fn dispatch_to_worker_if_active(
         alt_screen,
         worker_required,
         inherited_worker,
+        config_resolution,
     } = options;
     let client = match inherited_worker {
         Some(client) => Some(client),
@@ -1336,7 +1338,9 @@ pub(super) async fn dispatch_to_worker_if_active(
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
         }) => {
-            print_json(&client.call(WorkerOperation::AccessEffective).await?)?;
+            let mut report = client.call(WorkerOperation::AccessEffective).await?;
+            attach_config_resolution(&mut report, &config_resolution)?;
+            print_json(&report)?;
             Ok(true)
         }
         Command::Update(_)

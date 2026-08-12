@@ -1,5 +1,8 @@
 //! Signed offline bundle production and clean-prefix installation acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use colossus_packs::current_release_target;
 use serde_json::Value;
 use std::{
@@ -16,10 +19,9 @@ const SIGNING_SEED: &str = "9393939393939393939393939393939393939393939393939393
 
 fn command(binary: &Path, root: &Path) -> Command {
     let mut command = Command::new(binary);
+    command.current_dir(root).env_clear();
+    process_support::isolate_user_home(&mut command, root);
     command
-        .current_dir(root)
-        .env_clear()
-        .env("HOME", root)
         .env("COLOSSUS_BUNDLE_TEST_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_BUNDLE_TEST_CHECKPOINT_KEY", CHECKPOINT_KEY)
         .env("COLOSSUS_BUNDLE_TEST_SIGNING_SEED", SIGNING_SEED)

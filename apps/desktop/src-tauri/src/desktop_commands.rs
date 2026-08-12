@@ -21,7 +21,7 @@ use crate::{
     desktop_settings::{
         DesktopSettings, ExternalTargetSetting, LOCAL_TERMINAL_CONSENT_VERSION,
         MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting,
-        ModelSetting, ProviderSetting, SettingsStore, WorkspaceSetting, application_support_root,
+        ModelSetting, ProviderKindSetting, ProviderSetting, SettingsStore, WorkspaceSetting,
         delete_provider_secret, load_provider_secret, provider_base_url, revalidate_workspace,
         store_provider_secret, validate_workspace,
     },
@@ -437,6 +437,16 @@ pub(crate) async fn configure_managed_runtime(
             false,
         ));
     }
+    if request.provider_kind == ProviderKindSetting::Codex {
+        return configure_managed_codex_runtime(
+            &app,
+            state.inner(),
+            &store,
+            &mut settings,
+            &mut request,
+        )
+        .await;
+    }
     if reusable_provider_credential(&settings, &request) {
         // Verify native keychain access before mutating settings or stopping the
         // working runtime. The value is dropped from zeroizing memory immediately;
@@ -490,6 +500,92 @@ pub(crate) async fn configure_managed_runtime(
     desktop_status_from(&state, &settings).await
 }
 
+async fn configure_managed_codex_runtime(
+    app: &AppHandle,
+    state: &AppState,
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    request: &mut ConfigureManagedRuntimeInput,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let provider_changed = settings
+        .primary_provider()
+        .is_none_or(|provider| provider.kind != ProviderKindSetting::Codex);
+    let codex_origins = [
+        "primary-provider: https://chatgpt.com".to_owned(),
+        "primary-provider refresh: https://auth.openai.com".to_owned(),
+    ];
+    if provider_changed && !confirm_provider_origins(app, &codex_origins).await? {
+        return Err(CommandErrorDto::local_sanitized(
+            "provider_origin_confirmation",
+            "The Codex provider origin change was not approved.",
+            false,
+        ));
+    }
+    crate::codex_auth::require_codex_auth_path()?;
+    let previous_settings = settings.clone();
+    let retired_ids = settings
+        .provider_credential_ids()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if settings
+        .pending_provider_cleanup_ids
+        .len()
+        .saturating_add(retired_ids.len())
+        > MAX_PENDING_PROVIDER_CLEANUPS
+    {
+        return Err(CommandErrorDto::busy(
+            "Pending provider credential cleanup must finish before selecting Codex.",
+        ));
+    }
+    settings.providers = vec![ProviderSetting {
+        profile: "primary-provider".into(),
+        kind: ProviderKindSetting::Codex,
+        base_url: provider_base_url(ProviderKindSetting::Codex).into(),
+        credential_id: None,
+        timeout_ms: None,
+    }];
+    settings.models = vec![ModelSetting {
+        profile: "primary".into(),
+        provider_profile: "primary-provider".into(),
+        model: std::mem::take(&mut request.model),
+        context_window_tokens: 128_000,
+        max_output_tokens: 16_000,
+        capabilities: ModelCapabilitiesSetting {
+            tool_calls: true,
+            streaming: true,
+        },
+        reasoning_effort: None,
+    }];
+    settings.model_roles = BTreeMap::from([("primary".into(), "primary".into())]);
+    settings.access_profile = request.access_profile;
+    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    for credential_id in &retired_ids {
+        if !settings
+            .pending_provider_cleanup_ids
+            .contains(credential_id)
+        {
+            settings
+                .pending_provider_cleanup_ids
+                .push(credential_id.clone());
+        }
+    }
+    store.save(settings)?;
+    state
+        .select_target(Some(MANAGED_TARGET_ID.to_owned()))
+        .await;
+    if let Err(start_error) = managed_runtime::start(state, store, settings, true).await {
+        store.save(&previous_settings)?;
+        *settings = previous_settings;
+        restore_managed_after_rollback(state, store, settings).await?;
+        return Err(start_error);
+    }
+    for credential_id in retired_ids {
+        retire_pending_provider_credential(store, settings, &credential_id)?;
+    }
+    desktop_status_from(state, settings).await
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn apply_managed_model_configuration(
     app: AppHandle,
@@ -502,6 +598,13 @@ pub(crate) async fn apply_managed_model_configuration(
     let mut settings = store.load()?;
     cleanup_pending_provider_credentials(&store, &mut settings)?;
     confirm_managed_model_configuration(&app, &state, &settings, &request).await?;
+    if request
+        .providers
+        .iter()
+        .any(|provider| provider.provider_kind == ProviderKindSetting::Codex)
+    {
+        crate::codex_auth::require_codex_auth_path()?;
+    }
 
     let previous_settings = settings.clone();
     let credentials = plan_provider_credentials(&settings, &request)?;
@@ -590,9 +693,20 @@ async fn confirm_managed_model_configuration(
                 .providers
                 .iter()
                 .find(|current| current.profile == provider.profile)
-                .is_none_or(|current| current.base_url != provider.base_url)
+                .is_none_or(|current| {
+                    current.kind != provider.provider_kind || current.base_url != provider.base_url
+                })
         })
-        .map(|provider| format!("{}: {}", provider.profile, provider.base_url))
+        .flat_map(|provider| {
+            if provider.provider_kind == ProviderKindSetting::Codex {
+                vec![
+                    format!("{}: https://chatgpt.com", provider.profile),
+                    format!("{} refresh: https://auth.openai.com", provider.profile),
+                ]
+            } else {
+                vec![format!("{}: {}", provider.profile, provider.base_url)]
+            }
+        })
         .collect::<Vec<_>>();
     if !changed_origins.is_empty() && !confirm_provider_origins(app, &changed_origins).await? {
         return Err(CommandErrorDto::local_sanitized(
@@ -811,7 +925,8 @@ fn reusable_provider_credential(
     settings: &DesktopSettings,
     request: &ConfigureManagedRuntimeInput,
 ) -> bool {
-    !request.replace_credential
+    request.provider_kind != ProviderKindSetting::Codex
+        && !request.replace_credential
         && settings
             .primary_provider()
             .is_some_and(|provider| provider.kind == request.provider_kind)
@@ -957,6 +1072,7 @@ fn persist_provider_rotation(
             tool_calls: true,
             streaming: true,
         },
+        reasoning_effort: None,
     }];
     settings.model_roles = std::collections::BTreeMap::from([("primary".into(), "primary".into())]);
     settings.access_profile = request.access_profile;
@@ -1676,6 +1792,7 @@ async fn desktop_status_from(
         managed_state,
         workspace,
         provider: ProviderSummaryDto::from_settings(settings),
+        codex_auth: crate::codex_auth::current_status(),
         managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
         approval_mode: state.approval_mode(),
@@ -1785,7 +1902,7 @@ const fn managed_state_name(state: ManagedRuntimeStateDto) -> &'static str {
 }
 
 fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
-    SettingsStore::open(application_support_root()?)
+    SettingsStore::open_application()
 }
 
 fn connect_guard(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, CommandErrorDto> {
@@ -1885,7 +2002,7 @@ mod tests {
     fn provider_request() -> ConfigureManagedRuntimeInput {
         ConfigureManagedRuntimeInput {
             workspace_id: Uuid::now_v7().to_string(),
-            provider_kind: crate::desktop_settings::ProviderKindSetting::OpenAiCompatible,
+            provider_kind: crate::desktop_settings::ProviderKindSetting::Compatible,
             model: "new-model".into(),
             access_profile: crate::desktop_settings::AccessProfileSetting::Development,
             replace_credential: false,
@@ -1900,7 +2017,7 @@ mod tests {
         DesktopSettings {
             providers: vec![ProviderSetting {
                 profile: "primary-provider".into(),
-                kind: crate::desktop_settings::ProviderKindSetting::OpenAiCompatible,
+                kind: crate::desktop_settings::ProviderKindSetting::Compatible,
                 base_url: crate::desktop_settings::OPENROUTER_BASE_URL.into(),
                 credential_id: Some(credential_id.into()),
                 timeout_ms: Some(120_000),
@@ -1915,6 +2032,7 @@ mod tests {
                     tool_calls: true,
                     streaming: true,
                 },
+                reasoning_effort: None,
             }],
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
@@ -2131,7 +2249,7 @@ mod tests {
         request.replace_credential = true;
         assert!(!reusable_provider_credential(&settings, &request));
         request.replace_credential = false;
-        request.provider_kind = crate::desktop_settings::ProviderKindSetting::OpenAiResponses;
+        request.provider_kind = crate::desktop_settings::ProviderKindSetting::Responses;
         assert!(!reusable_provider_credential(&settings, &request));
         assert!(!reusable_provider_credential(
             &DesktopSettings::default(),

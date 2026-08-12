@@ -173,6 +173,14 @@ receipt cannot commit. The bootstrap never elevates, mutates shell profiles, log
 headers or home-directory contents, or treats a package-manager installation as direct
 ownership.
 
+An ordinary packaged installer creates or validates only the empty Colossus home root:
+absolute `COLOSSUS_HOME` or the user's `.colossus` directory. It rejects linked,
+foreign-owned, or shared directories, verifies that ancestors cannot be replayed by an
+untrusted owner or ACL principal, and applies mode `0700` on Unix or an owner-private
+Windows DACL. It never generates configuration, state, credentials, or instruction
+files. A privileged or system-token install defers home creation until runtime has the
+actual end-user identity, and bootstrap dry-run remains non-mutating.
+
 Runtime update discovery is a second application-owned distribution boundary. The
 standalone `update check` command runs before workspace, configuration, worker, or model
 initialization, while the TUI starts it only as a detached one-shot notice task after
@@ -251,6 +259,15 @@ Codex streaming requests explicitly accept SSE. The fixed backend can omit the r
 media type, so only the Codex adapter permits an absent `Content-Type` before applying
 the same bounded strict SSE and Responses-event validation; an explicit conflicting
 media type still fails closed.
+
+Desktop exposes the same Codex contract only through native commands. The renderer can
+request status, login, or logout, but it receives only a bounded state and message. The
+native backend confirms account mutations, invokes the official CLI, validates the
+owner-private store, and passes only its absolute path over the inherited managed-sidecar
+bootstrap channel. The protocol requires that private path exactly when a managed Codex
+provider is present, rejects a renderer-selected Codex base URL or key reference, and
+keeps both the path and credential material out of generated runtime YAML and debug
+output.
 
 One explicit bounded PEM CA bundle may augment built-in roots across Colossus-owned
 outbound clients. It is loaded once at runtime startup and never sourced from ambient
@@ -434,6 +451,28 @@ token. The runtime retains that descriptor and revalidates the pathname both bef
 tool dispatch and at permit-bearing filesystem and process adapter boundaries. A
 renamed or replaced workspace therefore cannot inherit prior state or redirect an
 active managed runtime.
+
+The same identity feeds a versioned domain-separated SHA-256 home partition. CLI/TUI
+and Desktop select disjoint children, preventing a shared redb writer lease, worker
+bootstrap secret, or provider namespace. User-level configuration, Desktop settings,
+and every partition remain beneath the validated owner-private, no-follow home. An
+explicit configuration path outranks the repository file, which outranks the home file;
+the first selected document is complete and a malformed candidate fails without
+fallback. Automatic repository and home candidates additionally use confined no-follow
+opens and fail when unsafe; an explicit path retains the caller's normal explicit-file
+authority. `storage.location: home_workspace` additionally confines relative storage
+paths beneath the CLI partition, while omitted `location` preserves the
+workspace-relative compatibility boundary.
+
+Home and repository `AGENTS.md` files are model-input data, never authority. Each
+top-level user-facing run reads at most those two no-follow UTF-8 regular files, bounded
+to 64 KiB each and 128 KiB combined, then freezes their content and SHA-256 provenance
+for provider turns, Goal iterations, and delegated-subagent recovery. A later run
+refreshes the files. Present unsafe or invalid files fail closed. Explicit invocation
+and immutable runtime-mode instructions retain higher precedence. The snapshot is not
+injected into risk evaluation, summarization, provider diagnostics, or other internal
+security roles and cannot add tools, sandbox roots, network origins, policy grants, or
+approval authority.
 
 Private worker IPC remains an authenticated owner-only Unix socket. When the canonical
 state-derived pathname would exceed the portable Unix socket limit, Colossus places a

@@ -1,5 +1,8 @@
 //! Credential-free terminal approval-mode acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -18,6 +21,7 @@ const MCP_SECRET: &str = "risk-auto-mcp-secret-value";
 
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
     command
         .arg("--config")
         .arg(config)

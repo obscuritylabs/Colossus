@@ -1,5 +1,8 @@
 //! Audience-first documentation acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use colossus_access::builtin_action_descriptors;
 use colossus_runtime::RuntimeConfig;
 use colossus_tools::builtin_specs;
@@ -11,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use tempfile::tempdir;
 
 const LEGACY_PUBLIC_SIGNATURES: &[&str] = &[
     "uv run colossus",
@@ -670,6 +674,88 @@ fn user_and_operator_pages_use_only_current_installed_binary_commands() {
     }
 }
 
+#[test]
+fn colossus_home_configuration_and_instruction_contract_is_published() {
+    let home = read("docs/reference/colossus-home.md");
+    for required in [
+        "COLOSSUS_HOME",
+        "workspaces/<partition-id>/cli/",
+        "workspaces/<partition-id>/desktop/",
+        "Explicit `--config PATH`",
+        "`<workspace>/.colossus/config.yaml`",
+        "complete replacements",
+        "`configScope`",
+        "config init --local",
+        "`storage.location`",
+        "`home_workspace`",
+        "64 KiB",
+        "128 KiB",
+        "Goal iterations",
+        "`instruction_sources`",
+        "snapshot_refresh: top_level_run",
+        "cannot add tools",
+        "preserves `$COLOSSUS_HOME`",
+    ] {
+        assert!(
+            home.contains(required),
+            "Colossus home reference is missing {required:?}"
+        );
+    }
+
+    let navigation = read("zensical.toml");
+    assert!(navigation.contains("reference/colossus-home.md"));
+    for page in [
+        "README.md",
+        "docs/get-started/install.md",
+        "docs/get-started/quickstart.md",
+        "docs/get-started/desktop.md",
+        "docs/reference/configuration.md",
+        "docs/reference/cli.md",
+    ] {
+        assert!(
+            read(page).contains("colossus-home.md"),
+            "{page} must link the home-resolution authority"
+        );
+    }
+}
+
+#[test]
+fn home_upgrade_examples_and_desktop_terminal_boundaries_stay_consistent() {
+    for path in markdown_pages(&repository_root().join("docs")) {
+        let document = fs::read_to_string(&path).expect("read documentation page");
+        assert!(
+            !document.contains(".colosus"),
+            "{} misspells the .colossus directory",
+            path.display()
+        );
+    }
+
+    let offline = read("docs/admin/offline-airgap.md");
+    assert!(offline.contains("colossus -w . config init"));
+    assert!(
+        !offline.contains("--config .colossus/config.yaml"),
+        "offline commands must not select a local config that global init did not create"
+    );
+
+    let desktop = read("docs/get-started/desktop.md");
+    let terminal = read("docs/use/terminal-ui.md");
+    for document in [&desktop, &terminal] {
+        assert!(document.contains("/bin/zsh -l"));
+        assert!(document.contains("outside Colossus policy"));
+        assert!(!document.contains("rejects arbitrary Shell PTYs"));
+    }
+
+    let storage = read("docs/reference/configuration/storage.md");
+    assert!(storage.contains("with `home_workspace`, a confined relative path"));
+    let administration = read("docs/admin/configuration.md");
+    assert!(administration.contains("anchor_path: secure-anchor.json"));
+
+    let routes = read("docs/reference/cli.md");
+    for flag in ["--development", "--from PATH", "--storage-keys MODE"] {
+        assert!(routes.contains(flag), "CLI route index is missing {flag}");
+    }
+}
+
 fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
     let start = format!("<!-- {marker}:start -->");
     let end = format!("<!-- {marker}:end -->");
@@ -1038,6 +1124,7 @@ fn tools_and_action_reference_covers_the_executable_catalog() {
 #[test]
 fn documented_command_families_are_real_clap_routes() {
     let binary = env!("CARGO_BIN_EXE_colossus");
+    let isolated_home = tempdir().expect("isolated command home");
     let routes: &[&[&str]] = &[
         &["config", "init"],
         &["audit", "anchor-status"],
@@ -1077,7 +1164,9 @@ fn documented_command_families_are_real_clap_routes() {
         &["worker"],
     ];
     for route in routes {
-        let output = Command::new(binary)
+        let mut command = Command::new(binary);
+        process_support::isolate_user_home(&mut command, isolated_home.path());
+        let output = command
             .args(*route)
             .arg("--help")
             .output()

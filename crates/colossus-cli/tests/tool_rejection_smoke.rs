@@ -1,5 +1,8 @@
 //! Loopback-live proof that invalid or denied model tools never reach effect execution.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -18,6 +21,7 @@ const SIGNING_KEY: &str = "56565656565656565656565656565656565656565656565656565
 
 fn command(binary: &Path, config: &Path, directory: &Path) -> Command {
     let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, directory);
     command
         .current_dir(directory)
         .arg("--config")

@@ -1,5 +1,8 @@
 //! Cross-process acceptance for the interactive Plan workflow in both runtime hosts.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use std::{
@@ -57,6 +60,7 @@ struct Fixture {
 
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config parent"));
     command
         .current_dir(config.parent().expect("config parent"))
         .arg("--config")
@@ -217,6 +221,9 @@ fn write_config(origin: &str) -> Fixture {
 
 fn start_worker(binary: &Path, config: &Path) -> WorkerGuard {
     let child = command(binary, config)
+        // Keep this acceptance on Tokio's production default worker-thread stack so a
+        // developer-level override cannot mask oversized async state regressions.
+        .env_remove("RUST_MIN_STACK")
         .arg("--approval-mode")
         .arg("full-access")
         .arg("worker")
@@ -472,7 +479,11 @@ fn exercise_scripted_workflow(binary: &Path, host: RuntimeHost) {
         String::from_utf8_lossy(&terminal.stderr)
     );
     let stdout = String::from_utf8_lossy(&terminal.stdout);
-    assert!(stdout.contains("draft-created"), "{stdout}");
+    assert!(
+        stdout.contains("draft-created"),
+        "stdout={stdout}\nstderr={}",
+        String::from_utf8_lossy(&terminal.stderr)
+    );
     assert!(stdout.contains("draft-refined"), "{stdout}");
     assert!(stdout.contains("direct-executed"), "{stdout}");
     assert!(stdout.contains("mode=execute; plan=none"), "{stdout}");
@@ -533,6 +544,65 @@ fn scripted_line_mode_completes_the_plan_workflow_in_both_hosts() {
     }
 }
 
+#[test]
+fn worker_run_plan_uses_the_default_worker_thread_stack() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let (origin, provider) = serve(vec![
+        stream_tool(
+            "worker-plan-create",
+            "worker-plan-create-call",
+            "plan.create",
+            json!({
+                "prompt": "Plan the worker route",
+                "content": "# Worker route",
+                "steps": [{
+                    "title": "Verify",
+                    "detail": "Exercise WorkerOperation::RunPlan",
+                    "requires_mutation": false
+                }]
+            }),
+        ),
+        stream_text("worker-plan-finished", "worker-plan-created"),
+    ]);
+    let fixture = write_config(&origin);
+    let mut worker = start_worker(binary, &fixture.config);
+    let session = parse_success(
+        &run(
+            binary,
+            &fixture.config,
+            &["sessions", "new", "worker RunPlan"],
+        ),
+        "create worker RunPlan session",
+    );
+    let session_id = session["id"].as_str().expect("session id");
+    let planned = parse_success(
+        &run(
+            binary,
+            &fixture.config,
+            &[
+                "run",
+                "Plan the worker route",
+                "--plan",
+                "--session",
+                session_id,
+            ],
+        ),
+        "worker RunPlan",
+    );
+    assert_eq!(planned["output"], "worker-plan-created");
+    assert_eq!(planned["plan"]["status"], "draft");
+    stop_worker(binary, &fixture.config, &mut worker);
+
+    let requests = provider
+        .join()
+        .expect("provider thread")
+        .expect("provider fixture");
+    assert_eq!(requests.len(), 2);
+    let request = request_body(&requests[0]);
+    let tools = tool_names(&request);
+    assert!(tools.contains(&"plan_create"), "{tools:?}");
+}
+
 fn unused_loopback_origin() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("unused provider address");
     format!("http://{}", listener.local_addr().expect("unused address"))
@@ -575,7 +645,9 @@ fn run_full_screen_lifecycle(
         })
         .expect("open PTY");
     let mut process = CommandBuilder::new(binary);
-    process.cwd(config.parent().expect("config parent"));
+    let user_home = fs::canonicalize(config.parent().expect("config parent"))
+        .expect("canonical isolated test home");
+    process.cwd(&user_home);
     process.arg("--config");
     process.arg(config);
     if matches!(host, RuntimeHost::Embedded) {
@@ -588,6 +660,10 @@ fn run_full_screen_lifecycle(
     process.arg(session_id);
     process.env("COLOSSUS_INTERACTIVE_PLAN_JOURNAL_KEY", JOURNAL_KEY);
     process.env("COLOSSUS_INTERACTIVE_PLAN_SIGNING_KEY", SIGNING_KEY);
+    process.env("HOME", &user_home);
+    process.env("COLOSSUS_HOME", user_home.join(".colossus-home"));
+    #[cfg(windows)]
+    process.env("USERPROFILE", &user_home);
     process.env(
         "COLOSSUS_THEME_DIR",
         config.parent().expect("config parent").join("themes"),

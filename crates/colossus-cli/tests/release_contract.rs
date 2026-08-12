@@ -425,6 +425,80 @@ fn windows_installer_compares_owner_sids_for_elevated_tokens() {
 }
 
 #[test]
+fn direct_installers_prepare_only_an_owner_private_colossus_home() {
+    let unix = fs::read_to_string(repository_root().join("release/install.sh"))
+        .expect("read Unix package installer");
+    for required in [
+        "COLOSSUS_HOME",
+        "$HOME/.colossus",
+        "chmod 0700",
+        "must not grant group or other access",
+        "require_safe_home_ancestors",
+        "owned by an untrusted user",
+        "writable without sticky protection",
+        "if [ \"$(id -u)\" -eq 0 ]",
+    ] {
+        assert!(
+            unix.contains(required),
+            "Unix installer is missing {required}"
+        );
+    }
+
+    let windows = fs::read_to_string(repository_root().join("release/install.ps1"))
+        .expect("read Windows package installer");
+    for required in [
+        "COLOSSUS_HOME",
+        "DirectorySecurity",
+        "SetAccessRuleProtection($true, $false)",
+        "Assert-PrivateHomeDirectory",
+        "Assert-SafeHomeAncestors",
+        "New-OwnerPrivateDirectoryPath",
+        "Test-PrivilegedSystemInstall",
+        "deferred Colossus home creation",
+        "untrusted principal",
+        "TrustedInstaller",
+        "PropagationFlags]::InheritOnly",
+    ] {
+        assert!(
+            windows.contains(required),
+            "Windows installer is missing {required}"
+        );
+    }
+
+    for (name, installer) in [("Unix", unix), ("Windows", windows)] {
+        for forbidden in ["config.yaml", "state.redb", "AGENTS.md"] {
+            assert!(
+                !installer.contains(forbidden),
+                "{name} installer must not generate {forbidden}"
+            );
+        }
+    }
+
+    for (path, dry_run_guard, package_install) in [
+        (
+            "release/bootstrap/install.sh",
+            "if [ \"$dry_run\" = true ]",
+            "\"$package_root/install.sh\" --prefix \"$prefix\"",
+        ),
+        (
+            "release/bootstrap/install.ps1",
+            "if ($DryRun)",
+            "& (Join-Path $packageRoot \"install.ps1\") -Prefix $Prefix",
+        ),
+    ] {
+        let bootstrap = fs::read_to_string(repository_root().join(path))
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
+        assert!(
+            bootstrap.find(dry_run_guard).expect("dry-run guard")
+                < bootstrap
+                    .find(package_install)
+                    .expect("packaged installer invocation"),
+            "{path} must return from dry-run before the home-creating package installer"
+        );
+    }
+}
+
+#[test]
 fn published_stable_releases_are_installed_anonymously_on_all_host_classes() {
     let workflow = workflow("public-distribution.yml");
     let distribution_jobs = jobs(&workflow);

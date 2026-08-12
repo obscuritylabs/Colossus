@@ -34,7 +34,8 @@ loopback address and port you intend to grant. The example below uses
 
 ### 2. Configure the loopback route
 
-Keep the other required fields from your generated configuration. Apply this validated
+Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
+keep its other required fields. Apply this validated
 overlay, then replace `local-model` and its limits with the exact selected catalog entry.
 
 <!-- provider-guide-config:start -->
@@ -82,16 +83,16 @@ The example uses the backward-compatible `max_tokens` request field. Select
 ### 3. Inspect routing and readiness
 
 ```bash
-colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider models local-provider
-colossus --config .colossus/config.yaml provider doctor local-provider
-colossus --config .colossus/config.yaml models doctor local
+colossus -w . models route primary
+colossus -w . provider models local-provider
+colossus -w . provider doctor local-provider
+colossus -w . models doctor local
 ```
 
 ### 4. Send one bounded model turn
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w . run \
   "Reply with exactly: connected"
 ```
 

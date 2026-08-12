@@ -16,7 +16,8 @@ required.
 ## Prerequisites
 
 - The installed `colossus` executable. See [Install Colossus](install.md).
-- An empty directory where Colossus may create `.colossus/config.yaml` and local state.
+- A fresh Colossus home with no global `config.yaml` yet.
+- An empty directory to use as the repository workspace.
 
 ## Steps
 
@@ -39,15 +40,20 @@ required.
 ### 2. Initialize strict configuration
 
 ```bash
-colossus -w . --config .colossus/config.yaml config init
-colossus -w . --config .colossus/config.yaml config show
-colossus -w . --config .colossus/config.yaml config effective
+colossus -w . config init
+colossus -w . config show
+colossus -w . config effective
 ```
 
-`config init` refuses to overwrite an existing file. The generated configuration uses
-the local deterministic `echo` provider, the `development` access profile, and the
-`workspace-development` sandbox preset. The selected workspace is canonicalized once;
-relative configuration and runtime paths resolve from it.
+`config init` creates `$COLOSSUS_HOME/config.yaml` and refuses to overwrite an existing
+file. The generated configuration uses the local deterministic `echo` provider, the
+`development` access profile, the `workspace-development` sandbox preset, and
+`storage.location: home_workspace`. The selected workspace is canonicalized once and
+its state resolves beneath `workspaces/<partition-id>/cli/`.
+
+Use `config init --local` when this repository needs a complete replacement at
+`<workspace>/.colossus/config.yaml`. Configuration files are selected, not merged; see
+[Colossus home and workspace resolution](../reference/colossus-home.md).
 
 The generated `storage.keys.kind: none` keeps setup dependency-free. Journal payloads
 are plaintext, while record hashes, the append-only chain, projections, and full audit
@@ -58,7 +64,7 @@ fresh protected journal instead, pass `--storage-keys platform` or
 ### 3. Run the offline smoke
 
 ```bash
-colossus -w . --config .colossus/config.yaml run "hello from Colossus"
+colossus -w . run "hello from Colossus"
 ```
 
 On an interactive terminal, Colossus prints only the assistant response. When output is
@@ -67,7 +73,7 @@ redirected, it emits the complete stable JSON result.
 ### 4. Verify the journal
 
 ```bash
-colossus -w . --config .colossus/config.yaml audit verify
+colossus -w . audit verify
 ```
 
 ## Expected result
@@ -80,7 +86,7 @@ run ID, and session ID. Audit verification completes successfully.
 Prove the machine-readable contract without changing configuration:
 
 ```bash
-colossus -w . --config .colossus/config.yaml --output json \
+colossus -w . --output json \
   run "verified" > result.json
 ```
 
@@ -89,8 +95,9 @@ Open `result.json` and confirm that it contains `"profile": "echo"` and
 
 ## Failure path
 
-- **Configuration already exists:** choose another directory or inspect the existing
-  file; initialization never overwrites it.
+- **Configuration already exists:** inspect the global file and use it, choose an
+  explicit unused `COLOSSUS_HOME`, or intentionally initialize a repository-local
+  replacement with `config init --local`; initialization never overwrites.
 - **Protected-storage credential error:** create a fresh environment-key configuration
   for a headless host rather than storing raw keys in YAML.
 - **Audit verification fails:** stop before running effects and follow

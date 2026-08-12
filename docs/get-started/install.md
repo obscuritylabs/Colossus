@@ -59,6 +59,20 @@ The installer defaults to `$HOME/.local`. It never uses `sudo` and never changes
 shell or PowerShell profile. If the prefix's `bin` directory is absent from `PATH`, the
 installer prints the exact process-local command to use.
 
+For an ordinary per-user install, the packaged installer also creates the owner-private
+Colossus home empty when it is absent, or validates an existing home without changing
+its contents. `COLOSSUS_HOME` selects a non-default absolute path; otherwise it uses
+`$HOME/.colossus`. On Unix a new directory is created with mode `0700`; an existing
+directory must be user-owned and grant no group or other access. Windows uses a private
+DACL. Existing ancestors must also have trusted ownership and must not grant untrusted
+namespace-replacement authority. Linked, shared, foreign-owned, relative, or otherwise
+unsafe homes are rejected. No configuration, database, credential, or repository file
+is generated during installation.
+
+An elevated or system-token installation defers the home because it cannot safely
+infer the eventual user. The first non-privileged CLI, TUI, or Desktop launch creates
+and validates that user's home instead.
+
 ### 2. Review the bootstrap before running it
 
 Use the two-step form when your policy does not permit piping a network response into a
@@ -88,6 +102,9 @@ shell.
 The versioned source for each published bootstrap is also retained in the corresponding
 Git tag under `release/bootstrap/`. Release assets include adjacent SHA-256 sidecars for
 offline comparison of the bootstrap bytes.
+
+Dry-run resolution is completely non-mutating: it does not download an archive, install
+an executable, create the prefix, or create the Colossus home.
 
 ### 3. Select a version, channel, or prefix
 
@@ -259,6 +276,10 @@ sudo ./install.sh --prefix /usr/local
 sudo ./install-apparmor.sh /usr/local/bin/colossus
 ```
 
+This privileged Unix install deliberately does not create `/root/.colossus` or guess
+the eventual user's home. Each user gets an owner-private home on first launch. The
+installer still creates no configuration or database.
+
 This is not required where `sandbox doctor` already reports protected-path exclusions
 as supported. Do not disable Ubuntu's host-wide unprivileged-user-namespace
 restriction; use the exact-path profile or the OCI backend.
@@ -267,7 +288,8 @@ restriction; use the exact-path profile or the OCI backend.
 
 The selected release is installed at the requested prefix, its direct ownership is
 recorded in the platform data directory, and any required `PATH` change is printed
-without modifying a profile.
+without modifying a profile. A per-user installation leaves an empty private Colossus
+home ready for `config init`.
 
 ## Verification
 
@@ -309,6 +331,11 @@ and the receipt; remove the parent directories only when they are empty.
 Homebrew, Nix, source builds, Desktop, and unknown installations are not direct
 installer ownership and must be removed through their owning installation method.
 
+Uninstalling the executable intentionally preserves `$COLOSSUS_HOME`, including all
+configuration, `AGENTS.md` instructions, Desktop settings, trust records, and workspace
+state. Back up or remove it only as a separate, explicit data-lifecycle decision. See
+[Colossus home and workspace resolution](../reference/colossus-home.md#back-up-restore-and-uninstall).
+
 ## Failure path
 
 - **Offline or rate limited:** retry later or use a previously downloaded archive and
@@ -317,6 +344,8 @@ installer ownership and must be removed through their owning installation method
   again and report a reproducible mismatch.
 - **Unsafe prefix:** choose an absolute, current-user-owned prefix without linked,
   group-writable, or world-writable installation directories.
+- **Unsafe Colossus home:** use an absolute current-user-owned private directory with
+  no linked components. Do not relax its permissions to complete installation.
 - **Command not found:** apply the printed `PATH` command, then open a new terminal.
 - **Platform blocked execution:** confirm that the detected target matches the host and
   follow your organization's software-verification process.

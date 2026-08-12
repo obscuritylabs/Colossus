@@ -11,10 +11,19 @@ use colossus_ports::StoreError;
 const LEASE_DIRECTORY: &str = "colossus-worker-leases";
 #[cfg(unix)]
 const LEASE_INODE_DOMAIN: &[u8] = b"colossus-workspace-owner-unix-inode-v1\0";
+#[cfg(target_os = "linux")]
+const HOME_LINUX_IDENTITY_DOMAIN: &[u8] =
+    b"colossus-home-workspace-linux-device-inode-birthtime-v4\0";
 #[cfg(target_os = "macos")]
 const MACOS_IDENTITY_DOMAIN: &[u8] = b"colossus-workspace-owner-macos-inode-birthtime-v2\0";
+#[cfg(target_os = "macos")]
+const HOME_MACOS_IDENTITY_DOMAIN: &[u8] =
+    b"colossus-sidecar-workspace-macos-device-inode-birthtime-v2\0";
 #[cfg(windows)]
 const WINDOWS_IDENTITY_DOMAIN: &[u8] = b"colossus-workspace-owner-windows-volume-file-id-v3\0";
+#[cfg(windows)]
+const HOME_WINDOWS_IDENTITY_DOMAIN: &[u8] =
+    b"colossus-sidecar-workspace-windows-volume-file-id-v3\0";
 #[cfg(not(any(unix, windows)))]
 const LEASE_PATH_DOMAIN: &[u8] = b"colossus-workspace-owner-canonical-path-v1\0";
 #[cfg(not(any(unix, windows)))]
@@ -33,6 +42,12 @@ enum WorkspaceIdentityTokenKind {
     MacosBirthtimeV2,
     #[cfg(windows)]
     WindowsFileIdV3,
+    #[cfg(target_os = "linux")]
+    HomeLinuxBirthtimeV4,
+    #[cfg(target_os = "macos")]
+    HomeMacosBirthtimeV2,
+    #[cfg(windows)]
+    HomeWindowsFileIdV3,
 }
 
 /// Opaque expected identity supplied by a host that securely opened the workspace.
@@ -43,6 +58,31 @@ pub struct WorkspaceIdentityToken {
 }
 
 impl WorkspaceIdentityToken {
+    /// Bind runtime acquisition to the opaque identity used for a home partition.
+    pub fn from_home_workspace_identity(
+        identity: colossus_home::WorkspaceIdentityRef<'_>,
+    ) -> Option<Self> {
+        if identity.sha256.len() != 64
+            || !identity
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return None;
+        }
+        let digest: [u8; 32] = hex::decode(identity.sha256).ok()?.try_into().ok()?;
+        let kind = match identity.version {
+            #[cfg(target_os = "linux")]
+            4 => WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4,
+            #[cfg(target_os = "macos")]
+            2 => WorkspaceIdentityTokenKind::HomeMacosBirthtimeV2,
+            #[cfg(windows)]
+            3 => WorkspaceIdentityTokenKind::HomeWindowsFileIdV3,
+            _ => return None,
+        };
+        Some(Self { kind, digest })
+    }
+
     /// Construct a non-macOS Unix workspace token from metadata obtained from an
     /// opened, no-follow directory descriptor.
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -194,6 +234,10 @@ struct WorkspaceIdentityInner {
     birth_seconds: i64,
     #[cfg(target_os = "macos")]
     birth_nanoseconds: i64,
+    #[cfg(target_os = "linux")]
+    birth_seconds: i64,
+    #[cfg(target_os = "linux")]
+    birth_nanoseconds: u32,
 }
 
 #[cfg(windows)]
@@ -237,6 +281,16 @@ impl WorkspaceIdentity {
 
                 if retained.st_birthtime() != self.0.birth_seconds
                     || retained.st_birthtime_nsec() != self.0.birth_nanoseconds
+                {
+                    return Err(identity_changed());
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let (birth_seconds, birth_nanoseconds) =
+                    linux_directory_birthtime(&self.0.directory, &retained)?;
+                if birth_seconds != self.0.birth_seconds
+                    || birth_nanoseconds != self.0.birth_nanoseconds
                 {
                     return Err(identity_changed());
                 }
@@ -286,6 +340,35 @@ impl WorkspaceIdentity {
                 )
                 .is_some_and(|actual| actual.digest == expected.digest))
             }
+            #[cfg(target_os = "linux")]
+            WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4 => {
+                let mut digest = Sha256::new();
+                digest.update(HOME_LINUX_IDENTITY_DOMAIN);
+                digest.update(self.0.device.to_le_bytes());
+                digest.update(self.0.inode.to_le_bytes());
+                digest.update(self.0.birth_seconds.to_le_bytes());
+                digest.update(self.0.birth_nanoseconds.to_le_bytes());
+                Ok(expected.digest == <[u8; 32]>::from(digest.finalize()))
+            }
+            #[cfg(target_os = "macos")]
+            WorkspaceIdentityTokenKind::HomeMacosBirthtimeV2 => {
+                let mut digest = Sha256::new();
+                digest.update(HOME_MACOS_IDENTITY_DOMAIN);
+                digest.update(self.0.device.to_le_bytes());
+                digest.update(self.0.inode.to_le_bytes());
+                digest.update(self.0.birth_seconds.to_le_bytes());
+                digest.update(self.0.birth_nanoseconds.to_le_bytes());
+                Ok(expected.digest == <[u8; 32]>::from(digest.finalize()))
+            }
+            #[cfg(windows)]
+            WorkspaceIdentityTokenKind::HomeWindowsFileIdV3 => {
+                let identity = self.0.binding.identity();
+                let mut digest = Sha256::new();
+                digest.update(HOME_WINDOWS_IDENTITY_DOMAIN);
+                digest.update(identity.volume_serial_number.to_le_bytes());
+                digest.update(identity.file_id);
+                Ok(expected.digest == <[u8; 32]>::from(digest.finalize()))
+            }
         }
     }
 
@@ -297,7 +380,15 @@ impl WorkspaceIdentity {
             && self.0.birth_nanoseconds == other.0.birth_nanoseconds
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    fn same_object(&self, other: &Self) -> bool {
+        self.0.device == other.0.device
+            && self.0.inode == other.0.inode
+            && self.0.birth_seconds == other.0.birth_seconds
+            && self.0.birth_nanoseconds == other.0.birth_nanoseconds
+    }
+
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
     fn same_object(&self, other: &Self) -> bool {
         self.0.device == other.0.device && self.0.inode == other.0.inode
     }
@@ -359,6 +450,8 @@ fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreE
             return Err(identity_changed());
         }
     }
+    #[cfg(target_os = "linux")]
+    let (birth_seconds, birth_nanoseconds) = linux_directory_birthtime(&directory, &opened)?;
 
     Ok(WorkspaceIdentity(Arc::new(WorkspaceIdentityInner {
         directory,
@@ -375,7 +468,37 @@ fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreE
             use std::os::macos::fs::MetadataExt as _;
             opened.st_birthtime_nsec()
         },
+        #[cfg(target_os = "linux")]
+        birth_seconds,
+        #[cfg(target_os = "linux")]
+        birth_nanoseconds,
     })))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_directory_birthtime(
+    directory: &File,
+    metadata: &fs::Metadata,
+) -> Result<(i64, u32), StoreError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let statx = rustix::fs::statx(
+        directory,
+        "",
+        rustix::fs::AtFlags::EMPTY_PATH,
+        rustix::fs::StatxFlags::BASIC_STATS | rustix::fs::StatxFlags::BTIME,
+    )
+    .map_err(|_| identity_changed())?;
+    if statx.stx_mask & rustix::fs::StatxFlags::BTIME.bits() == 0
+        || statx.stx_ino != metadata.ino()
+        || statx.stx_dev_major != rustix::fs::major(metadata.dev())
+        || statx.stx_dev_minor != rustix::fs::minor(metadata.dev())
+        || statx.stx_btime.tv_sec <= 0
+        || statx.stx_btime.tv_nsec >= 1_000_000_000
+    {
+        return Err(identity_changed());
+    }
+    Ok((statx.stx_btime.tv_sec, statx.stx_btime.tv_nsec))
 }
 
 #[cfg(windows)]
@@ -666,6 +789,32 @@ mod tests {
         fs::rename(&workspace, &moved).expect("rename original");
         fs::create_dir(&workspace).expect("replacement");
 
+        assert!(matches!(
+            WorkspaceOwnershipLease::acquire_at_expected(&workspace, &lease_root, Some(&expected),),
+            Err(StoreError::WorkspaceIdentityChanged)
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn home_partition_identity_binds_runtime_acquisition_to_the_same_object() {
+        let root = tempfile::tempdir().expect("lease root");
+        let lease_root = root.path().join("leases");
+        let parent = tempfile::tempdir().expect("workspace parent");
+        let workspace = parent.path().join("workspace");
+        let moved = parent.path().join("workspace-moved");
+        fs::create_dir(&workspace).expect("workspace");
+        let identity =
+            colossus_home::detect_workspace_identity(&workspace).expect("home workspace identity");
+        let expected = WorkspaceIdentityToken::from_home_workspace_identity(identity.as_ref())
+            .expect("runtime identity token");
+        let owner =
+            WorkspaceOwnershipLease::acquire_at_expected(&workspace, &lease_root, Some(&expected))
+                .expect("matching workspace");
+        drop(owner);
+
+        fs::rename(&workspace, &moved).expect("move workspace");
+        fs::create_dir(&workspace).expect("replacement workspace");
         assert!(matches!(
             WorkspaceOwnershipLease::acquire_at_expected(&workspace, &lease_root, Some(&expected),),
             Err(StoreError::WorkspaceIdentityChanged)

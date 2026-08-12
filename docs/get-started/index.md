@@ -8,8 +8,9 @@ type: concept
 # Get started
 
 You can prove that Colossus works without a network connection or model credential, then
-connect a provider when you are ready. A first run creates encrypted local state and
-uses the deterministic `echo` provider.
+connect a provider when you are ready. A first run uses the deterministic `echo`
+provider and stores canonical state in the selected repository's isolated partition
+under the owner-private Colossus home.
 
 ## The shortest path
 
@@ -26,12 +27,15 @@ server administration:
 
 After this journey you will have:
 
-- one strict YAML configuration;
-- encrypted canonical state beside that configuration;
+- one strict user-level YAML configuration, or a repository-local replacement;
+- canonical state isolated by workspace beneath the Colossus home;
 - a verified offline agent run;
 - an optional network model route whose credential remains an environment reference;
 - an explicit repository sandbox root; and
 - enough context to understand approvals before allowing a mutation.
+
+The [Colossus home reference](../reference/colossus-home.md) explains the directory
+layout, configuration precedence, and automatic `AGENTS.md` instruction snapshot.
 
 ## Before you grant access
 

@@ -152,6 +152,8 @@ pub(super) enum WorkOperation {
         task: String,
         role: String,
         allowed_tools: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instruction_snapshot_id: Option<String>,
     },
     SubagentRead {
         id: String,

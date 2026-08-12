@@ -213,6 +213,20 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   );
   assert.match(terminalManager, /TerminalKind::Shell/u);
   assert.match(terminalManager, /command\.env_clear\(\)/u);
+  assert.match(terminalManager, /ColossusHome::ensure_at/u);
+  const terminalProcess = read(
+    "apps/desktop/src-tauri/src/terminal_process.rs",
+  );
+  assert.match(terminalProcess, /COLOSSUS_HOME/u);
+  assert.match(terminalProcess, /minimal_windows_environment\(colossus_home\)/u);
+  assert.match(terminalProcess, /minimal_environment\(colossus_home\)/u);
+  const managedRuntime = read(
+    "apps/desktop/src-tauri/src/managed_runtime.rs",
+  );
+  assert.match(
+    managedRuntime,
+    /without_automatic_agent_instructions_for_diagnostics\(\)/u,
+  );
   const dto = read("apps/desktop/src-tauri/src/dto.rs");
   assert.match(dto, /deny_unknown_fields/u);
 });

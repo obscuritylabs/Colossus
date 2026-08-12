@@ -43,7 +43,13 @@ On a remote or headless machine, use `colossus codex login --device-code`. If Co
 not on `PATH`, place `--codex-bin /absolute/path/to/codex` before the `login`, `status`,
 or `logout` subcommand. These commands do not require a valid Colossus configuration.
 Codex stores the sign-in under `$CODEX_HOME/auth.json`, or `~/.codex/auth.json` when
-`CODEX_HOME` is unset. See OpenAI's
+`CODEX_HOME` is unset. When set, `CODEX_HOME` must be absolute. After the official CLI
+exits successfully, Colossus validates that `login` and `status` produced a
+credential that passes runtime validation before reporting
+`completed: true`; `logout` reports completion only after that credential is no longer
+usable. Colossus rejects an existing auth file that fails runtime safety validation
+before invoking the account command; a failing remaining file is an error, not a
+successful logout. See OpenAI's
 [Codex authentication documentation](https://learn.chatgpt.com/docs/app-server#authentication-endpoints)
 for the underlying supported login modes and credential storage behavior.
 
@@ -68,12 +74,14 @@ secret, and the command itself contains no credential value.
 
 Use your platform's secure secret injection mechanism for persistent or unattended
 operation. The process environment necessarily contains the resolved value while
-Colossus runs; close the shell when finished. Do not paste a secret into
-`.colossus/config.yaml`.
+Colossus runs; close the shell when finished. Do not paste a secret into the selected
+configuration.
 
 ### 2. Add a provider profile and route
 
-Edit `.colossus/config.yaml`.
+Run `colossus config effective` and edit the reported `resolution.configPath`. After the
+quickstart this is normally `$COLOSSUS_HOME/config.yaml`; a repository-local
+`.colossus/config.yaml` is a complete higher-priority replacement, not an overlay.
 
 If the provider uses a private CA, add the runtime-wide bundle once. Relative paths are
 resolved from the selected workspace:
@@ -183,9 +191,9 @@ The origin grant contains only scheme, host, and effective port. The API path re
 ### 3. Inspect routing and readiness
 
 ```bash
-colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider doctor openai-provider
-colossus --config .colossus/config.yaml models doctor openai
+colossus -w . models route primary
+colossus -w . provider doctor openai-provider
+colossus -w . models doctor openai
 ```
 
 The route command is network-free. `provider doctor` checks the provider connection and
@@ -196,7 +204,7 @@ matching OpenRouter names, when following those examples.
 ### 4. Send one bounded model turn
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w . run \
   "Reply with exactly: connected"
 ```
 
@@ -210,9 +218,9 @@ and the model run returns `connected`.
 Inspect the active route and recent redacted audit envelopes:
 
 ```bash
-colossus --config .colossus/config.yaml provider profiles
-colossus --config .colossus/config.yaml models profiles
-colossus --config .colossus/config.yaml audit show --limit 10
+colossus -w . provider profiles
+colossus -w . models profiles
+colossus -w . audit show --limit 10
 ```
 
 The credential value must not appear in configuration, output, or audit evidence.

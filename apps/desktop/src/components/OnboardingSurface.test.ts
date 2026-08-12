@@ -25,6 +25,10 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
       selectedWorkspace === null ? "needs_workspace" : "needs_provider",
     workspace: selectedWorkspace,
     provider: { configured: false, kind: null, model: "" },
+    codexAuth: {
+      state: "signed_out",
+      message: "Sign in with ChatGPT to use Codex.",
+    },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     approvalMode: "ask",
@@ -64,6 +68,8 @@ function renderOnboarding(
       onConfigure: vi.fn(),
       onApplyConfiguration: vi.fn(),
       onRunSelfTest: vi.fn(),
+      onCodexLogin: vi.fn(),
+      onCodexLogout: vi.fn(),
       onUseExternal: vi.fn(),
       dismissible,
       onCancel: vi.fn(),
@@ -149,5 +155,21 @@ describe("OnboardingSurface", () => {
     );
     expect(markup).toContain('type="checkbox"');
     expect(markup).not.toContain('type="checkbox" checked=""');
+  });
+
+  it("uses native ChatGPT auth for the Codex subscription provider", () => {
+    const markup = renderOnboarding(workspace, {
+      provider: {
+        configured: true,
+        kind: "open_ai_codex",
+        model: "gpt-5-codex",
+      },
+    });
+
+    expect(markup).toContain("ChatGPT subscription (Codex)");
+    expect(markup).toContain("Sign in with ChatGPT");
+    expect(markup).toContain("official Codex credential remains file-backed");
+    expect(markup).not.toContain("Replace the stored API key");
+    expect(openingButtonTag(markup, "Continue securely")).toContain("disabled");
   });
 });

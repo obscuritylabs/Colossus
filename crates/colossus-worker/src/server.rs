@@ -35,11 +35,9 @@ impl WorkerServer {
         approvals: Arc<dyn colossus_ports::ApprovalProvider>,
         options: RuntimeOpenOptions,
     ) -> Result<Self, WorkerError> {
-        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
+        let options = options.canonicalized()?;
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let authentication_key = WorkerAuthenticationKey::load_or_create(
-            &config.worker_ipc_auth_path_at(&options.workspace),
-        )?;
+        let authentication_key = open_authentication_key(config, &options.workspace)?;
         let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
             approvals, None,
         ));
@@ -98,15 +96,31 @@ impl WorkerServer {
         options: RuntimeOpenOptions,
         provider_credentials: Arc<dyn CredentialResolver>,
     ) -> Result<Self, WorkerError> {
-        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
-        let authentication_key = WorkerAuthenticationKey::load_or_create(
-            &config.worker_ipc_auth_path_at(&options.workspace),
-        )?;
-        Self::open_with_mode_at_workspace_provider_credentials_and_authentication(
+        Self::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
             config,
             approval_mode,
             options,
             provider_credentials,
+            None,
+        )
+    }
+
+    /// Open an interactive worker with explicit API-key and Codex credential sources.
+    pub fn open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+        codex_auth: Option<CodexAuthStore>,
+    ) -> Result<Self, WorkerError> {
+        let options = options.canonicalized()?;
+        let authentication_key = open_authentication_key(config, &options.workspace)?;
+        Self::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
+            config,
+            approval_mode,
+            options,
+            provider_credentials,
+            codex_auth,
             authentication_key,
         )
     }
@@ -120,7 +134,27 @@ impl WorkerServer {
         provider_credentials: Arc<dyn CredentialResolver>,
         authentication_key: WorkerAuthenticationKey,
     ) -> Result<Self, WorkerError> {
-        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
+        Self::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
+            config,
+            approval_mode,
+            options,
+            provider_credentials,
+            None,
+            authentication_key,
+        )
+    }
+
+    /// Open an inherited-bootstrap worker with explicit API-key and Codex credential
+    /// resolvers selected by trusted native composition.
+    pub fn open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+        codex_auth: Option<CodexAuthStore>,
+        authentication_key: WorkerAuthenticationKey,
+    ) -> Result<Self, WorkerError> {
+        let options = options.canonicalized()?;
         let approval_mode = WorkerApprovalModeState::new(Some(approval_mode));
         let approvals: Arc<dyn ApprovalProvider> =
             Arc::new(WorkerInteractiveApproval::new(approval_mode.clone()));
@@ -132,12 +166,13 @@ impl WorkerServer {
         );
         let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
         let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
-        let runtime = Arc::new(Runtime::open_with_provider_credentials(
+        let runtime = Arc::new(Runtime::open_with_provider_credentials_and_codex_auth(
             config,
             approval_interface,
             Some(prompt_interface),
             options,
             provider_credentials,
+            codex_auth,
         )?);
         Ok(Self {
             endpoint,
@@ -405,6 +440,20 @@ impl WorkerServer {
             Some(error) => Err(WorkerError::PublicApi(error)),
             None => Ok(()),
         }
+    }
+}
+
+fn open_authentication_key(
+    config: &RuntimeConfig,
+    workspace: &Path,
+) -> Result<WorkerAuthenticationKey, WorkerError> {
+    let path = config.worker_ipc_auth_path_at(workspace)?;
+    match config.open_resolved_home_file(&path)? {
+        Some(file) => {
+            let (file, was_created) = file.into_parts();
+            WorkerAuthenticationKey::load_or_create_file(file, was_created)
+        }
+        None => WorkerAuthenticationKey::load_or_create(&path),
     }
 }
 

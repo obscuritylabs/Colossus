@@ -31,6 +31,8 @@ interface OnboardingSurfaceProps {
     request: ApplyManagedModelConfigurationRequest,
   ) => Promise<boolean>;
   onRunSelfTest: () => Promise<void>;
+  onCodexLogin: () => Promise<void>;
+  onCodexLogout: () => Promise<void>;
   onUseExternal: () => Promise<void>;
   dismissible: boolean;
   onCancel: () => void;
@@ -44,6 +46,8 @@ export function OnboardingSurface({
   onConfigure,
   onApplyConfiguration,
   onRunSelfTest,
+  onCodexLogin,
+  onCodexLogout,
   onUseExternal,
   dismissible,
   onCancel,
@@ -70,7 +74,9 @@ export function OnboardingSurface({
   const providerChanged =
     desktop.provider.configured && desktop.provider.kind !== providerKind;
   const providerPromptRequired =
-    !desktop.provider.configured || providerChanged || replaceCredential;
+    providerKind !== "open_ai_codex" &&
+    (!desktop.provider.configured || providerChanged || replaceCredential);
+  const codexReady = desktop.codexAuth.state === "signed_in";
   const developmentConfirmationRequired =
     accessProfile === "development" &&
     (!desktop.provider.configured || desktop.accessProfile !== "development");
@@ -116,7 +122,7 @@ export function OnboardingSurface({
           </h1>
           <p>
             Pick a workspace and provider. The app supervises an isolated local
-            runtime while credentials remain in the native keychain boundary.
+            runtime while credentials remain behind native storage boundaries.
           </p>
         </div>
 
@@ -170,6 +176,8 @@ export function OnboardingSurface({
             busy={busy}
             onApply={onApplyConfiguration}
             onBack={() => setShowAdvanced(false)}
+            onCodexLogin={onCodexLogin}
+            onCodexLogout={onCodexLogout}
           />
         ) : (
           <form
@@ -210,6 +218,9 @@ export function OnboardingSurface({
                     OpenRouter (OpenAI-compatible)
                   </option>
                   <option value="openai_responses">OpenAI Responses</option>
+                  <option value="open_ai_codex">
+                    ChatGPT subscription (Codex)
+                  </option>
                 </select>
               </label>
               <label>
@@ -243,7 +254,31 @@ export function OnboardingSurface({
               </label>
             </div>
 
-            {dismissible && desktop.provider.configured && !providerChanged ? (
+            {providerKind === "open_ai_codex" ? (
+              <div className="provider-security-note codex-auth-row">
+                <IconCloudLock size={19} stroke={1.6} aria-hidden="true" />
+                <p>
+                  <strong>
+                    {codexReady
+                      ? "ChatGPT connected"
+                      : "ChatGPT sign-in required"}
+                  </strong>{" "}
+                  {desktop.codexAuth.message}
+                </p>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void (codexReady ? onCodexLogout() : onCodexLogin())
+                  }
+                >
+                  {codexReady ? "Sign out" : "Sign in with ChatGPT"}
+                </button>
+              </div>
+            ) : dismissible &&
+              desktop.provider.configured &&
+              !providerChanged ? (
               <label className="provider-credential-toggle">
                 <input
                   type="checkbox"
@@ -271,7 +306,9 @@ export function OnboardingSurface({
                   : ""}
                 {providerPromptRequired
                   ? "Continue opens a native secure prompt for the fixed provider origin. The key never enters this WebView or renderer IPC, and native code stores it directly in the OS keychain."
-                  : "The existing provider key remains in the OS keychain. Only the model and access policy cross this WebView boundary."}
+                  : providerKind === "open_ai_codex"
+                    ? "The official Codex credential remains file-backed. Only its native path crosses private inherited bootstrap IPC; tokens never enter the WebView."
+                    : "The existing provider key remains in the OS keychain. Only the model and access policy cross this WebView boundary."}
               </p>
             </div>
 
@@ -294,7 +331,11 @@ export function OnboardingSurface({
             <button
               className="button primary onboarding-launch"
               type="submit"
-              disabled={busy || model.trim() === ""}
+              disabled={
+                busy ||
+                model.trim() === "" ||
+                (providerKind === "open_ai_codex" && !codexReady)
+              }
             >
               {busy ? "Starting Managed Local…" : "Continue securely"}
               <IconArrowRight size={16} stroke={1.8} aria-hidden="true" />

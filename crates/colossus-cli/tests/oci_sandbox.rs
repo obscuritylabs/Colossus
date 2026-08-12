@@ -2,6 +2,9 @@
 
 #![cfg(unix)]
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
@@ -17,7 +20,9 @@ const JOURNAL_KEY: &str = "33333333333333333333333333333333333333333333333333333
 const SIGNING_KEY: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    command
         .arg("--config")
         .arg(config)
         .args(arguments)

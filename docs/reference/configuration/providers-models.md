@@ -148,10 +148,14 @@ credential is resolved only after policy authorizes the provider effect, and its
 is removed from released results and diagnostics.
 
 `codex:default` reads `$CODEX_HOME/auth.json`, or `~/.codex/auth.json` when that variable
-is unset. The file must be a regular non-symlink file and, on Unix, inaccessible to group
-and other users. Tokens remain late-bound and zeroize when dropped. Colossus refreshes an
-expiring access token only through the fixed `https://auth.openai.com/oauth/token`
-endpoint and atomically returns the rotated values to the same file. Grant both
+is unset. `CODEX_HOME` must be absolute when set. The file must be a regular non-symlink
+file and, on Unix, inaccessible to group and other users. `colossus codex login` and
+`colossus codex status` report completion only after this same runtime validation
+succeeds; `colossus codex logout` verifies that no usable credential remains and rejects
+an unsafe store it cannot verify. Tokens remain late-bound and zeroize when dropped.
+Colossus refreshes an expiring access token only through the fixed
+`https://auth.openai.com/oauth/token` endpoint and atomically returns the rotated values
+to the same file. Grant both
 `https://chatgpt.com` and `https://auth.openai.com` in
 `sandbox.networkDestinations`; the refresh fails closed if the second origin is absent.
 The adapter advertises its separately audited Codex wire-contract version in the

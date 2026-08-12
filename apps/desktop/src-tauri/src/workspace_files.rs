@@ -14,7 +14,7 @@ use std::fs::File;
 use crate::{
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, SettingsStore, WorkspaceSetting,
-        application_support_root, revalidate_workspace,
+        revalidate_workspace,
     },
     dto::CommandErrorDto,
     state::{AppState, MANAGED_TARGET_ID},
@@ -111,7 +111,7 @@ pub(crate) async fn read_workspace_file(
 }
 
 fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
-    SettingsStore::open(application_support_root()?)
+    SettingsStore::open_application()
 }
 
 fn authorize_workspace<'a>(

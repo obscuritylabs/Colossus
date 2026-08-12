@@ -12,6 +12,7 @@ description = "Minimal application-bundled Colossus managed runtime host"
 colossus-access.workspace = true
 colossus-api.workspace = true
 colossus-grpc.workspace = true
+colossus-home.workspace = true
 colossus-network.workspace = true
 colossus-ports.workspace = true
 colossus-provider.workspace = true

@@ -8,6 +8,7 @@ import type {
   ArtifactContent,
   ArtifactReference,
   ConfigureManagedRuntimeRequest,
+  CodexAuthStatus,
   ConnectionStatus,
   CreateRunRequest,
   DesktopStatus,
@@ -133,6 +134,18 @@ export function installDesktopUpdate(): Promise<boolean> {
 
 export function desktopStatus(): Promise<DesktopStatus> {
   return call("desktop_status");
+}
+
+export function codexAuthStatus(): Promise<CodexAuthStatus> {
+  return call("codex_auth_status");
+}
+
+export function codexAuthLogin(): Promise<CodexAuthStatus> {
+  return call("codex_auth_login");
+}
+
+export function codexAuthLogout(): Promise<CodexAuthStatus> {
+  return call("codex_auth_logout");
 }
 
 export function importCaBundle(): Promise<DesktopStatus | null> {

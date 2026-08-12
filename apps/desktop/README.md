@@ -7,6 +7,13 @@ and native settings around it. The renderer reaches the public Rust SDK only thr
 narrow native bridge: it never receives provider keys, API bearers, discovery paths, or
 private runtime paths.
 
+Native settings live in `$COLOSSUS_HOME/desktop/`, and each selected repository gets a
+separate `workspaces/<partition-id>/desktop/` Managed Local partition. Desktop never
+reuses the matching CLI/TUI partition or writes managed state into the repository.
+Earlier application-support data is preserved but ignored; there is no silent import
+or deletion. See the
+[Colossus home contract](../../docs/reference/colossus-home.md).
+
 Advanced users can also save multiple authenticated **External** daemon targets. Both
 modes use the same pinned loopback gRPC and SDK contracts; only the native lifecycle
 owner differs.
@@ -42,13 +49,24 @@ Run these commands from the repository root.
    ```
 
 2. Choose a workspace, configure a provider and model, and let Desktop start Managed
-   Local. Use the offline self-test when you want to verify the sidecar without a key or
+   Local. OpenAI Responses and compatible providers enroll a native key; the Codex
+   provider uses **Sign in with ChatGPT** through the installed official Codex CLI. Use
+   the offline self-test when you want to verify the sidecar without a credential or
    network call.
 
    Settings reuses the stored key for same-provider model/profile changes. Select
    **Replace the stored API key** only when rotating it; first setup and provider
    changes always use native secure input. Development access also requires a fixed
    native authority confirmation.
+
+   Codex auth tokens never enter the renderer or saved Desktop settings. Native code
+   validates the Codex-owned credential file and supplies only its private path through
+   inherited sidecar bootstrap IPC. Advanced configuration can set reasoning effort per
+   model.
+
+   Every top-level run snapshots the owner-private home `AGENTS.md` and the selected
+   repository's `AGENTS.md` before explicit run and immutable mode instructions. Goal
+   iterations and delegated subagents keep that exact snapshot for the run.
 
 No daemon enrollment or separate terminal is required for this path. The launcher
 builds and stages the two native binaries before starting Tauri.

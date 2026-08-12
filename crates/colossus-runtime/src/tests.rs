@@ -2,17 +2,18 @@ use super::extensions::extension_path;
 use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
-    InteractiveToolExecutor, JournalExternalWorkQueue, LOOPBACK_PROVIDER_TIMEOUT_MS,
-    MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation, ModelCapabilities,
-    ModelProfileConfig, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
-    PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
-    REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, ResearchSearchConfig, RuntimeConfig, SearchConfig,
-    SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
-    SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
-    model_workspace_path, provider_profile, recover_interrupted_subagents, recover_unknown_effects,
-    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
-    shell_command_arguments, terminal_actor,
+    InstructionSnapshotStore, InteractiveToolExecutor, JournalExternalWorkQueue,
+    LOOPBACK_PROVIDER_TIMEOUT_MS, MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation,
+    ModelCapabilities, ModelProfileConfig, PackProcessDeclaration, PackProcessExecutor,
+    PackToolEffectInput, PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
+    REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, ResearchSearchConfig, Runtime, RuntimeConfig,
+    RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig, SemanticMemoryConfig,
+    SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter, TraceToolExecutor,
+    WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
+    goal_objective_from_plan, model_workspace_path, provider_profile,
+    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
+    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
+    terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -23,6 +24,7 @@ use colossus_contracts::{
     RiskRecommendation, SandboxBoundaryMode, StartupVerificationMode, SubagentStatus, TaskStatus,
     TerminalPreferences, ToolCall,
 };
+use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
 use colossus_mcp::{
     McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
     McpTransportKind,
@@ -87,6 +89,11 @@ struct PrivateOutputProcess;
 
 struct RuntimePostDenyPolicy(BuiltInPolicy);
 
+struct RecordingDenyPolicy {
+    inner: BuiltInPolicy,
+    requests: Arc<Mutex<Vec<EffectRequest>>>,
+}
+
 #[async_trait::async_trait]
 impl PolicyDecisionPoint for RuntimePostDenyPolicy {
     async fn decide(
@@ -103,6 +110,24 @@ impl PolicyDecisionPoint for RuntimePostDenyPolicy {
 
     async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
         self.0.doctor().await
+    }
+}
+
+#[async_trait::async_trait]
+impl PolicyDecisionPoint for RecordingDenyPolicy {
+    async fn decide(
+        &self,
+        request: &EffectRequest,
+    ) -> Result<PolicyDecision, colossus_ports::PolicyError> {
+        self.requests
+            .lock()
+            .expect("recorded policy requests")
+            .push(request.clone());
+        self.inner.decide(request).await
+    }
+
+    async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
+        self.inner.doctor().await
     }
 }
 
@@ -146,6 +171,87 @@ fn provider_diagnostic_display_prioritizes_response_and_dotted_tool_names() {
         Some(400)
     );
     assert!(!error.to_string().contains("dotted tool rejected"));
+}
+
+#[tokio::test]
+async fn provider_diagnostic_roles_exclude_automatic_agent_instructions() {
+    const HOME_SENTINEL: &str = "private-home-agents-diagnostic-sentinel";
+    const WORKSPACE_SENTINEL: &str = "private-workspace-agents-diagnostic-sentinel";
+
+    let temporary = tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("Colossus home");
+    fs::write(home.root().join("AGENTS.md"), HOME_SENTINEL).expect("home instructions");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::write(workspace.join("AGENTS.md"), WORKSPACE_SENTINEL).expect("workspace instructions");
+
+    let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
+    config.providers.profiles.insert(
+        "diagnostic".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: Some("https://diagnostics.invalid/v1".into()),
+            credential_reference: None,
+            timeout_ms: Some(1_000),
+            chat_completions_output_token_parameter: None,
+        },
+    );
+    configure_primary_model(&mut config, "diagnostic", "diagnostic", "diagnostic-model");
+    config
+        .sandbox
+        .network_destinations
+        .push("https://diagnostics.invalid".into());
+    let mut runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace)
+            .expect("workspace options")
+            .with_colossus_home(home.root())
+            .expect("home binding"),
+    )
+    .expect("runtime");
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    runtime.gateway = Arc::new(EffectGateway::new(
+        Arc::clone(&runtime.journal),
+        Arc::new(RecordingDenyPolicy {
+            inner: BuiltInPolicy::offline_default(),
+            requests: Arc::clone(&requests),
+        }),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [29_u8; 32],
+    ));
+
+    runtime
+        .provider_doctor(Some("diagnostic"))
+        .await
+        .expect("provider diagnostic result");
+    runtime
+        .model_doctor(Some("diagnostic"))
+        .await
+        .expect("model diagnostic result");
+
+    let requests = requests.lock().expect("recorded policy requests");
+    assert_eq!(requests.len(), 2);
+    let provider_probe = &requests[0];
+    assert_eq!(provider_probe.actor.id, "provider-diagnostics");
+    assert_eq!(provider_probe.action, "provider.models");
+    assert!(provider_probe.content["request"].is_null());
+    let model_probe = &requests[1];
+    assert_eq!(model_probe.actor.id, "model-diagnostics");
+    assert_eq!(model_probe.action, "provider.openai.chat");
+    assert_eq!(
+        model_probe.content["request"]["instructions"],
+        "This is a model readiness probe. Reply with exactly: ok"
+    );
+    for request in requests.iter() {
+        let content = request.content.to_string();
+        assert!(!content.contains(HOME_SENTINEL));
+        assert!(!content.contains(WORKSPACE_SENTINEL));
+    }
 }
 
 #[cfg(unix)]
@@ -783,6 +889,253 @@ fn resolved_configuration_yaml_states_default_runtime_limits() {
 }
 
 #[test]
+fn storage_location_defaults_to_workspace_for_existing_configurations() {
+    let config = RuntimeConfig::offline_template("state.redb");
+    let mut document: Value =
+        serde_saphyr::from_str(&config.to_yaml().expect("YAML")).expect("YAML value");
+    document["storage"]
+        .as_object_mut()
+        .expect("storage mapping")
+        .remove("location");
+    let parsed = RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("YAML"))
+        .expect("legacy storage location");
+    assert_eq!(parsed.storage.location, super::StorageLocation::Workspace);
+}
+
+#[test]
+fn home_workspace_storage_is_confined_and_resolves_private_paths() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let home_workspace_temporary = tempfile::tempdir().expect("home workspace");
+    let home_workspace = home_workspace_temporary
+        .path()
+        .canonicalize()
+        .expect("canonical home workspace");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(&home_workspace, fs::Permissions::from_mode(0o700))
+            .expect("private home workspace permissions");
+    }
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.storage.location = super::StorageLocation::HomeWorkspace;
+    config.use_environment_storage("secure-anchor.json");
+
+    let resolved = config
+        .resolve_storage_paths(workspace.path(), &home_workspace)
+        .expect("resolved storage");
+    assert_eq!(resolved.storage.path, home_workspace.join("state.redb"));
+    assert_eq!(resolved.storage.location, super::StorageLocation::Workspace);
+    let super::KeyConfig::Environment { anchor_path, .. } = resolved.storage.keys else {
+        panic!("environment key config");
+    };
+    assert_eq!(anchor_path, home_workspace.join("secure-anchor.json"));
+
+    for unsafe_path in ["../state.redb", "/tmp/state.redb", "."] {
+        config.storage.path = unsafe_path.into();
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("unsafe YAML")).is_err());
+        assert!(
+            config
+                .resolve_storage_paths(workspace.path(), &home_workspace)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn distinct_workspaces_hold_distinct_home_writer_leases_and_surfaces() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("Colossus home");
+    let workspace_one = root.join("workspace-one");
+    let workspace_two = root.join("workspace-two");
+    fs::create_dir(&workspace_one).expect("first workspace");
+    fs::create_dir(&workspace_two).expect("second workspace");
+    let identity_one = detect_workspace_identity(&workspace_one).expect("first identity");
+    let identity_two = detect_workspace_identity(&workspace_two).expect("second identity");
+    let cli_one = home
+        .workspace_surface_dir(
+            identity_one.canonical_path(),
+            identity_one.as_ref(),
+            HomeSurface::Cli,
+        )
+        .expect("first CLI surface");
+    let cli_two = home
+        .workspace_surface_dir(
+            identity_two.canonical_path(),
+            identity_two.as_ref(),
+            HomeSurface::Cli,
+        )
+        .expect("second CLI surface");
+    let desktop_one = home
+        .workspace_surface_dir(
+            identity_one.canonical_path(),
+            identity_one.as_ref(),
+            HomeSurface::Desktop,
+        )
+        .expect("first Desktop surface");
+    assert_ne!(cli_one, cli_two);
+    assert_ne!(cli_one, desktop_one);
+
+    let mut source = RuntimeConfig::offline_template("state.redb");
+    source.storage.location = super::StorageLocation::HomeWorkspace;
+    let config_one = source
+        .resolve_storage_paths(&workspace_one, &cli_one)
+        .expect("first resolved configuration");
+    let config_two = source
+        .resolve_storage_paths(&workspace_two, &cli_two)
+        .expect("second resolved configuration");
+    let runtime_one = Runtime::open_with_options(
+        &config_one,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace_one)
+            .expect("first workspace options")
+            .with_colossus_home(home.root())
+            .expect("first home binding"),
+    )
+    .expect("first runtime");
+    let runtime_two = Runtime::open_with_options(
+        &config_two,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace_two)
+            .expect("second workspace options")
+            .with_colossus_home(home.root())
+            .expect("second home binding"),
+    )
+    .expect("second runtime while first writer lease remains held");
+
+    let doctor_one = runtime_one.state_doctor().expect("first state doctor");
+    let doctor_two = runtime_two.state_doctor().expect("second state doctor");
+    let lease_one = doctor_one["writer_lease"]["path"]
+        .as_str()
+        .expect("first writer lease path");
+    let lease_two = doctor_two["writer_lease"]["path"]
+        .as_str()
+        .expect("second writer lease path");
+    assert_eq!(Path::new(lease_one), cli_one.join("state.redb.writer.lock"));
+    assert_eq!(Path::new(lease_two), cli_two.join("state.redb.writer.lock"));
+    assert_ne!(lease_one, lease_two);
+}
+
+#[test]
+fn unresolved_home_workspace_is_rejected_by_runtime_composition() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.storage.location = super::StorageLocation::HomeWorkspace;
+
+    let result = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    );
+    assert!(
+        matches!(result, Err(RuntimeError::Config(message)) if message.contains("trusted host"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn home_workspace_rejects_symlink_escape_and_desktop_state_alias() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    let cli = root.join("cli");
+    let desktop = root.join("desktop");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&cli).expect("CLI state root");
+    fs::create_dir(&desktop).expect("Desktop state root");
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).expect("CLI permissions");
+    fs::set_permissions(&desktop, fs::Permissions::from_mode(0o700)).expect("Desktop permissions");
+
+    let mut config = RuntimeConfig::offline_template("nested/state.redb");
+    config.storage.location = super::StorageLocation::HomeWorkspace;
+    symlink(&desktop, cli.join("nested")).expect("parent escape link");
+    assert!(config.resolve_storage_paths(&workspace, &cli).is_err());
+
+    fs::remove_file(cli.join("nested")).expect("remove parent link");
+    config.storage.path = "state.redb".into();
+    let desktop_state = desktop.join("state.redb");
+    fs::write(&desktop_state, []).expect("Desktop state");
+    fs::set_permissions(&desktop_state, fs::Permissions::from_mode(0o600))
+        .expect("Desktop state permissions");
+    symlink(&desktop_state, cli.join("state.redb")).expect("Desktop alias");
+    assert!(config.resolve_storage_paths(&workspace, &cli).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_revalidates_home_state_after_resolution_before_open() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    let cli = root.join("cli");
+    let desktop = root.join("desktop");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&cli).expect("CLI state root");
+    fs::create_dir(&desktop).expect("Desktop state root");
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).expect("CLI permissions");
+    fs::set_permissions(&desktop, fs::Permissions::from_mode(0o700)).expect("Desktop permissions");
+    let mut source = RuntimeConfig::offline_template("state.redb");
+    source.storage.location = super::StorageLocation::HomeWorkspace;
+    let resolved = source
+        .resolve_storage_paths(&workspace, &cli)
+        .expect("resolved configuration");
+
+    let desktop_state = desktop.join("state.redb");
+    fs::write(&desktop_state, []).expect("Desktop state");
+    fs::set_permissions(&desktop_state, fs::Permissions::from_mode(0o600))
+        .expect("Desktop state permissions");
+    symlink(&desktop_state, cli.join("state.redb")).expect("state replacement link");
+    let result = Runtime::open_with_options(
+        &resolved,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace).expect("workspace options"),
+    );
+    assert!(matches!(result, Err(RuntimeError::Config(message)) if message.contains("unsafe")));
+}
+
+#[cfg(unix)]
+#[test]
+fn derived_home_runtime_paths_reject_cli_to_desktop_links() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    let cli = root.join("cli");
+    let desktop = root.join("desktop");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&cli).expect("CLI root");
+    fs::create_dir(&desktop).expect("Desktop root");
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).expect("CLI permissions");
+    fs::set_permissions(&desktop, fs::Permissions::from_mode(0o700)).expect("Desktop permissions");
+
+    symlink(&desktop, cli.join("state.memory-index")).expect("memory index alias");
+    let mut source = RuntimeConfig::offline_template("state.redb");
+    source.storage.location = super::StorageLocation::HomeWorkspace;
+    assert!(source.resolve_storage_paths(&workspace, &cli).is_err());
+    fs::remove_file(cli.join("state.memory-index")).expect("remove memory alias");
+
+    let resolved = source
+        .resolve_storage_paths(&workspace, &cli)
+        .expect("resolved configuration");
+    let desktop_auth = desktop.join("worker-auth");
+    fs::write(&desktop_auth, []).expect("Desktop auth placeholder");
+    fs::set_permissions(&desktop_auth, fs::Permissions::from_mode(0o600))
+        .expect("Desktop auth permissions");
+    symlink(&desktop_auth, cli.join("state.redb.worker-auth")).expect("worker auth alias");
+    assert!(resolved.worker_ipc_auth_path_at(&workspace).is_err());
+}
+
+#[test]
 fn observability_is_disabled_by_default_and_full_payloads_require_acknowledgement() {
     let config = RuntimeConfig::offline_template("state.redb");
     assert!(!config.observability.enabled);
@@ -877,7 +1230,9 @@ fn security_posture_reports_danger_full_access_even_when_acknowledged() {
 fn worker_authentication_path_is_adjacent_to_local_state() {
     let config = RuntimeConfig::offline_template(".colossus/state.redb");
     assert_eq!(
-        config.worker_ipc_auth_path_at(PathBuf::from("/workspace").as_path()),
+        config
+            .worker_ipc_auth_path_at(PathBuf::from("/workspace").as_path())
+            .expect("worker auth path"),
         PathBuf::from("/workspace/.colossus/state.redb.worker-auth")
     );
 }
@@ -2361,6 +2716,7 @@ fn startup_marks_running_subagents_interrupted_without_retrying() {
                 task: "unfinished".into(),
                 role: "subagent_default".into(),
                 allowed_tools: None,
+                instruction_snapshot_id: None,
             },
             actor.clone(),
         )
@@ -2768,6 +3124,7 @@ async fn model_work_tools_are_durable_attributed_and_session_confined() {
     let work = Arc::new(WorkEffectExecutor {
         service,
         repository: Arc::clone(&repository),
+        instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let actions = [
         "task.create",
@@ -3321,6 +3678,7 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
             sessions,
         )),
         repository: Arc::clone(&repository),
+        instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let policy = colossus_policy::BuiltInPolicy::offline_default()
         .with_action("plan.create", DecisionOutcome::Allow)
@@ -3454,12 +3812,14 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
     let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
         colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
     );
+    let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
     let work = Arc::new(WorkEffectExecutor {
         service: Arc::new(colossus_work::WorkService::new(
             Arc::clone(&repository),
             Arc::clone(&sessions),
         )),
         repository: Arc::clone(&repository),
+        instruction_snapshots: Arc::clone(&instruction_snapshots),
     });
     let actions = ["subagent.create", "subagent.read", "subagent.list"];
     let mut policy = colossus_policy::BuiltInPolicy::offline_default();
@@ -3496,22 +3856,86 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
         offered_tools: vec!["agent.delegate".into(), "echo".into()],
         ..ExecutionContext::default()
     };
-    let created = executor
-        .execute(
+    let instruction_workspace = tempdir().expect("instruction workspace");
+    fs::write(
+        instruction_workspace.path().join("AGENTS.md"),
+        "rules captured before delegation",
+    )
+    .expect("initial AGENTS.md");
+    let snapshot = Arc::new(
+        super::InstructionSnapshot::capture(
+            None,
+            instruction_workspace.path(),
+            "parent invocation rules",
+            "immutable Plan Mode rules",
+        )
+        .expect("instruction snapshot"),
+    );
+    let snapshot_id = snapshot.id().to_owned();
+    let created = super::scope_instruction_snapshot(
+        Some(snapshot),
+        executor.execute(
             ToolCall {
                 call_id: "delegate-1".into(),
                 name: "agent.delegate".into(),
                 arguments: json!({"task": "Review the Rust tests"}),
             },
             context("session-a"),
-        )
-        .await
-        .expect("delegate");
+        ),
+    )
+    .await
+    .expect("delegate");
     let created: serde_json::Value = serde_json::from_str(&created.output).expect("job JSON");
     let id = created["id"].as_str().expect("id").to_owned();
     assert_eq!(created["parent_run_id"], "run-parent");
     assert_eq!(created["parent_call_id"], "delegate-1");
     assert_eq!(created["status"], "queued");
+    assert!(
+        created.get("instruction_snapshot_id").is_none(),
+        "private instruction provenance must not enter the public child-job DTO"
+    );
+    assert_eq!(
+        repository
+            .subagent_instruction_snapshot_id(&id)
+            .expect("snapshot reference")
+            .as_deref(),
+        Some(snapshot_id.as_str())
+    );
+    fs::write(
+        instruction_workspace.path().join("AGENTS.md"),
+        "rules changed after delegation",
+    )
+    .expect("changed AGENTS.md");
+    let recovered_repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+        colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+    );
+    let recovered_store = InstructionSnapshotStore::new(Arc::clone(&journal));
+    let recovered_snapshot_id = recovered_repository
+        .subagent_instruction_snapshot_id(&id)
+        .expect("recovered snapshot reference")
+        .expect("durable snapshot reference");
+    let recovered_instructions = recovered_store
+        .load(&recovered_snapshot_id)
+        .expect("snapshot after repository reopen")
+        .compose();
+    assert!(recovered_instructions.contains("rules captured before delegation"));
+    assert!(!recovered_instructions.contains("rules changed after delegation"));
+    assert!(recovered_instructions.contains("immutable Plan Mode rules"));
+    assert!(
+        instruction_snapshots
+            .load(&snapshot_id)
+            .expect("durable snapshot")
+            .compose()
+            .contains("parent invocation rules")
+    );
+    assert!(
+        instruction_snapshots
+            .load(&snapshot_id)
+            .expect("durable snapshot")
+            .compose()
+            .contains("immutable Plan Mode rules"),
+        "delegated recovery must retain the parent's immutable runtime mode"
+    );
     assert_eq!(
         created["allowed_tools"],
         json!(["agent.delegate", "echo"]),
@@ -3712,6 +4136,10 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
         let recorded = provider.requests.lock().expect("requests");
         let model_request = recorded.first().expect("model request");
         assert!(model_request.tools.is_empty());
+        assert!(
+            !model_request.instructions.contains("[Colossus "),
+            "the internal risk evaluator bypasses user-facing instruction composition"
+        );
         let disclosed = &model_request.messages[0].content;
         assert!(!disclosed.contains("argument-secret"));
         assert!(!disclosed.contains("environment-secret"));
@@ -3883,6 +4311,7 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
     let work = Arc::new(WorkEffectExecutor {
         service: work_service,
         repository: Arc::clone(&repository),
+        instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
         Arc::clone(&journal),
@@ -4203,6 +4632,7 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
     let work = Arc::new(WorkEffectExecutor {
         service: Arc::clone(&service),
         repository: Arc::clone(&repository),
+        instruction_snapshots: Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal))),
     });
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
         Arc::clone(&journal),

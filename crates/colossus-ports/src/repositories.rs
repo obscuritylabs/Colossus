@@ -302,11 +302,32 @@ pub trait WorkRepository: Send + Sync {
     /// Create one queued durable child-agent job.
     fn create_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError>;
 
+    /// Create one queued child job with a private content-addressed instruction snapshot.
+    ///
+    /// The default preserves compatibility for repository adapters that predate automatic
+    /// instruction loading. Durable implementations should store the reference atomically
+    /// with job creation and return it only through
+    /// [`WorkRepository::subagent_instruction_snapshot_id`].
+    fn create_subagent_with_instruction_snapshot(
+        &self,
+        job: SubagentJob,
+        instruction_snapshot_id: Option<String>,
+        actor: Actor,
+    ) -> Result<SubagentJob, StoreError> {
+        let _ = instruction_snapshot_id;
+        self.create_subagent(job, actor)
+    }
+
     /// Append one validated child-agent lifecycle transition.
     fn update_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError>;
 
     /// Reconstruct one child-agent job.
     fn get_subagent(&self, id: &str) -> Result<Option<SubagentJob>, StoreError>;
+
+    /// Return the private instruction snapshot reference for one child job.
+    fn subagent_instruction_snapshot_id(&self, _id: &str) -> Result<Option<String>, StoreError> {
+        Ok(None)
+    }
 
     /// List bounded child-agent jobs.
     fn list_subagents(

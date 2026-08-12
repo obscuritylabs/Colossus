@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use colossus_access::AccessProfile;
-use colossus_codex_auth::{CodexCliAction, run_codex_cli};
+use colossus_codex_auth::CodexCliAction;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice,
     DecisionPriority, DecisionStatus, EffectRequest, GoalRunOutcome, GoalStatus, IntegrationAuth,
@@ -15,6 +15,9 @@ use colossus_contracts::{
     ResearchSourceKind, RiskReviewFallbackNotice, RunEvent, RunEventEnvelope,
     SecurityPostureReport, SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest,
     UserPromptResponse, WorkflowScheduleMisfirePolicy,
+};
+use colossus_home::{
+    ColossusHome, ConfinedRoot, HomeError, HomeSurface, detect_workspace_identity,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
@@ -27,7 +30,9 @@ use colossus_presentation::{
     TerminalPreferences, ThemeLibrary, ThemeName, TranscriptDensity, automatic_approval_document,
     document_from_json, risk_review_fallback_document,
 };
-use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
+use colossus_runtime::{
+    Runtime, RuntimeConfig, RuntimeOpenOptions, StorageLocation, WorkspaceIdentityToken,
+};
 use colossus_tui::{BackgroundNoticeProvider, BootstrapRequest, ScreenMode, TuiOptions, run_tui};
 use colossus_update::{
     InstallerKind, UpdateApplyFailure, UpdateApplyReport, UpdateApplyStatus, UpdateCheckReport,
@@ -44,7 +49,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fs,
-    io::{self, BufRead, IsTerminal as _, Write as _},
+    io::{self, BufRead, IsTerminal as _, Read as _, Write as _},
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
@@ -58,6 +63,7 @@ use uuid::Uuid;
 mod artifact_args;
 mod artifact_commands;
 mod cli;
+mod codex_commands;
 mod commands;
 mod configuration;
 mod desktop_tui_auth;
@@ -84,6 +90,7 @@ mod workflow_commands;
 use artifact_args::*;
 use artifact_commands::*;
 use cli::*;
+use codex_commands::*;
 use commands::*;
 use configuration::*;
 use desktop_tui_auth::*;

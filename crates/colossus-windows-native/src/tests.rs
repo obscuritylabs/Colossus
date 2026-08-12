@@ -24,12 +24,36 @@ fn retained_file_handle_can_read_and_revalidate() {
 
 #[cfg(windows)]
 #[test]
+fn retained_read_write_handle_writes_and_reports_hard_links() {
+    use std::io::{Seek as _, Write as _};
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("payload.txt");
+    create_private_file(&path, b"old").expect("private file");
+    let binding = BoundPath::open_file_read_write(&path).expect("read/write binding");
+    assert_eq!(binding.link_count().expect("link count"), 1);
+    let mut file = binding.try_clone_file().expect("writable clone");
+    file.seek(std::io::SeekFrom::Start(0)).expect("seek");
+    file.write_all(b"new")
+        .expect("write through retained handle");
+    file.sync_all().expect("sync retained handle");
+    assert_eq!(std::fs::read(&path).expect("read updated file"), b"new");
+
+    std::fs::hard_link(&path, directory.path().join("alias.txt")).expect("hard link");
+    assert_eq!(binding.link_count().expect("updated link count"), 2);
+}
+
+#[cfg(windows)]
+#[test]
 fn private_directory_creation_protects_the_directory_and_children() {
     let parent = tempfile::tempdir().expect("temporary parent");
     let directory = parent.path().join("private");
 
     create_private_directory(&directory).expect("create private directory");
     let binding = BoundPath::open_directory(&directory).expect("bind private directory");
+    binding
+        .validate_ancestor_namespace_authority()
+        .expect("standard ancestors retain safe namespace authority");
     binding
         .validate_private_owner_dacl()
         .expect("private directory DACL");
@@ -41,6 +65,27 @@ fn private_directory_creation_protects_the_directory_and_children() {
         .validate_private_owner_dacl()
         .expect("private child DACL");
     assert!(create_private_directory(&directory).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn untrusted_ancestor_delete_child_authority_is_rejected() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let directory = parent.path().join("private");
+    create_private_directory(&directory).expect("create private directory");
+
+    let status = std::process::Command::new("icacls.exe")
+        .arg(parent.path())
+        .args(["/grant", "*S-1-1-0:(DC)"])
+        .status()
+        .expect("run Windows ACL editor");
+    assert!(status.success(), "grant Everyone delete-child authority");
+
+    let binding = BoundPath::open_directory(&directory).expect("bind private directory");
+    assert!(
+        binding.validate_ancestor_namespace_authority().is_err(),
+        "an untrusted principal with FILE_DELETE_CHILD may replay the home namespace"
+    );
 }
 
 #[cfg(windows)]
@@ -82,6 +127,34 @@ fn private_file_replacement_is_atomic_and_preserves_private_access() {
         .expect("bind replacement")
         .validate_private_owner_dacl()
         .expect("replacement remains private");
+}
+
+#[cfg(windows)]
+#[test]
+fn private_file_replacement_rejects_untrusted_ancestor_authority() {
+    let ancestor = tempfile::tempdir().expect("temporary ancestor");
+    let directory = ancestor.path().join("private");
+    create_private_directory(&directory).expect("create private directory");
+    let destination = directory.join("settings.json");
+    let source = directory.join(".settings.next");
+    create_private_file(&destination, b"old").expect("private destination");
+    create_private_file(&source, b"new").expect("private source");
+
+    let status = std::process::Command::new("icacls.exe")
+        .arg(ancestor.path())
+        .args(["/grant", "*S-1-1-0:(DC)"])
+        .status()
+        .expect("run Windows ACL editor");
+    assert!(status.success(), "grant Everyone delete-child authority");
+
+    assert!(
+        replace_private_file(&source, &destination).is_err(),
+        "a replaceable ancestor must block path-based atomic replacement"
+    );
+    assert_eq!(
+        std::fs::read(&destination).expect("read unchanged destination"),
+        b"old"
+    );
 }
 
 #[cfg(windows)]

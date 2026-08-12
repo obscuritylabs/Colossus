@@ -12,6 +12,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    let home = ColossusHome::resolve_and_ensure()?;
     if let Command::Update(update) = &cli.command {
         match update.command.as_ref() {
             Some(UpdateAction::Check) => run_update_check().await?,
@@ -28,16 +29,30 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());
     }
-    let runtime_options = RuntimeOpenOptions::for_workspace(&cli.workspace)?;
+    let mut runtime_options =
+        RuntimeOpenOptions::for_workspace(&cli.workspace)?.with_colossus_home(home.root())?;
+    let workspace_identity = detect_workspace_identity(&runtime_options.workspace)?;
+    if workspace_identity.canonical_path() != runtime_options.workspace {
+        return Err("workspace identity canonicalization changed unexpectedly".into());
+    }
+    workspace_identity.revalidate()?;
+    let expected_workspace_identity =
+        WorkspaceIdentityToken::from_home_workspace_identity(workspace_identity.as_ref())
+            .ok_or("workspace identity cannot be bound to runtime acquisition")?;
+    runtime_options = runtime_options.with_expected_workspace_identity(expected_workspace_identity);
+    let workspace_partition_id = home.workspace_partition_id(
+        workspace_identity.canonical_path(),
+        workspace_identity.as_ref(),
+    )?;
+    let home_workspace = home.workspace_surface_dir(
+        workspace_identity.canonical_path(),
+        workspace_identity.as_ref(),
+        HomeSurface::Cli,
+    )?;
     let desktop_workspace = cli
         .desktop_worker_auth
         .then(|| bind_desktop_tui_workspace(&runtime_options.workspace))
         .transpose()?;
-    let config_path = if cli.config.is_absolute() {
-        cli.config.clone()
-    } else {
-        runtime_options.workspace.join(&cli.config)
-    };
     if let Some(workspace) = desktop_workspace.as_ref() {
         workspace.enter()?;
     } else {
@@ -46,6 +61,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     if let Command::Config(ConfigCommand {
         command:
             ConfigAction::Init {
+                local,
                 development,
                 from,
                 access_profile,
@@ -54,8 +70,17 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             },
     }) = &cli.command
     {
-        return init_config(
-            &config_path,
+        validate_config_init_scope(cli.config.as_deref(), *local)?;
+        let target = config_init_target(
+            cli.config.as_deref(),
+            *local,
+            &runtime_options.workspace,
+            &home,
+            &home_workspace,
+            *development,
+        );
+        return init_config_at(
+            &target,
             *development,
             from.as_deref(),
             *access_profile,
@@ -70,7 +95,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             CodexAction::Status => CodexCliAction::Status,
             CodexAction::Logout => CodexCliAction::Logout,
         };
-        run_codex_cli(&command.codex_bin, action).await?;
+        run_codex_account_operation(&command.codex_bin, action).await?;
         let operation = match action {
             CodexCliAction::Login => "login",
             CodexCliAction::LoginDeviceCode => "login_device_code",
@@ -84,9 +109,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         }))?;
         return Ok(());
     }
-    let config = RuntimeConfig::from_path(&config_path)?;
+    let config_selection = select_config(cli.config.as_deref(), &runtime_options.workspace, &home)?;
+    let config_path = config_selection.path.clone();
+    let source_config = load_selected_config(&config_selection, &runtime_options.workspace, &home)?;
     if !matches!(cli.command, Command::Tui { .. }) {
-        emit_security_posture_warning(&config.security_posture())?;
+        emit_security_posture_warning(&source_config.security_posture())?;
     }
     if matches!(
         cli.command,
@@ -94,9 +121,17 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             command: ConfigAction::Show
         })
     ) {
-        print!("{}", config.to_resolved_yaml()?);
+        print!("{}", source_config.to_resolved_yaml()?);
         return Ok(());
     }
+    let config =
+        source_config.resolve_storage_paths(&runtime_options.workspace, &home_workspace)?;
+    let config_resolution = config_resolution_report(
+        &config_selection,
+        &home,
+        &workspace_partition_id,
+        &config.storage.path,
+    );
     match &cli.command {
         Command::Worker(worker)
             if !worker.once
@@ -229,6 +264,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             alt_screen: cli.alt_screen,
             worker_required: cli.worker_required,
             inherited_worker,
+            config_resolution: config_resolution.clone(),
         },
     )
     .await?
@@ -276,7 +312,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
-        }) => print_json(&runtime.effective_access())?,
+        }) => {
+            let mut report = runtime.effective_access();
+            attach_config_resolution(&mut report, &config_resolution)?;
+            print_json(&report)?;
+        }
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Preferences(command) => match command.command {
             PreferencesAction::Show => print_json(&runtime.presentation_preferences()?)?,
@@ -1224,7 +1264,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             println!("{}", String::from_utf8_lossy(&result.bytes));
         }
         Command::Tui { session, resume } if interactive_tui => {
-            let themes = ThemeLibrary::load_for_config(&cli.config)?;
+            let themes = ThemeLibrary::load_for_config(&config_path)?;
             let router = prompt_router
                 .clone()
                 .ok_or_else(|| cli_error("interactive prompt router is unavailable"))?;
@@ -1254,7 +1294,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             .await?;
         }
         Command::Tui { session, resume } => {
-            let themes = ThemeLibrary::load_for_config(&cli.config)?;
+            let themes = ThemeLibrary::load_for_config(&config_path)?;
             line_runner(&runtime, session, resume, configured_approval, &themes).await?
         }
         Command::Worker(WorkerCommand {

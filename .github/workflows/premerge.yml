@@ -239,6 +239,14 @@ jobs:
         id: windows_native
         continue-on-error: true
         run: cargo test --locked -p colossus-windows-native -- --nocapture
+      - name: Run Windows Colossus-home acceptance
+        id: windows_home
+        continue-on-error: true
+        run: cargo test --locked -p colossus-home --lib -- --nocapture
+      - name: Run Windows Codex credential-store acceptance
+        id: windows_codex_auth
+        continue-on-error: true
+        run: cargo test --locked -p colossus-codex-auth --lib -- --nocapture
       - name: Run Windows worker and AppContainer escape acceptance
         id: worker_acceptance
         continue-on-error: true
@@ -264,6 +272,8 @@ jobs:
         env:
           CLIPPY_OUTCOME: ${{ steps.native_clippy.outcome }}
           CONTRACT_OUTCOME: ${{ steps.renderer_contracts.outcome }}
+          CODEX_AUTH_OUTCOME: ${{ steps.windows_codex_auth.outcome }}
+          HOME_OUTCOME: ${{ steps.windows_home.outcome }}
           NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
           PREPARE_OUTCOME: ${{ steps.desktop_prepare.outcome }}
           NATIVE_TEST_OUTCOME: ${{ steps.native_tests.outcome }}
@@ -278,6 +288,8 @@ jobs:
             "renderer-tests=$RENDERER_TEST_OUTCOME" \
             "renderer-contracts=$CONTRACT_OUTCOME" \
             "windows-native=$NATIVE_OUTCOME" \
+            "windows-home=$HOME_OUTCOME" \
+            "windows-codex-auth=$CODEX_AUTH_OUTCOME" \
             "worker-and-sandbox=$WORKER_OUTCOME" \
             "desktop-prepare=$PREPARE_OUTCOME" \
             "desktop-clippy=$CLIPPY_OUTCOME" \

@@ -85,10 +85,11 @@ impl ModelProvider for BudgetSummaryProvider {
 
     async fn turn(
         &self,
-        _role: &str,
+        role: &str,
         request: ModelRequest,
         _context: ExecutionContext,
     ) -> Result<ProviderTurn, ModelProviderError> {
+        assert_eq!(role, "context_summarizer");
         self.requests.lock().expect("requests").push(request);
         Ok(ProviderTurn {
             profile: self.summary_route.model_profile.clone(),
@@ -269,6 +270,53 @@ async fn model_summary_is_used_and_failure_falls_back_deterministically() {
             assert_eq!(snapshot.summary, "assisted durable summary");
         }
     }
+}
+
+#[tokio::test]
+async fn model_summary_excludes_primary_agent_instructions_from_the_internal_request() {
+    const AGENT_INSTRUCTION_SENTINEL: &str = "private-agents-instruction-sentinel";
+
+    let provider = Arc::new(BudgetSummaryProvider {
+        summary_route: model_route("context_summarizer"),
+        requests: Mutex::new(Vec::new()),
+    });
+    let (_journal, _sessions, _snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    let mut preparation = preparation_request(
+        vec![message(
+            ModelMessageRole::User,
+            "ordinary user history retained for summarization",
+        )],
+        true,
+    );
+    preparation.instructions = format!(
+        "[Colossus home AGENTS.md]\n{AGENT_INSTRUCTION_SENTINEL}\n\n\
+         [Colossus workspace AGENTS.md]\n{AGENT_INSTRUCTION_SENTINEL}"
+    );
+
+    let prepared = service
+        .prepare(preparation)
+        .await
+        .expect("prepared context");
+
+    assert_eq!(prepared.strategy.as_deref(), Some("hybrid_model"));
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.instructions, SUMMARY_INSTRUCTIONS);
+    assert!(
+        request.messages[0]
+            .content
+            .contains("ordinary user history retained for summarization")
+    );
+    assert!(
+        !serde_json::to_string(request)
+            .expect("summary request")
+            .contains(AGENT_INSTRUCTION_SENTINEL),
+        "top-level agent instructions must not enter the internal context-summarizer request"
+    );
 }
 
 #[tokio::test]

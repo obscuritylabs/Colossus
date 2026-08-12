@@ -1,5 +1,8 @@
 //! Cross-process Plan Mode, single-use execution, and Goal Mode handoff acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -67,8 +70,11 @@ fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<String
 }
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output {
-    Command::new(binary)
-        .current_dir(config.parent().expect("config parent"))
+    let root = config.parent().expect("config parent");
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, root);
+    command
+        .current_dir(root)
         .arg("--config")
         .arg(config)
         .arg("--approval-mode")

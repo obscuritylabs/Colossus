@@ -1,6 +1,9 @@
 //! Native helper integration and escape tests.
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
@@ -28,7 +31,9 @@ fn colossus_binary() -> std::path::PathBuf {
 }
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    command
         .arg("--config")
         .arg(config)
         .args(arguments)
@@ -39,7 +44,9 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
 }
 
 fn run_in_workspace(binary: &Path, workspace: &Path, config: &Path, arguments: &[&str]) -> Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, workspace);
+    command
         .arg("--workspace")
         .arg(workspace)
         .arg("--config")

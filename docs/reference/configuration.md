@@ -7,16 +7,22 @@ type: reference
 
 # Configuration fields
 
-Colossus reads one strict YAML document selected by global `--config`. Global
-`-w, --workspace` defaults to the current directory, is canonicalized once, and is the
-base for relative configuration and workspace-owned paths. Unknown fields, invalid enum
-values, unsafe paths, incomplete profiles, and inconsistent grants fail before runtime
-construction. Field names are case-sensitive.
+Colossus reads one strict YAML document. Selection order is explicit `--config PATH`,
+`<workspace>/.colossus/config.yaml`, then `$COLOSSUS_HOME/config.yaml`; the documents
+are complete replacements and are never merged. A missing explicit path or malformed
+higher-priority file fails without fallback. Global `-w, --workspace` defaults to the
+current directory, is canonicalized once, and selects the repository access boundary,
+not the Colossus home. Unknown fields, invalid enum values, unsafe paths, incomplete
+profiles, and inconsistent grants fail before runtime construction. Field names are
+case-sensitive.
 
 The current schema is exactly `2`. Schema `1` configurations are rejected rather than
 silently migrated because provider connections and model profiles now have separate
-authority and metadata. Generate a fresh configuration with `colossus --config PATH
-config init` and reapply the intended settings explicitly.
+authority and metadata. Generate a fresh configuration with `colossus config init`,
+`colossus config init --local`, or `colossus --config PATH config init` as appropriate,
+then reapply the intended settings explicitly. See
+[Colossus home and workspace resolution](colossus-home.md) for exact selection and
+initialization behavior.
 
 Use this page for the complete baseline and top-level map. Each linked domain page owns
 the exact fields, defaults, examples, and constraints for that part of the schema.
@@ -39,7 +45,8 @@ access:
     requireApproval: []
     deny: []
 storage:
-  path: .colossus/state.redb
+  location: home_workspace
+  path: state.redb
   startupVerification: incremental
   keys:
     kind: none
@@ -141,9 +148,12 @@ process launch. YAML contains names and identities, never the values.
 
 ## Shared rules
 
-- Relative configuration, state, workflow, skill, pack, and workspace-owned paths
-  resolve from the canonical selected workspace. Security-sensitive explicit sandbox
-  roots and executables use the constraints in [Sandbox](configuration/sandbox.md).
+- Relative explicit configuration paths and workspace-owned workflow, skill, pack, and
+  sandbox paths resolve from the canonical selected workspace. Relative storage paths
+  use `storage.location`; `home_workspace` confines them to the current CLI workspace
+  partition. See [Storage](configuration/storage.md). Security-sensitive explicit
+  sandbox roots and executables use the constraints in
+  [Sandbox](configuration/sandbox.md).
 - Credential fields store `env:VARIABLE`, injected `host:IDENTIFIER`, or `null` when the
   adapter supports unauthenticated operation. They never store a literal secret.
 - Every remote origin must be authorized by the matching sandbox network destination.
@@ -156,14 +166,16 @@ process launch. YAML contains names and identities, never the values.
 ## Validation commands
 
 ```bash
-colossus --config .colossus/config.yaml config show
-colossus --config .colossus/config.yaml config effective
-colossus --config .colossus/config.yaml state doctor
-colossus --config .colossus/config.yaml policy doctor
-colossus --config .colossus/config.yaml sandbox doctor
+colossus -w /absolute/path/to/repository config show
+colossus -w /absolute/path/to/repository config effective
+colossus -w /absolute/path/to/repository state doctor
+colossus -w /absolute/path/to/repository policy doctor
+colossus -w /absolute/path/to/repository sandbox doctor
 ```
 
 `config show` is the authority for parsed values. `config effective` adds the canonical
-workspace, explicit and derived grants, resolved shell, protected paths, wildcard
-meaning, tools, actions, sources, decisions, and unmet prerequisites without resolving
-credentials.
+workspace, `resolution.configSource`, `resolution.configScope`, the resolved home,
+workspace partition ID, resolved state path, explicit and derived grants, resolved
+shell, protected paths,
+wildcard meaning, tools, actions, sources, decisions, and unmet prerequisites without
+resolving credentials or private bootstrap material.

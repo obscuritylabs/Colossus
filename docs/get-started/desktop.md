@@ -17,7 +17,8 @@ confirm that work uses the app-managed runtime and its bounded access profile.
 - macOS 13 or later for the first desktop release.
 - Apple silicon for the first direct-download build.
 - A folder you own and intend Colossus to use as its workspace.
-- An OpenAI Responses or OpenAI-compatible provider key for real model runs.
+- An OpenAI Responses or OpenAI-compatible provider key, or the official Codex CLI
+  installed for ChatGPT subscription-backed model runs.
 
 The offline self-test does not require a provider key or network connection.
 
@@ -50,31 +51,50 @@ disable Gatekeeper globally, and do not treat this preview as a stable productio
 ### 2. Open a workspace
 
 Launch Colossus Desktop and choose a folder through the native picker. The app records
-an opaque workspace binding in application support storage. It does not write Colossus
-configuration, state, or credentials into the selected repository.
+an opaque workspace binding in `$COLOSSUS_HOME/desktop/settings.json`. It does not write
+Colossus configuration, state, or credentials into the selected repository. Managed
+Local keeps its generated configuration, canonical database, indexes, and private
+runtime files in the selected workspace's isolated
+`workspaces/<partition-id>/desktop/` home partition; it never aliases CLI/TUI state.
 
 An older preview that recorded only a path or inode cannot safely prove that the
 current folder is the one you chose after the app has exited. After upgrading such a
 preview, Desktop intentionally asks you to choose the folder again and starts a fresh
 managed state partition; it never attaches the replacement folder to the old state.
+This release also starts fresh in the Colossus home rather than migrating earlier
+application-support data. That legacy data is preserved and ignored, not imported or
+deleted. Keep it until the new workspace has been verified.
 
 New installations select **Managed Local**. The signed app supervises its bundled
 `colossus-sidecar`, and the native desktop backend connects to that process over the
 same authenticated, pinned loopback gRPC contract used by application SDKs. A WebView
 reload does not stop the runtime.
 
+The repository remains the maximum filesystem/tool boundary. Selecting it does not
+relocate the Colossus home. Top-level Desktop agent runs automatically snapshot
+`$COLOSSUS_HOME/AGENTS.md` followed by the selected repository's `AGENTS.md`; see the
+[home and instruction reference](../reference/colossus-home.md#load-agentsmd).
+
 ### 3. Configure a model
 
-Select the fixed OpenAI Responses or OpenRouter (OpenAI-compatible) preset and enter
-the model. Continuing opens an operating-system secure-input dialog for that preset's
-fixed origin; the WebView cannot submit a key or endpoint. The native layer stores the
-key directly in the platform keychain.
-The managed runtime receives it through a one-use inherited bootstrap channel and
-resolves only its opaque `host:` reference after policy permits the provider action.
+Select the fixed OpenAI Responses, OpenRouter (OpenAI-compatible), or **ChatGPT
+subscription (Codex)** preset and enter the model. OpenAI and OpenRouter continue
+through an operating-system secure-input dialog for the preset's fixed origin; the
+WebView cannot submit a key or endpoint. The native layer stores that key directly in
+the platform keychain, and Managed Local resolves only its opaque `host:` reference
+after policy permits the provider action.
+
+For Codex, choose **Sign in with ChatGPT**. Desktop confirms the operation natively and
+starts the official Codex CLI login flow. The resulting credential stays in the
+Codex-owned private file store. The WebView receives only signed-in, signed-out, or
+unavailable status; the native host passes the validated file path—not its tokens or
+account identifier—over inherited bootstrap IPC. Sign-out uses the official CLI too.
 
 Later model or access-profile edits reuse the existing keychain entry when the
 provider preset is unchanged. Select **Replace the stored API key** to rotate it;
-first setup and every provider-preset change always force the native key prompt.
+first setup and every API-key provider-preset change always force the native key
+prompt. Advanced model configuration also exposes the provider-neutral reasoning-effort
+setting used by Codex and other adapters that support it.
 
 The key is not written to YAML, argv, environment variables, renderer state, logs, or
 terminal sessions. Real model runs remain unavailable until this setup succeeds. Use
@@ -212,19 +232,16 @@ A workspace already owned by another worker is never stopped or taken over. Conn
 that worker as External instead. Closing Desktop stops Managed Local after graceful
 drain and checkpoint; it does not stop an installed External daemon.
 
-### 7. Opt into the local TUI
+### 7. Opt into local terminals
 
-The macOS MVP deliberately does not expose a general Shell PTY. macOS provides no
-supported race-free job primitive to an ordinary desktop app that can guarantee cleanup
-after an arbitrary child creates a new session, double-forks, and is reparented. The
-native DTO rejects `shell` instead of presenting a cleanup guarantee the platform cannot
-enforce.
-
-The dedicated terminal WebView can open only the bundled Colossus TUI for the active
-managed workspace. It cannot supply an executable, environment, absolute working
-directory, or arbitrary arguments. Clipboard escape writes, automatic URL opening,
-remote navigation, and renderer-initiated process spawning are disabled; manual copy
-and paste remain user actions.
+The dedicated terminal WebView can open the bundled Colossus TUI for the active managed
+workspace and, on macOS, one fixed local shell. Enabling this feature for the first time
+requires a native operating-system confirmation. Consent recorded by an earlier
+TUI-only build does not silently enable shell authority. The terminal renderer cannot
+supply an executable, environment, absolute working directory, or arbitrary arguments.
+Clipboard escape writes, automatic URL opening, remote navigation, and general
+renderer-initiated process spawning are disabled; manual copy and paste remain user
+actions.
 
 **Open Colossus TUI** starts the verified bundled CLI suspended with fixed arguments,
 binds its live code identity to the signed bundle manifest before resuming it, and then
@@ -237,6 +254,16 @@ a second writer. Inside that TUI, `/permissions` shows the active approval mode 
 TUI. The selection is client-scoped: it does not change the managed worker default for
 Desktop or other clients. TUI actions remain inside normal Colossus policy and audit.
 External targets never offer a TUI action.
+
+**Open Shell** is a privileged local-user convenience, not an agent tool. Native macOS
+code launches exactly the validated system `/bin/zsh -l` with a cleared,
+native-constructed environment and the selected workspace. It receives no worker
+authentication. It runs outside Colossus policy, approvals, journal, and audit. It can
+remain available while Managed Local is unavailable so an operator can inspect or
+repair the repository directly. Closing the tab, disabling the feature, closing the
+terminal window, or exiting Desktop requests best-effort process-group cleanup; macOS
+cannot guarantee cleanup after an arbitrary shell child deliberately detaches and
+reparents itself.
 
 ## Expected result
 

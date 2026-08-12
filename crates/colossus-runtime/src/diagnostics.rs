@@ -75,6 +75,20 @@ impl Runtime {
         &self.workspace
     }
 
+    /// Credential- and content-free hashes for currently discoverable AGENTS.md inputs.
+    pub fn instruction_source_diagnostics(&self) -> Result<Value, RuntimeError> {
+        self._workspace_lease.identity().revalidate()?;
+        Ok(
+            InstructionSnapshot::capture(
+                self.colossus_home_root.as_ref(),
+                &self.workspace,
+                "",
+                "",
+            )?
+            .automatic_source_diagnostics(),
+        )
+    }
+
     /// Projection position, lag, and readiness for every built-in reducer.
     pub fn projection_status(&self) -> Result<Vec<ProjectionStatus>, RuntimeError> {
         self.projections.status().map_err(Into::into)
@@ -128,6 +142,7 @@ impl Runtime {
             "journal_head": journal_head,
             "record_hash": record_hash,
             "storage": self.storage_diagnostic,
+            "instruction_sources": self.instruction_source_diagnostics()?,
             "security_posture": self.security_posture,
             "writer_lease": writer_lease,
             "projection_store": {

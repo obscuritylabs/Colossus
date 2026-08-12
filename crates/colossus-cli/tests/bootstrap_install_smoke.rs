@@ -281,6 +281,7 @@ esac
             .env("COLOSSUS_BOOTSTRAP_FIXTURES", &self.root)
             .env("COLOSSUS_TEST_KERNEL", kernel_name())
             .env("COLOSSUS_TEST_MACHINE", machine_name())
+            .env("COLOSSUS_HOME", prefix.join("home/.colossus"))
             .env("XDG_DATA_HOME", prefix.join("data"))
             .output()
             .expect("run bootstrap installer")
@@ -311,6 +312,7 @@ fn machine_name() -> &'static str {
 fn bootstrap_maps_supported_unix_hosts_and_honors_dry_run_flags() {
     let fixture = Fixture::new();
     let prefix = fixture.root.join("dry-run-prefix");
+    let colossus_home = fixture.root.join("dry-run-home");
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     for (kernel, machine, expected) in [
         ("Darwin", "arm64", "aarch64-apple-darwin"),
@@ -334,6 +336,7 @@ fn bootstrap_maps_supported_unix_hosts_and_honors_dry_run_flags() {
             .env("COLOSSUS_BOOTSTRAP_FIXTURES", &fixture.root)
             .env("COLOSSUS_TEST_KERNEL", kernel)
             .env("COLOSSUS_TEST_MACHINE", machine)
+            .env("COLOSSUS_HOME", &colossus_home)
             .output()
             .expect("run dry-run bootstrap");
         assert!(
@@ -347,6 +350,7 @@ fn bootstrap_maps_supported_unix_hosts_and_honors_dry_run_flags() {
         assert!(stdout.contains("dry run complete"), "{stdout}");
     }
     assert!(!prefix.exists());
+    assert!(!colossus_home.exists());
 }
 
 #[test]
@@ -416,6 +420,14 @@ fn bootstrap_verifies_then_installs_and_records_direct_ownership() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(prefix.join("bin/colossus").is_file());
+    let colossus_home = prefix.join("home/.colossus");
+    assert!(colossus_home.is_dir());
+    assert_eq!(
+        fs::read_dir(colossus_home)
+            .expect("empty installer-created Colossus home")
+            .count(),
+        0
+    );
     let receipt: Value = serde_json::from_slice(
         &fs::read(prefix.join("data/colossus/install.json")).expect("install receipt"),
     )

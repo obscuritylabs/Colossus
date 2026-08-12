@@ -22,6 +22,9 @@ import {
   cancelRun,
   checkDesktopUpdate,
   closeTerminal,
+  codexAuthLogin,
+  codexAuthLogout,
+  codexAuthStatus,
   configureManagedRuntime,
   connectColossus,
   createRun,
@@ -190,6 +193,7 @@ describe("desktop API target routing", () => {
           model: "local-model",
           contextWindowTokens: 32_768,
           maxOutputTokens: 4_096,
+          reasoningEffort: null,
           capabilities: { toolCalls: false, streaming: false },
         },
       ],
@@ -205,6 +209,18 @@ describe("desktop API target routing", () => {
     );
     expect(JSON.stringify(request)).not.toContain("apiKey");
     expect(JSON.stringify(request)).not.toContain("credentialId");
+  });
+
+  it("invokes only native Codex account commands without renderer credentials", async () => {
+    await codexAuthStatus();
+    await codexAuthLogin();
+    await codexAuthLogout();
+
+    expect(tauri.invoke.mock.calls.slice(-3)).toEqual([
+      ["codex_auth_status", undefined],
+      ["codex_auth_login", undefined],
+      ["codex_auth_logout", undefined],
+    ]);
   });
 
   it("reads the native compile-time release channel without renderer input", async () => {
