@@ -1,0 +1,122 @@
+name: Verify public distribution
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact published stable vX.Y.Z tag to verify anonymously
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: public-distribution-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  unix:
+    name: Anonymous install (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Download and verify the public Unix bootstrap anonymously
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          version=${RELEASE_TAG#v}
+          root="$RUNNER_TEMP/public-colossus-$version"
+          install -d -m 0700 "$root/download" "$root/prefix" "$root/data" "$root/cache"
+          exact="https://github.com/obscuritylabs/Colossus/releases/download/$RELEASE_TAG"
+          latest="https://github.com/obscuritylabs/Colossus/releases/latest/download"
+          curl -fsSL --noproxy '*' "$exact/colossus-install.sh" \
+            -o "$root/download/colossus-install.sh"
+          curl -fsSL --noproxy '*' "$exact/colossus-install.sh.sha256" \
+            -o "$root/download/colossus-install.sh.sha256"
+          curl -fsSL --noproxy '*' "$latest/colossus-install.sh" \
+            -o "$root/download/colossus-install.latest.sh"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$root/download" && sha256sum --check --strict colossus-install.sh.sha256)
+          else
+            (cd "$root/download" && shasum -a 256 -c colossus-install.sh.sha256)
+          fi
+          cmp "$root/download/colossus-install.sh" "$root/download/colossus-install.latest.sh"
+          sh -n "$root/download/colossus-install.sh"
+          XDG_DATA_HOME="$root/data" XDG_CACHE_HOME="$root/cache" \
+            sh "$root/download/colossus-install.sh" \
+              --version "$RELEASE_TAG" \
+              --prefix "$root/prefix" \
+              --channel stable \
+              --no-modify-path \
+              --yes
+          test "$("$root/prefix/bin/colossus" --version)" = "colossus $version"
+          grep -F '"installerKind": "direct"' "$root/data/colossus/install.json"
+          XDG_DATA_HOME="$root/data" XDG_CACHE_HOME="$root/cache" \
+            "$root/prefix/bin/colossus" --output json update check \
+              > "$root/update-check.json"
+          grep -F '"status": "up_to_date"' "$root/update-check.json"
+
+  windows:
+    name: Anonymous install (Windows)
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Download and verify the public PowerShell bootstrap anonymously
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RELEASE_TAG -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "public distribution verification requires a stable vX.Y.Z tag"
+          }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $root = Join-Path $env:RUNNER_TEMP "public-colossus-$version"
+          $download = Join-Path $root "download"
+          $prefix = Join-Path $root "prefix"
+          $env:LOCALAPPDATA = Join-Path $root "data"
+          New-Item -ItemType Directory -Force -Path $download, $prefix, $env:LOCALAPPDATA | Out-Null
+          $exact = "https://github.com/obscuritylabs/Colossus/releases/download/$($env:RELEASE_TAG)"
+          $latest = "https://github.com/obscuritylabs/Colossus/releases/latest/download"
+          $bootstrap = Join-Path $download "colossus-install.ps1"
+          $checksum = Join-Path $download "colossus-install.ps1.sha256"
+          $latestBootstrap = Join-Path $download "colossus-install.latest.ps1"
+          Invoke-WebRequest "$exact/colossus-install.ps1" -OutFile $bootstrap
+          Invoke-WebRequest "$exact/colossus-install.ps1.sha256" -OutFile $checksum
+          Invoke-WebRequest "$latest/colossus-install.ps1" -OutFile $latestBootstrap
+          $checksumText = [IO.File]::ReadAllText($checksum, [Text.Encoding]::ASCII)
+          $match = [regex]::Match($checksumText, '\A([0-9a-f]{64})  colossus-install\.ps1\r?\n?\z')
+          if (-not $match.Success) { throw "bootstrap checksum has an invalid shape" }
+          $actual = (Get-FileHash -LiteralPath $bootstrap -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $match.Groups[1].Value) { throw "bootstrap checksum mismatch" }
+          if ((Get-FileHash $bootstrap).Hash -cne (Get-FileHash $latestBootstrap).Hash) {
+            throw "latest bootstrap does not match the published stable tag"
+          }
+          & $bootstrap `
+            -Version $env:RELEASE_TAG `
+            -Prefix $prefix `
+            -Channel stable `
+            -NoModifyPath `
+            -Yes
+          if ($LASTEXITCODE -ne 0) { throw "public bootstrap install failed" }
+          $binary = Join-Path $prefix "bin/colossus.exe"
+          if ((& $binary --version | Out-String).Trim() -cne "colossus $version") {
+            throw "installed binary version mismatch"
+          }
+          $receipt = Join-Path $env:LOCALAPPDATA "Colossus/install.json"
+          if ((Get-Content $receipt -Raw | ConvertFrom-Json).installerKind -cne "direct") {
+            throw "direct installation receipt is missing"
+          }
+          $check = (& $binary --output json update check | Out-String) | ConvertFrom-Json
+          if ($check.status -cne "up_to_date") { throw "public update discovery mismatch" }

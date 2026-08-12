@@ -15,6 +15,148 @@ pub(super) async fn run_update_check() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Apply one install-aware stable update without constructing the agent runtime.
+pub(super) async fn run_update(requested_version: Option<&str>) -> Result<(), Box<dyn Error>> {
+    let report = UpdateService::for_current_installation()
+        .update(requested_version)
+        .await;
+    let terminal = io::stdout().is_terminal();
+    if human_output(terminal) {
+        print_terminal_document(
+            &update_apply_document(&report),
+            &terminal_preferences(),
+            terminal,
+        );
+    } else {
+        print_json(&report)?;
+    }
+    if matches!(
+        report.status,
+        UpdateApplyStatus::Updated | UpdateApplyStatus::Scheduled | UpdateApplyStatus::UpToDate
+    ) {
+        Ok(())
+    } else {
+        Err(io::Error::other("Colossus update did not complete").into())
+    }
+}
+
+fn update_apply_document(report: &UpdateApplyReport) -> PresentationDocument {
+    let details = vec![
+        ("Current".into(), report.current_version.clone()),
+        (
+            "Selected".into(),
+            report
+                .selected_version
+                .as_deref()
+                .unwrap_or("unavailable")
+                .into(),
+        ),
+        (
+            "Installer".into(),
+            installer_name(report.installer_kind).into(),
+        ),
+    ];
+    match report.status {
+        UpdateApplyStatus::Updated => PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Colossus updated".into(),
+            tone: PresentationTone::Success,
+            body: vec![
+                PresentationBlock::KeyValue(details),
+                PresentationBlock::Text(
+                    "Restart running workers and terminals to use the new executable.".into(),
+                ),
+            ],
+        }),
+        UpdateApplyStatus::Scheduled => PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Colossus update scheduled".into(),
+            tone: PresentationTone::Success,
+            body: vec![
+                PresentationBlock::KeyValue(details),
+                PresentationBlock::Text(
+                    "Windows will replace the executable after this command exits.".into(),
+                ),
+            ],
+        }),
+        UpdateApplyStatus::UpToDate => PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Colossus is up to date".into(),
+            tone: PresentationTone::Success,
+            body: vec![PresentationBlock::KeyValue(details)],
+        }),
+        UpdateApplyStatus::Refused => {
+            let guidance = match report.refusal_reason {
+                Some(UpdateRefusalReason::NotDirectInstallation) => match report.installer_kind {
+                    InstallerKind::Homebrew => {
+                        "Homebrew owns this executable. Run `brew upgrade obscuritylabs/tap/colossus`."
+                    }
+                    InstallerKind::Nix => {
+                        "Nix owns this executable. Upgrade the Colossus profile or flake input through Nix."
+                    }
+                    InstallerKind::Source => {
+                        "A source workflow owns this executable. Rebuild it from the selected source revision."
+                    }
+                    InstallerKind::Direct | InstallerKind::Unknown => {
+                        "This executable has no matching direct-install receipt. Use the installation channel that owns it; to adopt a direct prefix, run the reviewed installer explicitly."
+                    }
+                },
+                Some(UpdateRefusalReason::InvalidVersion) => {
+                    "Use an exact stable version in the form `--version vX.Y.Z`."
+                }
+                Some(UpdateRefusalReason::Downgrade) => {
+                    "Automatic replacement never downgrades the installed executable."
+                }
+                Some(UpdateRefusalReason::PreviewInstallation) => {
+                    "Preview installations remain on the explicit preview installer path."
+                }
+                None => "The installation ownership policy refused replacement.",
+            };
+            PresentationDocument::from_block(PresentationBlock::Card {
+                title: "Colossus update refused".into(),
+                tone: PresentationTone::Warning,
+                body: vec![
+                    PresentationBlock::KeyValue(details),
+                    PresentationBlock::Text(guidance.into()),
+                ],
+            })
+        }
+        UpdateApplyStatus::Unavailable => {
+            let reason = match report.failure_reason {
+                Some(UpdateApplyFailure::DiscoveryUnavailable) => {
+                    "stable release discovery is unavailable"
+                }
+                Some(UpdateApplyFailure::LaunchFailed) => "the reviewed updater could not start",
+                Some(UpdateApplyFailure::InstallFailed) => {
+                    "the requested release was not installed; the prior executable was preserved"
+                }
+                Some(UpdateApplyFailure::TimedOut) => {
+                    "the bounded installer timed out; inspect the receipt before retrying"
+                }
+                Some(UpdateApplyFailure::UnsupportedHost) => {
+                    "this host has no supported native release target"
+                }
+                None => "the update is unavailable",
+            };
+            PresentationDocument::from_block(PresentationBlock::Card {
+                title: "Colossus update unavailable".into(),
+                tone: PresentationTone::Warning,
+                body: vec![
+                    PresentationBlock::KeyValue(details),
+                    PresentationBlock::Text(reason.into()),
+                ],
+            })
+        }
+    }
+}
+
+fn installer_name(installer: InstallerKind) -> &'static str {
+    match installer {
+        InstallerKind::Direct => "direct",
+        InstallerKind::Homebrew => "homebrew",
+        InstallerKind::Nix => "nix",
+        InstallerKind::Source => "source",
+        InstallerKind::Unknown => "unknown",
+    }
+}
+
 /// Construct the one-shot background notice used by both embedded and worker-backed TUIs.
 pub(super) fn default_update_notice_provider() -> Arc<dyn BackgroundNoticeProvider> {
     Arc::new(UpdateNoticeProvider::new(Arc::new(
@@ -85,10 +227,14 @@ fn update_check_document(report: &UpdateCheckReport) -> PresentationDocument {
 fn update_available_document(report: &UpdateCheckReport) -> PresentationDocument {
     let guidance = match report.installer_kind {
         InstallerKind::Direct => {
-            "A newer stable release is available. Re-run the official installer when ready."
+            "A newer stable release is available. Run `colossus update` when ready."
         }
-        InstallerKind::Homebrew => "A newer stable release is available. Upgrade with Homebrew.",
-        InstallerKind::Nix => "A newer stable release is available. Upgrade through Nix.",
+        InstallerKind::Homebrew => {
+            "A newer stable release is available. Run `brew upgrade obscuritylabs/tap/colossus`."
+        }
+        InstallerKind::Nix => {
+            "A newer stable release is available. Upgrade the Colossus profile or flake input through Nix."
+        }
         InstallerKind::Source => {
             "A newer stable release is available. Update through your source-build workflow."
         }
@@ -168,6 +314,19 @@ mod tests {
         }
     }
 
+    fn apply_report(status: UpdateApplyStatus) -> UpdateApplyReport {
+        UpdateApplyReport {
+            schema_version: 1,
+            status,
+            current_version: "0.10.4".into(),
+            selected_version: Some("0.10.5".into()),
+            target: Some("aarch64-apple-darwin".into()),
+            installer_kind: InstallerKind::Direct,
+            refusal_reason: None,
+            failure_reason: None,
+        }
+    }
+
     #[tokio::test]
     async fn background_notice_is_silent_when_update_discovery_is_offline() {
         let mut unavailable = report(UpdateCheckStatus::Unavailable);
@@ -191,5 +350,22 @@ mod tests {
         assert!(rendered.contains("0.10.5"));
         assert!(!rendered.contains("workspace"));
         assert!(!rendered.contains("session"));
+    }
+
+    #[test]
+    fn apply_documents_distinguish_success_refusal_and_failure() {
+        let updated = update_apply_document(&apply_report(UpdateApplyStatus::Updated));
+        assert!(format!("{updated:?}").contains("Colossus updated"));
+
+        let mut refused = apply_report(UpdateApplyStatus::Refused);
+        refused.installer_kind = InstallerKind::Homebrew;
+        refused.refusal_reason = Some(UpdateRefusalReason::NotDirectInstallation);
+        let rendered = format!("{:?}", update_apply_document(&refused));
+        assert!(rendered.contains("brew upgrade obscuritylabs/tap/colossus"));
+
+        let mut unavailable = apply_report(UpdateApplyStatus::Unavailable);
+        unavailable.failure_reason = Some(UpdateApplyFailure::InstallFailed);
+        let rendered = format!("{:?}", update_apply_document(&unavailable));
+        assert!(rendered.contains("prior executable was preserved"));
     }
 }

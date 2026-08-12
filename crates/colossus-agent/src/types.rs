@@ -10,6 +10,8 @@ pub(super) const INVALID_TOOL_ARGUMENTS_CODE: &str = "provider.invalid_tool_argu
 #[derive(Default)]
 pub(super) struct RunScope<'a> {
     pub(super) requested_run_id: Option<&'a str>,
+    pub(super) end_user_id: Option<&'a str>,
+    pub(super) remote_trace_context: Option<&'a colossus_contracts::RemoteTraceContext>,
     pub(super) goal_id: Option<&'a str>,
     pub(super) plan_id: Option<&'a str>,
     pub(super) subagent_id: Option<&'a str>,

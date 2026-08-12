@@ -88,6 +88,7 @@ impl WorkflowService {
                 "run {run_id} is not resumable"
             )));
         }
+        let mut observation = self.workflow_observation(&run, "recovery")?;
         let (definition, current_hash) = self
             .repository
             .definition(&run.workflow_name, &run.workflow_version)?
@@ -137,15 +138,38 @@ impl WorkflowService {
             "workflow.run.resumed.v1",
             json!({"from_status": run.status}),
         )?;
-        self.drive(
-            run_id,
-            definition,
-            current_hash,
-            run.inputs,
-            run.completed_steps,
-        )
-        .await?;
-        self.get_run(run_id)
+        if let Err(error) = self
+            .drive(
+                run_id,
+                definition,
+                current_hash,
+                run.inputs,
+                run.completed_steps,
+            )
+            .instrument(observation.span().clone())
+            .await
+        {
+            observation.span().record("otel.status_code", "ERROR");
+            observation.span().record("error.type", "workflow.failed");
+            colossus_observability::record_workflow(
+                &run.workflow_name,
+                observation.elapsed_seconds(),
+                Some("workflow.failed"),
+            );
+            return Err(error);
+        }
+        let result = self.get_run(run_id)?;
+        if result.status == WorkflowStatus::Waiting {
+            observation.retain();
+        } else {
+            observation.span().record("otel.status_code", "OK");
+            colossus_observability::record_workflow(
+                &run.workflow_name,
+                observation.elapsed_seconds(),
+                None,
+            );
+        }
+        Ok(result)
     }
 
     /// Cancel a non-terminal run. Compensation, if configured later, is separate.
@@ -173,6 +197,20 @@ impl WorkflowService {
             "workflow.run.cancelled.v1",
             json!({"reason": "operator requested cancellation"}),
         )?;
+        if let Some(observation) = self
+            .observability_spans
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?
+            .remove(run_id)
+        {
+            observation.span.record("otel.status_code", "ERROR");
+            observation.span.record("error.type", "workflow.cancelled");
+            colossus_observability::record_workflow(
+                &run.workflow_name,
+                observation.prior_elapsed_seconds + observation.started.elapsed().as_secs_f64(),
+                Some("workflow.cancelled"),
+            );
+        }
         self.get_run(run_id)
     }
 

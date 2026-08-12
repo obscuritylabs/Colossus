@@ -20,6 +20,7 @@ colossus-memory.workspace = true
 colossus-memory-chroma.workspace = true
 colossus-mcp.workspace = true
 colossus-network.workspace = true
+colossus-observability.workspace = true
 colossus-packs.workspace = true
 colossus-research.workspace = true
 colossus-policy.workspace = true
@@ -49,11 +50,16 @@ sha2.workspace = true
 thiserror.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 colossus-testkit.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native.workspace = true

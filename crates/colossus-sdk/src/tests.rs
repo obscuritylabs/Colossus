@@ -99,6 +99,7 @@ async fn plan_continuation_requires_an_advertised_runtime_capability() {
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text("Run the approved Plan".into())],
             session_id: Some("session-1".into()),
+            end_user_id: None,
             role: "primary".into(),
             mode: RunMode::Execute,
             selected_skills: Vec::new(),

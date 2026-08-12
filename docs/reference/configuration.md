@@ -88,6 +88,26 @@ sandbox:
   maxProcesses: 16
   maxMemoryBytes: 268435456
   maxConcurrency: 1
+observability:
+  enabled: false
+  serviceName: colossus
+  resourceAttributes: {}
+  traces:
+    enabled: false
+    sampleRatio: 1.0
+  metrics:
+    enabled: false
+    exportIntervalMs: 60000
+  logs:
+    otlp: false
+    stdoutJson: false
+    journalPayloads: disabled
+    acknowledgeSensitiveContent: false
+  otlp:
+    endpoint: null
+    protocol: grpc
+    timeoutMs: 10000
+    acknowledgeInsecureTransport: false
 ```
 <!-- rust-config-example:end -->
 
@@ -117,6 +137,7 @@ process launch. YAML contains names and identities, never the values.
 | `packs` | No | Pack installation root | [Skills, packs, and workflows](configuration/extensions.md) |
 | `mcp` | No | Exact stdio and stateful Streamable HTTP server declarations | [MCP servers](configuration/mcp.md) |
 | `audit` | No | External evidence exporter | [Policy and audit](configuration/policy-audit.md) |
+| `observability` | No | Opt-in OTLP traces, metrics, logs, and journal log disclosure | [Live observability](configuration/observability.md) |
 
 ## Shared rules
 

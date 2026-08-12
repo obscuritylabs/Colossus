@@ -33,6 +33,14 @@ a reintroduced root Python runtime or tracked Python source outside the maintain
 SDK and its credential-free SDK fixtures, and runs formatting, Clippy, the complete
 workspace suite, fuzz compilation, and production/fuzz supply-chain policy.
 
+The root `cargo-audit` invocation temporarily ignores only `RUSTSEC-2026-0253` for
+Tantivy 0.26.1. Tantivy uses `usize` keys in the affected cache, so the advisory's
+required panicking key destructor is unreachable, and its next unreleased version
+already uses patched `lru` 0.18.2. `cargo-deny` does not report this informational
+advisory and retains an empty ignore list. Confirm that the `cargo-audit` exception
+remains exact during release review and remove it as soon as the merged
+[Tantivy fix](https://github.com/quickwit-oss/tantivy/pull/3034) is published on crates.io.
+
 ## Dry-run artifacts
 
 Before tagging, the release operator may exercise all six package jobs without publishing:
@@ -123,8 +131,11 @@ Before publishing the draft:
    [`release/bundle-publisher.json`](https://github.com/obscuritylabs/Colossus/blob/main/release/bundle-publisher.json).
 
 Publishing a stable draft triggers the protected, OIDC-backed SDK publisher described in
-[Core release operations](/develop/releasing/). Never publish the disposable signing
-material used by CI smoke tests. Preserve the workflow run, gate status,
+[Core release operations](/develop/releasing/) and the credential-free public
+distribution workflow performs real anonymous installs on macOS, Linux, and Windows.
+Treat a failed public-distribution check as a release incident: the documented latest
+installer route is not ready until all three host checks pass. Never publish the
+disposable signing material used by CI smoke tests. Preserve the workflow run, gate status,
 secure-anchor/audit evidence, and artifact hashes with the release record. The frozen
 legacy Python runtime tag and branches are not rebuilt; the maintained public Python SDK
 is released from `sdk/python` with the coordinated stable core version.

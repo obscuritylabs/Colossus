@@ -16,6 +16,9 @@ pub struct RuntimeConfig {
     /// Optional durable external audit evidence export.
     #[serde(default)]
     pub audit: AuditConfig,
+    /// Opt-in live OpenTelemetry traces, metrics, and structured logs.
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
     /// Policy decision point settings.
     pub policy: PolicyConfig,
     /// Workflow definition libraries.
@@ -769,6 +772,10 @@ impl RuntimeConfig {
             }
         }
         validate_audit_config(&config.audit, &config.sandbox)?;
+        config
+            .observability
+            .validate()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
         if config
             .network
             .ca_bundle_path
@@ -1041,6 +1048,7 @@ impl RuntimeConfig {
             },
             network: NetworkConfig::default(),
             audit: AuditConfig::default(),
+            observability: ObservabilityConfig::default(),
             policy: PolicyConfig::BuiltIn {
                 require_post_effect: false,
             },

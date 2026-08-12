@@ -34,6 +34,7 @@ use tonic::{
     Request, Response, Status,
     codegen::tokio_stream::{Stream, StreamExt},
 };
+use tracing::Instrument as _;
 
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_OPAQUE_TOKEN_BYTES: usize = 512;
@@ -49,13 +50,63 @@ pub const MAX_ACTIVE_WATCH_STREAMS: usize = 64;
 struct AdmittedWatchStream {
     inner: Pin<Box<dyn Stream<Item = Result<WatchRunResponse, Status>> + Send + 'static>>,
     _permit: OwnedSemaphorePermit,
+    span: tracing::Span,
 }
 
 impl Stream for AdmittedWatchStream {
     type Item = Result<WatchRunResponse, Status>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(context)
+        let span = self.span.clone();
+        let _entered = span.enter();
+        let result = self.inner.as_mut().poll_next(context);
+        if matches!(result, Poll::Ready(Some(Err(_)))) {
+            span.record("otel.status_code", "ERROR");
+            span.record("error.type", "rpc.stream.failed");
+        }
+        result
+    }
+}
+
+fn public_rpc_span<T>(
+    request: &Request<T>,
+    caller: &CallerContext,
+    method: &'static str,
+) -> tracing::Span {
+    let remote = colossus_observability::extract_remote_trace_context(
+        request
+            .metadata()
+            .get("traceparent")
+            .and_then(|value| value.to_str().ok()),
+        request
+            .metadata()
+            .get("tracestate")
+            .and_then(|value| value.to_str().ok()),
+    );
+    let span = tracing::info_span!(
+        target: "colossus.rpc",
+        "grpc.request",
+        otel.name = %format_args!("colossus.api.v1alpha1.AgentRunService/{method}"),
+        otel.kind = "server",
+        otel.status_code = tracing::field::Empty,
+        rpc.system = "grpc",
+        rpc.service = "colossus.api.v1alpha1.AgentRunService",
+        rpc.method = method,
+        colossus.application.id = caller.principal().application_id(),
+        error.type = tracing::field::Empty,
+    );
+    if let Some(remote) = remote.as_ref() {
+        let _ = colossus_observability::set_remote_parent(&span, remote);
+    }
+    span
+}
+
+fn record_rpc_result<T>(span: &tracing::Span, result: &Result<T, Status>) {
+    if result.is_ok() {
+        span.record("otel.status_code", "OK");
+    } else {
+        span.record("otel.status_code", "ERROR");
+        span.record("error.type", "rpc.failed");
     }
 }
 
@@ -87,15 +138,24 @@ impl AgentRunService for AgentRunServiceAdapter {
         request: Request<CreateRunRequest>,
     ) -> Result<Response<CreateRunResponse>, Status> {
         let caller = caller_context(&request)?.clone();
-        let request = create_request(&caller, request.into_inner())?;
-        let response = self
-            .api
-            .create_run(&caller, request)
-            .await
-            .map_err(api_status)?;
-        Ok(Response::new(CreateRunResponse {
-            run: Some(proto_run(response.run)?),
-        }))
+        let span = public_rpc_span(&request, &caller, "CreateRun");
+        let result = async {
+            let caller =
+                caller.with_remote_trace_context(colossus_observability::current_trace_context());
+            let request = create_request(&caller, request.into_inner())?;
+            let response = self
+                .api
+                .create_run(&caller, request)
+                .await
+                .map_err(api_status)?;
+            Ok(Response::new(CreateRunResponse {
+                run: Some(proto_run(response.run)?),
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
     }
 
     async fn get_run(
@@ -103,31 +163,38 @@ impl AgentRunService for AgentRunServiceAdapter {
         request: Request<GetRunRequest>,
     ) -> Result<Response<GetRunResponse>, Status> {
         let caller = caller_context(&request)?.clone();
-        let request = request.into_inner();
-        validate_identifier(&caller, "run_id", &request.run_id)?;
-        let run = self
-            .api
-            .get_run(
-                &caller,
-                CoreGetRunRequest {
-                    run_id: request.run_id,
-                },
-            )
-            .await
-            .map_err(api_status)?;
-        let pending_interactions = run
-            .pending_interaction
-            .as_ref()
-            .map(|pending| {
-                proto_interaction(pending, &run.id, Some(&run.etag), &caller)
-                    .map(|value| vec![value])
-            })
-            .transpose()?
-            .unwrap_or_default();
-        Ok(Response::new(GetRunResponse {
-            run: Some(proto_run(run)?),
-            pending_interactions,
-        }))
+        let span = public_rpc_span(&request, &caller, "GetRun");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "run_id", &request.run_id)?;
+            let run = self
+                .api
+                .get_run(
+                    &caller,
+                    CoreGetRunRequest {
+                        run_id: request.run_id,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            let pending_interactions = run
+                .pending_interaction
+                .as_ref()
+                .map(|pending| {
+                    proto_interaction(pending, &run.id, Some(&run.etag), &caller)
+                        .map(|value| vec![value])
+                })
+                .transpose()?
+                .unwrap_or_default();
+            Ok(Response::new(GetRunResponse {
+                run: Some(proto_run(run)?),
+                pending_interactions,
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
     }
 
     async fn list_runs(
@@ -135,53 +202,60 @@ impl AgentRunService for AgentRunServiceAdapter {
         request: Request<ListRunsRequest>,
     ) -> Result<Response<ListRunsResponse>, Status> {
         let caller = caller_context(&request)?.clone();
-        let request = request.into_inner();
-        if let Some(session_id) = request.session_id.as_deref() {
-            validate_identifier(&caller, "session_id", session_id)?;
+        let span = public_rpc_span(&request, &caller, "ListRuns");
+        let result = async {
+            let request = request.into_inner();
+            if let Some(session_id) = request.session_id.as_deref() {
+                validate_identifier(&caller, "session_id", session_id)?;
+            }
+            if request.statuses.len() > MAX_RUN_STATUS_FILTERS {
+                return Err(invalid(
+                    &caller,
+                    "statuses",
+                    "statuses must contain at most nine lifecycle states",
+                ));
+            }
+            let statuses = request
+                .statuses
+                .into_iter()
+                .map(|status| core_run_status(&caller, status))
+                .collect::<Result<Vec<_>, _>>()?;
+            let (page_size, page_token) = request.page.map_or((0, None), |page| {
+                let page_token = (!page.page_token.is_empty()).then_some(page.page_token);
+                (page.page_size, page_token)
+            });
+            if let Some(page_token) = page_token.as_deref() {
+                validate_opaque(&caller, "page.page_token", page_token)?;
+            }
+            let response = self
+                .api
+                .list_runs(
+                    &caller,
+                    CoreListRunsRequest {
+                        session_id: request.session_id,
+                        statuses,
+                        page_size,
+                        page_token,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            let runs = response
+                .runs
+                .into_iter()
+                .map(proto_run)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Response::new(ListRunsResponse {
+                runs,
+                page: Some(PageResponse {
+                    next_page_token: response.next_page_token.unwrap_or_default(),
+                }),
+            }))
         }
-        if request.statuses.len() > MAX_RUN_STATUS_FILTERS {
-            return Err(invalid(
-                &caller,
-                "statuses",
-                "statuses must contain at most nine lifecycle states",
-            ));
-        }
-        let statuses = request
-            .statuses
-            .into_iter()
-            .map(|status| core_run_status(&caller, status))
-            .collect::<Result<Vec<_>, _>>()?;
-        let (page_size, page_token) = request.page.map_or((0, None), |page| {
-            let page_token = (!page.page_token.is_empty()).then_some(page.page_token);
-            (page.page_size, page_token)
-        });
-        if let Some(page_token) = page_token.as_deref() {
-            validate_opaque(&caller, "page.page_token", page_token)?;
-        }
-        let response = self
-            .api
-            .list_runs(
-                &caller,
-                CoreListRunsRequest {
-                    session_id: request.session_id,
-                    statuses,
-                    page_size,
-                    page_token,
-                },
-            )
-            .await
-            .map_err(api_status)?;
-        let runs = response
-            .runs
-            .into_iter()
-            .map(proto_run)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Response::new(ListRunsResponse {
-            runs,
-            page: Some(PageResponse {
-                next_page_token: response.next_page_token.unwrap_or_default(),
-            }),
-        }))
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
     }
 
     type WatchRunStream =
@@ -192,46 +266,54 @@ impl AgentRunService for AgentRunServiceAdapter {
         request: Request<WatchRunRequest>,
     ) -> Result<Response<Self::WatchRunStream>, Status> {
         let caller = caller_context(&request)?.clone();
-        let request = request.into_inner();
-        validate_identifier(&caller, "run_id", &request.run_id)?;
-        let watch_permit = Arc::clone(&self.watch_slots)
-            .try_acquire_owned()
-            .map_err(|_| {
-                api_status(
-                    ApiError::resource_exhausted(
-                        ApiErrorReason::CapacityExceeded,
-                        "public watch transport capacity reached",
+        let span = public_rpc_span(&request, &caller, "WatchRun");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "run_id", &request.run_id)?;
+            let watch_permit = Arc::clone(&self.watch_slots)
+                .try_acquire_owned()
+                .map_err(|_| {
+                    api_status(
+                        ApiError::resource_exhausted(
+                            ApiErrorReason::CapacityExceeded,
+                            "public watch transport capacity reached",
+                        )
+                        .with_correlation_id(caller.request_id().clone()),
                     )
-                    .with_correlation_id(caller.request_id().clone()),
+                })?;
+            let stream = self
+                .api
+                .watch_run(
+                    &caller,
+                    CoreWatchRunRequest {
+                        run_id: request.run_id,
+                        after_sequence: request.after_sequence,
+                    },
                 )
-            })?;
-        let stream = self
-            .api
-            .watch_run(
-                &caller,
-                CoreWatchRunRequest {
-                    run_id: request.run_id,
-                    after_sequence: request.after_sequence,
-                },
-            )
-            .await
-            .map_err(api_status)?;
-        let api = Arc::clone(&self.api);
-        let mapped = stream.then(move |item| {
-            let api = Arc::clone(&api);
-            let caller = caller.clone();
-            async move {
-                let update = item.map_err(api_status)?;
-                let update = proto_update(api.as_ref(), &caller, update).await?;
-                Ok(WatchRunResponse {
-                    update: Some(update),
-                })
-            }
-        });
-        Ok(Response::new(Box::pin(AdmittedWatchStream {
-            inner: Box::pin(mapped),
-            _permit: watch_permit,
-        })))
+                .await
+                .map_err(api_status)?;
+            let api = Arc::clone(&self.api);
+            let mapped = stream.then(move |item| {
+                let api = Arc::clone(&api);
+                let caller = caller.clone();
+                async move {
+                    let update = item.map_err(api_status)?;
+                    let update = proto_update(api.as_ref(), &caller, update).await?;
+                    Ok(WatchRunResponse {
+                        update: Some(update),
+                    })
+                }
+            });
+            Ok(Response::new(Box::pin(AdmittedWatchStream {
+                inner: Box::pin(mapped),
+                _permit: watch_permit,
+                span: span.clone(),
+            }) as Self::WatchRunStream))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
     }
 
     async fn cancel_run(
@@ -239,23 +321,30 @@ impl AgentRunService for AgentRunServiceAdapter {
         request: Request<CancelRunRequest>,
     ) -> Result<Response<CancelRunResponse>, Status> {
         let caller = caller_context(&request)?.clone();
-        let request = request.into_inner();
-        validate_identifier(&caller, "run_id", &request.run_id)?;
-        let idempotency_key = idempotency_key(&caller, request.idempotency_key)?;
-        let run = self
-            .api
-            .cancel_run(
-                &caller,
-                CoreCancelRunRequest {
-                    run_id: request.run_id,
-                    idempotency_key,
-                },
-            )
-            .await
-            .map_err(api_status)?;
-        Ok(Response::new(CancelRunResponse {
-            run: Some(proto_run(run)?),
-        }))
+        let span = public_rpc_span(&request, &caller, "CancelRun");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "run_id", &request.run_id)?;
+            let idempotency_key = idempotency_key(&caller, request.idempotency_key)?;
+            let run = self
+                .api
+                .cancel_run(
+                    &caller,
+                    CoreCancelRunRequest {
+                        run_id: request.run_id,
+                        idempotency_key,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            Ok(Response::new(CancelRunResponse {
+                run: Some(proto_run(run)?),
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
     }
 
     async fn respond_interaction(
@@ -263,32 +352,39 @@ impl AgentRunService for AgentRunServiceAdapter {
         request: Request<RespondInteractionRequest>,
     ) -> Result<Response<RespondInteractionResponse>, Status> {
         let caller = caller_context(&request)?.clone();
-        let request = request.into_inner();
-        validate_identifier(&caller, "run_id", &request.run_id)?;
-        validate_identifier(&caller, "interaction_id", &request.interaction_id)?;
-        validate_opaque(&caller, "etag", &request.etag)?;
-        let idempotency_key = idempotency_key(&caller, request.idempotency_key)?;
-        let run_id = request.run_id;
-        let interaction_id = request.interaction_id;
-        let etag = request.etag;
-        let response = core_interaction_response(&caller, request.response)?;
-        let interaction = self
-            .api
-            .respond_interaction(
-                &caller,
-                CoreRespondInteractionRequest {
-                    run_id: run_id.clone(),
-                    interaction_id,
-                    etag: etag.clone(),
-                    idempotency_key,
-                    response,
-                },
-            )
-            .await
-            .map_err(api_status)?;
-        Ok(Response::new(RespondInteractionResponse {
-            interaction: Some(proto_interaction(&interaction, &run_id, None, &caller)?),
-        }))
+        let span = public_rpc_span(&request, &caller, "RespondInteraction");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "run_id", &request.run_id)?;
+            validate_identifier(&caller, "interaction_id", &request.interaction_id)?;
+            validate_opaque(&caller, "etag", &request.etag)?;
+            let idempotency_key = idempotency_key(&caller, request.idempotency_key)?;
+            let run_id = request.run_id;
+            let interaction_id = request.interaction_id;
+            let etag = request.etag;
+            let response = core_interaction_response(&caller, request.response)?;
+            let interaction = self
+                .api
+                .respond_interaction(
+                    &caller,
+                    CoreRespondInteractionRequest {
+                        run_id: run_id.clone(),
+                        interaction_id,
+                        etag: etag.clone(),
+                        idempotency_key,
+                        response,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            Ok(Response::new(RespondInteractionResponse {
+                interaction: Some(proto_interaction(&interaction, &run_id, None, &caller)?),
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
     }
 }
 
@@ -392,6 +488,7 @@ fn create_request(
     let request = CoreCreateRunRequest {
         input,
         session_id: request.session_id,
+        end_user_id: request.end_user_id,
         role: (!request.role.is_empty()).then_some(request.role),
         mode,
         skill_ids: request.selected_skills,
@@ -1068,6 +1165,7 @@ mod tests {
                 CreateRunRequest {
                     input: Vec::new(),
                     session_id: None,
+                    end_user_id: None,
                     role: String::new(),
                     mode,
                     selected_skills: Vec::new(),
@@ -1090,6 +1188,7 @@ mod tests {
                     .map(|_| colossus_api_proto::v1alpha1::ContentPart { content: None })
                     .collect(),
                 session_id: None,
+                end_user_id: None,
                 role: "assistant".into(),
                 mode: RunMode::Execute as i32,
                 selected_skills: Vec::new(),

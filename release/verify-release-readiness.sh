@@ -72,7 +72,12 @@ run cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 
 run cargo deny --locked check -A license-not-encountered licenses sources bans
 run cargo deny --locked check -D warnings advisories
-run cargo audit -D warnings --file Cargo.lock
+# Tantivy 0.26.1 uses `usize` lru keys, so the panicking key destructor required
+# by RUSTSEC-2026-0253 is unreachable. Tantivy merged lru 0.18.2 for its next
+# registry release in quickwit-oss/tantivy#3034. Remove this exact exception
+# with that upgrade. cargo-deny does not report this informational advisory, so
+# its advisory policy remains unmodified.
+run cargo audit -D warnings --ignore RUSTSEC-2026-0253 --file Cargo.lock
 
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories

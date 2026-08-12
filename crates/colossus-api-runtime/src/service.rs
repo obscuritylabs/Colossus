@@ -963,6 +963,8 @@ impl RuntimeAgentRunApi {
                         strategy,
                         max_turns,
                         &run.id,
+                        request.end_user_id.as_deref(),
+                        caller.remote_trace_context(),
                         &mut observer,
                         &control,
                     );
@@ -1005,6 +1007,8 @@ impl RuntimeAgentRunApi {
                         &request.skill_ids,
                         &allowed_tools,
                         mode,
+                        request.end_user_id.as_deref(),
+                        caller.remote_trace_context(),
                         caller.actor(),
                         &mut observer,
                         &control,
@@ -1419,7 +1423,8 @@ fn recovered_caller(
     .map_err(|_| recovery_invariant(external))?;
     let request_id =
         RequestId::new(format!("recovery-{run_id}")).map_err(|_| recovery_invariant(external))?;
-    Ok(CallerContext::authenticated(principal, request_id))
+    Ok(CallerContext::authenticated(principal, request_id)
+        .with_remote_trace_context(execution.trace_context.clone()))
 }
 
 fn supported_text_attachment(media_type: &str) -> bool {

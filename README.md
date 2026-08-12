@@ -6,9 +6,25 @@ memory, research, and an encrypted event journal in one Rust binary.
 
 ## Start in five minutes
 
-Download the archive for your platform from
-[GitHub Releases](https://github.com/obscuritylabs/Colossus/releases), run the included
-`install.sh` or `install.ps1`, and then initialize a local configuration:
+Install the latest stable native binary directly from the public release channel:
+
+```bash
+curl -fsSL https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.ps1 | iex
+```
+
+The installer selects the native archive for the host, verifies its adjacent SHA-256
+sidecar, and installs to `$HOME/.local` without `sudo` or profile changes. The
+[installation guide](docs/get-started/install.md) includes a review-before-running form,
+exact-version selection, Nix, offline archives, supported targets, updates, and
+uninstallation.
+
+Initialize a local configuration and prove the runtime offline:
 
 ```bash
 colossus config init
@@ -28,6 +44,13 @@ approvals, and sandbox grants still determine which effects it may perform.
 
 [Read the five-minute quickstart](docs/get-started/quickstart.md) or open the
 [published documentation](https://obscuritylabs.github.io/Colossus/).
+
+Direct installations can later check or apply stable updates with:
+
+```bash
+colossus update check
+colossus update
+```
 
 ## What you can do
 

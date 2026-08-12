@@ -13,6 +13,7 @@ base64.workspace = true
 colossus-api.workspace = true
 colossus-api-proto.workspace = true
 colossus-contracts.workspace = true
+colossus-observability.workspace = true
 colossus-ports.workspace = true
 getrandom.workspace = true
 futures.workspace = true
@@ -32,6 +33,7 @@ tokio.workspace = true
 tokio-rustls.workspace = true
 tokio-stream.workspace = true
 tonic = { workspace = true, features = ["router", "transport", "tls-ring"] }
+tracing.workspace = true
 tower.workspace = true
 url.workspace = true
 uuid.workspace = true

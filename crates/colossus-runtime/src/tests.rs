@@ -754,6 +754,32 @@ fn default_runtime_limits_are_implicit_in_serialized_configuration() {
 }
 
 #[test]
+fn observability_is_disabled_by_default_and_full_payloads_require_acknowledgement() {
+    let config = RuntimeConfig::offline_template("state.redb");
+    assert!(!config.observability.enabled);
+    assert_eq!(
+        config.observability.logs.journal_payloads,
+        super::JournalPayloadMode::Disabled
+    );
+
+    let mut document: Value =
+        serde_saphyr::from_str(&config.to_yaml().expect("YAML")).expect("YAML value");
+    document["observability"] = serde_json::json!({
+        "enabled": true,
+        "logs": {
+            "stdoutJson": true,
+            "journalPayloads": "full",
+            "acknowledgeSensitiveContent": false
+        }
+    });
+    let yaml = serde_saphyr::to_string(&document).expect("YAML");
+    assert!(RuntimeConfig::from_yaml(&yaml).is_err());
+    document["observability"]["logs"]["acknowledgeSensitiveContent"] = Value::Bool(true);
+    RuntimeConfig::from_yaml(&serde_saphyr::to_string(&document).expect("YAML"))
+        .expect("acknowledged sensitive logging");
+}
+
+#[test]
 fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     assert_eq!(

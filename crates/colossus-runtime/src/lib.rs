@@ -60,6 +60,7 @@ use colossus_memory_chroma::{
     LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile,
 };
 use colossus_network::AdditionalRootCertificates;
+use colossus_observability::ObservedEventJournal;
 use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
@@ -131,6 +132,7 @@ use std::{
 use thiserror::Error;
 use tokio::sync::{Mutex as TokioMutex, Notify};
 use tokio::task::JoinSet;
+use tracing::Instrument as _;
 use url::Url;
 use uuid::Uuid;
 
@@ -172,6 +174,10 @@ mod workspace_binding;
 mod workspace_lease;
 
 pub use colossus_contracts::{ModelCapabilities, ReasoningEffort};
+pub use colossus_observability::{
+    JournalPayloadMode, LogSignalConfig, MetricSignalConfig, ObservabilityConfig, OtlpConfig,
+    OtlpProtocol, TraceSignalConfig,
+};
 pub use composition::Runtime;
 pub use config::{
     AgentConfig, AuditConfig, AuditExporterConfig, KeyConfig, MemoryConfig, MemoryEmbeddingConfig,

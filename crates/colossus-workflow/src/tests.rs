@@ -1957,6 +1957,14 @@ async fn input_completes_waiting_step_before_resume() {
         .await
         .expect("start");
     assert_eq!(waiting.status, colossus_contracts::WorkflowStatus::Waiting);
+    assert!(
+        service
+            .observability_spans
+            .lock()
+            .expect("observability spans")
+            .contains_key(&waiting.run_id),
+        "the logical workflow span must remain live while the run waits"
+    );
     let completed = service
         .provide_input(&waiting.run_id, json!("accepted"))
         .await
@@ -1966,6 +1974,14 @@ async fn input_completes_waiting_step_before_resume() {
         colossus_contracts::WorkflowStatus::Completed
     );
     assert_eq!(completed.completed_steps, 2);
+    assert!(
+        !service
+            .observability_spans
+            .lock()
+            .expect("observability spans")
+            .contains_key(&waiting.run_id),
+        "terminal completion must close the retained logical span"
+    );
 }
 
 #[tokio::test]

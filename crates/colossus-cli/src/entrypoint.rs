@@ -12,13 +12,11 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
-    if matches!(
-        cli.command,
-        Command::Update(UpdateCommand {
-            command: UpdateAction::Check
-        })
-    ) {
-        run_update_check().await?;
+    if let Command::Update(update) = &cli.command {
+        match update.command.as_ref() {
+            Some(UpdateAction::Check) => run_update_check().await?,
+            None => run_update(update.version.as_deref()).await?,
+        }
         return Ok(());
     }
     if (cli.worker_required || cli.desktop_worker_auth)
@@ -107,6 +105,8 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 && worker.enroll_application.is_none()
                 && worker.revoke_credential.is_none() =>
         {
+            let observability =
+                colossus_observability::ObservabilityGuard::install(&config.observability)?;
             let mode = match cli.approval_mode.unwrap_or(ApprovalMode::Ask) {
                 ApprovalMode::Deny => WorkerApprovalMode::Deny,
                 ApprovalMode::Ask => WorkerApprovalMode::Ask,
@@ -133,6 +133,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             eprintln!("worker listening on {}", server.endpoint());
             let result = server.serve().await;
             drop(public_environment);
+            if let Some(observability) = observability {
+                observability.shutdown();
+            }
             result?;
             return Ok(());
         }

@@ -1072,7 +1072,10 @@ type CreateRunRequest struct {
 	// idempotency_key is required and scoped to the authenticated caller.
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	// plan_action optionally continues the exact Plan released by a caller-owned run.
-	PlanAction    *PlanRunAction `protobuf:"bytes,8,opt,name=plan_action,json=planAction,proto3" json:"plan_action,omitempty"`
+	PlanAction *PlanRunAction `protobuf:"bytes,8,opt,name=plan_action,json=planAction,proto3" json:"plan_action,omitempty"`
+	// end_user_id is optional caller-asserted correlation data. It is not an
+	// authenticated principal or authorization input and may contain PII.
+	EndUserId     *string `protobuf:"bytes,9,opt,name=end_user_id,json=endUserId,proto3,oneof" json:"end_user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1161,6 +1164,13 @@ func (x *CreateRunRequest) GetPlanAction() *PlanRunAction {
 		return x.PlanAction
 	}
 	return nil
+}
+
+func (x *CreateRunRequest) GetEndUserId() string {
+	if x != nil && x.EndUserId != nil {
+		return *x.EndUserId
+	}
+	return ""
 }
 
 // PlanRunAction continues the exact Plan released by a caller-owned source run.
@@ -3353,7 +3363,7 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x0fselected_skills\x18\x10 \x03(\tR\x0eselectedSkills\x12\x14\n" +
 	"\x05title\x18\x11 \x01(\tR\x05titleB\n" +
 	"\n" +
-	"\bterminal\"\xfd\x02\n" +
+	"\bterminal\"\xb2\x03\n" +
 	"\x10CreateRunRequest\x128\n" +
 	"\x05input\x18\x01 \x03(\v2\".colossus.api.v1alpha1.ContentPartR\x05input\x12\"\n" +
 	"\n" +
@@ -3364,8 +3374,10 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\tmax_turns\x18\x06 \x01(\rR\bmaxTurns\x12'\n" +
 	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12E\n" +
 	"\vplan_action\x18\b \x01(\v2$.colossus.api.v1alpha1.PlanRunActionR\n" +
-	"planActionB\r\n" +
-	"\v_session_id\"\xf3\x01\n" +
+	"planAction\x12#\n" +
+	"\vend_user_id\x18\t \x01(\tH\x01R\tendUserId\x88\x01\x01B\r\n" +
+	"\v_session_idB\x0e\n" +
+	"\f_end_user_id\"\xf3\x01\n" +
 	"\rPlanRunAction\x12\"\n" +
 	"\rsource_run_id\x18\x01 \x01(\tR\vsourceRunId\x12+\n" +
 	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\x12A\n" +

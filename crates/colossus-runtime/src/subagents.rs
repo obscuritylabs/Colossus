@@ -110,24 +110,27 @@ impl Runtime {
             for job in running {
                 let agent = Arc::clone(&self.agent);
                 let max_turns = self.agent_max_turns;
-                set.spawn(async move {
-                    let instructions = format!(
-                        "You are a durable Colossus child agent for job {}. Complete only the assigned task. Nested delegation is disabled. Return a concise result for the parent.",
-                        job.id
-                    );
-                    let result = agent
-                        .run_subagent(
-                            &job.role,
-                            &instructions,
-                            &job.task,
-                            max_turns,
-                            &job.child_session_id,
-                            &job.id,
-                            job.allowed_tools.as_deref(),
-                        )
-                        .await;
-                    (job.id, result)
-                });
+                set.spawn(
+                    async move {
+                        let instructions = format!(
+                            "You are a durable Colossus child agent for job {}. Complete only the assigned task. Nested delegation is disabled. Return a concise result for the parent.",
+                            job.id
+                        );
+                        let result = agent
+                            .run_subagent(
+                                &job.role,
+                                &instructions,
+                                &job.task,
+                                max_turns,
+                                &job.child_session_id,
+                                &job.id,
+                                job.allowed_tools.as_deref(),
+                            )
+                            .await;
+                        (job.id, result)
+                    }
+                    .instrument(tracing::Span::current()),
+                );
             }
             while let Some(joined) = set.join_next().await {
                 let (id, result) = joined.map_err(|error| {

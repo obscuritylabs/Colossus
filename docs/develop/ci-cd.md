@@ -89,6 +89,17 @@ native Tauri acceptance described below. Rust, npm, Go, and Python dependency ma
 and lockfiles also run license, source, ban, and advisory policy, including the standalone
 desktop Cargo graph.
 
+Advisory exceptions must name one exact RustSec ID in every scanner that reports the
+finding, document why the affected path is unreachable, and name the upstream removal
+condition. The current `cargo-audit` exception for `RUSTSEC-2026-0253` is limited to
+Tantivy 0.26.1's `LruCache<usize, Block>`: the advisory requires a panicking key
+destructor, while `usize` has no destructor. `cargo-deny` does not report this
+informational advisory, so its advisory policy remains unmodified.
+[Tantivy PR #3034](https://github.com/quickwit-oss/tantivy/pull/3034) has already moved
+the unreleased branch to patched `lru` 0.18.2; remove the exception when that Tantivy
+release is available on crates.io. Ratatui's independent dependency path is already
+locked to `lru` 0.18.2.
+
 Pull-request classification, title validation, and aggregate gate decisions execute
 the contract checked out from the PR base revision, never the proposed replacement
 from the PR head. While these contracts first land, their one-time bootstrap fallback

@@ -849,6 +849,9 @@ impl ProviderExecutor {
                 .header("content-type", "application/json")
                 .body(body);
         }
+        for (name, value) in colossus_observability::current_trace_headers() {
+            builder = builder.header(name, value);
+        }
         let response = builder.send().await?;
         Ok((response, secrets))
     }

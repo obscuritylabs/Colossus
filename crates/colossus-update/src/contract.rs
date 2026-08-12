@@ -233,3 +233,113 @@ pub trait UpdateChecker: Send + Sync {
     /// Return a typed report. Offline and rate-limited states are values, not errors.
     async fn check(&self) -> UpdateCheckReport;
 }
+
+/// Requested direct-install update after application-level ownership validation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectUpdateRequest {
+    /// Exact stable version without the leading `v`.
+    pub version: String,
+    /// Absolute prefix recorded by the trusted direct installer.
+    pub prefix: String,
+}
+
+/// Safe outcome returned by the platform-specific direct-update adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectUpdateOutcome {
+    /// The on-disk executable and receipt were replaced before the command returned.
+    Updated,
+    /// Replacement was handed to a detached helper because the running image is locked.
+    Scheduled,
+}
+
+/// Credential-free direct-update adapter failure.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum DirectUpdateFailure {
+    /// The reviewed bootstrap could not be staged or launched.
+    #[error("the direct updater could not be launched")]
+    LaunchFailed,
+    /// The reviewed bootstrap rejected or could not install the requested release.
+    #[error("the direct updater did not install the requested release")]
+    InstallFailed,
+    /// The bounded update attempt exceeded its fixed completion interval.
+    #[error("the direct updater timed out")]
+    TimedOut,
+}
+
+/// Application-owned adapter for a validated direct installation.
+#[async_trait]
+pub trait DirectUpdateInstaller: Send + Sync {
+    /// Install one exact stable release through the reviewed bootstrap contract.
+    async fn install(
+        &self,
+        request: &DirectUpdateRequest,
+    ) -> Result<DirectUpdateOutcome, DirectUpdateFailure>;
+}
+
+/// Terminal state of an operator-initiated update request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateApplyStatus {
+    /// The on-disk executable and receipt were replaced successfully.
+    Updated,
+    /// A detached platform helper will replace the executable after this process exits.
+    Scheduled,
+    /// The selected version is already running.
+    UpToDate,
+    /// Ownership or downgrade rules refused replacement.
+    Refused,
+    /// Discovery or the bounded installer could not complete.
+    Unavailable,
+}
+
+/// Stable reason an update request was refused before replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateRefusalReason {
+    /// No validated direct-install receipt owns the running executable.
+    NotDirectInstallation,
+    /// The requested value was not an exact stable `vX.Y.Z` version.
+    InvalidVersion,
+    /// The requested version is older than the running version.
+    Downgrade,
+    /// Preview installations must remain on the explicit preview install path.
+    PreviewInstallation,
+}
+
+/// Safe reason an accepted update could not complete.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateApplyFailure {
+    /// Stable release discovery was unavailable or invalid.
+    DiscoveryUnavailable,
+    /// The embedded reviewed updater could not be staged or launched.
+    LaunchFailed,
+    /// The embedded reviewed updater rejected or could not install the release.
+    InstallFailed,
+    /// The bounded updater exceeded its completion interval.
+    TimedOut,
+    /// This host has no native release target.
+    UnsupportedHost,
+}
+
+/// Human- and machine-readable result of `colossus update`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateApplyReport {
+    /// Projection schema version.
+    pub schema_version: u16,
+    /// Update outcome.
+    pub status: UpdateApplyStatus,
+    /// Version of the process that handled the request.
+    pub current_version: String,
+    /// Exact selected stable version, when resolution succeeded.
+    pub selected_version: Option<String>,
+    /// Exact native target, when supported.
+    pub target: Option<String>,
+    /// Validated installation owner.
+    pub installer_kind: InstallerKind,
+    /// Refusal category, when replacement was denied.
+    pub refusal_reason: Option<UpdateRefusalReason>,
+    /// Failure category, when an accepted request could not complete.
+    pub failure_reason: Option<UpdateApplyFailure>,
+}

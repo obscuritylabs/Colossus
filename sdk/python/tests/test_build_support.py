@@ -16,7 +16,7 @@ from build_support import (
 class SourceInputGuardTests(unittest.TestCase):
     def test_standalone_source_distribution_does_not_require_repository_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            standalone_root = Path(temporary_directory) / "obscuritylabs_colossus_sdk-0.10.5"
+            standalone_root = Path(temporary_directory) / "obscuritylabs_colossus_sdk-0.10.7"
             standalone_root.mkdir()
             verify_source_inputs(standalone_root)
 

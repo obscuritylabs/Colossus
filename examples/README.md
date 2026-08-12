@@ -9,6 +9,7 @@ expected results. Run them from a development workspace after reviewing the file
 | `sdk/` | Cross-language durable-run clients and public-API scenarios |
 | `workflows/` | Strict durable workflow definitions covering control flow, gates, recovery, and model steps |
 | `themes/` | Presentation theme examples |
+| `observability/` | Development-only Kubernetes Colossus + Grafana LGTM smoke environment |
 
 Start with `asks/01-model-smoke.txt` for a provider check or
 `workflows/01-control-flow-lab.yaml` for a deterministic workflow check. Use

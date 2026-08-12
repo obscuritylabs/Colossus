@@ -157,6 +157,7 @@ inspect hashes, audit records, and package contents without network access.
 | PACK-01 | Capability packs | P2 | Executable extensions are declared, verified, trusted, and lifecycle-managed. |
 | DIST-01 | Trusted distribution | P2 | Fixed-origin bootstrap installers verify exact public release assets, record direct ownership, and preserve offline bundle plus signed pack/skill verification without weakening offline operation. |
 | DIST-02 | Fail-soft update discovery | P2 | The standalone CLI and asynchronous TUI check one fixed stable channel at most daily; strict cached metadata and typed offline/rate-limit outcomes never block normal operation or replace a binary. |
+| DIST-03 | Install-aware direct updates | P2 | The standalone CLI embeds the reviewed bootstrap, replaces only the exact executable owned by a validated direct receipt, refuses downgrades and other owners, and preserves the prior binary on failure. |
 
 P0 is the minimum useful and secure product. P1 provides full agent workflow parity. P2
 provides the complete extension and distribution ecosystem.
@@ -932,6 +933,8 @@ reference, HTTP environment-trust toggle, and shell completion.
 
 - `update check`: read-only fixed-channel stable release discovery with structured,
   fail-soft offline output.
+- `update [--version vX.Y.Z]`: direct-install-only stable replacement through the
+  embedded reviewed bootstrap, with ownership and downgrade refusal.
 - `run`: normal turn, plan creation, approved-plan execution, or plan-to-goal handoff.
 - `goal`: bounded autonomous goal loop.
 - `research`: deep research with persisted cited output.
@@ -1164,7 +1167,7 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.10.5 is the active stable core release line, and every capability
+Rust 0.10.7 is the active stable core release line, and every capability
 in the Section 5 release baseline has executable evidence. The detailed
 requirement-to-test mapping lives in the
 [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and source paths belong

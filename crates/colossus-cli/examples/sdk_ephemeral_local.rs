@@ -189,6 +189,7 @@ async fn run_rust_prompt(
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text(prompt)],
             session_id: None,
+            end_user_id: None,
             role: "primary".to_owned(),
             mode: RunMode::Execute,
             selected_skills: Vec::new(),

@@ -1343,6 +1343,7 @@ impl CreateRunInput {
         Ok(CreateRunRequest {
             input,
             session_id: self.session_id,
+            end_user_id: None,
             role: self.role,
             mode: self.mode.into(),
             selected_skills: Vec::new(),

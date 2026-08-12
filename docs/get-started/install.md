@@ -29,6 +29,16 @@ The bootstrap refuses draft releases, channel/version disagreements, missing tar
 assets, unexpected redirect hosts, oversized responses, unsafe archive layouts, and
 checksum mismatches.
 
+Choose one installation owner and keep using it for upgrades:
+
+- **Direct installer (recommended):** one native binary, an owner-local receipt, and
+  install-aware `colossus update` support.
+- **Nix:** the repository flake installs the latest release pinned in that flake; Nix
+  remains the owner and `colossus update` will not mutate the store.
+- **Homebrew:** the official `obscuritylabs/homebrew-tap` installs the reviewed native
+  macOS archive; Homebrew remains the owner for upgrades and removal.
+- **Manual archive:** the offline and root-owned system-install path.
+
 ## Steps
 
 ### 1. Install the latest stable release
@@ -133,7 +143,7 @@ colossus update check
 
 On a terminal, the command shows the running version and latest validated stable
 version. When redirected, or with `--output json`, it emits the versioned structured
-report. Discovery is read-only in this release: it does not replace the executable.
+report. The check itself is always read-only.
 
 The check contacts only the fixed public GitHub latest-stable metadata endpoint. It
 rejects redirects, proxies, preview releases, malformed semantic versions, unexpected
@@ -152,6 +162,61 @@ Update cache locations are:
 - Unix: `$XDG_CACHE_HOME/colossus/`, falling back to
   `$HOME/.cache/colossus/`.
 - Windows: `%LOCALAPPDATA%\Colossus\`.
+
+### Update a direct installation
+
+The direct installer owns only the executable named by its matching receipt. Update to
+the latest validated stable release with:
+
+```bash
+colossus update
+```
+
+Select one exact newer stable release for a reproducible update:
+
+```bash
+colossus update --version vX.Y.Z
+```
+
+Colossus refuses downgrades, preview-to-stable ownership changes, stale receipts, and
+receipts that do not name the canonical running executable. Source builds and unknown,
+Homebrew-owned, or Nix-owned executables are never replaced; use the installation
+channel that owns them. To intentionally adopt a direct-install prefix, run the
+reviewed bootstrap with an explicit `--prefix`/`-Prefix` instead.
+
+The released binary embeds the exact reviewed bootstrap from its source tag. On macOS
+and Linux the bootstrap downloads, verifies, and installs the selected archive before
+returning. Windows hands the same bootstrap to a detached helper so the running image
+can exit before replacement. The packaged installer stages the new binary and receipt
+in their destination directories, replaces them atomically, and restores the previous
+binary if the receipt cannot commit.
+
+### Install with Nix
+
+The repository includes a locked flake that selects the reviewed native archives and
+digests for the published release pinned in that flake:
+
+```bash
+nix profile install github:obscuritylabs/Colossus
+```
+
+Nix remains the installation owner. Upgrade through the profile or your pinned flake
+input, for example `nix profile upgrade colossus`; `colossus update` reports the Nix
+ownership marker and refuses to mutate the Nix store.
+
+### Install with Homebrew
+
+The official tap publishes the reviewed prebuilt macOS archives:
+
+```bash
+brew install obscuritylabs/tap/colossus
+```
+
+The reviewed formula source remains under
+`packaging/homebrew/Formula/colossus.rb` and is mirrored to
+`obscuritylabs/homebrew-tap` only after the public release gates pass. A tap installation
+wraps the upstream binary with a Homebrew ownership marker, so `colossus update` reports
+`brew upgrade obscuritylabs/tap/colossus` while self-replacement remains disabled.
 
 ### Manual archive installation
 
@@ -210,9 +275,12 @@ Open a new terminal after applying the printed `PATH` guidance and run:
 
 ```bash
 colossus --version
+colossus update check
 ```
 
-The command prints the exact Colossus release identifier and exits successfully.
+The first command prints the exact Colossus release identifier. The second validates
+the public stable channel and reports `up_to_date` for a freshly installed latest
+release.
 
 ## Uninstall a direct installation
 

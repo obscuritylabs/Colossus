@@ -764,6 +764,9 @@ pub struct CreateRunRequest {
     pub input: Vec<ContentPart>,
     /// Existing session, or absent to create a session.
     pub session_id: Option<String>,
+    /// Optional caller-asserted end-user correlation identifier, never authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_user_id: Option<String>,
     /// Logical role; absent selects the configured default role.
     pub role: Option<String>,
     /// Requested execution mode.
@@ -802,6 +805,9 @@ pub struct RunExecutionRequest {
     ///
     /// Empty means deny all.
     pub allowed_tools: Vec<String>,
+    /// Normalized W3C parent context captured at acceptance, excluding baggage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<colossus_contracts::RemoteTraceContext>,
 }
 
 impl RunExecutionRequest {
@@ -821,6 +827,7 @@ impl RunExecutionRequest {
                 .allowed_tools()
                 .map(str::to_owned)
                 .collect(),
+            trace_context: caller.remote_trace_context().cloned(),
         }
     }
 }
@@ -914,6 +921,9 @@ impl CreateRunRequest {
         }
         if let Some(session_id) = &self.session_id {
             token(session_id, "session_id", MAX_IDENTIFIER_BYTES)?;
+        }
+        if let Some(end_user_id) = &self.end_user_id {
+            token(end_user_id, "end_user_id", MAX_IDENTIFIER_BYTES)?;
         }
         if let Some(role) = &self.role {
             token(role, "role", MAX_ROLE_BYTES)?;

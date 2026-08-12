@@ -10,6 +10,7 @@ license.workspace = true
 async-recursion.workspace = true
 async-trait.workspace = true
 colossus-contracts.workspace = true
+colossus-observability.workspace = true
 colossus-ports.workspace = true
 futures.workspace = true
 hex.workspace = true
@@ -21,6 +22,7 @@ sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
