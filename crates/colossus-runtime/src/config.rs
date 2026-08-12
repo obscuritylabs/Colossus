@@ -30,10 +30,10 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub models: ModelsConfig,
     /// Agent model-turn and active-tool limits.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "AgentConfig::is_default")]
     pub agent: AgentConfig,
     /// Durable child-agent scheduler limits.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "SubagentConfig::is_default")]
     pub subagents: SubagentConfig,
     /// Long-session budgeting and immutable snapshot settings.
     #[serde(default)]
@@ -105,7 +105,7 @@ pub enum AuditExporterConfig {
 }
 
 /// Bounded agent-loop configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
     /// Maximum provider turns in one run.
@@ -120,8 +120,14 @@ impl Default for AgentConfig {
     }
 }
 
+impl AgentConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Bounded durable child-agent scheduler configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubagentConfig {
     /// Maximum child runs executing concurrently in one runtime.
@@ -132,6 +138,22 @@ impl Default for SubagentConfig {
     fn default() -> Self {
         Self { max_concurrent: 10 }
     }
+}
+
+impl SubagentConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Runtime-limit blocks that serialization omits while they hold compiled defaults.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OmittedRuntimeLimits<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<&'a AgentConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subagents: Option<&'a SubagentConfig>,
 }
 
 /// Runtime memory-index and retrieval configuration.
@@ -1080,8 +1102,34 @@ impl RuntimeConfig {
     }
 
     /// Render fresh YAML without resolving or exposing secrets.
+    ///
+    /// Runtime-limit blocks still holding their compiled defaults are omitted so generated
+    /// configuration never pins a default that later releases change.
     pub fn to_yaml(&self) -> Result<String, RuntimeError> {
         serde_saphyr::to_string(self).map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Render YAML that always states the resolved runtime limits.
+    ///
+    /// Inspection surfaces such as `config show` must report the limits the runtime will
+    /// enforce, including the compiled defaults that [`Self::to_yaml`] omits.
+    pub fn to_resolved_yaml(&self) -> Result<String, RuntimeError> {
+        let omitted = OmittedRuntimeLimits {
+            agent: self.agent.is_default().then_some(&self.agent),
+            subagents: self.subagents.is_default().then_some(&self.subagents),
+        };
+        let mut document = self.to_yaml()?;
+        if omitted.agent.is_none() && omitted.subagents.is_none() {
+            return Ok(document);
+        }
+        if !document.ends_with('\n') {
+            document.push('\n');
+        }
+        document.push_str(
+            &serde_saphyr::to_string(&omitted)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        Ok(document)
     }
 
     /// Platform-specific local worker endpoint derived from the canonical state identity.

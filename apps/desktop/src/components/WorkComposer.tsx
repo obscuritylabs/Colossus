@@ -14,6 +14,7 @@ import type {
   CommandError,
   RunMode,
 } from "../types";
+import { USE_CONFIGURED_MAX_TURNS } from "../types";
 
 interface WorkComposerProps {
   formRef: RefObject<HTMLFormElement | null>;
@@ -197,14 +198,19 @@ export function WorkComposer({
               <span>Maximum turns</span>
               <input
                 type="number"
-                value={maxTurns}
+                value={maxTurns === USE_CONFIGURED_MAX_TURNS ? "" : maxTurns}
+                placeholder="Server default"
                 min={1}
                 max={maxTurnsLimit}
+                aria-describedby="max-turns-default-hint"
                 disabled={submitting}
                 onChange={(event) =>
                   onMaxTurnsChange(Number(event.target.value))
                 }
               />
+              <span className="run-control-hint" id="max-turns-default-hint">
+                Leave blank to use the server default.
+              </span>
             </label>
           </div>
         </details>

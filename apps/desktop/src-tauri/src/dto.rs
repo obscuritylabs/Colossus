@@ -1595,6 +1595,22 @@ mod tests {
     }
 
     #[test]
+    fn create_input_preserves_the_configured_turn_default_sentinel() {
+        let input: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Continue until the work is complete",
+            "sessionId": null,
+            "role": "primary",
+            "mode": "execute",
+            "maxTurns": 0,
+            "idempotencyKey": "01968a3e-0ab3-7f10-bb27-4eadbd550010"
+        }))
+        .expect("defaulted desktop request");
+
+        let request = input.into_sdk().expect("valid SDK request");
+        assert_eq!(request.max_turns, 0);
+    }
+
+    #[test]
     fn plan_action_is_exact_revision_bound_and_goal_budgeted() {
         let input: CreateRunInput = serde_json::from_value(json!({
             "prompt": "Run the reviewed plan",

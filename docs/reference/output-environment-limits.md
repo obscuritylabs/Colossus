@@ -43,7 +43,7 @@ and never interpreted as terminal control input.
 
 | Bound | Baseline |
 | --- | ---: |
-| Agent turns | `24` |
+| Agent turns | `100` |
 | Concurrent subagents | `10` |
 | Sandbox timeout | `30000 ms` |
 | Sandbox output | `1048576 bytes` |

@@ -3,6 +3,7 @@ import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { USE_CONFIGURED_MAX_TURNS } from "../types";
 import { WorkComposer } from "./WorkComposer";
 
 type WorkComposerProps = ComponentProps<typeof WorkComposer>;
@@ -60,6 +61,16 @@ function renderRevisionComposer(): string {
 }
 
 describe("WorkComposer capabilities", () => {
+  it("leaves the turn override blank when the server default is selected", () => {
+    const markup = renderComposer(false, {
+      maxTurns: USE_CONFIGURED_MAX_TURNS,
+    });
+
+    expect(markup).toContain('placeholder="Server default"');
+    expect(markup).toContain('value=""');
+    expect(markup).toContain("Leave blank to use the server default.");
+  });
+
   it("hides unsupported attachment and context controls", () => {
     const markup = renderComposer(false);
 

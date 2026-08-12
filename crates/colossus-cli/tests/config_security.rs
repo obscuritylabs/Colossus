@@ -193,3 +193,44 @@ fn config_show_preserves_only_references_and_unknown_secret_fields_fail_without_
         String::from_utf8_lossy(&rejected.stderr)
     );
 }
+
+#[test]
+fn config_show_reports_resolved_runtime_limits_omitted_from_the_document() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    fs::create_dir(directory.path().join("workflows")).expect("workflows");
+
+    let mut document = config_document(directory.path());
+    let root = document.as_object_mut().expect("configuration mapping");
+    root.remove("agent");
+    root.remove("subagents");
+    let config = directory.path().join("config.json");
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&document).expect("config JSON"),
+    )
+    .expect("write config");
+
+    let shown = command(binary, &config)
+        .args(["config", "show"])
+        .output()
+        .expect("config show");
+    assert!(
+        shown.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let rendered = String::from_utf8(shown.stdout).expect("UTF-8 config");
+    let resolved: Value = serde_saphyr::from_str(&rendered).expect("rendered configuration");
+    assert_eq!(
+        resolved["agent"]["maxTurns"].as_u64(),
+        Some(100),
+        "{rendered}"
+    );
+    assert_eq!(
+        resolved["subagents"]["maxConcurrent"].as_u64(),
+        Some(10),
+        "{rendered}"
+    );
+}

@@ -1,7 +1,7 @@
 use super::*;
 
-/// Default and hard maximum model turns per run.
-pub const DEFAULT_MAX_TURNS: u16 = 24;
+/// Default model turns per run when no caller or configuration override is present.
+pub const DEFAULT_MAX_TURNS: u16 = 100;
 /// Absolute bound preventing unbounded model/tool loops.
 pub const MAX_TURNS: u16 = 100;
 pub(super) const TOOL_ARGUMENT_RECOVERY_LIMIT: u8 = 2;

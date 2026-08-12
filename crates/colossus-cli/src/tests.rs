@@ -462,6 +462,31 @@ fn config_init_generates_each_storage_key_mode_without_secret_values() {
 }
 
 #[test]
+fn config_init_omits_default_runtime_limits() {
+    let directory = tempfile::tempdir().expect("directory");
+    let destination = directory.path().join("config.yaml");
+    init_config(
+        &destination,
+        false,
+        None,
+        AccessProfile::Development,
+        None,
+        StorageKeys::None,
+    )
+    .expect("generated config");
+
+    let yaml = fs::read_to_string(&destination).expect("configuration YAML");
+    let document: Value = serde_saphyr::from_str(&yaml).expect("configuration value");
+    let root = document.as_object().expect("configuration mapping");
+    assert!(!root.contains_key("agent"));
+    assert!(!root.contains_key("subagents"));
+
+    let generated = RuntimeConfig::from_path(destination).expect("strict config");
+    assert_eq!(generated.agent.max_turns, 100);
+    assert_eq!(generated.subagents.max_concurrent, 10);
+}
+
+#[test]
 fn config_init_generates_all_four_access_profiles() {
     for profile in [
         AccessProfile::Minimal,
