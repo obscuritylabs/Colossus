@@ -173,6 +173,8 @@ fn public_installation_docs_keep_the_complete_distribution_path() {
         "-Version vX.Y.Z",
         "nix profile install github:obscuritylabs/Colossus",
         "obscuritylabs/homebrew-tap",
+        "brew install obscuritylabs/tap/colossus",
+        "brew upgrade obscuritylabs/tap/colossus",
         "sha256sum --check",
         "Get-FileHash $archive -Algorithm SHA256",
         "colossus update check",
@@ -185,6 +187,10 @@ fn public_installation_docs_keep_the_complete_distribution_path() {
             "installation guide is missing public distribution contract {required:?}"
         );
     }
+    assert!(
+        !install.contains("mirrored to the planned"),
+        "installation guide must describe the published Homebrew tap"
+    );
 }
 
 #[test]

@@ -37,7 +37,6 @@ function render(version, armSha, intelSha) {
   return `class Colossus < Formula
   desc "Auditable runtime for agent work and durable automation"
   homepage "https://github.com/obscuritylabs/Colossus"
-  version "${version}"
   license "Apache-2.0"
 
   on_macos do
@@ -52,7 +51,7 @@ function render(version, armSha, intelSha) {
 
   def install
     libexec.install "colossus"
-    bin.write_env_script libexec/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew"
+    (bin/"colossus").write_env_script libexec/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew"
   end
 
   test do

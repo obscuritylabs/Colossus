@@ -35,8 +35,8 @@ Choose one installation owner and keep using it for upgrades:
   install-aware `colossus update` support.
 - **Nix:** the repository flake installs the latest release pinned in that flake; Nix
   remains the owner and `colossus update` will not mutate the store.
-- **Homebrew:** use the direct installer until the separately maintained
-  `obscuritylabs/homebrew-tap` is published.
+- **Homebrew:** the official `obscuritylabs/homebrew-tap` installs the reviewed native
+  macOS archive; Homebrew remains the owner for upgrades and removal.
 - **Manual archive:** the offline and root-owned system-install path.
 
 ## Steps
@@ -204,13 +204,18 @@ Nix remains the installation owner. Upgrade through the profile or your pinned f
 input, for example `nix profile upgrade colossus`; `colossus update` reports the Nix
 ownership marker and refuses to mutate the Nix store.
 
-### Homebrew packaging
+### Install with Homebrew
 
-The reviewed prebuilt formula source is maintained under
-`packaging/homebrew/Formula/colossus.rb` and is ready to be mirrored to the planned
-`obscuritylabs/homebrew-tap` repository. Until that tap is created and its first formula
-is published, use the direct installer above. A tap installation wraps the upstream
-binary with a Homebrew ownership marker, so update discovery can report
+The official tap publishes the reviewed prebuilt macOS archives:
+
+```bash
+brew install obscuritylabs/tap/colossus
+```
+
+The reviewed formula source remains under
+`packaging/homebrew/Formula/colossus.rb` and is mirrored to
+`obscuritylabs/homebrew-tap` only after the public release gates pass. A tap installation
+wraps the upstream binary with a Homebrew ownership marker, so `colossus update` reports
 `brew upgrade obscuritylabs/tap/colossus` while self-replacement remains disabled.
 
 ### Manual archive installation

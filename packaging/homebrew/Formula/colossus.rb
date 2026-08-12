@@ -1,7 +1,6 @@
 class Colossus < Formula
   desc "Auditable runtime for agent work and durable automation"
   homepage "https://github.com/obscuritylabs/Colossus"
-  version "0.10.7"
   license "Apache-2.0"
 
   on_macos do
@@ -16,7 +15,7 @@ class Colossus < Formula
 
   def install
     libexec.install "colossus"
-    bin.write_env_script libexec/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew"
+    (bin/"colossus").write_env_script libexec/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew"
   end
 
   test do

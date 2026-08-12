@@ -480,6 +480,7 @@ fn package_manager_definitions_pin_prebuilt_assets_and_refuse_self_ownership() {
         "aarch64-apple-darwin.tar.gz",
         "x86_64-apple-darwin.tar.gz",
         "sha256",
+        "(bin/\"colossus\").write_env_script",
         "COLOSSUS_INSTALLER_KIND: \"homebrew\"",
         "colossus --version",
     ] {
@@ -488,7 +489,13 @@ fn package_manager_definitions_pin_prebuilt_assets_and_refuse_self_ownership() {
             "Homebrew formula is missing {required}"
         );
     }
-    for forbidden in ["system \"cargo\"", "cargo install", "installerKind: direct"] {
+    for forbidden in [
+        "\n  version \"",
+        "\n    bin.write_env_script",
+        "system \"cargo\"",
+        "cargo install",
+        "installerKind: direct",
+    ] {
         assert!(
             !formula.contains(forbidden),
             "Homebrew formula must not contain {forbidden}"
