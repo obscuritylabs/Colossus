@@ -45,7 +45,7 @@ fn retained_read_write_handle_writes_and_reports_hard_links() {
 
 #[cfg(windows)]
 #[test]
-fn directories_directly_beneath_the_volume_root_bind_without_binding_the_root() {
+fn directories_directly_beneath_the_volume_root_retain_and_validate_the_root() {
     let system_root =
         std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"));
     assert!(
@@ -55,11 +55,15 @@ fn directories_directly_beneath_the_volume_root_bind_without_binding_the_root() 
         "SystemRoot must name a directory directly beneath the volume root"
     );
 
+    let retained = crate::windows::open_bound(&system_root, crate::windows::BoundKind::Directory)
+        .expect("retain the directory and its volume root");
+    assert_eq!(retained.retained_ancestor_count(), 1);
+
     let binding =
         BoundPath::open_directory(&system_root).expect("bind directory beneath the volume root");
     binding
         .validate_ancestor_namespace_authority()
-        .expect("volume roots carry no bindable namespace authority");
+        .expect("volume root namespace authority");
     binding.revalidate().expect("same directory identity");
 }
 

@@ -528,6 +528,11 @@ pub(super) fn install_bootstrap_pipe_as_standard_io(
 }
 
 impl BoundPathInner {
+    #[cfg(test)]
+    pub(super) fn retained_ancestor_count(&self) -> usize {
+        self.ancestors.len()
+    }
+
     pub(super) fn revalidate(&self) -> Result<(), WindowsNativeError> {
         let current = open_bound(&self.canonical_path, self.kind)?;
         if current.identity != self.identity || file_identity(&self.file)? != self.identity {
@@ -536,8 +541,14 @@ impl BoundPathInner {
         if current.ancestors.len() != self.ancestors.len() {
             return Err(WindowsNativeError::IdentityChanged);
         }
-        for (actual, expected) in current.ancestors.iter().zip(&self.ancestors) {
-            if file_identity(actual)? != file_identity(expected)? {
+        for (index, (actual, expected)) in current.ancestors.iter().zip(&self.ancestors).enumerate()
+        {
+            let unchanged = if index == 0 {
+                root_file_identity(actual)? == root_file_identity(expected)?
+            } else {
+                file_identity(actual)? == file_identity(expected)?
+            };
+            if !unchanged {
                 return Err(WindowsNativeError::IdentityChanged);
             }
         }
@@ -594,10 +605,10 @@ fn open_bound_with_access(
     let components = path.components().collect::<Vec<_>>();
     for (index, component) in components.iter().enumerate() {
         candidate.push(component.as_os_str());
-        // Never bind the volume root itself: it has no parent name that another
-        // principal could rename or replay, and hosted Windows volume roots answer
-        // the retained identity query with ERROR_INVALID_FUNCTION.
-        if !candidate.has_root() || candidate.parent().is_none() {
+        // A verbatim or UNC prefix can report itself as rooted before its RootDir
+        // component is consumed. Open exactly the RootDir once so ancestor index zero
+        // always retains the volume or share root, including during canonical reopens.
+        if matches!(*component, std::path::Component::Prefix(_)) || !candidate.has_root() {
             continue;
         }
         let leaf = index + 1 == components.len();
@@ -955,6 +966,23 @@ fn file_identity(file: &File) -> Result<FileIdentity, WindowsNativeError> {
             file_id: info.FileId.Identifier,
         })
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct RootFileIdentity {
+    volume_serial_number: u32,
+    file_index: u64,
+}
+
+fn root_file_identity(file: &File) -> Result<RootFileIdentity, WindowsNativeError> {
+    // Volume roots on hosted filesystems may not implement FileIdInfo, but the legacy
+    // retained-handle query still supplies a stable volume serial and 64-bit file index.
+    // Leaves and non-root ancestors continue to require the stronger 128-bit FileIdInfo.
+    let info = file_information(file)?;
+    Ok(RootFileIdentity {
+        volume_serial_number: info.dwVolumeSerialNumber,
+        file_index: u64::from(info.nFileIndexHigh) << 32 | u64::from(info.nFileIndexLow),
+    })
 }
 
 pub(super) fn file_link_count(file: &File) -> Result<u64, WindowsNativeError> {
