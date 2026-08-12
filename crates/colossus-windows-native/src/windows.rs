@@ -594,7 +594,10 @@ fn open_bound_with_access(
     let components = path.components().collect::<Vec<_>>();
     for (index, component) in components.iter().enumerate() {
         candidate.push(component.as_os_str());
-        if !candidate.has_root() {
+        // Never bind the volume root itself: it has no parent name that another
+        // principal could rename or replay, and hosted Windows volume roots answer
+        // the retained identity query with ERROR_INVALID_FUNCTION.
+        if !candidate.has_root() || candidate.parent().is_none() {
             continue;
         }
         let leaf = index + 1 == components.len();

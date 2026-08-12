@@ -45,6 +45,26 @@ fn retained_read_write_handle_writes_and_reports_hard_links() {
 
 #[cfg(windows)]
 #[test]
+fn directories_directly_beneath_the_volume_root_bind_without_binding_the_root() {
+    let system_root =
+        std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"));
+    assert!(
+        system_root
+            .parent()
+            .is_some_and(|parent| parent.parent().is_none()),
+        "SystemRoot must name a directory directly beneath the volume root"
+    );
+
+    let binding =
+        BoundPath::open_directory(&system_root).expect("bind directory beneath the volume root");
+    binding
+        .validate_ancestor_namespace_authority()
+        .expect("volume roots carry no bindable namespace authority");
+    binding.revalidate().expect("same directory identity");
+}
+
+#[cfg(windows)]
+#[test]
 fn private_directory_creation_protects_the_directory_and_children() {
     let parent = tempfile::tempdir().expect("temporary parent");
     let directory = parent.path().join("private");

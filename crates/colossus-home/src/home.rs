@@ -3,7 +3,7 @@ use directories::BaseDirs;
 use sha2::{Digest as _, Sha256};
 use std::{
     env, fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 const HOME_ENVIRONMENT: &str = "COLOSSUS_HOME";
@@ -142,7 +142,10 @@ fn update_path_digest(digest: &mut Sha256, path: &Path) {
 
 #[cfg(unix)]
 pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), HomeError> {
-    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+    use std::{
+        os::unix::fs::{DirBuilderExt as _, MetadataExt as _},
+        path::Component,
+    };
 
     let mut current = PathBuf::new();
     for component in path.components() {
