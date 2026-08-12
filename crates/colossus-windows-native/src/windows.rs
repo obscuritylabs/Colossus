@@ -34,13 +34,12 @@ use windows_sys::Win32::{
         WinBuiltinAdministratorsSid, WinLocalSystemSid,
     },
     Storage::FileSystem::{
-        CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
-        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_INFO,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_STANDARD_INFO, FileAttributeTagInfo, FileIdInfo, FileStandardInfo,
-        GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-        MoveFileExW, READ_CONTROL,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdInfo,
+        GetFileInformationByHandle, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
+        MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL,
     },
     System::{
         Console::{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
@@ -649,11 +648,11 @@ fn open_exact(
             operation: "open path without following reparse points",
             source,
         })?;
-    let attributes = file_attributes(&file)?;
-    if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    let information = file_information(&file)?;
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(WindowsNativeError::ReparsePoint);
     }
-    let directory = attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    let directory = information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
     if directory != matches!(kind, BoundKind::Directory) {
         return Err(WindowsNativeError::InvalidInput);
     }
@@ -920,20 +919,14 @@ fn sid_is_one_of(sid: PSID, first: PSID, second: PSID, third: PSID) -> bool {
     sid_matches(sid, first) || sid_matches(sid, second) || sid_matches(sid, third)
 }
 
-fn file_attributes(file: &File) -> Result<FILE_ATTRIBUTE_TAG_INFO, WindowsNativeError> {
-    // SAFETY: the output points to an initialized fixed-size structure for the exact
-    // information class and the borrowed File keeps the HANDLE valid for the call.
-    let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { zeroed() };
-    let result = unsafe {
-        GetFileInformationByHandleEx(
-            file.as_raw_handle().cast(),
-            FileAttributeTagInfo,
-            (&raw mut info).cast(),
-            u32::try_from(size_of::<FILE_ATTRIBUTE_TAG_INFO>()).expect("structure size fits u32"),
-        )
-    };
+fn file_information(file: &File) -> Result<BY_HANDLE_FILE_INFORMATION, WindowsNativeError> {
+    // SAFETY: the output points to an initialized structure and the borrowed File keeps
+    // the HANDLE valid for the call. This legacy query is supported across the Windows
+    // filesystems used by Colossus and still describes the retained no-follow handle.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { zeroed() };
+    let result = unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &raw mut info) };
     if result == 0 {
-        Err(last_error("query file attributes"))
+        Err(last_error("query file information"))
     } else {
         Ok(info)
     }
@@ -962,24 +955,11 @@ fn file_identity(file: &File) -> Result<FileIdentity, WindowsNativeError> {
 }
 
 pub(super) fn file_link_count(file: &File) -> Result<u64, WindowsNativeError> {
-    // SAFETY: the output points to an initialized fixed-size structure for the exact
-    // information class and the borrowed File keeps the HANDLE valid for the call.
-    let mut info: FILE_STANDARD_INFO = unsafe { zeroed() };
-    let result = unsafe {
-        GetFileInformationByHandleEx(
-            file.as_raw_handle().cast(),
-            FileStandardInfo,
-            (&raw mut info).cast(),
-            u32::try_from(size_of::<FILE_STANDARD_INFO>()).expect("structure size fits u32"),
-        )
-    };
-    if result == 0 {
-        return Err(last_error("query file link count"));
-    }
-    if info.NumberOfLinks == 0 {
+    let info = file_information(file)?;
+    if info.nNumberOfLinks == 0 {
         return Err(WindowsNativeError::InvalidInput);
     }
-    Ok(u64::from(info.NumberOfLinks))
+    Ok(u64::from(info.nNumberOfLinks))
 }
 
 pub(super) fn prompt_secret(
