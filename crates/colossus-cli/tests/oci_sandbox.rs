@@ -116,7 +116,9 @@ fn live_oci_enforces_mount_environment_network_timeout_and_cleanup_boundaries() 
     let anchor = directory.path().join("anchor.json");
     // Container creation is charged to the sandbox process budget, and that budget is
     // further reduced by the OCI cleanup reserve, so rootless runtimes need real headroom
-    // for the phases that must succeed. Enforcement phases use `bounded_config` below.
+    // for the phases that must succeed: the first `--userns=keep-id` container also
+    // materializes an id-mapped copy of the image, which acceptance CI pays up front.
+    // Enforcement phases use `bounded_config` below.
     let config = directory.path().join("config.yaml");
     fs::write(
         &config,
