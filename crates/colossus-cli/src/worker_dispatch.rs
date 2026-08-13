@@ -9,6 +9,27 @@ pub(super) struct WorkerDispatchOptions {
     pub(super) config_resolution: Value,
 }
 
+/// Ephemeral storage keeps canonical state inside the current process, so a worker
+/// cannot share it with any other invocation. Reject the worker modes that serve or
+/// attach to a separate process instead of letting them start an unreachable worker.
+pub(super) fn reject_ephemeral_worker_attachment(
+    config: &RuntimeConfig,
+    command: &Command,
+) -> Result<(), Box<dyn Error>> {
+    if config.storage.adapter != colossus_runtime::StorageAdapter::Ephemeral {
+        return Ok(());
+    }
+    // `--once` conflicts with every other worker mode and only recovers and drains the
+    // current process, so it stays valid for process-local state.
+    if matches!(command, Command::Worker(worker) if !worker.once) {
+        return Err(
+            "ephemeral storage is process-local and cannot host or reach a worker; use redb or PostgreSQL for a persistent worker, or `colossus worker --once` to drain this process"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) async fn dispatch_to_worker_if_active(
     config: &RuntimeConfig,
     config_path: &Path,
@@ -31,6 +52,9 @@ pub(super) async fn dispatch_to_worker_if_active(
                     .into(),
             );
         }
+        // `reject_ephemeral_worker_attachment` already refused every worker mode that
+        // could be serving this configuration, so no reachable worker owns the
+        // process-local state and the command runs embedded.
         return Ok(false);
     }
     let client = match inherited_worker {

@@ -14,6 +14,9 @@ include breaking changes while the public API is still settling.
   in-memory backend for the canonical journal and projections, keeps the default
   Tantivy and automatic MCP OAuth state in memory, creates no canonical state or
   writer-lock file, and reports the loss of restart/recovery evidence explicitly.
+  Because the journal is process-local, `colossus worker` modes that serve or attach to
+  another process are rejected under this adapter; `worker --once` still drains the
+  running process.
 
 ## [0.10.8] - 2026-08-13
 

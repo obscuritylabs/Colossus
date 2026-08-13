@@ -83,6 +83,11 @@ If no endpoint exists, a one-shot command may safely use the embedded runtime. A
 stale, replayed, malformed, or incorrectly permissioned endpoint fails authentication;
 it never authorizes a second embedded writer.
 
+`adapter: ephemeral` has no cross-process journal to own, so every worker mode except
+`--once` is rejected: serving, `--status`, `--shutdown`, and `--public-api-dir` hosting
+would publish state no other invocation can read. Select redb or PostgreSQL when clients
+must share one runtime.
+
 Ordinary workers create or load an independent versioned secret at
 `<storage.path>.worker-auth`. The file must be a current-user, owner-only, single-link
 regular file; clients only load it. Managed Desktop continues to deliver its independent

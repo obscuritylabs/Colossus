@@ -68,8 +68,12 @@ storage:
 This runs the production redb journal and projection implementation over redb's memory
 backend. It creates no canonical database or writer-lock file. The default Tantivy
 memory index and the MCP `oauthCredentialStore: auto` selection are also process-local.
-`storage.path` remains a logical identity for worker IPC and adjacent explicitly
-persistent features; ordinary one-shot commands do not use those files.
+`storage.path` remains a logical identity for adjacent explicitly persistent features;
+ordinary one-shot commands do not use those files. Because the journal never leaves the
+current process, `colossus worker` is refused under this adapter: serving, `--status`,
+`--shutdown`, and public API hosting all require a worker another process can reach.
+`colossus worker --once`, which recovers and drains inside the running process, remains
+available.
 
 Every invocation starts empty. Sessions, workflow progress, child jobs, approvals,
 idempotency claims, effect evidence, audit history, projections, memories, and OAuth
