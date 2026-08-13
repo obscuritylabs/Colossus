@@ -19,11 +19,11 @@ use crate::{
         RuntimeTargetKindDto, WorkspaceSummaryDto,
     },
     desktop_settings::{
-        DesktopSettings, ExternalTargetSetting, LOCAL_TERMINAL_CONSENT_VERSION,
-        MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting,
-        ModelSetting, ProviderKindSetting, ProviderSetting, SettingsStore, WorkspaceSetting,
-        delete_provider_secret, load_provider_secret, provider_base_url, revalidate_workspace,
-        store_provider_secret, validate_workspace,
+        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ExternalTargetSetting,
+        LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
+        ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
+        SettingsStore, WorkspaceSetting, delete_provider_secret, load_provider_secret,
+        provider_base_url, revalidate_workspace, store_provider_secret, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto},
     managed_runtime, provider_enrollment,
@@ -428,12 +428,21 @@ pub(crate) async fn configure_managed_runtime(
         ));
     }
     revalidate_workspace(workspace)?;
-    if development_access_elevation(&settings, &request)
-        && !confirm_development_access(&app).await?
+    if access_profile_elevation(&settings, request.access_profile)
+        && !confirm_access_profile(&app, request.access_profile).await?
     {
         return Err(CommandErrorDto::local_sanitized(
             "access_profile_confirmation",
-            "Development access was not enabled.",
+            "The requested access profile was not enabled.",
+            false,
+        ));
+    }
+    if execution_boundary_elevation(&settings, request.execution_boundary)
+        && !confirm_execution_boundary(&app, request.execution_boundary).await?
+    {
+        return Err(CommandErrorDto::local_sanitized(
+            "execution_boundary_confirmation",
+            "The requested execution boundary was not enabled.",
             false,
         ));
     }
@@ -559,6 +568,7 @@ async fn configure_managed_codex_runtime(
     }];
     settings.model_roles = BTreeMap::from([("primary".into(), "primary".into())]);
     settings.access_profile = request.access_profile;
+    settings.execution_boundary = request.execution_boundary;
     settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     for credential_id in &retired_ids {
         if !settings
@@ -619,6 +629,7 @@ pub(crate) async fn apply_managed_model_configuration(
     settings.models = request.model_settings();
     settings.model_roles = request.roles.clone();
     settings.access_profile = request.access_profile;
+    settings.execution_boundary = request.execution_boundary;
     settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     settings
         .pending_provider_cleanup_ids
@@ -673,15 +684,21 @@ async fn confirm_managed_model_configuration(
     revalidate_workspace(workspace)?;
     reject_active_managed_runs(state).await?;
 
-    if request.access_profile == crate::desktop_settings::AccessProfileSetting::Development
-        && (!settings.managed_configured()
-            || settings.access_profile
-                != crate::desktop_settings::AccessProfileSetting::Development)
-        && !confirm_development_access(app).await?
+    if access_profile_elevation(settings, request.access_profile)
+        && !confirm_access_profile(app, request.access_profile).await?
     {
         return Err(CommandErrorDto::local_sanitized(
             "access_profile_confirmation",
-            "Development access was not enabled.",
+            "The requested access profile was not enabled.",
+            false,
+        ));
+    }
+    if execution_boundary_elevation(settings, request.execution_boundary)
+        && !confirm_execution_boundary(app, request.execution_boundary).await?
+    {
+        return Err(CommandErrorDto::local_sanitized(
+            "execution_boundary_confirmation",
+            "The requested execution boundary was not enabled.",
             false,
         ));
     }
@@ -932,14 +949,33 @@ fn reusable_provider_credential(
             .is_some_and(|provider| provider.kind == request.provider_kind)
 }
 
-fn development_access_elevation(
+fn access_profile_elevation(settings: &DesktopSettings, requested: AccessProfileSetting) -> bool {
+    (!settings.managed_configured() && requested != AccessProfileSetting::Minimal)
+        || access_profile_rank(requested) > access_profile_rank(settings.access_profile)
+}
+
+const fn access_profile_rank(profile: AccessProfileSetting) -> u8 {
+    match profile {
+        AccessProfileSetting::Minimal => 0,
+        AccessProfileSetting::Development => 1,
+        AccessProfileSetting::AllowAll => 2,
+    }
+}
+
+fn execution_boundary_elevation(
     settings: &DesktopSettings,
-    request: &ConfigureManagedRuntimeInput,
+    requested: ExecutionBoundarySetting,
 ) -> bool {
-    request.access_profile == crate::desktop_settings::AccessProfileSetting::Development
-        && (!settings.managed_configured()
-            || settings.access_profile
-                != crate::desktop_settings::AccessProfileSetting::Development)
+    (!settings.managed_configured() && requested != ExecutionBoundarySetting::OfflineIsolated)
+        || execution_boundary_rank(requested) > execution_boundary_rank(settings.execution_boundary)
+}
+
+const fn execution_boundary_rank(boundary: ExecutionBoundarySetting) -> u8 {
+    match boundary {
+        ExecutionBoundarySetting::OfflineIsolated => 0,
+        ExecutionBoundarySetting::WorkspaceIsolated => 1,
+        ExecutionBoundarySetting::FullAccess => 2,
+    }
 }
 
 fn verify_reused_provider_credential(
@@ -954,17 +990,31 @@ fn verify_reused_provider_credential(
     Ok(())
 }
 
-async fn confirm_development_access(app: &AppHandle) -> Result<bool, CommandErrorDto> {
+async fn confirm_access_profile(
+    app: &AppHandle,
+    profile: AccessProfileSetting,
+) -> Result<bool, CommandErrorDto> {
+    let (name, message) = match profile {
+        AccessProfileSetting::Minimal => return Ok(true),
+        AccessProfileSetting::Development => (
+            "Development",
+            "Development access lets Colossus use workspace-development tools. The execution boundary and approval mode are configured separately.",
+        ),
+        AccessProfileSetting::AllowAll => (
+            "Allow all",
+            "Allow all grants the Managed Local agent every declared built-in tool. The execution boundary and approval mode are configured separately.",
+        ),
+    };
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
-            .message(
-                "Development access lets Colossus read and change files in the folder you selected and request sandboxed shell effects. Policy, audit, and per-effect approval still apply.\n\nEnable Development access for Managed Local?",
-            )
-            .title("Enable Colossus Development access")
+            .message(format!(
+                "{message}\n\nEnable {name} access for Managed Local?"
+            ))
+            .title(format!("Enable Colossus {name} access"))
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Enable Development".into(),
+                format!("Enable {name}"),
                 "Cancel".into(),
             ))
             .blocking_show()
@@ -974,6 +1024,45 @@ async fn confirm_development_access(app: &AppHandle) -> Result<bool, CommandErro
         CommandErrorDto::local_sanitized(
             "access_profile_confirmation",
             "The native access-profile confirmation could not be opened.",
+            true,
+        )
+    })
+}
+
+async fn confirm_execution_boundary(
+    app: &AppHandle,
+    boundary: ExecutionBoundarySetting,
+) -> Result<bool, CommandErrorDto> {
+    let (name, message) = match boundary {
+        ExecutionBoundarySetting::OfflineIsolated => return Ok(true),
+        ExecutionBoundarySetting::WorkspaceIsolated => (
+            "Workspace isolated",
+            "Workspace isolated confines filesystem effects to the selected workspace while allowing explicitly configured provider destinations.",
+        ),
+        ExecutionBoundarySetting::FullAccess => (
+            "Full access",
+            "Unsafe: Full access runs commands without Colossus filesystem or network isolation. They can access files, environment variables, and network destinations available to your account. Policy, permits, approvals, and audit remain active, but approval mode is a separate setting.",
+        ),
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(format!(
+                "{message}\n\nEnable the {name} execution boundary for Managed Local?"
+            ))
+            .title(format!("Enable {name}"))
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                format!("Enable {name}"),
+                "Cancel".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "execution_boundary_confirmation",
+            "The native execution-boundary confirmation could not be opened.",
             true,
         )
     })
@@ -1010,6 +1099,7 @@ fn persist_reused_provider_configuration(
         .ok_or_else(CommandErrorDto::not_configured)?
         .model = std::mem::take(&mut request.model);
     settings.access_profile = request.access_profile;
+    settings.execution_boundary = request.execution_boundary;
     settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     if let Err(error) = save_settings(settings) {
         *settings = previous;
@@ -1076,6 +1166,7 @@ fn persist_provider_rotation(
     }];
     settings.model_roles = std::collections::BTreeMap::from([("primary".into(), "primary".into())]);
     settings.access_profile = request.access_profile;
+    settings.execution_boundary = request.execution_boundary;
     settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     settings
         .pending_provider_cleanup_ids
@@ -1691,8 +1782,7 @@ fn desktop_capabilities(
             && cfg!(target_os = "macos"),
         files: selected_managed
             && workspace_available
-            && settings.access_profile
-                == crate::desktop_settings::AccessProfileSetting::Development,
+            && settings.access_profile != AccessProfileSetting::Minimal,
         artifacts: advertised.contains("artifacts.read"),
         plan_continuation: advertised.contains(PLAN_CONTINUATION_CAPABILITY),
         update_available: state.update_available(),
@@ -1795,6 +1885,7 @@ async fn desktop_status_from(
         codex_auth: crate::codex_auth::current_status(),
         managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
+        execution_boundary: settings.execution_boundary,
         approval_mode: state.approval_mode(),
         terminal_enabled: settings.local_terminal_enabled(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
@@ -2005,6 +2096,8 @@ mod tests {
             provider_kind: crate::desktop_settings::ProviderKindSetting::Compatible,
             model: "new-model".into(),
             access_profile: crate::desktop_settings::AccessProfileSetting::Development,
+            execution_boundary:
+                crate::desktop_settings::ExecutionBoundarySetting::WorkspaceIsolated,
             replace_credential: false,
         }
     }
@@ -2258,23 +2351,36 @@ mod tests {
     }
 
     #[test]
-    fn development_authority_requires_native_confirmation_only_on_elevation() {
-        let request = provider_request();
-        assert!(development_access_elevation(
-            &DesktopSettings::default(),
-            &request,
+    fn access_and_execution_authority_confirm_only_on_independent_elevation() {
+        let mut minimal = settings_with_provider(&Uuid::now_v7().to_string());
+        minimal.access_profile = AccessProfileSetting::Minimal;
+        minimal.execution_boundary = ExecutionBoundarySetting::OfflineIsolated;
+        assert!(access_profile_elevation(
+            &minimal,
+            AccessProfileSetting::Development
+        ));
+        assert!(access_profile_elevation(
+            &minimal,
+            AccessProfileSetting::AllowAll
+        ));
+        assert!(execution_boundary_elevation(
+            &minimal,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        ));
+        assert!(execution_boundary_elevation(
+            &minimal,
+            ExecutionBoundarySetting::FullAccess
         ));
 
-        let mut minimal = settings_with_provider(&Uuid::now_v7().to_string());
-        minimal.access_profile = crate::desktop_settings::AccessProfileSetting::Minimal;
-        assert!(development_access_elevation(&minimal, &request));
-
-        let development = settings_with_provider(&Uuid::now_v7().to_string());
-        assert!(!development_access_elevation(&development, &request));
-
-        let mut narrower = request;
-        narrower.access_profile = crate::desktop_settings::AccessProfileSetting::Minimal;
-        assert!(!development_access_elevation(&development, &narrower));
+        let full = settings_with_provider(&Uuid::now_v7().to_string());
+        assert!(!access_profile_elevation(
+            &full,
+            AccessProfileSetting::Development
+        ));
+        assert!(!execution_boundary_elevation(
+            &full,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        ));
     }
 
     #[test]

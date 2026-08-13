@@ -3,8 +3,10 @@ use super::{
     LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile, ProjectionState,
     persist_position, read_position,
 };
-use colossus_contracts::DecisionOutcome;
-use colossus_policy::{BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel};
+use colossus_contracts::{DecisionOutcome, ResourceAuthority, SandboxBoundaryMode};
+use colossus_policy::{
+    BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, SandboxBoundaryGate,
+};
 use colossus_ports::{EmbeddingProvider, EventJournal, MemoryIndex};
 use colossus_testkit::{InMemoryEventJournal, assert_memory_index_conformance};
 use std::sync::{
@@ -15,6 +17,41 @@ use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
 };
+
+#[test]
+fn ambient_semantic_profiles_allow_non_loopback_http_only_explicitly() {
+    assert!(
+        ChromaProfile::new(
+            "http://10.0.0.9:8000",
+            "tenant",
+            "database",
+            "collection",
+            None,
+            1_000,
+        )
+        .is_err()
+    );
+    ChromaProfile::new_with_resource_authority(
+        "http://10.0.0.9:8000",
+        "tenant",
+        "database",
+        "collection",
+        None,
+        1_000,
+        ResourceAuthority::Ambient,
+    )
+    .expect("ambient private Chroma endpoint");
+    OpenAiEmbeddingProfile::new_with_resource_authority(
+        "private",
+        "embedding-model",
+        "http://169.254.169.254/v1",
+        None,
+        1_000,
+        Some(64),
+        ResourceAuthority::Ambient,
+    )
+    .expect("ambient metadata embedding endpoint");
+}
 
 #[tokio::test]
 async fn local_embeddings_are_deterministic_normalized_and_distinct() {
@@ -289,6 +326,79 @@ async fn openai_compatible_embeddings_are_permit_bound_and_strictly_normalized()
             .any(|request| request.contains("/v1/embeddings HTTP/1.1"))
     );
     fixture.task.abort();
+}
+
+#[tokio::test]
+async fn remote_plaintext_embeddings_require_ambient_authority_in_the_permit() {
+    let credential = "env:COLOSSUS_TEST_MISSING_PLAINTEXT_EMBEDDING_KEY";
+    let profile = OpenAiEmbeddingProfile::new_with_resource_authority(
+        "remote-http",
+        "embed-test",
+        "http://192.0.2.1:9/v1",
+        Some(credential.into()),
+        25,
+        Some(3),
+        ResourceAuthority::Ambient,
+    )
+    .expect("potential ambient profile");
+    let origin = profile.network_origin().expect("origin");
+
+    let declared_gateway = Arc::new(EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("embedding.openai.create", DecisionOutcome::Allow)
+                .with_network_destination(&origin),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["embedding.openai.create".into()]),
+        [65_u8; 32],
+    ));
+    let declared = GatewayOpenAiEmbeddingProvider::new(
+        declared_gateway,
+        Arc::new(OpenAiEmbeddingExecutor::new(profile.clone())),
+        profile.clone(),
+    );
+    let error = declared
+        .embed("test")
+        .await
+        .expect_err("declared exact origin must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+
+    let ambient_gateway = Arc::new(EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("embedding.openai.create", DecisionOutcome::Allow)
+                .with_sandbox("danger_full_access", "test", false)
+                .with_resource_authority(ResourceAuthority::Ambient)
+                .with_limits(25, 1024 * 1024, 1, 64 * 1024 * 1024, 1),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["embedding.openai.create".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [66_u8; 32],
+    ));
+    let ambient = GatewayOpenAiEmbeddingProvider::new(
+        ambient_gateway,
+        Arc::new(OpenAiEmbeddingExecutor::new(profile.clone())),
+        profile,
+    );
+    let error = ambient
+        .embed("test")
+        .await
+        .expect_err("missing credential must stop before dispatch");
+    assert!(error.to_string().contains("environment credential"));
+    assert!(
+        !error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
 }
 
 struct ChromaFixture {

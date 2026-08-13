@@ -1,6 +1,6 @@
 use colossus_network::{AdditionalRootCertificates, pinned_reqwest_client};
 use colossus_policy::{
-    ExecutionError, ExecutionPermit, NetworkDestinationMatch, network_destination_match,
+    ExecutionError, ExecutionPermit, NetworkDestinationMatch, http_transport_authority_match,
     non_public_network_address,
 };
 use futures::{StreamExt as _, stream::BoxStream};
@@ -36,17 +36,17 @@ impl HardenedStreamableHttpClient {
         tls_roots: &AdditionalRootCertificates,
     ) -> Result<Self, ExecutionError> {
         let url = Url::parse(endpoint).map_err(adapter_failure)?;
-        let origin = url.origin().ascii_serialization();
-        let matched =
-            network_destination_match(&permit.obligations().network_destinations, &origin)
-                .map_err(adapter_failure)?
-                .ok_or_else(|| adapter_failure("MCP HTTP origin is not permitted"))?;
+        let matched = http_transport_authority_match(permit.obligations(), endpoint)
+            .map_err(adapter_failure)?
+            .ok_or_else(|| adapter_failure("MCP HTTP origin is not permitted"))?;
         let host = url
             .host_str()
             .ok_or_else(|| adapter_failure("MCP HTTP URL has no host"))?;
-        let allow_non_public = matched == NetworkDestinationMatch::Exact
-            && (host.eq_ignore_ascii_case("localhost")
-                || colossus_network::parse_host_ip(host).is_some_and(non_public_network_address));
+        let allow_non_public = matched == NetworkDestinationMatch::Ambient
+            || (matched == NetworkDestinationMatch::Exact
+                && (host.eq_ignore_ascii_case("localhost")
+                    || colossus_network::parse_host_ip(host)
+                        .is_some_and(non_public_network_address)));
         let client = pinned_reqwest_client(
             &url,
             tls_roots,

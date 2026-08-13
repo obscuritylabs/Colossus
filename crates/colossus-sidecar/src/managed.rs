@@ -17,9 +17,10 @@ use colossus_runtime::{
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
     FailureResponse, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
-    ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, PROTOCOL_VERSION,
-    ParentFrame, ReadyResponse, SecretString, WorkspaceIdentity as BootstrapWorkspaceIdentity,
-    decode_worker_authentication, read_frame, write_frame,
+    ManagedExecutionBoundary, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
+    PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
+    WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication, read_frame,
+    write_frame,
 };
 use colossus_worker::{
     ApplicationGrant, PublicApiAuthenticationKey, PublicApiDeploymentMode, PublicApiHostOptions,
@@ -169,6 +170,8 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     let mut runtime_options = RuntimeOpenOptions::for_workspace(&workspace.canonical_path)
         .map_err(|_| FailureCode::InvalidWorkspace)?
         .with_expected_workspace_identity(workspace.runtime_identity()?);
+    runtime_options =
+        apply_execution_boundary_tool_mode(runtime_options, request.runtime.execution_boundary);
     if let Some(home) = &colossus_home {
         runtime_options = runtime_options
             .with_colossus_home(home.root())
@@ -401,6 +404,17 @@ fn apply_instruction_loading_mode(
     }
 }
 
+fn apply_execution_boundary_tool_mode(
+    options: RuntimeOpenOptions,
+    boundary: ManagedExecutionBoundary,
+) -> RuntimeOpenOptions {
+    if boundary == ManagedExecutionBoundary::OfflineIsolated {
+        options.without_model_network_tools()
+    } else {
+        options
+    }
+}
+
 const fn chat_completions_output_token_parameter(
     parameter: ManagedChatCompletionsOutputTokenParameter,
 ) -> ChatCompletionsOutputTokenParameter {
@@ -441,11 +455,20 @@ fn managed_runtime_config(
     };
     config.set_access_profile(access_profile);
     config.network.ca_bundle_path = ca_bundle_path.map(Path::to_path_buf);
-    if matches!(
-        managed.access_profile,
-        ManagedAccessProfile::Development | ManagedAccessProfile::AllowAll
-    ) {
-        config.set_sandbox_profile("workspace-development");
+    match managed.execution_boundary {
+        ManagedExecutionBoundary::FullAccess => {
+            config.sandbox.backend = "danger_full_access".into();
+            config.sandbox.profile = "offline-default".into();
+            config.sandbox.allow_broker_fallback = false;
+            config.sandbox.acknowledge_external_boundary = false;
+            config.sandbox.acknowledge_danger_full_access = true;
+        }
+        ManagedExecutionBoundary::WorkspaceIsolated => {
+            config.use_platform_isolating_sandbox("workspace-development");
+        }
+        ManagedExecutionBoundary::OfflineIsolated => {
+            config.use_platform_isolating_sandbox("offline-default");
+        }
     }
     config.providers = ProvidersConfig {
         profiles: managed
@@ -1134,6 +1157,7 @@ mod tests {
     fn test_managed_runtime() -> ManagedRuntimeConfig {
         ManagedRuntimeConfig {
             access_profile: ManagedAccessProfile::Development,
+            execution_boundary: ManagedExecutionBoundary::WorkspaceIsolated,
             providers: vec![ManagedProviderConfig {
                 profile: "echo".into(),
                 kind: ManagedProviderKind::Echo,
@@ -1156,6 +1180,75 @@ mod tests {
             }],
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
         }
+    }
+
+    #[test]
+    fn managed_execution_boundary_maps_independently_from_access_profile() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.access_profile = ManagedAccessProfile::Minimal;
+        managed.execution_boundary = ManagedExecutionBoundary::FullAccess;
+        let full = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("full access config");
+        assert_eq!(full.access.profile, AccessProfile::Minimal);
+        assert_eq!(full.sandbox.backend, "danger_full_access");
+        assert_eq!(full.sandbox.profile, "offline-default");
+        assert!(full.sandbox.acknowledge_danger_full_access);
+
+        managed.access_profile = ManagedAccessProfile::AllowAll;
+        managed.execution_boundary = ManagedExecutionBoundary::WorkspaceIsolated;
+        let workspace = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("workspace isolated config");
+        assert_eq!(workspace.access.profile, AccessProfile::AllowAll);
+        assert_ne!(workspace.sandbox.backend, "danger_full_access");
+        assert_eq!(workspace.sandbox.profile, "workspace-development");
+        assert!(!workspace.sandbox.acknowledge_danger_full_access);
+
+        managed.execution_boundary = ManagedExecutionBoundary::OfflineIsolated;
+        let offline = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("offline isolated config");
+        assert_ne!(offline.sandbox.backend, "danger_full_access");
+        assert_eq!(offline.sandbox.profile, "offline-default");
+        assert!(!offline.sandbox.acknowledge_danger_full_access);
+    }
+
+    #[test]
+    fn offline_isolated_retains_provider_origins_without_enabling_model_network_tools() {
+        let instance = tempfile::tempdir().expect("instance");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut managed = test_managed_runtime();
+        managed.access_profile = ManagedAccessProfile::AllowAll;
+        managed.execution_boundary = ManagedExecutionBoundary::OfflineIsolated;
+        managed.providers[0] = ManagedProviderConfig {
+            profile: "private-provider".into(),
+            kind: ManagedProviderKind::OpenAiCompatible,
+            base_url: Some("https://provider.example/v1".into()),
+            credential_id: Some("provider-main".into()),
+            timeout_ms: 120_000,
+            chat_completions_output_token_parameter: None,
+        };
+        managed.models[0].provider_profile = "private-provider".into();
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("offline managed config");
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&"https://provider.example".into()),
+            "provider transport authority remains configured"
+        );
+        let options = apply_execution_boundary_tool_mode(
+            RuntimeOpenOptions::for_workspace(workspace.path()).expect("runtime options"),
+            managed.execution_boundary,
+        );
+        assert!(!options.model_network_tools_enabled());
+
+        let ordinary = apply_execution_boundary_tool_mode(
+            RuntimeOpenOptions::for_workspace(workspace.path()).expect("ordinary options"),
+            ManagedExecutionBoundary::WorkspaceIsolated,
+        );
+        assert!(ordinary.model_network_tools_enabled());
     }
 
     #[cfg(unix)]
@@ -1369,6 +1462,7 @@ mod tests {
         let instance = tempfile::tempdir().expect("instance");
         let mut managed = ManagedRuntimeConfig {
             access_profile: ManagedAccessProfile::Development,
+            execution_boundary: ManagedExecutionBoundary::WorkspaceIsolated,
             providers: vec![ManagedProviderConfig {
                 profile: "openrouter".into(),
                 kind: ManagedProviderKind::OpenAiCompatible,
@@ -1425,6 +1519,7 @@ mod tests {
         let instance = tempfile::tempdir().expect("instance");
         let managed = ManagedRuntimeConfig {
             access_profile: ManagedAccessProfile::Development,
+            execution_boundary: ManagedExecutionBoundary::WorkspaceIsolated,
             providers: vec![ManagedProviderConfig {
                 profile: "openrouter".into(),
                 kind: ManagedProviderKind::OpenAiCompatible,
@@ -1465,6 +1560,7 @@ mod tests {
         let instance = tempfile::tempdir().expect("instance");
         let managed = ManagedRuntimeConfig {
             access_profile: ManagedAccessProfile::Development,
+            execution_boundary: ManagedExecutionBoundary::WorkspaceIsolated,
             providers: vec![ManagedProviderConfig {
                 profile: "codex".into(),
                 kind: ManagedProviderKind::OpenAiCodex,

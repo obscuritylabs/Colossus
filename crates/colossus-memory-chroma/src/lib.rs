@@ -5,11 +5,13 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, EffectRequest, QuarantinedEffectResult,
+    ResourceAuthority,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit, GatewayError,
-    NetworkDestinationMatch, effect_request, network_destination_match, non_public_network_address,
+    NetworkDestinationMatch, effect_request, http_transport_authority_match,
+    non_public_network_address,
 };
 use colossus_ports::{EmbeddingProvider, MemoryIndex, StoreError};
 use futures::StreamExt as _;

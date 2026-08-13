@@ -76,9 +76,30 @@ impl OpenAiEmbeddingProfile {
         timeout_ms: u64,
         dimensions: Option<usize>,
     ) -> Result<Self, StoreError> {
+        Self::new_with_resource_authority(
+            name,
+            model,
+            base_url,
+            credential_reference,
+            timeout_ms,
+            dimensions,
+            ResourceAuthority::Declared,
+        )
+    }
+
+    /// Validate a profile under an explicit runtime resource authority.
+    pub fn new_with_resource_authority(
+        name: impl Into<String>,
+        model: impl Into<String>,
+        base_url: impl Into<String>,
+        credential_reference: Option<String>,
+        timeout_ms: u64,
+        dimensions: Option<usize>,
+        resource_authority: ResourceAuthority,
+    ) -> Result<Self, StoreError> {
         let name = name.into();
         let model = model.into();
-        let base_url = normalize_base_url(&base_url.into(), true)?;
+        let base_url = normalize_base_url(&base_url.into(), true, resource_authority)?;
         validate_credential_reference(credential_reference.as_deref())?;
         if !valid_name(&name)
             || model.trim().is_empty()

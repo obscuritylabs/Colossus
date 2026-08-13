@@ -71,6 +71,9 @@ pub(super) fn enforce_read_grant(
     permit: &ExecutionPermit,
 ) -> Result<(), ExecutionError> {
     let canonical = fs::canonicalize(path).map_err(execution)?;
+    if permit.obligations().resource_authority == ResourceAuthority::Ambient {
+        return Ok(());
+    }
     let allowed = permit.obligations().filesystem.iter().any(|grant| {
         matches!(grant.mode.as_str(), "read" | "write")
             && fs::canonicalize(&grant.root).is_ok_and(|root| canonical.starts_with(root))
@@ -105,6 +108,9 @@ pub(super) fn enforce_write_grant(
         }
     }
     let resolved_existing = fs::canonicalize(existing).map_err(execution)?;
+    if permit.obligations().resource_authority == ResourceAuthority::Ambient {
+        return Ok(());
+    }
     let allowed = permit.obligations().filesystem.iter().any(|grant| {
         if grant.mode != "write" {
             return false;
@@ -167,26 +173,30 @@ pub(super) async fn registry_client(
         .ok_or_else(|| PackError::Invalid("registry URL must include a host".into()))?;
     let host_ip = host.parse::<IpAddr>().ok();
     let loopback_http = url.scheme() == "http" && host_ip.is_some_and(|ip| ip.is_loopback());
-    if !(url.scheme() == "https" || loopback_http)
+    let ambient_http = url.scheme() == "http"
+        && permit.obligations().resource_authority == ResourceAuthority::Ambient;
+    if !(url.scheme() == "https" || loopback_http || ambient_http)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
         return Err(PackError::Invalid(
-            "registry URLs require HTTPS (or explicit loopback HTTP) and no credentials, query, or fragment"
+            "registry URLs require HTTPS, explicit loopback HTTP, or acknowledged ambient HTTP and no credentials, query, or fragment"
                 .into(),
         ));
     }
     let origin = url.origin().ascii_serialization();
-    if !permit
-        .obligations()
-        .network_destinations
-        .iter()
-        .any(|allowed| allowed == &origin)
-    {
+    let matched = network_authority_match(permit.obligations(), &origin)
+        .map_err(|error| PackError::Invalid(error.to_string()))?
+        .ok_or_else(|| {
+            PackError::Invalid(format!(
+                "registry origin {origin} is absent from permit obligations"
+            ))
+        })?;
+    if matched == NetworkDestinationMatch::PublicWildcard {
         return Err(PackError::Invalid(format!(
-            "registry origin {origin} is absent from permit obligations"
+            "registry origin {origin} requires an exact or ambient grant"
         )));
     }
     let port = url
@@ -195,9 +205,10 @@ pub(super) async fn registry_client(
     let mut addresses = lookup_host((host, port))
         .await
         .map_err(|error| PackError::Invalid(format!("registry DNS resolution failed: {error}")))?
-        .filter(|address| match host_ip {
-            Some(ip) => ip.is_loopback() || !non_public_ip(address.ip()),
-            None => !non_public_ip(address.ip()),
+        .filter(|address| match (matched, host_ip) {
+            (NetworkDestinationMatch::Ambient, _) => true,
+            (_, Some(ip)) => ip.is_loopback() || !non_public_ip(address.ip()),
+            (_, None) => !non_public_ip(address.ip()),
         })
         .collect::<Vec<_>>();
     if addresses.is_empty() {
@@ -234,11 +245,12 @@ pub(super) fn registry_auth(
         || !variable.bytes().enumerate().all(|(index, byte)| {
             byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
         })
-        || !permit
-            .obligations()
-            .allowed_environment
-            .iter()
-            .any(|allowed| allowed == variable)
+        || (permit.obligations().resource_authority != ResourceAuthority::Ambient
+            && !permit
+                .obligations()
+                .allowed_environment
+                .iter()
+                .any(|allowed| allowed == variable))
     {
         return Err(PackError::Invalid(
             "registry credential is absent from permit environment obligations".into(),

@@ -741,11 +741,10 @@ impl ProviderExecutor {
                 "provider effect endpoint does not match its configured profile".into(),
             ));
         }
-        let origin = self
-            .profile
+        self.profile
             .network_origin()?
             .ok_or_else(|| ProviderError::Configuration("network provider has no origin".into()))?;
-        if network_destination_match(&permit.obligations().network_destinations, &origin)
+        if http_transport_authority_match(permit.obligations(), endpoint)
             .map_err(|error| ProviderError::Configuration(error.to_string()))?
             .is_none()
         {
@@ -867,17 +866,17 @@ impl ProviderExecutor {
         let port = url
             .port_or_known_default()
             .ok_or_else(|| ProviderError::Configuration("provider URL has no port".into()))?;
-        let matched =
-            network_destination_match(&permit.obligations().network_destinations, url.as_str())
-                .map_err(|error| ProviderError::Configuration(error.to_string()))?
-                .ok_or_else(|| {
-                    ProviderError::Configuration(
-                        "provider origin is absent from permit obligations".into(),
-                    )
-                })?;
-        let allow_non_public = matched == NetworkDestinationMatch::Exact
-            && (host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let matched = http_transport_authority_match(permit.obligations(), url.as_str())
+            .map_err(|error| ProviderError::Configuration(error.to_string()))?
+            .ok_or_else(|| {
+                ProviderError::Configuration(
+                    "provider origin is absent from permit obligations".into(),
+                )
+            })?;
+        let allow_non_public = matched == NetworkDestinationMatch::Ambient
+            || (matched == NetworkDestinationMatch::Exact
+                && (host.eq_ignore_ascii_case("localhost")
+                    || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
         let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
         self.tls_roots

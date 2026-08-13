@@ -116,19 +116,29 @@ encrypted. A mismatch aborts runtime construction before event writes. Mixed alg
 and in-place protection migration are unsupported. Incremental plaintext startup checks
 only bounded local head/index invariants, while full startup and explicit audit
 verification replay all payloads. Runtime-owned structured posture findings feed CLI,
-worker, and TUI diagnostics; automatic warnings are interactive-only.
+worker, and TUI diagnostics. The dangerous full-access finding is emitted on stderr even
+for non-interactive CLI invocations, while JSON stdout remains machine-readable; other
+automatic posture cards remain terminal-oriented.
 
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
 writes reject symlink leaves and use same-directory atomic replacement. Processes run
-through authenticated helpers with bounded arguments and process trees plus selected
-native, Windows, or OCI isolation. Isolating and `external` modes use cleared
-environments, exact or trusted-profile executables, isolated shell homes/temp
-directories, and sanitized command paths. Explicitly acknowledged
-`danger_full_access` retains the authenticated permit/audit path and process limits but
-deliberately permits ambient executables, environment, working directories, filesystem,
-and child networking; private helper-control variables are not inherited.
+through authenticated helpers with bounded arguments and supervised process groups,
+plus selected native, Windows, or OCI isolation. Isolating and `external` modes use
+cleared environments, exact or trusted-profile executables, isolated shell homes/temp
+directories, and sanitized command paths. Acknowledged `danger_full_access` retains the
+authenticated permit/audit path and configured effect bounds but deliberately enables
+a distinct ambient resource-authority mode for all effect lineages. Process execution
+permits ambient executables, environment, working directories, filesystem, and child
+networking; private helper-control variables are not inherited. Structured filesystem,
+repository, patch, trace, and related path effects may bind exact host paths outside the
+selected workspace, including Colossus and version-control control paths. Structured
+network effects may bind any exact canonical HTTP(S) origin, including loopback,
+private, link-local, and metadata destinations. Ambient authority is carried explicitly
+in the policy obligation and permit; it is not encoded as filesystem `/` or network
+`*`, and the Safety Kernel rejects it unless the runtime's danger boundary is
+acknowledged.
 The Linux helper is dispatched before the asynchronous CLI runtime starts so it can
 establish and map its rootless user namespace while still single-threaded, then create
 the private mount namespace used to mask protected paths. After mounting those masks,
@@ -147,11 +157,42 @@ command starts.
 
 HTTP effects match either an exact canonical origin or the public HTTP(S)-only `*`
 grant. The wildcard excludes loopback, private, link-local, and metadata destinations;
-exact private origins remain possible. Provider, search, integration, brokered HTTP,
+exact private HTTPS origins and exact loopback HTTP origins remain possible. Under
+declared authority, even an exact origin cannot authorize non-loopback plaintext HTTP.
+Provider, search, integration, brokered HTTP,
 semantic memory, native/Windows process proxy, and OCI proxy paths share this matcher,
 pin DNS results, validate TLS authority, reject ambient proxies and redirects, bound
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
+
+Under ambient authority, the destination classifier no longer rejects a requested
+non-public HTTP(S) origin and no configured destination entry is required. URL
+canonicalization, HTTP(S)-only transport, credential-in-URL rejection, safe headers,
+DNS pinning, disabled ambient proxies and redirects, response bounds, quarantine,
+post-effect policy, and durable evidence remain mandatory. HTTPS still receives normal
+certificate and hostname validation. Ambient authority also accepts canonical
+non-loopback plaintext HTTP, which has no TLS confidentiality or server authentication
+and can expose request content and credentials in transit. Provider routes,
+MCP servers and tool allowlists, integrations, credentials, pack trust, and all other
+capability declarations remain configured-only.
+
+Direct Unix process supervision is not a kernel containment boundary. The effect
+timeout and output ceiling cover the supervised request and attached process group, but
+process-count, memory, whole-tree termination, and cleanup are best-effort against code
+that deliberately calls `setsid`, double-forks, or reparents itself. An escaped
+descendant may outlive the effect and its later activity is not represented by that
+effect's audit record. Strict descendant containment requires native or OCI isolation,
+a Windows Job Object, or an asserted external host boundary that owns the complete
+process namespace/job.
+
+For the same reason, runtime composition rejects enabled pack tools and pack-declared
+stdio MCP servers under `danger_full_access`. Direct ambient execution cannot preserve
+their manifest resource and credential ceilings. Pack signatures, trust, and
+declarations remain necessary under every boundary and never grant ambient authority.
+
+Ambient destination authority does not weaken dedicated security-channel contracts.
+Remote OPA remains HTTPS with pinned CA trust and mTLS identity. WORM audit export
+remains HTTPS-only, create-only, and hash-bound.
 
 Standalone CLI distribution is a separate operator-initiated network boundary, not an
 agent effect. Repository-owned Unix and PowerShell bootstrap installers contact only
@@ -368,15 +409,16 @@ bounds. Continuation tokens bind the authenticated application and canonical fil
 carry an immutable index snapshot and exclusive resume version, and validate their
 referenced durable index entries before use.
 
-Run-update payloads contain a versioned, encrypted prior-state projection and
-cumulative released-byte count. Mutation paths authenticate only the creation and
-two-event tail, derive state and accounting from the predecessor, validate the current
-projection, and append with optimistic concurrency, keeping per-update work constant as
-a run grows. Pending interactions block unrelated updates so their prompt projection
-cannot be duplicated across the remaining event budget. Read reconstruction continues
-to replay the complete bounded stream and verifies every projection against the
-preceding state. The projection is journal-authenticated durable evidence, not a
-mutable in-memory authority cache.
+Run-update payloads contain a versioned prior-state projection and cumulative
+released-byte count. Protected storage encrypts that payload; keyless storage keeps
+canonical plaintext with payload and record hashes. Mutation paths authenticate only
+the creation and two-event tail, derive state and accounting from the predecessor,
+validate the current projection, and append with optimistic concurrency, keeping
+per-update work constant as a run grows. Pending interactions block unrelated updates
+so their prompt projection cannot be duplicated across the remaining event budget. Read
+reconstruction continues to replay the complete bounded stream and verifies every
+projection against the preceding state. The projection is journal-authenticated durable
+evidence, not a mutable in-memory authority cache.
 
 Finite loopback connection and handshake limits mitigate resource exhaustion but are
 not an availability boundary against a hostile local process, including one running as
@@ -410,15 +452,16 @@ See [Public API and application SDKs](application-sdk.md) for the complete topol
 
 The read-only Desktop file viewer is a separate, narrow local-user disclosure surface,
 not a generic filesystem bridge or an agent tool. It is available only while the exact
-Managed Local target is selected with Development access, accepts the opaque current
-workspace ID plus a bounded relative path, and revalidates the persisted object-bound
-workspace identity before and after every operation. It rejects absolute paths, parent
-components, links, non-files, non-directories, non-UTF-8 or unsafe-control text, large
-files, and oversized directories. Control state, version-control internals, generated
-dependency/build trees, environment files, credential files, and key/certificate
-formats are excluded. The native boundary returns at most 256 KiB of text and exposes
-no write, execute, process, network, arbitrary-open, or SDK command. Source changes
-continue through ordinary permit-bound agent effects; the viewer cannot mutate them.
+Managed Local target is selected with non-Minimal workspace-tool access (Development or
+Allow all), accepts the opaque current workspace ID plus a bounded relative path, and
+revalidates the persisted object-bound workspace identity before and after every
+operation. It rejects absolute paths, parent components, links, non-files,
+non-directories, non-UTF-8 or unsafe-control text, large files, and oversized
+directories. Control state, version-control internals, generated dependency/build trees,
+environment files, credential files, and key/certificate formats are excluded. The
+native boundary returns at most 256 KiB of text and exposes no write, execute, process,
+network, arbitrary-open, or SDK command. Source changes continue through ordinary
+permit-bound agent effects; the viewer cannot mutate them.
 
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a
@@ -597,10 +640,11 @@ delivers, acknowledges, activates, and revokes the pair as one bootstrap lifecyc
 the SDK routes only approval answers over the broker's separately authenticated pinned
 gRPC client. Renderer approval input still requires the native operating-system
 confirmation before an allow response reaches this broker.
-First-time Development access and every Minimal-to-Development elevation likewise
-require a fixed native confirmation before the wider workspace and shell tool ceiling
-is persisted. A renderer can request key rotation but cannot suppress the native key
-prompt for first setup or a provider-kind change.
+First-time non-Minimal access and every access-rank elevation, including
+Development-to-Allow-all, require a fixed native confirmation before the wider tool
+ceiling is persisted. Execution-boundary elevation is confirmed independently, including
+changes from either isolated boundary to Full access. A renderer can request key rotation
+but cannot suppress the native key prompt for first setup or a provider-kind change.
 
 ## Evidence and uncertainty
 

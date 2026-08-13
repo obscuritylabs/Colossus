@@ -24,7 +24,7 @@ flowchart LR
     Worker["Colossus worker"]
     Public["Public API adapter"]
     Runtime["Runtime and Safety Kernel"]
-    Journal["Encrypted journal"]
+    Journal["Hash-chained journal<br/>configured encryption"]
 
     Web -->|"narrow commands and ordered channels"| Native
     Native --> SDK
@@ -161,6 +161,29 @@ into a capability-confused deputy.
 
 ## Managed Local bootstrap and lifecycle
 
+Managed hosts carry an explicit `ManagedExecutionBoundary` independently from access
+profile and approval mode:
+
+- `FullAccess` is the default host posture and maps to acknowledged
+  `danger_full_access`;
+- `WorkspaceIsolated` selects the supported platform-native
+  `workspace-development` boundary; and
+- `OfflineIsolated` selects platform isolation without derived workspace resources,
+  hides the generic model-visible `network.http`, `web.fetch`, and `docs.fetch` tools,
+  and retains the exact provider service and authentication/refresh destinations
+  needed by the configured provider.
+
+Rust builders and getters expose this choice, and the private sidecar protocol carries
+it as a versioned bootstrap field. Hosts must not infer it from the access profile.
+Full access permits ambient structured filesystem and HTTP(S) effects as well as child
+process resources, but it does not add undeclared tools, routes, credentials, MCP
+servers, integration operations, or extension trust.
+
+`OfflineIsolated` is therefore not an air-gap declaration: selected provider and
+authentication transports can still use their retained destinations. Preserving those
+destinations does not reactivate general model fetch tools. Search, MCP, and integration
+adapters remain independently governed by their own configuration and host grants.
+
 The signed desktop bundle contains two independent executables:
 
 - `colossus-sidecar` owns runtime composition, private worker IPC, the public gRPC host,
@@ -212,9 +235,10 @@ Same-provider model and profile edits can reuse the native keychain binding with
 opening another secret prompt. First enrollment, provider-kind changes, and explicit
 rotation never take that reuse branch. A missing reused key fails before any settings
 or runtime mutation and requires an explicit replacement retry.
-Minimal-to-Development elevation also requires a separate native confirmation that
-describes the workspace and shell-effect authority being enabled; renderer input alone
-cannot widen the effective grant.
+First-time non-Minimal access and every access-rank elevation, including
+Development-to-Allow-all, require a native confirmation describing the wider tool
+ceiling. Execution-boundary elevation is confirmed separately, including a move from an
+isolated boundary to Full access; renderer input alone cannot widen either axis.
 
 WebView reload does not own sidecar lifetime. Provider and workspace changes request a
 graceful restart. An unexpected exit receives at most three backoff attempts; create and
@@ -362,10 +386,12 @@ Trusted enrollment code creates an exact application grant:
 - allowed tools.
 
 Empty role and tool grants deny all. Credential issuance first persists a pending
-keyed verifier and the grant in the encrypted journal. Pending credentials cannot
-authenticate. Trusted bootstrap transfers the one-time bearer directly to an
-operating-system credential store, then records a separate durable activation. The
-bearer must not enter a file, descriptor, URL, command line, environment variable,
+keyed verifier and the grant in the canonical journal. Managed Local uses
+platform-backed encryption; other hosts use their configured storage protection.
+Pending credentials cannot authenticate. Trusted bootstrap transfers the one-time
+bearer directly to an operating-system credential store, then records a separate
+durable activation. The bearer must not enter a file, descriptor, URL, command line,
+environment variable,
 crash report, or log. Rotation activates a new credential for the same application ID
 before revoking the old credential; revocation permanently invalidates either state.
 If old-credential revocation cannot be confirmed, the active replacement remains in
@@ -469,10 +495,11 @@ Ordinary nonterminal appends stop when the durable sequence reaches 4,096; three
 reserved lifecycle events allow interaction closure, the cancelling transition, and
 one terminal event without making that valid stream unlistable.
 
-Each encrypted run-update event carries a versioned projection of the public state
-immediately before that update and the cumulative released-byte count. A mutation
-authenticates the creation event and two-event tail, derives the current state and byte
-count from the predecessor, validates the tail projection against them, then uses
+Each run-update event carries a versioned projection of the public state immediately
+before that update and the cumulative released-byte count. Protected storage encrypts
+the payload; keyless storage keeps canonical plaintext with payload and record hashes.
+A mutation authenticates the creation event and two-event tail, derives the current
+state and byte count from the predecessor, validates the tail projection against them, then uses
 optimistic stream concurrency for its append; its work is independent of run history
 length. While an interaction is pending, only its resolution or a conservative
 terminal settlement may append, preventing repeated projection of its bounded prompt.

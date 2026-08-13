@@ -75,6 +75,25 @@ impl ProviderProfile {
         credential_reference: Option<String>,
         timeout_ms: u64,
     ) -> Result<Self, ProviderError> {
+        Self::new_with_resource_authority(
+            name,
+            kind,
+            base_url,
+            credential_reference,
+            timeout_ms,
+            ResourceAuthority::Declared,
+        )
+    }
+
+    /// Validate a profile under an explicit runtime resource authority.
+    pub fn new_with_resource_authority(
+        name: impl Into<String>,
+        kind: ProviderKind,
+        base_url: Option<String>,
+        credential_reference: Option<String>,
+        timeout_ms: u64,
+        resource_authority: ResourceAuthority,
+    ) -> Result<Self, ProviderError> {
         let name = name.into();
         if name.is_empty() || timeout_ms == 0 {
             return Err(ProviderError::Configuration(
@@ -102,7 +121,7 @@ impl ProviderProfile {
                 let raw = base_url.ok_or_else(|| {
                     ProviderError::Configuration("network providers require baseUrl".into())
                 })?;
-                Some(normalize_base_url(&raw)?)
+                Some(normalize_base_url(&raw, resource_authority)?)
             }
             ProviderKind::OpenAiCodex => {
                 if base_url.is_some()

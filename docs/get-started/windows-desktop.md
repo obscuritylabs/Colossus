@@ -56,16 +56,28 @@ independently bind that directory by a retained handle, volume serial number, an
 128-bit file ID. Reparse points, junction escapes, same-path replacement, and file
 replacement during preview are rejected.
 
+Fresh Managed Local settings default to **Allow all** access with the explicitly unsafe
+**Full access** execution boundary. Schema-v1–v3 migrations preserve the old effective
+isolation: **Minimal** maps to **Offline isolated**, while **Development** and legacy
+`allow_all` map to **Workspace isolated**. Setup and Settings let you change either axis
+independently. Full access can reach host files, environment, executables, and network
+outside the selected workspace, and Desktop keeps a persistent warning visible while
+that Managed Local runtime is active. Offline isolated hides the generic model-visible
+HTTP and fetch tools, but it is not an air gap: the exact configured provider and
+authentication or refresh destinations remain available.
+
 Managed Local starts the sealed sidecar suspended, verifies its retained image identity,
 assigns it to a kill-on-close Job Object, establishes an authenticated local named pipe,
 and only then resumes it. Closing Desktop closes the Job Object and cleans up the
 sidecar process tree.
 
-Desktop application storage and imported connection files are checked with Windows
-owner and DACL rules. Provider credentials are collected by Windows Credential UI with
-UI persistence disabled, then stored in Windows Credential Manager. Intermediate
-credential buffers are zeroized. Credentials, prompts, model output, and private paths
-are not included in diagnostics.
+Desktop settings, generated configuration, runtime state, and imported connection files
+live in the workspace's private Desktop partition under the Colossus home and are checked
+with Windows owner and DACL rules. The former application-support location is ignored and
+left untouched. Provider credentials are collected by Windows Credential UI with UI
+persistence disabled, then stored in Windows Credential Manager. Intermediate credential
+buffers are zeroized. Credentials, prompts, model output, and private paths are not
+included in diagnostics.
 
 ### 3. Import a private CA
 

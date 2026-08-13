@@ -8,7 +8,8 @@ type: concept
 # Use Colossus
 
 Colossus supports quick one-shot requests and long-running, restart-safe work. Both use
-the same model routing, tools, authorization, encrypted journal, and recovery semantics.
+the same model routing, tools, authorization, hash-chained journal, and recovery
+semantics.
 
 ## Connect a model provider
 
@@ -40,8 +41,10 @@ access method:
 ## What stays durable
 
 Session messages, tasks, decisions, plans, goals, child jobs, memories, research runs,
-workflow runs, and audit evidence are canonical encrypted records. Terminal layout,
-search indexes, and projections can be rebuilt; they are not the source of truth.
+workflow runs, and audit evidence are canonical journal records. The keyless default
+stores payloads as plaintext; configured platform or environment keys add authenticated
+encryption. Terminal layout, search indexes, and projections can be rebuilt; they are
+not the source of truth.
 
 When an external effect starts but its terminal outcome is not recorded, Colossus marks
 it unknown instead of assuming success or retrying silently.

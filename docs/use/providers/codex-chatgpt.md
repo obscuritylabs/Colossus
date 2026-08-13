@@ -48,8 +48,8 @@ store fails verification.
 ### 2. Configure the subscription route
 
 Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
-keep its other required fields. Replace its
-`schemaVersion`, `providers`, `models`, and `sandbox.networkDestinations` values with
+keep its required `storage` block and any intended custom settings. Replace its
+`schemaVersion`, `providers`, and `models` values with
 this validated overlay, then replace `YOUR_CODEX_MODEL_ID` and the limits with values
 for the selected catalog entry.
 
@@ -83,7 +83,9 @@ sandbox:
 
 Do not add `baseUrl`. The adapter owns its supported backend URL and sends the
 Codex-managed credential only to fixed service and refresh endpoints. Both origins are
-required so an expiring token can refresh.
+required under an isolating boundary so an expiring token can refresh. Acknowledged
+full access supplies ambient authority for both fixed endpoints without duplicate
+grants.
 
 `reasoningEffort` is optional. Choose only a level supported by the selected model, or
 omit it to use the backend default; Colossus does not assume every model supports every
@@ -130,8 +132,8 @@ configuration must contain only
 - **The model or reasoning level is rejected:** run `provider models codex-provider`,
   copy an exact visible model ID, and omit or correct `reasoningEffort` before rerunning
   `models doctor codex`.
-- **Refresh cannot reach the auth service:** retain both exact sandbox destinations and
-  rerun `provider doctor codex-provider`.
+- **Refresh cannot reach the auth service under isolation:** retain both exact sandbox
+  destinations and rerun `provider doctor codex-provider`.
 
 ## Next step
 

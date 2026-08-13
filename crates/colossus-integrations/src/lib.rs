@@ -13,7 +13,7 @@ use colossus_contracts::{
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
-    network_destination_match, non_public_network_address,
+    http_transport_authority_match, non_public_network_address,
 };
 use colossus_ports::{
     AggregateRepository, EventJournal, ExtensionRepository, StoreError, collect_stream_ids,

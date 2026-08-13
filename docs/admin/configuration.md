@@ -28,9 +28,11 @@ effective access surface easy to review.
     colossus -w /absolute/path/to/repository config init
     ```
 
-   `config init` defaults `access.profile: development` to
-   `sandbox.profile: workspace-development`, uses keyless plaintext journal storage,
-   and writes `storage.location: home_workspace`. Override these choices explicitly:
+   `config init` writes only schema and storage for the ordinary case. The omitted
+   groups resolve to `access.profile: allow_all` and acknowledged
+   `sandbox.backend: danger_full_access`, use keyless plaintext journal storage, and
+   write `storage.location: home_workspace`. This is immediately usable and
+   intentionally unsafe. Override it with an isolating preset explicitly:
 
     ```bash
     colossus -w /absolute/path/to/repository \
@@ -73,12 +75,14 @@ Common deployment shapes are:
 | Shape | Provider | Access profile | Network |
 | --- | --- | --- | --- |
 | Offline smoke | `echo` | `minimal` or `development` | Empty |
-| Interactive repository work | Configured local or hosted provider | `development` + `workspace-development` | Exact origins or reviewed public `*` |
+| Interactive repository work | Configured local or hosted provider | Default `allow_all` + full host access, or explicit `development` + `workspace-development` | Ambient under full access; exact origins when isolated |
 | Reviewed catalog | Any configured provider | `pinned` | Exact required origins |
-| Bounded test environment | Any configured provider | `allow_all` | Still sandboxed; wildcard remains HTTP(S)-only |
+| Bounded test environment | Any configured provider | `allow_all` plus an explicit isolating backend | Public wildcard or exact HTTPS/loopback-HTTP origins |
 
-`allow_all` changes built-in action decisions. It does not create filesystem roots,
-executables, origins, trusted extensions, credentials, or permits.
+`allow_all` changes built-in action decisions. Under the acknowledged full-access
+default, the runtime separately supplies ambient filesystem, executable, environment,
+and HTTP(S) resource authority. It still does not invent provider routes, credentials,
+MCP servers or tools, integrations, signed packs, actions, or permits.
 
 The `workspace-development` sandbox preset is a separate resource decision. It derives
 workspace writes and a trusted non-interactive shell for users and agents outside
@@ -174,9 +178,13 @@ The run should complete through the configured role and the audit chain should v
 - Relative explicit sandbox roots and executables are rejected. Workspace-owned config,
   workflow, skill, and pack paths resolve from canonical `--workspace`; storage uses
   its explicit `location`.
-- A configured remote origin must also appear in `sandbox.networkDestinations`.
-- A public HTTP(S) origin may match `*`; loopback/private/metadata origins require an
-  exact entry.
+- Under an isolating boundary, a configured remote origin must also appear in
+  `sandbox.networkDestinations`. Under acknowledged full access, each requested
+  canonical HTTP(S) origin is bound into its one-use permit without a duplicate grant.
+- Under isolation, a public HTTP(S) origin may match `*`; loopback, private, link-local,
+  and metadata origins require an exact entry. Non-loopback plaintext HTTP additionally
+  requires acknowledged ambient authority, even when listed exactly. Adding entries
+  does not narrow an ambient full-access boundary.
 - `config init` intentionally refuses to overwrite. Back up or choose a new home/path.
 
 Do not weaken multiple controls at once to clear an error. Follow the first unmet

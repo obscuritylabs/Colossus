@@ -1,6 +1,6 @@
 ---
 title: Connect the OpenAI API
-description: Configure the public OpenAI Responses API with an environment-backed credential and exact sandbox origin.
+description: Configure the public OpenAI Responses API with an environment-backed credential and reviewed network authority.
 audience: user
 type: how-to
 ---
@@ -33,7 +33,8 @@ reference with the secret value.
 ### 2. Configure the Responses route
 
 Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
-keep its other required fields. Apply this validated overlay, then replace
+keep its required `storage` block and any intended custom settings. Apply this validated
+overlay, then replace
 `YOUR_OPENAI_MODEL_ID` and the model limits with exact values for the selected model.
 
 <!-- provider-guide-config:start -->
@@ -63,8 +64,10 @@ sandbox:
 ```
 <!-- provider-guide-config:end -->
 
-Colossus appends `/responses` and `/models` to the API prefix. Keep `/v1` in `baseUrl`
-and only the exact origin `https://api.openai.com` in the sandbox grant. Set model limits
+Colossus appends `/responses` and `/models` to the API prefix. Keep `/v1` in `baseUrl`.
+The shown exact `https://api.openai.com` sandbox grant applies under an isolating
+boundary; acknowledged full access needs no duplicate grant, and adding one does not
+narrow ambient authority. Set model limits
 and capabilities from the selected model's documentation; Colossus does not infer them
 from the catalog.
 
@@ -91,8 +94,9 @@ run returns `connected`.
 
 ## Verification
 
-Run `colossus -w . config show` and confirm that the output
-contains the credential reference and exact sandbox origin but not the API key value.
+Run `colossus -w . config show` and confirm that the output contains the credential
+reference but not the API key value. Under isolation, also confirm the exact sandbox
+origin; under full access, confirm `config effective` reports ambient network authority.
 
 ## Failure path
 
@@ -100,8 +104,8 @@ contains the credential reference and exact sandbox origin but not the API key v
   environment of the Colossus process, then rerun `provider doctor openai-provider`.
 - **The model is absent or denied:** run `provider models openai-provider`, copy an
   exact accessible model ID, and rerun `models doctor openai`.
-- **The provider origin is denied:** grant exactly `https://api.openai.com`; do not put
-  `/v1` in `sandbox.networkDestinations`.
+- **The provider origin is denied under isolation:** grant exactly
+  `https://api.openai.com` in `sandbox.networkDestinations`; do not put `/v1` there.
 - **Generation rejects the request:** verify the selected model's limits and set
   `toolCalls` or `streaming` to `false` when that model does not support the contract,
   then rerun `models doctor openai`.

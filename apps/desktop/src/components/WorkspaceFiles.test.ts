@@ -41,7 +41,7 @@ describe("WorkspaceFiles", () => {
     const markup = renderFiles(false);
 
     expect(markup).toContain("Managed Local files unavailable");
-    expect(markup).toContain("enable Development access");
+    expect(markup).toContain("enable Development or Allow all access");
     expect(markup).toContain("Open settings");
   });
 });

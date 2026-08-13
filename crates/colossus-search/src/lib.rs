@@ -4,13 +4,13 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    CredentialReference, EffectRequest, QuarantinedEffectResult, SearchProfileSummary,
-    SearchRequest, SearchResponse, SearchResult,
+    CredentialReference, EffectRequest, QuarantinedEffectResult, ResourceAuthority,
+    SearchProfileSummary, SearchRequest, SearchResponse, SearchResult,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
-    network_destination_match, non_public_network_address,
+    http_transport_authority_match, non_public_network_address,
 };
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};

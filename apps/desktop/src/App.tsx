@@ -49,6 +49,10 @@ import type {
   ArtifactViewItem,
 } from "./components/ArtifactWorkspace";
 import { ContextSidebar } from "./components/ContextSidebar";
+import {
+  ExecutionBoundaryBanner,
+  managedRuntimeBoundaryActive,
+} from "./components/ExecutionBoundaryBanner";
 import { OperationsSurface } from "./components/OperationsSurface";
 import { OnboardingSurface } from "./components/OnboardingSurface";
 import { ProductRail } from "./components/ProductRail";
@@ -212,7 +216,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
       : [],
     roles: FIXTURE_MODE ? { primary: "primary" } : {},
   },
-  accessProfile: "development",
+  accessProfile: "allow_all",
+  executionBoundary: "full_access",
   approvalMode: "ask",
   terminalEnabled: false,
   additionalCaBundle: {
@@ -1590,6 +1595,7 @@ export default function App() {
             model: request.model,
           },
           accessProfile: request.accessProfile,
+          executionBoundary: request.executionBoundary,
         }));
         setShowOnboarding(false);
         return true;
@@ -1654,6 +1660,7 @@ export default function App() {
             roles: request.roles,
           },
           accessProfile: request.accessProfile,
+          executionBoundary: request.executionBoundary,
         }));
         setShowOnboarding(false);
         return true;
@@ -2251,6 +2258,10 @@ export default function App() {
         Skip to workspace
       </a>
       <ReleaseChannelBanner releaseChannel={releaseChannel} />
+      <ExecutionBoundaryBanner
+        active={managedRuntimeBoundaryActive(desktop.managedState)}
+        boundary={desktop.executionBoundary}
+      />
       <ProductRail
         surface={surface}
         attentionCount={attentionCount}

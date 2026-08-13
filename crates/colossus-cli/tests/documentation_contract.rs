@@ -756,6 +756,83 @@ fn home_upgrade_examples_and_desktop_terminal_boundaries_stay_consistent() {
     }
 }
 
+#[test]
+fn sparse_full_access_defaults_and_warnings_are_published_consistently() {
+    let quickstart = read("docs/get-started/quickstart.md");
+    for required in [
+        "access.profile: allow_all",
+        "sandbox.backend: danger_full_access",
+        "danger-full-access warning also appears on stderr",
+        "JSON stdout stays clean",
+    ] {
+        assert!(
+            quickstart.contains(required),
+            "quickstart is missing sparse/full-access contract {required:?}"
+        );
+    }
+
+    let upgrade = read("docs/get-started/upgrade-compatibility.md");
+    assert!(upgrade.contains("--sandbox-profile workspace-development"));
+    assert!(upgrade.contains("applies to existing sparse files without a schema-version bump"));
+
+    let cli = read("docs/reference/cli.md");
+    for required in [
+        "config init --development --from PATH",
+        "preserves the explicitly supplied",
+        "danger-full-access posture warning",
+        "emitted on stderr even when",
+        "contaminates the one-value JSON stdout contract",
+    ] {
+        assert!(
+            cli.contains(required),
+            "CLI reference is missing {required:?}"
+        );
+    }
+
+    let desktop = read("docs/get-started/desktop.md");
+    for required in [
+        "Full access",
+        "default access profile",
+        "boundary for fresh Managed Local settings",
+        "Schema-v1–v3 migrations preserve",
+        "persistent warning",
+        "Workspace isolated",
+        "Offline isolated",
+        "not an air gap",
+        "`network.http`, `web.fetch`,",
+        "authentication/refresh destinations",
+        "do not make the generic",
+    ] {
+        assert!(
+            desktop.contains(required),
+            "Desktop guide is missing execution-boundary contract {required:?}"
+        );
+    }
+
+    let opa = read("docs/admin/policy-opa.md");
+    for required in [
+        "resource_authority: ambient",
+        "`resource_authority` defaults to",
+        "`declared` when omitted",
+        "does not silently rewrite an OPA response",
+    ] {
+        assert!(opa.contains(required), "OPA guide is missing {required:?}");
+    }
+
+    let sandbox = read("docs/reference/configuration/sandbox.md");
+    for required in [
+        "canonical plaintext HTTP outside loopback",
+        "no TLS",
+        "server authentication",
+        "Adding the list does not narrow ambient",
+    ] {
+        assert!(
+            sandbox.contains(required),
+            "sandbox reference is missing ambient-authority contract {required:?}"
+        );
+    }
+}
+
 fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
     let start = format!("<!-- {marker}:start -->");
     let end = format!("<!-- {marker}:end -->");
@@ -768,8 +845,22 @@ fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
 #[test]
 fn published_config_and_workflow_examples_are_accepted_by_rust_parsers() {
     let configuration = read("docs/reference/configuration.md");
-    RuntimeConfig::from_yaml(marked_yaml(&configuration, "rust-config-example"))
-        .expect("documented configuration must parse");
+    let documented_yaml = marked_yaml(&configuration, "rust-config-example");
+    RuntimeConfig::from_yaml(documented_yaml).expect("documented configuration must parse");
+    let documented: serde_json::Value =
+        serde_saphyr::from_str(documented_yaml).expect("documented configuration value");
+    let resolved_defaults = RuntimeConfig::from_yaml(
+        "schemaVersion: 2\nstorage:\n  location: home_workspace\n  path: state.redb\n",
+    )
+    .expect("minimal global configuration")
+    .to_resolved_yaml()
+    .expect("resolved default configuration");
+    let resolved_defaults: serde_json::Value =
+        serde_saphyr::from_str(&resolved_defaults).expect("resolved default value");
+    assert_eq!(
+        documented, resolved_defaults,
+        "the complete documented baseline must stay identical to `config show` for a minimal global configuration"
+    );
 
     let workflows = read("docs/extend/workflows/authoring.md");
     validate_definition(marked_yaml(&workflows, "rust-workflow-example"))
@@ -1176,5 +1267,16 @@ fn documented_command_families_are_real_clap_routes() {
             "documented route {route:?} is invalid: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        if *route == ["config", "init"] {
+            let help = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                help.contains("Create a sparse default configuration"),
+                "config init help must describe the sparse default"
+            );
+            assert!(
+                !help.to_ascii_lowercase().contains("strict offline"),
+                "config init help must not describe the default as strict offline"
+            );
+        }
     }
 }

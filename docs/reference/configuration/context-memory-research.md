@@ -55,7 +55,10 @@ research:
     kind: disabled
 ```
 
-When a block is present, use its complete strict shape. Unknown fields are rejected.
+When a block is present, you may specify only the fields you want to override. Omitted
+ordinary fields keep the defaults above, while unknown fields are rejected. Tagged
+choices such as `semantic` and `search` still require an explicit `kind` when their
+block is present.
 
 ## Context configuration
 
@@ -101,7 +104,8 @@ preserved messages cannot fit in the effective input budget, Colossus fails expl
 instead of discarding them.
 
 Setting `autoCompaction: false` disables threshold-triggered snapshots. Manual compaction
-remains available, and the other context fields are still required and validated:
+remains available, and omitted context fields keep their defaults. The materialized
+values are still validated together:
 
 ```yaml
 context:
@@ -264,15 +268,16 @@ sandbox:
     - https://chroma.internal.example
 ```
 
-Merge the sandbox destination into the deployment's complete sandbox block. Chroma and
-embedding credentials are resolved by Colossus in-process after authorization; they do
-not need `sandbox.environment` grants.
+Under an isolating boundary, merge the sandbox destination into the deployment's
+sandbox block. Acknowledged full access needs no duplicate destination and adding one
+does not narrow ambient authority. Chroma and embedding credentials are resolved by
+Colossus in-process after authorization; they do not need `sandbox.environment` grants.
 
 ### Chroma fields
 
 | Field | Rule |
 | --- | --- |
-| `baseUrl` | Credential-free HTTPS origin; exact loopback HTTP is allowed for development |
+| `baseUrl` | Credential-free HTTPS origin; isolation also allows exact loopback HTTP, while acknowledged full access permits canonical HTTP(S) |
 | `tenant` | Existing Chroma tenant; 1–128 ASCII letters, digits, dots, underscores, or hyphens |
 | `database` | Existing Chroma database with the same name constraint |
 | `collection` | Colossus-managed disposable collection name with the same constraint |
@@ -285,7 +290,12 @@ The Chroma `baseUrl` must not contain a path other than `/`, user information, q
 fragment. Colossus constructs the Chroma v2 API paths and gets or creates the configured
 collection.
 
-The Chroma origin must appear in `sandbox.networkDestinations`. Its client uses DNS
+Under acknowledged full access, canonical non-loopback plaintext HTTP is accepted. It
+has no TLS confidentiality or server authentication and can expose memory text,
+metadata, vectors, and credentials in transit.
+
+Under an isolating boundary, the Chroma origin must appear in
+`sandbox.networkDestinations`. Its client uses DNS
 pinning, no ambient proxy, no redirects, bounded requests and responses, the permit
 timeout, and the shared [network CA bundle](network.md).
 
@@ -325,13 +335,14 @@ embedding:
 | --- | --- |
 | `profile` | Stable 1–128 character name using ASCII letters, digits, dots, underscores, or hyphens |
 | `model` | Nonempty provider model ID of at most 256 bytes |
-| `baseUrl` | Credential-free HTTPS API base; a path such as `/v1` is allowed |
+| `baseUrl` | Credential-free API base; isolation requires HTTPS outside loopback, while acknowledged full access accepts canonical HTTP(S); a path such as `/v1` is allowed |
 | `credentialReference` | Optional `env:VARIABLE`; sent as a bearer credential |
 | `timeoutMs` | Positive per-request timeout, capped by permit policy |
 | `dimensions` | Optional strict response length in `1..=4096`; `null` accepts any valid bounded length |
 
-Colossus appends `/embeddings` to `baseUrl`. The embedding origin and Chroma origin must
-both be present in `sandbox.networkDestinations`; list both when they differ:
+Colossus appends `/embeddings` to `baseUrl`. Under an isolating boundary, the embedding
+origin and Chroma origin must both be present in `sandbox.networkDestinations`; list
+both when they differ. This is the corresponding isolating-boundary grant:
 
 ```yaml
 sandbox:
@@ -339,6 +350,9 @@ sandbox:
     - https://chroma.internal.example
     - https://embeddings.example.com
 ```
+
+Acknowledged full access authorizes the exact configured HTTP(S) endpoints without
+that duplicate grant; adding the list does not narrow ambient authority.
 
 The embedding service receives memory text during indexing and query text during search.
 Changing the embedding model or vector dimensions changes projection compatibility;
@@ -467,9 +481,12 @@ research:
     userAgent: colossus-rust/0.6
 ```
 
-The legacy endpoint requires HTTPS except for loopback HTTP, no query or fragment, a
-nonempty user agent of at most 256 bytes, and an authorized network origin. It has no
-credential field and inherits `sandbox.timeoutMs`. Configuring both legacy
+Under isolation, the legacy endpoint requires HTTPS except for loopback HTTP.
+Acknowledged full access also accepts canonical non-loopback plaintext HTTP, with no TLS
+confidentiality or server authentication. Every mode requires no query or fragment, a
+nonempty user agent of at most 256 bytes, and authorized request-bound network
+authority. The legacy adapter has no credential field and inherits `sandbox.timeoutMs`.
+Configuring both legacy
 `research.search` and any top-level search profile or role is rejected.
 
 ## Data disclosure and trust boundaries
@@ -483,8 +500,9 @@ credential field and inherits `sandbox.timeoutMs`. Configuring both legacy
 | MCP research | Templated queries sent to configured MCP tools; released results persisted as research sources |
 
 Credentials remain references in YAML and are resolved only inside permit-bearing
-adapters. Colossus-owned semantic and search clients use the shared CA bundle, exact
-network authorization, DNS pinning, redirect rejection, response bounds, and quarantine.
+adapters. Colossus-owned semantic and search clients use the shared CA bundle for
+HTTPS, declared or ambient request-bound network authorization, DNS pinning, redirect
+rejection, response bounds, and quarantine.
 
 Neither an index nor an external service may directly make a memory visible. Colossus
 always rechecks canonical lifecycle and scope before composing memory context.
@@ -499,8 +517,8 @@ always rechecks canonical lifecycle and scope before composing memory context.
 | Turning off model assistance disables compaction | It does not; deterministic snapshots remain available |
 | A restored snapshot appears to lose later messages | Restore changes the derived active view only; inspect canonical messages with `sessions messages` |
 | Memory search returns no indexed result | Check scope, lifecycle status, and expiry with `memories index status`; canonical fallback may still return bounded matches |
-| Chroma is rejected at startup | Set `indexEnabled: true`, use an origin-only base URL, and authorize its exact network origin |
-| Chroma works but embedding calls are denied | Authorize the separate embedding origin and verify its credential reference |
+| Chroma is rejected at startup | Set `indexEnabled: true`, use an origin-only base URL, and under isolation authorize its exact network origin |
+| Chroma works but embedding calls are denied | Under isolation authorize the separate embedding origin; in every mode verify its credential reference |
 | A Chroma retry is blocked after failure | The previous mutation outcome is unknown; inspect status and perform a deliberate rebuild |
 | Vector writes fail after changing models | Keep dimensions compatible or rebuild the disposable collection and position state |
 | Web research is disabled | Configure the exact top-level `search.roles.research` route |

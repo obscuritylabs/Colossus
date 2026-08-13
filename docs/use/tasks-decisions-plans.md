@@ -38,7 +38,7 @@ Tasks are actionable records. Their status can be `pending`, `in-progress`, `com
 ```bash
 colossus --config .colossus/config.yaml decisions create SESSION_ID \
   "Storage authority" \
-  "The encrypted journal is authoritative" \
+  "The hash-chained journal is authoritative" \
   --priority high --rationale "Projections can be rebuilt"
 colossus --config .colossus/config.yaml decisions list \
   --session SESSION_ID

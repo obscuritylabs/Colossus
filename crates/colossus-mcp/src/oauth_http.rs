@@ -1,6 +1,8 @@
+use colossus_contracts::ResourceAuthority;
 use colossus_network::{AdditionalRootCertificates, pinned_reqwest_client};
 use colossus_policy::{
-    NetworkDestinationMatch, network_destination_match, non_public_network_address,
+    NetworkDestinationMatch, canonical_network_origin, network_destination_match,
+    non_public_network_address,
 };
 use futures::StreamExt as _;
 use reqwest::Url;
@@ -11,6 +13,7 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub(super) struct HardenedOAuthHttpClient {
+    resource_authority: ResourceAuthority,
     destinations: Vec<String>,
     tls_roots: AdditionalRootCertificates,
     timeout_ms: u64,
@@ -19,12 +22,14 @@ pub(super) struct HardenedOAuthHttpClient {
 
 impl HardenedOAuthHttpClient {
     pub(super) fn new(
+        resource_authority: ResourceAuthority,
         destinations: Vec<String>,
         tls_roots: AdditionalRootCertificates,
         timeout_ms: u64,
         max_response_bytes: usize,
     ) -> Self {
         Self {
+            resource_authority,
             destinations,
             tls_roots,
             timeout_ms,
@@ -52,17 +57,27 @@ impl OAuthHttpClient for HardenedOAuthHttpClient {
             let loopback = host.eq_ignore_ascii_case("localhost")
                 || colossus_network::parse_host_ip(host)
                     .is_some_and(|address| address.is_loopback());
-            if url.scheme() != "https" && !loopback {
+            if self.resource_authority != ResourceAuthority::Ambient
+                && url.scheme() != "https"
+                && !loopback
+            {
                 return Err(oauth_error("OAuth request requires HTTPS"));
             }
             let origin = url.origin().ascii_serialization();
-            let matched = network_destination_match(&self.destinations, &origin)
-                .map_err(|_| oauth_error("OAuth request origin is invalid"))?
-                .ok_or_else(|| oauth_error("OAuth request origin is not permitted"))?;
-            let allow_non_public = matched == NetworkDestinationMatch::Exact
-                && (host.eq_ignore_ascii_case("localhost")
-                    || colossus_network::parse_host_ip(host)
-                        .is_some_and(non_public_network_address));
+            let matched = if self.resource_authority == ResourceAuthority::Ambient {
+                canonical_network_origin(&origin)
+                    .map_err(|_| oauth_error("OAuth request origin is invalid"))?;
+                NetworkDestinationMatch::Ambient
+            } else {
+                network_destination_match(&self.destinations, &origin)
+                    .map_err(|_| oauth_error("OAuth request origin is invalid"))?
+                    .ok_or_else(|| oauth_error("OAuth request origin is not permitted"))?
+            };
+            let allow_non_public = matched == NetworkDestinationMatch::Ambient
+                || (matched == NetworkDestinationMatch::Exact
+                    && (host.eq_ignore_ascii_case("localhost")
+                        || colossus_network::parse_host_ip(host)
+                            .is_some_and(non_public_network_address)));
             let timeout_ms = request
                 .timeout
                 .map(|value| {

@@ -20,7 +20,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 2;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -335,6 +335,23 @@ pub enum ManagedAccessProfile {
     Pinned,
 }
 
+/// Host execution boundary selected for an app-managed runtime.
+///
+/// This is independent from the access profile and approval interaction mode. Full
+/// access is the compatibility default for app hosts, while the isolated variants
+/// let callers explicitly opt into Colossus sandbox boundaries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedExecutionBoundary {
+    /// Run with the ambient filesystem, environment, and network access of the host.
+    #[default]
+    FullAccess,
+    /// Confine filesystem access to the workspace while retaining configured network.
+    WorkspaceIsolated,
+    /// Confine filesystem access to the workspace and disable general network access.
+    OfflineIsolated,
+}
+
 /// Provider adapter selected by compact native onboarding state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -569,6 +586,8 @@ pub fn default_managed_provider_timeout_ms(value: &str) -> Result<u64, ProtocolE
 pub struct ManagedRuntimeConfig {
     /// Access and policy preset.
     pub access_profile: ManagedAccessProfile,
+    /// Host execution boundary, independent from access and approval policy.
+    pub execution_boundary: ManagedExecutionBoundary,
     /// Bounded provider connection profiles.
     pub providers: Vec<ManagedProviderConfig>,
     /// Bounded explicit model profiles.
@@ -582,6 +601,7 @@ impl ManagedRuntimeConfig {
     pub fn echo(access_profile: ManagedAccessProfile) -> Self {
         Self {
             access_profile,
+            execution_boundary: ManagedExecutionBoundary::default(),
             providers: vec![ManagedProviderConfig {
                 profile: "echo".into(),
                 kind: ManagedProviderKind::Echo,
@@ -604,6 +624,21 @@ impl ManagedRuntimeConfig {
             }],
             roles: BTreeMap::from([("primary".into(), "echo".into())]),
         }
+    }
+
+    /// Select the host execution boundary for this managed runtime.
+    #[must_use]
+    pub const fn with_execution_boundary(
+        mut self,
+        execution_boundary: ManagedExecutionBoundary,
+    ) -> Self {
+        self.execution_boundary = execution_boundary;
+        self
+    }
+
+    /// Return the selected host execution boundary.
+    pub const fn execution_boundary(&self) -> ManagedExecutionBoundary {
+        self.execution_boundary
     }
 
     /// Validate the compact configuration.
@@ -1288,6 +1323,7 @@ mod tests {
             codex_auth_path: None,
             runtime: ManagedRuntimeConfig {
                 access_profile: ManagedAccessProfile::Development,
+                execution_boundary: ManagedExecutionBoundary::WorkspaceIsolated,
                 providers: vec![ManagedProviderConfig {
                     profile: "provider-main".into(),
                     kind: ManagedProviderKind::OpenAiCompatible,
@@ -1332,6 +1368,37 @@ mod tests {
             worker_ipc_authentication: Some(
                 encode_worker_authentication(&[0x5a; 32]).expect("worker authentication"),
             ),
+        }
+    }
+
+    #[test]
+    fn managed_execution_boundary_defaults_to_full_access_and_has_stable_wire_values() {
+        let runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal);
+        assert_eq!(
+            runtime.execution_boundary(),
+            ManagedExecutionBoundary::FullAccess
+        );
+        let mut value = serde_json::to_value(&runtime).expect("serialize managed runtime");
+        assert_eq!(value["execution_boundary"], "full_access");
+
+        value
+            .as_object_mut()
+            .expect("runtime object")
+            .remove("execution_boundary");
+        assert!(serde_json::from_value::<ManagedRuntimeConfig>(value).is_err());
+
+        for (boundary, wire) in [
+            (ManagedExecutionBoundary::FullAccess, "full_access"),
+            (
+                ManagedExecutionBoundary::WorkspaceIsolated,
+                "workspace_isolated",
+            ),
+            (
+                ManagedExecutionBoundary::OfflineIsolated,
+                "offline_isolated",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(boundary).expect("wire value"), wire);
         }
     }
 

@@ -234,6 +234,7 @@ impl Runtime {
         let colossus_home = options.colossus_home.clone();
         let colossus_home_root = options.colossus_home_root.clone();
         let automatic_agent_instructions = options.automatic_agent_instructions;
+        let model_network_tools = options.model_network_tools;
         match (&colossus_home, &colossus_home_root) {
             (None, None) => {}
             (Some(home), Some(root)) if home == root.path() => {
@@ -583,6 +584,7 @@ impl Runtime {
             provider_credentials,
             codex_auth,
             &tls_roots,
+            configured_resource_authority(&config.sandbox),
         )?);
         let searches = Arc::new(search_registry(config, &tls_roots)?);
         let access_config = &config.access;
@@ -649,14 +651,18 @@ impl Runtime {
         let danger_full_access =
             config.sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend();
         let access_context = AccessContext {
-            filesystem_read: access_filesystem
-                .iter()
-                .any(|grant| matches!(grant.mode.as_str(), "read" | "write" | "metadata")),
-            filesystem_write: access_filesystem.iter().any(|grant| grant.mode == "write"),
+            filesystem_read: danger_full_access
+                || access_filesystem
+                    .iter()
+                    .any(|grant| matches!(grant.mode.as_str(), "read" | "write" | "metadata")),
+            filesystem_write: danger_full_access
+                || access_filesystem.iter().any(|grant| grant.mode == "write"),
             git_executable: configured_git_executables == 1
                 || (danger_full_access && ambient_executable("git").is_some()),
             any_executable: danger_full_access || !access_executables.is_empty(),
-            network_destination: !config.sandbox.network_destinations.is_empty(),
+            network_destination: danger_full_access
+                || !config.sandbox.network_destinations.is_empty(),
+            model_network_tools,
             agent_search_route: searches.resolve("agent").is_ok(),
             interactive: user_prompts.is_some(),
             mcp_configured: !active_pack_extensions.mcp.servers.is_empty(),
@@ -681,6 +687,11 @@ impl Runtime {
                         &config.sandbox.profile,
                         config.sandbox.allow_broker_fallback,
                     )
+                    .with_resource_authority(if danger_full_access {
+                        ResourceAuthority::Ambient
+                    } else {
+                        ResourceAuthority::Declared
+                    })
                     .with_limits(
                         config.sandbox.timeout_ms,
                         config.sandbox.max_output_bytes,
@@ -843,11 +854,14 @@ impl Runtime {
         validate_mcp_config(
             &active_pack_extensions.mcp,
             &workspace,
-            &effective_executables,
-            &effective_filesystem,
-            &config.sandbox.environment,
-            config.sandbox.timeout_ms,
-            config.sandbox.max_output_bytes,
+            McpValidationContext {
+                resource_authority: configured_resource_authority(&config.sandbox),
+                sandbox_executables: &effective_executables,
+                sandbox_filesystem: &effective_filesystem,
+                sandbox_environment: &config.sandbox.environment,
+                sandbox_timeout_ms: config.sandbox.timeout_ms,
+                sandbox_max_output_bytes: config.sandbox.max_output_bytes,
+            },
         )?;
         let mcp_executor = McpExecutor::new(
             &active_pack_extensions.mcp,
@@ -856,6 +870,9 @@ impl Runtime {
             Arc::clone(&process_executor),
         )?
         .with_tls_roots(tls_roots.clone())
+        // Operator OAuth runs outside the effect gateway and has no session-scoped
+        // acknowledgement capability. Only the global acknowledgement may widen it.
+        .with_oauth_resource_authority(globally_acknowledged_resource_authority(&config.sandbox))
         .with_oauth_policy(
             config.sandbox.network_destinations.clone(),
             config.sandbox.environment.clone(),

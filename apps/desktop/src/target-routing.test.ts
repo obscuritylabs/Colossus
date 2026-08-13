@@ -101,6 +101,7 @@ function status(): DesktopStatus {
     },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
+    executionBoundary: "full_access",
     approvalMode: "ask",
     terminalEnabled: false,
     additionalCaBundle: {

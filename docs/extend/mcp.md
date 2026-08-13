@@ -19,10 +19,13 @@ enabled.
 ## Prerequisites
 
 - For stdio, an MCP server executable at a canonical absolute path.
-- For Streamable HTTP, an exact credential-free endpoint using HTTPS, except for exact
-  loopback development endpoints.
+- For Streamable HTTP, an exact credential-free endpoint. Isolation requires HTTPS
+  outside exact loopback development; acknowledged full access also accepts canonical
+  non-loopback plaintext HTTP, with no TLS protection.
 - Any secret behind an `env:VARIABLE` reference.
-- Matching process or network, filesystem, and environment grants.
+- Under an isolating boundary, matching process or network, filesystem, and
+  environment grants. Acknowledged full access supplies ambient resources but does not
+  create the server declaration or tool allowlist.
 
 ## Steps
 
@@ -50,9 +53,11 @@ mcp:
       maxOutputBytes: 1048576
 ```
 
-Add the command to `sandbox.executables`, its working directory to the appropriate
-filesystem roots, and `API_TOKEN` to the allowed environment names. Configuration stores
-the reference, not the secret value.
+Under isolation, add the command to `sandbox.executables`, its working directory to the
+appropriate filesystem roots, and `API_TOKEN` to the allowed environment names.
+Acknowledged full access supplies those resources but still requires the exact absolute
+command and credential reference in the server declaration. Configuration stores the
+reference, not the secret value.
 
 For a remote Splunk endpoint with a static bearer token:
 
@@ -73,13 +78,16 @@ mcp:
       maxOutputBytes: 1048576
 ```
 
-Add the exact endpoint origin to `sandbox.networkDestinations` and
-`SPLUNK_MCP_TOKEN` to `sandbox.environment`. `allowedTools: ["*"]` is deliberately
-broad: every currently or subsequently published valid tool becomes eligible for normal
-schema validation, policy, approval, quarantine, and audit. An empty list, duplicate
-names, or a wildcard mixed with explicit names is rejected. Signed-pack MCP declarations
-remain explicit-only. Set `allowStateless: true` only when the reviewed remote server
-intentionally omits `Mcp-Session-Id`; omit it for stateful servers.
+Under an isolating boundary, add the exact endpoint origin to
+`sandbox.networkDestinations` and `SPLUNK_MCP_TOKEN` to `sandbox.environment`.
+Permit-bound discovery and calls under acknowledged full access need neither duplicate
+grant; adding them does not constrain ambient authority. `allowedTools: ["*"]` is
+deliberately broad: every currently or subsequently published valid tool becomes
+eligible for normal schema validation, policy, approval, quarantine, and audit. An
+empty list, duplicate names, or a wildcard mixed with explicit names is rejected.
+Signed-pack MCP declarations remain explicit-only. Set `allowStateless: true` only when
+the reviewed remote server intentionally omits `Mcp-Session-Id`; omit it for stateful
+servers.
 
 OAuth is an alternative to `credentialHeaders`:
 
@@ -94,6 +102,14 @@ OAuth is an alternative to `credentialHeaders`:
 Use `colossus mcp auth login splunk`; add `--manual` to paste the final redirect URL in a
 headless environment. `status` inspects local token presence and `logout` removes local
 tokens without remote revocation. Agents never initiate browser login.
+
+`mcp auth login` is a direct operator control-plane operation, not a permit-bound MCP
+turn. It receives ambient environment and OAuth-origin authority only when the effective
+configuration selects `sandbox.backend: danger_full_access` and globally sets
+`sandbox.acknowledgeDangerFullAccess: true`. A TUI's session-only danger acknowledgement
+applies to permit-bound discovery and calls, not to this login ceremony. Without the
+global acknowledgement, grant the client-secret environment name and every actual
+protected-resource, authorization, and token origin exactly.
 
 ### 2. Inspect configuration without launching
 
@@ -123,9 +139,9 @@ colossus --config .colossus/config.yaml --approval-mode ask \
 ```
 
 Use `@path` instead of inline JSON when arguments come from a policy-readable file. MCP
-invocation is approval-required under the development access profile; the global
-`--approval-mode ask` option lets the noninteractive CLI request that approval before it
-launches the configured process.
+invocation is allowed by the sparse `allow_all` default. With an explicit development
+access profile it is approval-required; the global `--approval-mode ask` option lets the
+noninteractive CLI request that approval before it launches the configured process.
 
 ## Expected result
 
@@ -142,15 +158,17 @@ The maintainer-only live Splunk smoke-test command is documented in
 
 ## Failure path
 
-- **Executable denied:** add the exact canonical executable and required working
-  directory grants; no shell lookup is used.
+- **Executable denied:** configure an exact absolute executable; under isolation also
+  add it and the required working directory to sandbox grants. MCP never uses shell
+  lookup for its configured command.
 - **Tool is absent:** include the exact discovered name in `allowedTools`.
-- **Environment denied:** allow the variable name and keep its value behind an
-  `env:VARIABLE` reference.
+- **Environment denied under isolation:** allow the variable name and keep its value
+  behind an `env:VARIABLE` reference.
 - **Authorization required:** run `colossus mcp auth login SERVER`; tool calls never
   trigger interactive login.
-- **Network denied:** grant the exact canonical origin. Public `*` grants remain
-  public-address-only and cannot authorize loopback or private destinations.
+- **Network denied under isolation:** grant the exact canonical origin. Public `*`
+  grants remain public-address-only and cannot authorize loopback or private
+  destinations.
 - **Output exceeds bounds or is malformed:** fix the server; Colossus does not release
   unbounded or invalid output.
 

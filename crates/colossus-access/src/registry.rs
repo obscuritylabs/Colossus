@@ -56,9 +56,13 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         | "skill.resource.list"
         | "skill.resource.read" => simple_tool("skills"),
         "web.search" => ("web", vec![ToolPrerequisite::AgentSearchRoute]),
-        "web.fetch" | "docs.fetch" | "network.http" => {
-            ("web", vec![ToolPrerequisite::NetworkDestination])
-        }
+        "web.fetch" | "docs.fetch" | "network.http" => (
+            "web",
+            vec![
+                ToolPrerequisite::NetworkDestination,
+                ToolPrerequisite::ModelNetworkTools,
+            ],
+        ),
         "mcp.servers" | "mcp.tools" | "mcp.call" => ("mcp", vec![ToolPrerequisite::McpConfigured]),
         _ => return Err(AccessError::Unclassified(format!("tool {name}"))),
     };

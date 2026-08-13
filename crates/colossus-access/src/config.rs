@@ -9,9 +9,9 @@ pub enum AccessProfile {
     /// Pure support tools with effectful actions denied.
     Minimal,
     /// Applicable development tools with consequential actions approval-gated.
-    #[default]
     Development,
     /// Applicable trusted tools and actions, still bounded by hard safety and sandboxing.
+    #[default]
     AllowAll,
     /// Exact tool selection and deny-by-default actions.
     Pinned,
@@ -79,18 +79,25 @@ impl ActionAccessConfig {
 }
 
 /// Unified model-visible tool and built-in policy selection.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessConfig {
     /// Stable built-in profile.
-    #[serde(default)]
     pub profile: AccessProfile,
     /// Tool exposure overrides.
-    #[serde(default)]
     pub tools: ToolAccessConfig,
     /// Built-in action outcome overrides.
-    #[serde(default)]
     pub actions: ActionAccessConfig,
+}
+
+impl Default for AccessConfig {
+    fn default() -> Self {
+        Self {
+            profile: AccessProfile::AllowAll,
+            tools: ToolAccessConfig::default(),
+            actions: ActionAccessConfig::default(),
+        }
+    }
 }
 
 /// Access metadata or selection failure.

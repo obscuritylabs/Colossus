@@ -138,6 +138,7 @@ describe("desktop API target routing", () => {
       providerKind: "openai_responses",
       model: "gpt-5",
       accessProfile: "development",
+      executionBoundary: "workspace_isolated",
       replaceCredential: false,
     };
 
@@ -199,6 +200,7 @@ describe("desktop API target routing", () => {
       ],
       roles: { primary: "primary", context_summarizer: "primary" },
       accessProfile: "minimal",
+      executionBoundary: "offline_isolated",
     };
 
     await applyManagedModelConfiguration(request);

@@ -4,7 +4,11 @@
 mod process_support;
 
 use serde_json::{Value, json};
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+};
 use tempfile::tempdir;
 
 const JOURNAL_SECRET: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -237,4 +241,109 @@ fn config_show_reports_resolved_runtime_limits_omitted_from_the_document() {
         Some(10),
         "{rendered}"
     );
+}
+
+#[test]
+fn noninteractive_tui_emits_the_default_danger_warning_without_polluting_stdout() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let config = directory.path().join("minimal-config.json");
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 2,
+            "storage": {"path": directory.path().join("state.redb")}
+        }))
+        .expect("minimal config JSON"),
+    )
+    .expect("write minimal config");
+
+    let output = command(binary, &config)
+        .args(["-w", directory.path().to_str().expect("workspace"), "tui"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("noninteractive TUI");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 stdout");
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert!(stdout.starts_with("Colossus Rust "), "{stdout}");
+    assert!(!stdout.contains("Security posture"), "{stdout}");
+    assert!(stderr.contains("Security posture"), "{stderr}");
+    assert!(stderr.contains("Danger full access is enabled"), "{stderr}");
+}
+
+#[test]
+fn json_effective_config_keeps_the_danger_warning_on_stderr_and_reports_resolution() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let config = directory.path().join("minimal-config.json");
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 2,
+            "storage": {"path": directory.path().join("state.redb")}
+        }))
+        .expect("minimal config JSON"),
+    )
+    .expect("write minimal config");
+
+    let output = command(binary, &config)
+        .args([
+            "-w",
+            directory.path().to_str().expect("workspace"),
+            "--output",
+            "json",
+            "config",
+            "effective",
+        ])
+        .output()
+        .expect("effective config");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON-only stdout");
+    assert_eq!(report["profile"], "allow_all");
+    assert_eq!(report["sandbox"]["backend"], "danger_full_access");
+    assert_eq!(report["sandbox"]["resource_authority"], "ambient");
+    assert_eq!(report["resolution"]["configSource"], "explicit");
+    assert!(report["resolution"]["configPath"].is_string());
+    assert!(report["resolution"]["colossusHome"].is_string());
+    assert!(report["resolution"]["workspacePartitionId"].is_string());
+    assert!(report["resolution"]["statePath"].is_string());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert!(stderr.contains("Security posture"), "{stderr}");
+    assert!(stderr.contains("Danger full access is enabled"), "{stderr}");
+}
+
+#[test]
+fn json_config_init_emits_one_machine_readable_value_and_warns_on_stderr() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let config = directory.path().join("created-config.yaml");
+
+    let output = command(binary, &config)
+        .args(["--output", "json", "config", "init"])
+        .output()
+        .expect("config init");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON-only stdout");
+    assert_eq!(report["created"], true);
+    assert_eq!(report["config_path"], json!(config));
+    assert!(config.exists());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert!(stderr.contains("Security posture"), "{stderr}");
+    assert!(stderr.contains("Danger full access is enabled"), "{stderr}");
 }

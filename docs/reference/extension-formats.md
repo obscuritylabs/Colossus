@@ -84,6 +84,13 @@ Every tool and MCP server requires `process`; credential references also require
 `credentials`. A child declaration cannot exceed the pack-level permission ceiling.
 Every regular payload file is declared with exact path, size, SHA-256, and content type.
 
+Executable pack tools and pack-declared stdio MCP servers require an isolating
+`native`, `oci`, or `windows_job` boundary. Runtime composition rejects them when
+`sandbox.backend` is `danger_full_access`: ambient direct execution cannot enforce the
+manifest's resource and credential ceilings, and acknowledgement is not a substitute
+for that enforcement. A pack with no tool or MCP declaration exposes no executable
+capability.
+
 Pack verification rejects traversal, absolute or non-normalized paths, links, special
 entries, duplicates, undeclared payload, size/hash mismatch, excessive bounds, and
 publisher/signature mismatch. Every present signature must resolve to an exact trusted

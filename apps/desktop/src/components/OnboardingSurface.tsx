@@ -1,5 +1,6 @@
 import {
   IconArrowRight,
+  IconAlertTriangle,
   IconCloudLock,
   IconFolder,
   IconPlugConnected,
@@ -68,6 +69,9 @@ export function OnboardingSurface({
   const [accessProfile, setAccessProfile] = useState<
     ConfigureManagedRuntimeRequest["accessProfile"]
   >(desktop.accessProfile);
+  const [executionBoundary, setExecutionBoundary] = useState<
+    ConfigureManagedRuntimeRequest["executionBoundary"]
+  >(desktop.executionBoundary);
   const [replaceCredential, setReplaceCredential] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [selfTest, setSelfTest] = useState(INITIAL_MANAGED_SELF_TEST_STATUS);
@@ -77,9 +81,19 @@ export function OnboardingSurface({
     providerKind !== "open_ai_codex" &&
     (!desktop.provider.configured || providerChanged || replaceCredential);
   const codexReady = desktop.codexAuth.state === "signed_in";
-  const developmentConfirmationRequired =
-    accessProfile === "development" &&
-    (!desktop.provider.configured || desktop.accessProfile !== "development");
+  const accessRank = { minimal: 0, development: 1, allow_all: 2 } as const;
+  const boundaryRank = {
+    offline_isolated: 0,
+    workspace_isolated: 1,
+    full_access: 2,
+  } as const;
+  const accessConfirmationRequired =
+    (!desktop.provider.configured && accessProfile !== "minimal") ||
+    accessRank[accessProfile] > accessRank[desktop.accessProfile];
+  const boundaryConfirmationRequired =
+    (!desktop.provider.configured &&
+      executionBoundary !== "offline_isolated") ||
+    boundaryRank[executionBoundary] > boundaryRank[desktop.executionBoundary];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -89,6 +103,7 @@ export function OnboardingSurface({
         providerKind,
         model,
         accessProfile,
+        executionBoundary,
         replaceCredential,
       },
       onConfigure,
@@ -121,8 +136,9 @@ export function OnboardingSurface({
               : "Start Colossus in this app"}
           </h1>
           <p>
-            Pick a workspace and provider. The app supervises an isolated local
-            runtime while credentials remain behind native storage boundaries.
+            Pick a workspace, provider, and execution boundary. The app
+            supervises a local runtime while credentials remain behind native
+            storage boundaries.
           </p>
         </div>
 
@@ -150,8 +166,11 @@ export function OnboardingSurface({
               <div>
                 <h2>Choose a folder</h2>
                 <p>
-                  Agent tools are confined to the folder you select. Runtime
-                  state is stored separately in Colossus application support.
+                  This folder is the repository context and relative-path
+                  anchor. Full access can reach beyond it; choose an isolated
+                  execution boundary next if you want confinement. Runtime state
+                  stays in its private Desktop partition under the Colossus
+                  home.
                 </p>
               </div>
               <button
@@ -250,9 +269,40 @@ export function OnboardingSurface({
                   <option value="development">
                     Development — approval-gated effects
                   </option>
+                  <option value="allow_all">
+                    Allow all — every declared built-in tool
+                  </option>
+                </select>
+              </label>
+              <label className="provider-wide-field">
+                <span>Execution boundary</span>
+                <select
+                  value={executionBoundary}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setExecutionBoundary(
+                      event.target
+                        .value as ConfigureManagedRuntimeRequest["executionBoundary"],
+                    )
+                  }
+                >
+                  <option value="full_access">Full access — unsafe</option>
+                  <option value="workspace_isolated">Workspace isolated</option>
+                  <option value="offline_isolated">Offline isolated</option>
                 </select>
               </label>
             </div>
+
+            {executionBoundary === "full_access" ? (
+              <div className="unsafe-execution-note" role="alert">
+                <IconAlertTriangle size={20} stroke={1.8} aria-hidden="true" />
+                <p>
+                  <strong>Unsafe: Full access.</strong> Commands can use host
+                  files, environment variables, and network access without
+                  Colossus isolation. Approval mode is a separate setting.
+                </p>
+              </div>
+            ) : null}
 
             {providerKind === "open_ai_codex" ? (
               <div className="provider-security-note codex-auth-row">
@@ -292,7 +342,8 @@ export function OnboardingSurface({
                   <strong>Replace the stored API key</strong>
                   <small>
                     Leave this off to reuse the existing native keychain entry
-                    when changing only the model or access profile.
+                    when changing only the model, access profile, or execution
+                    boundary.
                   </small>
                 </span>
               </label>
@@ -301,14 +352,17 @@ export function OnboardingSurface({
             <div className="provider-security-note">
               <IconCloudLock size={19} stroke={1.6} aria-hidden="true" />
               <p>
-                {developmentConfirmationRequired
-                  ? "A separate native confirmation is required before Development access can be enabled. "
+                {accessConfirmationRequired
+                  ? "A separate native confirmation is required before this access profile can be enabled. "
+                  : ""}
+                {boundaryConfirmationRequired
+                  ? "The execution boundary has its own separate native confirmation. "
                   : ""}
                 {providerPromptRequired
                   ? "Continue opens a native secure prompt for the fixed provider origin. The key never enters this WebView or renderer IPC, and native code stores it directly in the OS keychain."
                   : providerKind === "open_ai_codex"
                     ? "The official Codex credential remains file-backed. Only its native path crosses private inherited bootstrap IPC; tokens never enter the WebView."
-                    : "The existing provider key remains in the OS keychain. Only the model and access policy cross this WebView boundary."}
+                    : "The existing provider key remains in the OS keychain. Only the model, access policy, and execution boundary cross this WebView boundary."}
               </p>
             </div>
 

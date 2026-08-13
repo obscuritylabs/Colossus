@@ -1,9 +1,11 @@
 use super::*;
 use colossus_contracts::{
     Actor, ActorType, DecisionOutcome, EffectPhase, ExecutionContext, PolicyDecision,
+    SandboxBoundaryMode,
 };
 use colossus_policy::{
-    BuiltInPolicy, DenyApproval, EffectGateway, GatewayError, SafetyKernel, effect_request,
+    BuiltInPolicy, DenyApproval, EffectGateway, GatewayError, SafetyKernel, SandboxBoundaryGate,
+    effect_request,
 };
 use colossus_ports::{EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
@@ -18,6 +20,33 @@ use tokio::{
 struct CountingCredentialResolver {
     calls: AtomicUsize,
     secret: String,
+}
+
+#[test]
+fn ambient_search_profiles_allow_non_loopback_http_only_explicitly() {
+    assert!(
+        SearchProfile::new(
+            "private",
+            SearchKind::Searxng,
+            "http://169.254.169.254/search",
+            None,
+            None,
+            "test",
+            1_000,
+        )
+        .is_err()
+    );
+    SearchProfile::new_with_resource_authority(
+        "private",
+        SearchKind::Searxng,
+        "http://169.254.169.254/search",
+        None,
+        None,
+        "test",
+        1_000,
+        ResourceAuthority::Ambient,
+    )
+    .expect("ambient metadata search endpoint");
 }
 
 impl CredentialResolver for CountingCredentialResolver {
@@ -308,6 +337,79 @@ async fn denial_opens_no_socket_and_resolves_no_credential() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn remote_plaintext_search_requires_ambient_authority_in_the_permit() {
+    let profile = SearchProfile::new_with_resource_authority(
+        "remote-http",
+        SearchKind::SerpApi,
+        "http://192.0.2.1:9/search",
+        Some("env:SERPAPI_API_KEY".into()),
+        None,
+        "unit-test",
+        25,
+        ResourceAuthority::Ambient,
+    )
+    .expect("potential ambient profile");
+    let origin = profile.network_origin().expect("origin");
+    let credentials = Arc::new(CountingCredentialResolver {
+        calls: AtomicUsize::new(0),
+        secret: "unit-secret".into(),
+    });
+    let executor = SearchExecutor::with_credentials(
+        profile.clone(),
+        Arc::clone(&credentials) as Arc<dyn CredentialResolver>,
+    );
+
+    let declared = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("web.search", DecisionOutcome::Allow)
+                .with_network_destination(&origin)
+                .with_post_effect(true),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["web.search".into()]),
+        [63_u8; 32],
+    );
+    let error = declared
+        .execute(search_request(&profile, "q", 1), &executor)
+        .await
+        .expect_err("declared exact origin must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 0);
+
+    let ambient = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("web.search", DecisionOutcome::Allow)
+                .with_sandbox("danger_full_access", "test", false)
+                .with_resource_authority(ResourceAuthority::Ambient)
+                .with_limits(25, 1024 * 1024, 1, 64 * 1024 * 1024, 1)
+                .with_post_effect(true),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["web.search".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [64_u8; 32],
+    );
+    let result = ambient
+        .execute(search_request(&profile, "q", 1), &executor)
+        .await;
+    assert!(result.as_ref().err().is_none_or(|error| {
+        !error
+            .to_string()
+            .contains("requires ambient resource authority")
+    }));
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]

@@ -3,16 +3,22 @@ use super::{
     PackExecutor, PackOperation, PackService, RELEASE_TARGETS, bundle_artifact_path,
     canonical_bundle_signing_bytes, canonical_collection_signing_bytes,
     canonical_pack_signing_bytes, current_release_target, digest_hex, extract_collection_archive,
-    validate_pack_references, write_collection_archive,
+    registry_client, validate_pack_references, write_collection_archive,
 };
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, ActorType, BundleFileEntry, BundleManifest, CredentialReference, DecisionOutcome,
-    PackFileEntry, PackManifest, PackMcpServerDeclaration, PackPathReference, PackSignature,
-    PackStatus, PublisherTrust, SkillManifest,
+    EffectRequest, PackFileEntry, PackManifest, PackMcpServerDeclaration, PackPathReference,
+    PackSignature, PackStatus, PublisherTrust, QuarantinedEffectResult, ResourceAuthority,
+    SandboxBoundaryMode, SkillManifest,
 };
 use colossus_integrations::EventSourcedExtensionRepository;
-use colossus_policy::{BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request};
+use colossus_network::AdditionalRootCertificates;
+use colossus_policy::{
+    BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
+    SafetyKernel, SandboxBoundaryGate, effect_request,
+};
 use colossus_ports::{EventJournal, ExtensionRepository};
 use colossus_testkit::InMemoryEventJournal;
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -44,6 +50,32 @@ fn repository() -> (
         Arc::clone(&journal) as Arc<dyn EventJournal>
     ));
     (journal, repository)
+}
+
+struct RegistryClientProbe {
+    endpoint: String,
+}
+
+#[async_trait]
+impl EffectExecutor for RegistryClientProbe {
+    async fn execute(
+        &self,
+        _request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        registry_client(
+            &self.endpoint,
+            &permit,
+            &AdditionalRootCertificates::default(),
+        )
+        .await
+        .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: b"{}".to_vec(),
+            effect_succeeded: true,
+        })
+    }
 }
 
 fn write_pack(root: &Path) -> PackManifest {
@@ -752,6 +784,68 @@ fn collection_archive_is_deterministic_and_rejects_special_entries() {
         Err(PackError::Invalid(_))
     ));
     assert!(!root.path().join("outside").exists());
+}
+
+#[tokio::test]
+async fn ambient_authority_accepts_non_loopback_http_registry_transport() {
+    let endpoint = "http://192.0.2.1/collections/example/1.0.0";
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("registry.pull", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["registry.pull".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [48_u8; 32],
+    );
+    let mut request = effect_request(actor(), "registry.pull", endpoint, serde_json::json!({}));
+    request.capabilities = vec!["registry.pull".into()];
+
+    gateway
+        .execute(
+            request,
+            &RegistryClientProbe {
+                endpoint: endpoint.into(),
+            },
+        )
+        .await
+        .expect("ambient HTTP registry client");
+}
+
+#[tokio::test]
+async fn declared_authority_rejects_non_loopback_http_registry_transport() {
+    let endpoint = "http://192.0.2.1/collections/example/1.0.0";
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("registry.pull", DecisionOutcome::Allow)
+        .with_network_destination("http://192.0.2.1");
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["registry.pull".into()]),
+        [49_u8; 32],
+    );
+    let mut request = effect_request(actor(), "registry.pull", endpoint, serde_json::json!({}));
+    request.capabilities = vec!["registry.pull".into()];
+
+    let error = gateway
+        .execute(
+            request,
+            &RegistryClientProbe {
+                endpoint: endpoint.into(),
+            },
+        )
+        .await
+        .expect_err("declared HTTP registry transport must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("non-loopback plaintext HTTP requires ambient resource authority")
+    );
 }
 
 #[tokio::test]

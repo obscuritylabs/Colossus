@@ -226,13 +226,15 @@ search traffic and pressure on external services.
 
 ## Sandbox resource ceilings
 
-Sandbox limits bound individual effects and their process trees. These are the default
-values; see [Sandbox configuration](sandbox.md#resource-limits) for complete backend
-examples.
+Sandbox limits bound individual effects and, under an isolating backend, their process
+trees. On Unix direct backends, timeout and output bind the supervised request and
+attached group, while process-count, memory, and cleanup are best-effort for
+deliberately detached descendants. These are the default values; see
+[Sandbox configuration](sandbox.md#resource-limits) for complete backend examples.
 
 | Field | Meaning | Constraint | Default |
 | --- | --- | --- | ---: |
-| `sandbox.timeoutMs` | Complete effect wall time, including confirmed cleanup | Positive, with backend minimums | `30000` |
+| `sandbox.timeoutMs` | Supervised effect wall time, including attached-group cleanup; isolating backends confirm whole-tree cleanup | Positive, with backend minimums | `30000` |
 | `sandbox.maxOutputBytes` | Request, result, and captured-output ceiling in bytes | At least `1024` | `1048576` |
 | `sandbox.maxProcesses` | Process-tree count where supported | Positive | `16` |
 | `sandbox.maxMemoryBytes` | Process-tree memory in bytes where supported | Positive | `268435456` |

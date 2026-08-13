@@ -3,8 +3,7 @@ use super::*;
 static SECURITY_WARNING_EMITTED: AtomicU8 = AtomicU8::new(0);
 
 pub(super) fn emit_security_posture_warning(report: &SecurityPostureReport) -> io::Result<()> {
-    if report.is_hardened()
-        || !io::stderr().is_terminal()
+    if !should_emit_security_posture_warning(report, io::stderr().is_terminal())
         || SECURITY_WARNING_EMITTED.swap(1, Ordering::Relaxed) != 0
     {
         return Ok(());
@@ -24,6 +23,20 @@ pub(super) fn emit_security_posture_warning(report: &SecurityPostureReport) -> i
         tone: colossus_presentation::PresentationTone::Warning,
         body,
     }))
+}
+
+pub(super) fn should_emit_security_posture_warning(
+    report: &SecurityPostureReport,
+    terminal: bool,
+) -> bool {
+    if report.is_hardened() {
+        return false;
+    }
+    terminal
+        || report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "sandbox.danger_full_access")
 }
 
 pub(super) fn set_output_mode(mode: OutputMode) {

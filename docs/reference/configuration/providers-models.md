@@ -31,10 +31,10 @@ compatibility boundaries.
 | --- | --- | --- | --- |
 | Offline smoke testing | `echo` | None | None |
 | Codex/ChatGPT subscription | `open_ai_codex` | `codex:default` | `https://chatgpt.com` and `https://auth.openai.com` |
-| OpenAI Responses endpoint | `open_ai_responses` | Usually `env:VARIABLE` | Exact HTTPS origin |
-| OpenAI-compatible Chat Completions endpoint | `open_ai_compatible` | `env:VARIABLE` or `null` | Exact HTTPS origin or exact loopback origin |
-| Desktop-managed local model | `open_ai_compatible` | Injected `host:IDENTIFIER` | Exact loopback origin |
-| Several models or providers | One profile per connection | Per provider profile | Every selected provider origin |
+| OpenAI Responses endpoint | `open_ai_responses` | Usually `env:VARIABLE` | Exact HTTPS origin under isolation |
+| OpenAI-compatible Chat Completions endpoint | `open_ai_compatible` | `env:VARIABLE` or `null` | Exact HTTPS or loopback origin under isolation |
+| Desktop-managed local model | `open_ai_compatible` | Injected `host:IDENTIFIER` | Exact loopback origin under isolation |
+| Several models or providers | One profile per connection | Per provider profile | Every selected provider origin under isolation |
 
 Start with one provider, one model, and only the required `primary` role. Add specialized
 roles after the primary route passes both connection and generation diagnostics.
@@ -69,9 +69,10 @@ sandbox:
     - https://models.example.com
 ```
 
-The `baseUrl` includes the provider's API prefix (`/v1`). The sandbox destination is
-only its canonical origin. Colossus appends the operation path, such as
-`/chat/completions`, to the configured base URL.
+The `baseUrl` includes the provider's API prefix (`/v1`). Under an isolating boundary,
+the sandbox destination is only its canonical origin. Acknowledged full access needs no
+duplicate destination, and adding one does not narrow ambient authority. Colossus
+appends the operation path, such as `/chat/completions`, to the configured base URL.
 
 ## Provider profiles
 
@@ -106,7 +107,11 @@ providers:
 The URL must:
 
 - Use HTTP or HTTPS and include a host.
-- Use HTTPS unless the host is exact loopback (`localhost` or a loopback IP address).
+- Under an isolating boundary, use HTTPS unless the host is exact loopback
+  (`localhost` or a loopback IP address).
+- Under acknowledged full access, a canonical non-loopback plaintext HTTP URL is also
+  accepted; it has no TLS confidentiality or server authentication and may expose the
+  provider credential and request content in transit.
 - Contain no username, password, query, or fragment.
 - Include any required API prefix, such as `/v1`.
 - Omit `/responses`, `/chat/completions`, and `/models`; Colossus adds those paths.
@@ -115,8 +120,9 @@ The URL must:
 `https://chatgpt.com/backend-api/codex` so a ChatGPT bearer and account identifier cannot
 be redirected to an operator-configured host.
 
-A trailing slash is normalized away. Add only the canonical origin—scheme, host, and
-effective port—to `sandbox.networkDestinations`:
+A trailing slash is normalized away. Under an isolating boundary, add only the
+canonical origin—scheme, host, and effective port—to
+`sandbox.networkDestinations`:
 
 ```yaml
 sandbox:
@@ -157,7 +163,8 @@ Colossus refreshes an expiring access token only through the fixed
 `https://auth.openai.com/oauth/token` endpoint and atomically returns the rotated values
 to the same file. Grant both
 `https://chatgpt.com` and `https://auth.openai.com` in
-`sandbox.networkDestinations`; the refresh fails closed if the second origin is absent.
+`sandbox.networkDestinations` under an isolating boundary; acknowledged full access
+authorizes both fixed HTTP(S) origins without duplicate grants.
 The adapter advertises its separately audited Codex wire-contract version in the
 backend's `version` header and model-catalog query; its `User-Agent` continues to identify
 the actual Colossus build. A Colossus release must review the matching official Codex
@@ -509,7 +516,7 @@ tool authority.
 | A role target is rejected | Roles point to model profile names, not provider profile names or raw model IDs |
 | Generation uses the wrong endpoint | Configure the API prefix in `baseUrl`; omit `/responses` and `/chat/completions` |
 | A remote URL is rejected | Use HTTPS and remove URL credentials, query parameters, and fragments |
-| The provider origin is denied | Add only the canonical origin to `sandbox.networkDestinations` |
+| The provider origin is denied under isolation | Add only the canonical origin to `sandbox.networkDestinations` |
 | A credential is unavailable | Use `env:VARIABLE` and inject its value into the Colossus process; do not put the value in YAML |
 | A Codex sign-in is unavailable | Run `colossus codex status`, then `colossus codex login`; ensure the file-backed auth file is owner-only |
 | A `host:` credential is unavailable | Run through an application that supplies the matching in-memory resolver |

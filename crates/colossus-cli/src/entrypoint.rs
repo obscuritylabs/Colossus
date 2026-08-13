@@ -112,7 +112,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     let config_selection = select_config(cli.config.as_deref(), &runtime_options.workspace, &home)?;
     let config_path = config_selection.path.clone();
     let source_config = load_selected_config(&config_selection, &runtime_options.workspace, &home)?;
-    if !matches!(cli.command, Command::Tui { .. }) {
+    let interactive_tui = matches!(&cli.command, Command::Tui { .. })
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal();
+    if !interactive_tui {
         emit_security_posture_warning(&source_config.security_posture())?;
     }
     if matches!(
@@ -271,9 +274,6 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     {
         return Ok(());
     }
-    let interactive_tui = matches!(&cli.command, Command::Tui { .. })
-        && io::stdin().is_terminal()
-        && io::stdout().is_terminal();
     if interactive_tui && cli.output == OutputMode::Json {
         return Err(
             "interactive --output json is not supported; omit it for the TUI or redirect line-mode input"

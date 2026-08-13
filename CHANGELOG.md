@@ -10,6 +10,12 @@ include breaking changes while the public API is still settling.
 
 ### Added
 
+- Added recursively sparse schema-version-2 configuration: only `schemaVersion` and
+  `storage.path` are required, while omitted defaultable groups and fields resolve to
+  inspectable compiled defaults.
+- Added an explicit Managed Local and embedded-SDK execution-boundary choice so hosts
+  can select full access, workspace isolation, or offline isolation independently from
+  approval mode.
 - Added the ChatGPT subscription-backed Codex provider to Desktop Managed Local,
   including native official-CLI sign-in/sign-out status and per-model reasoning effort.
 - Added the shared owner-private Colossus home, opaque per-workspace CLI/Desktop state
@@ -19,11 +25,40 @@ include breaking changes while the public API is still settling.
 
 ### Changed
 
+- Sparse schema-version-2 configurations now default to `access.profile: allow_all`
+  and acknowledged `sandbox.backend: danger_full_access`. This intentionally unsafe
+  pre-1.0 default applies across CLI, TUI, Desktop Managed Local, embedded SDK hosts,
+  workflows, and background effects unless an isolating execution boundary is selected.
+- `config init` now writes only `schemaVersion` and the selected storage location/path
+  for the ordinary global or local case. `config show` continues to render the complete
+  resolved configuration.
+- Under acknowledged danger full access, structured filesystem and HTTP adapters use
+  request-bound ambient authority as well as child processes. Absolute host paths and
+  every canonical HTTP(S) origin—including loopback, private, link-local, and metadata
+  origins—are in scope. Configured provider routes, credentials, MCP/integration
+  declarations, extension trust, permits, audit, quarantine, transport validation, and
+  configured bounds remain mandatory. Direct Unix timeout and output bounds cover the
+  supervised effect, while process-count, memory, and cleanup are best-effort for
+  deliberately detached descendants; strict containment requires native, OCI, Windows
+  Job, or a containing external host boundary.
+- Enabled pack tools and pack-declared stdio MCP servers are rejected under
+  `danger_full_access`, where direct ambient execution cannot enforce their manifest
+  resource and credential ceilings.
+- `-w, --workspace` now denotes repository context, relative-path anchoring, and state
+  partition identity rather than a universal filesystem security boundary when full
+  access is active.
 - `config init` now creates the user-level configuration, while `config init --local`
   creates a complete repository replacement. Resolution is explicit, repository, then
   home without merging.
 - Desktop Managed Local now starts fresh under the workspace's Desktop home partition;
   earlier application-support data is preserved but ignored.
+- Desktop Managed Local's **Offline isolated** boundary keeps the selected provider's
+  exact service and authentication/refresh destinations while hiding the generic
+  model-visible `network.http`, `web.fetch`, and `docs.fetch` tools. It is not an air-gap
+  declaration.
+- Fresh Desktop schema-v4 settings default to **Allow all** and **Full access**. Migrations
+  from schema v1–v3 preserve the earlier effective isolation: Minimal maps to Offline
+  isolated, while Development and legacy `allow_all` map to Workspace isolated.
 - Codex CLI account commands now report completion only after Colossus verifies their
   runtime credential postcondition; unsafe stores are rejected before the official CLI
   is invoked, and logout must leave no usable credential behind.

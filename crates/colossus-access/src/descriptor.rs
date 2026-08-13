@@ -60,16 +60,18 @@ impl ActionDescriptor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPrerequisite {
-    /// At least one read-capable filesystem root.
+    /// Read-capable filesystem authority is declared or ambient.
     FilesystemRead,
-    /// At least one write-capable filesystem root.
+    /// Write-capable filesystem authority is declared or ambient.
     FilesystemWrite,
-    /// Exactly one configured Git executable.
+    /// Git resolution is available from a declaration or ambient process authority.
     GitExecutable,
-    /// At least one exact executable.
+    /// Executable resolution is available from a declaration or ambient process authority.
     AnyExecutable,
-    /// At least one exact network origin.
+    /// Network authority is available from a declaration or ambient authority.
     NetworkDestination,
+    /// Trusted host composition permits general model-visible network tools.
+    ModelNetworkTools,
     /// A valid agent search route.
     AgentSearchRoute,
     /// A trusted interactive interface for this run.
@@ -111,16 +113,18 @@ impl ToolDescriptor {
 /// Runtime facts used only for availability; they never grant an effect.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AccessContext {
-    /// At least one read-capable filesystem root is configured.
+    /// Declared or acknowledged ambient filesystem read authority is available.
     pub filesystem_read: bool,
-    /// At least one write filesystem root is configured.
+    /// Declared or acknowledged ambient filesystem write authority is available.
     pub filesystem_write: bool,
-    /// Exactly one configured executable is Git.
+    /// Git is declared or ambient executable resolution is available.
     pub git_executable: bool,
-    /// At least one exact executable is configured.
+    /// An exact declaration or ambient executable resolution is available.
     pub any_executable: bool,
-    /// At least one exact network origin is configured.
+    /// A declared destination or acknowledged ambient network authority is available.
     pub network_destination: bool,
+    /// General model-visible network tools are enabled by trusted host composition.
+    pub model_network_tools: bool,
     /// A valid agent search route is configured.
     pub agent_search_route: bool,
     /// A trusted interactive prompt interface is present.

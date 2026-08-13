@@ -60,7 +60,7 @@ pub(super) fn validate_destination(
     permit: &ExecutionPermit,
     expected_origin: &str,
 ) -> Result<(), ExecutionError> {
-    if network_destination_match(&permit.obligations().network_destinations, expected_origin)
+    if http_transport_authority_match(permit.obligations(), expected_origin)
         .map_err(execution)?
         .is_some()
     {
@@ -109,12 +109,13 @@ pub(super) async fn send_http(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| adapter("semantic endpoint has no port"))?;
-    let matched = network_destination_match(&permit.obligations().network_destinations, endpoint)
+    let matched = http_transport_authority_match(permit.obligations(), endpoint)
         .map_err(adapter)?
         .ok_or_else(|| adapter("semantic endpoint origin is absent from permit obligations"))?;
-    let allow_non_public = matched == NetworkDestinationMatch::Exact
-        && (host.eq_ignore_ascii_case("localhost")
-            || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+    let allow_non_public = matched == NetworkDestinationMatch::Ambient
+        || (matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
     let addresses = resolve_addresses(host, port, allow_non_public).await?;
     let timeout_ms = transport.timeout_ms.min(permit.obligations().timeout_ms);
     let client = transport

@@ -10,10 +10,13 @@ use colossus_contracts::{
     CollectionInstallation, CollectionManifest, CollectionMaterialization, CollectionVerification,
     EffectRequest, PackFileEntry, PackInstallation, PackManifest, PackSignature, PackStatus,
     PackVerification, PublisherTrust, QuarantinedEffectResult, RegistryPullResult,
-    RegistryPushResult, SkillInstallResult, SkillValidationResult,
+    RegistryPushResult, ResourceAuthority, SkillInstallResult, SkillValidationResult,
 };
 use colossus_network::AdditionalRootCertificates;
-use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
+use colossus_policy::{
+    EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
+    network_authority_match,
+};
 use colossus_ports::{ExtensionRepository, StoreError};
 use colossus_skills::{copy_verified_skill, inspect_skill_directory};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};

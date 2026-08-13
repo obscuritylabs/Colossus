@@ -30,7 +30,8 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
       message: "Sign in with ChatGPT to use Codex.",
     },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
-    accessProfile: "development",
+    accessProfile: "allow_all",
+    executionBoundary: "full_access",
     approvalMode: "ask",
     terminalEnabled: false,
     additionalCaBundle: {
@@ -117,6 +118,11 @@ describe("OnboardingSurface", () => {
     expect(markup).not.toContain('type="password"');
     expect(markup).not.toContain("API base URL");
     expect(markup).toContain("native secure prompt");
+    expect(markup).toContain(
+      '<option value="allow_all" selected="">Allow all — every declared built-in tool</option>',
+    );
+    expect(markup).toContain("Unsafe: Full access.");
+    expect(markup).toContain("Approval mode is a separate setting.");
     expect(openingButtonTag(markup, "Run offline self-test")).not.toContain(
       "disabled",
     );
@@ -136,6 +142,7 @@ describe("OnboardingSurface", () => {
           model: "configured-model",
         },
         accessProfile: "minimal",
+        executionBoundary: "offline_isolated",
       },
       true,
     );
@@ -149,6 +156,10 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain(
       '<option value="minimal" selected="">Minimal — no workspace tools</option>',
     );
+    expect(markup).toContain(
+      '<option value="offline_isolated" selected="">Offline isolated</option>',
+    );
+    expect(markup).not.toContain("Unsafe: Full access.");
     expect(markup).toContain("Replace the stored API key");
     expect(markup).toContain(
       "The existing provider key remains in the OS keychain.",

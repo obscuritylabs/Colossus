@@ -28,7 +28,6 @@ sidecar = [
     "daemon",
     "dep:colossus-darwin-process",
     "dep:colossus-windows-native",
-    "dep:colossus-sidecar-protocol",
     "dep:nix",
     "dep:rustix",
     "dep:serde",
@@ -41,7 +40,7 @@ async-trait.workspace = true
 colossus-api.workspace = true
 colossus-api-proto = { workspace = true, optional = true }
 colossus-grpc = { workspace = true, optional = true }
-colossus-sidecar-protocol = { workspace = true, optional = true }
+colossus-sidecar-protocol.workspace = true
 futures.workspace = true
 hex.workspace = true
 keyring = { workspace = true, optional = true }

@@ -97,8 +97,8 @@ mcp:
       maxOutputBytes: 1048576
 ```
 
-The matching sandbox configuration must grant the executable, working directory, and
-child environment name:
+Under an isolating boundary, matching sandbox configuration must grant the executable,
+working directory, and child environment name:
 
 ```yaml
 sandbox:
@@ -111,8 +111,9 @@ sandbox:
     - API_TOKEN
 ```
 
-This sandbox block is a fragment to merge into a complete sandbox declaration. In the
-environment mapping, `API_TOKEN` is the name visible inside the child and
+This sandbox block is an isolation-only fragment. Acknowledged full access supplies
+ambient resources, and adding the fragment does not narrow them. In the environment
+mapping, `API_TOKEN` is the name visible inside the child and
 `HOST_DOCS_API_TOKEN` is the host variable Colossus reads. The sandbox grant names the
 child variable, not the host variable. Using the same name for both is also valid.
 
@@ -121,15 +122,17 @@ child variable, not the host variable. Using the same name for both is also vali
 | Field | Rule |
 | --- | --- |
 | `transport` | Omitted or `stdio` |
-| `command` | Exact absolute executable also present in `sandbox.executables` |
+| `command` | Exact absolute executable; under isolation it must also be present in `sandbox.executables` |
 | `args` | Literal arguments passed without a shell; at most 256 |
-| `workingDirectory` | Existing workspace-relative or absolute directory inside a sandbox read/write grant |
+| `workingDirectory` | Existing workspace-relative or absolute directory; under isolation it must be inside a sandbox read/write grant |
 | `environment` | At most 128 child variable names mapped to `env:HOST_VARIABLE` references |
 | HTTP and OAuth fields | `url`, `headers`, `credentialHeaders`, `allowStateless`, and `oauth` must be absent |
 
-When `workingDirectory` is omitted, Colossus uses the selected workspace, which still
-needs a containing filesystem grant. Arguments do not use shell expansion, executable
-lookup, command substitution, or an ambient environment.
+When `workingDirectory` is omitted, Colossus uses the selected workspace; under
+isolation it still needs a containing filesystem grant. Arguments do not use shell
+expansion, executable lookup, or command substitution. An isolating boundary supplies
+only declared environment names; acknowledged full access supplies ambient environment
+authority.
 
 Stdio MCP is a process effect. The MCP child receives only permit-authorized process,
 filesystem, environment, network, time, output, process-count, and memory obligations.
@@ -164,10 +167,13 @@ sandbox:
     - https://splunk.example.com
 ```
 
-Merge the sandbox fields into the deployment's complete sandbox block. The credential
-reference is stored in YAML; its value is resolved only inside the permit-bearing MCP
-adapter. Unlike stdio child mappings, a remote credential header requires the referenced
-host variable itself in `sandbox.environment`.
+Under isolation, merge the sandbox fields into the deployment's sandbox block. The
+credential reference is stored in YAML; its value is resolved only inside the
+permit-bearing MCP adapter. Under an isolating boundary, a remote credential header
+requires the referenced host variable itself in `sandbox.environment` and the endpoint
+requires the listed destination. Permit-bound discovery and calls under acknowledged
+full access supply both resource authorities; keeping these entries does not narrow
+that ambient boundary.
 
 ### Remote transport fields
 
@@ -181,15 +187,19 @@ host variable itself in `sandbox.environment`.
 | `oauth` | Optional OAuth 2.1 authorization-code configuration |
 | Stdio fields | `command`, `args`, `workingDirectory`, and `environment` must be absent |
 
-The URL must not contain a username, password, query, or fragment. HTTPS is required
-except for exact `localhost` or IP-loopback development endpoints. Every request remains
-bound to that exact configured endpoint; the transport cannot redirect itself to a
-different path or origin.
+The URL must not contain a username, password, query, or fragment. Under an isolating
+boundary, HTTPS is required except for exact `localhost` or IP-loopback development
+endpoints. Acknowledged full access also accepts canonical non-loopback plaintext HTTP;
+it has no TLS confidentiality or server authentication and can expose MCP request
+content or credentials in transit. Every request remains bound to the exact configured
+endpoint; the transport cannot redirect itself to a different path or origin.
 
-The endpoint origin must match `sandbox.networkDestinations`. Public `*` may match a
-public HTTPS origin, but loopback, private, link-local, and metadata destinations require
-an exact origin. Remote MCP uses Colossus's pinned-DNS, redirect-free, ambient-proxy-free
-HTTP client and inherits additional roots from
+Under an isolating boundary, the endpoint origin must match
+`sandbox.networkDestinations`. Public `*` may match a public HTTPS origin, but loopback,
+private, link-local, and metadata destinations require an exact origin. Acknowledged
+full access supplies the endpoint resource without the duplicate grant; it does not
+discover a server or widen `allowedTools`. Remote MCP uses Colossus's pinned-DNS,
+redirect-free, ambient-proxy-free HTTP client and inherits additional roots from
 [Network trust configuration](network.md).
 
 ## Static headers and credentials
@@ -254,18 +264,23 @@ sandbox:
     - https://identity.example.com
 ```
 
-The identity origin is illustrative. Authorize the actual protected-resource,
-authorization, and token origins discovered for the deployment. OAuth discovery and
-token exchange use the same exact-origin/public-wildcard network policy, TLS roots,
-DNS pinning, redirect rejection, timeout, and response bounds as other Colossus-owned
-clients.
+The identity origin is illustrative. Under isolation, authorize the actual
+protected-resource, authorization, and token origins discovered for the deployment;
+when `sandbox.backend` is `danger_full_access`, only globally configured
+`sandbox.acknowledgeDangerFullAccess: true` supplies ambient authority for the
+operator-run login ceremony. A session-only TUI acknowledgement applies to permit-bound
+MCP turns and does not authorize `mcp auth login`. Without the global acknowledgement,
+grant the client-secret environment name and every actual protected-resource,
+authorization, and token origin exactly. OAuth discovery and token exchange use the
+same declared-or-ambient network policy, TLS roots for HTTPS, DNS pinning, redirect
+rejection, timeout, and response bounds as other Colossus-owned clients.
 
 ### OAuth fields
 
 | Field | Rule |
 | --- | --- |
 | `clientId` | Required bounded, control-free registered client identifier |
-| `clientSecretReference` | Optional `env:VARIABLE`; the variable needs a sandbox environment grant |
+| `clientSecretReference` | Optional `env:VARIABLE`; under isolation the variable needs a sandbox environment grant |
 | `callbackPort` | Required nonzero loopback port registered for `http://127.0.0.1:PORT/callback` |
 | `scopes` | At most 32 unique, nonempty, whitespace-free tokens; may be empty |
 
@@ -357,7 +372,8 @@ approvals, results, and audit records. If any wildcard-discovered tool violates 
 validation bounds, discovery fails closed.
 
 This wildcard selects server-published tools only. It does not widen
-`access.tools.include`, authorize the endpoint in `sandbox.networkDestinations`, grant a
+`access.tools.include`, authorize the endpoint in `sandbox.networkDestinations` when
+using an isolating boundary, grant a
 credential, or approve `mcp.call`. Those remain separate trust boundaries; see
 [Access configuration](access.md#wildcard-boundary).
 
@@ -458,6 +474,10 @@ Use the commands in this order:
     colossus --config .colossus/config.yaml mcp auth login splunk
     ```
 
+    This direct control-plane operation cannot consume a TUI session acknowledgement.
+    It needs either globally configured danger acknowledgement or exact environment and
+    OAuth-origin grants.
+
 3. Discover released live schemas:
 
     ```bash
@@ -502,14 +522,14 @@ or unexpectedly upgraded server; wildcard selection intentionally broadens that 
 
 | Symptom | Check |
 | --- | --- |
-| A stdio command is rejected at startup | Use an absolute executable and add that exact path to `sandbox.executables` |
+| A stdio command is rejected at startup | Use an absolute configured executable; under isolation also add that exact path to `sandbox.executables` |
 | The working directory is denied | Add a containing read/write filesystem grant; the selected workspace is used when the field is omitted |
 | A stdio environment mapping is denied | Grant the child variable name and map it to a valid `env:HOST_VARIABLE` reference |
-| A remote credential reference is denied | Grant the referenced host variable itself in `sandbox.environment` |
-| A remote URL is rejected | Remove credentials, query, and fragment; use HTTPS outside exact loopback development |
-| The endpoint is still denied | Add its exact origin to `sandbox.networkDestinations`; CA trust alone is not authorization |
+| A remote credential reference is denied under isolation | Grant the referenced host variable itself in `sandbox.environment` |
+| A remote URL is rejected under isolation | Remove credentials, query, and fragment; use HTTPS outside exact loopback development |
+| The endpoint is still denied under isolation | Add its exact origin to `sandbox.networkDestinations`; CA trust alone is not authorization |
 | Enterprise TLS still fails | Configure `network.caBundlePath` and restart; stdio children need their own trust configuration |
-| OAuth discovery is denied | Authorize every actual protected-resource, authorization, and token origin |
+| OAuth discovery is denied | Globally configure danger acknowledgement, or authorize every actual protected-resource, authorization, and token origin plus the client-secret environment name |
 | `auth status` is true but calls return unauthorized | Status checks local token presence only; log in again or review remote revocation/scopes |
 | OAuth login times out | Confirm the registered callback is the exact configured loopback URL, or use `--manual` |
 | A tool is absent from discovery | Add the exact name, or deliberately select `allowedTools: ["*"]` |

@@ -46,20 +46,41 @@ colossus -w . config effective
 ```
 
 `config init` creates `$COLOSSUS_HOME/config.yaml` and refuses to overwrite an existing
-file. The generated configuration uses the local deterministic `echo` provider, the
-`development` access profile, the `workspace-development` sandbox preset, and
-`storage.location: home_workspace`. The selected workspace is canonicalized once and
-its state resolves beneath `workspaces/<partition-id>/cli/`.
+file. The ordinary generated document is intentionally small:
+
+```yaml
+schemaVersion: 2
+storage:
+  location: home_workspace
+  path: state.redb
+```
+
+Omitted fields use the strict compiled defaults shown by `config show`: the local
+deterministic `echo` provider, `access.profile: allow_all`, and acknowledged
+`sandbox.backend: danger_full_access`. This is an intentionally unsafe pre-1.0
+developer default. Authorized process, filesystem, and HTTP tools can use ambient host
+resources outside the selected workspace without approval. Provider routes,
+credentials, configured extensions, one-use permits, audit, transport checks, and
+configured bounds still apply. On Unix, however, a deliberately detached direct child
+can evade process-tree memory/count accounting, outlive the effect, and act outside its
+audit record; timeout and output bounds cover the supervised effect. Executable pack
+tools and pack stdio MCP servers are rejected under full access because their manifest
+permission ceilings require isolation. Select an explicit isolating sandbox preset
+when ambient authority or best-effort process cleanup is inappropriate.
+
+The selected workspace is canonicalized once and its state resolves beneath
+`workspaces/<partition-id>/cli/`.
 
 Use `config init --local` when this repository needs a complete replacement at
 `<workspace>/.colossus/config.yaml`. Configuration files are selected, not merged; see
 [Colossus home and workspace resolution](../reference/colossus-home.md).
 
-The generated `storage.keys.kind: none` keeps setup dependency-free. Journal payloads
+The default `storage.keys.kind: none` keeps setup dependency-free. Journal payloads
 are plaintext, while record hashes, the append-only chain, projections, and full audit
-verification remain active. Interactive commands show a security warning. To start a
-fresh protected journal instead, pass `--storage-keys platform` or
-`--storage-keys environment` during initialization.
+verification remain active. Interactive commands show security posture warnings; the
+danger-full-access warning also appears on stderr for noninteractive commands while
+JSON stdout stays clean. To start a fresh protected journal instead, pass
+`--storage-keys platform` or `--storage-keys environment` during initialization.
 
 ### 3. Run the offline smoke
 
@@ -105,11 +126,11 @@ Open `result.json` and confirm that it contains `"profile": "echo"` and
   into read-only recovery mode.
 - **JSON appears in the terminal:** automatic output selection detected a redirected
   stream; add `--output human` when a human renderer is required.
-- **Development sandbox is unsupported:** initialize with
-  `--sandbox-profile offline-default` for the network-free echo smoke, then review the
-  platform-specific [Sandbox](../admin/sandbox.md) requirements before enabling shell
-  work. Ubuntu's AppArmor user-namespace restriction may require the release archive's
-  exact-path profile for a root-owned Colossus installation.
+- **Full host access is inappropriate:** initialize with an explicit
+  `--sandbox-profile workspace-development` or `--sandbox-profile offline-default`
+  preset, then review the platform-specific [Sandbox](../admin/sandbox.md)
+  requirements. Ubuntu's AppArmor user-namespace restriction may require the release
+  archive's exact-path profile for a root-owned Colossus installation.
 
 ## Next step
 

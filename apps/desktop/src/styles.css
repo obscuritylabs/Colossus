@@ -218,6 +218,30 @@ p {
   text-transform: uppercase;
 }
 
+.unsafe-execution-banner {
+  position: fixed;
+  z-index: 55;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  max-width: 440px;
+  gap: 4px;
+  padding: 11px 14px;
+  border: 1px solid #b44b3d;
+  border-radius: 9px;
+  background: #351917;
+  box-shadow: var(--shadow);
+  color: #f6b6ad;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.unsafe-execution-banner strong {
+  color: #ffd0c9;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .product-rail {
   position: relative;
   z-index: 5;
@@ -3066,6 +3090,25 @@ textarea {
   color: var(--muted);
   font-size: 0.7rem;
   line-height: 1.5;
+}
+
+.unsafe-execution-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #9e4035;
+  border-radius: 10px;
+  background: #321817;
+  color: #f3a99f;
+}
+
+.unsafe-execution-note p,
+.unsafe-settings-label {
+  margin: 0;
+  color: #f3a99f;
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 
 .setup-icon {

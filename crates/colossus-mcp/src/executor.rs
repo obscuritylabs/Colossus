@@ -26,6 +26,7 @@ pub struct McpExecutor {
     process: Arc<dyn EffectExecutor>,
     tls_roots: AdditionalRootCertificates,
     oauth_store: Option<OAuthStoreFactory>,
+    oauth_resource_authority: ResourceAuthority,
     oauth_network_destinations: Vec<String>,
     oauth_allowed_environment: Vec<String>,
     oauth_timeout_ms: u64,
@@ -83,6 +84,7 @@ impl McpExecutor {
             process,
             tls_roots: AdditionalRootCertificates::default(),
             oauth_store: None,
+            oauth_resource_authority: ResourceAuthority::Declared,
             oauth_network_destinations: Vec::new(),
             oauth_allowed_environment: Vec::new(),
             oauth_timeout_ms: 30_000,
@@ -111,6 +113,13 @@ impl McpExecutor {
         self.oauth_allowed_environment = allowed_environment;
         self.oauth_timeout_ms = timeout_ms;
         self.oauth_max_output_bytes = max_output_bytes;
+        self
+    }
+
+    /// Select the acknowledged resource authority used by operator OAuth commands.
+    #[must_use]
+    pub fn with_oauth_resource_authority(mut self, authority: ResourceAuthority) -> Self {
+        self.oauth_resource_authority = authority;
         self
     }
 
@@ -195,6 +204,7 @@ impl McpExecutor {
         let manager = self
             .oauth_manager(
                 configured,
+                self.oauth_resource_authority,
                 &self.oauth_network_destinations,
                 &self.oauth_allowed_environment,
                 self.oauth_timeout_ms,
@@ -206,7 +216,11 @@ impl McpExecutor {
             .get_authorization_url(&scopes)
             .await
             .map_err(safe_oauth_error)?;
-        validate_oauth_authorization_url(&authorization_url, &self.oauth_network_destinations)?;
+        validate_oauth_authorization_url(
+            &authorization_url,
+            self.oauth_resource_authority,
+            &self.oauth_network_destinations,
+        )?;
         let session = AuthorizationSession::for_scope_upgrade(
             manager,
             authorization_url.clone(),
@@ -515,6 +529,7 @@ impl McpExecutor {
     async fn oauth_manager(
         &self,
         server: &ConfiguredServer,
+        resource_authority: ResourceAuthority,
         network_destinations: &[String],
         allowed_environment: &[String],
         timeout_ms: u64,
@@ -531,6 +546,7 @@ impl McpExecutor {
         let max_output_bytes = usize::try_from(max_output_bytes)
             .map_err(|_| McpError::OAuth("OAuth output bound is invalid".into()))?;
         let http = Arc::new(HardenedOAuthHttpClient::new(
+            resource_authority,
             network_destinations.to_vec(),
             self.tls_roots.clone(),
             timeout_ms,
@@ -549,8 +565,11 @@ impl McpExecutor {
         let mut client = OAuthClientConfig::new(&oauth.client_id, redirect_uri)
             .with_scopes(oauth.scopes.clone());
         if let Some(reference) = oauth.client_secret_reference.as_deref() {
-            client = client
-                .with_client_secret(resolve_oauth_client_secret(reference, allowed_environment)?);
+            client = client.with_client_secret(resolve_oauth_client_secret(
+                reference,
+                resource_authority,
+                allowed_environment,
+            )?);
         }
         manager.configure_client(client).map_err(safe_oauth_error)?;
         Ok(manager)
@@ -680,11 +699,12 @@ fn resolve_http_headers(
     for (name, credential) in &server.credential_headers {
         let variable = environment_reference(&credential.reference)
             .ok_or_else(|| failed("MCP credential reference is invalid"))?;
-        if !permit
-            .obligations()
-            .allowed_environment
-            .iter()
-            .any(|allowed| allowed == variable)
+        if permit.obligations().resource_authority != ResourceAuthority::Ambient
+            && !permit
+                .obligations()
+                .allowed_environment
+                .iter()
+                .any(|allowed| allowed == variable)
         {
             return Err(failed(format!(
                 "MCP credential environment variable {variable} is absent from permit obligations"
@@ -714,13 +734,15 @@ fn resolve_http_headers(
 
 fn resolve_oauth_client_secret(
     reference: &str,
+    resource_authority: ResourceAuthority,
     allowed_environment: &[String],
 ) -> Result<String, McpError> {
     let variable = environment_reference(reference)
         .ok_or_else(|| McpError::OAuth("OAuth client secret reference is invalid".into()))?;
-    if !allowed_environment
-        .iter()
-        .any(|allowed| allowed == variable)
+    if resource_authority != ResourceAuthority::Ambient
+        && !allowed_environment
+            .iter()
+            .any(|allowed| allowed == variable)
     {
         return Err(McpError::OAuth(format!(
             "OAuth client secret environment variable {variable} is not permitted"
@@ -741,6 +763,7 @@ fn resolve_oauth_client_secret(
 
 fn validate_oauth_authorization_url(
     authorization_url: &str,
+    resource_authority: ResourceAuthority,
     destinations: &[String],
 ) -> Result<(), McpError> {
     let url = url::Url::parse(authorization_url)
@@ -750,16 +773,21 @@ fn validate_oauth_authorization_url(
         .ok_or_else(|| McpError::OAuth("authorization URL has no host".into()))?;
     let loopback = host.eq_ignore_ascii_case("localhost")
         || colossus_network::parse_host_ip(host).is_some_and(|address| address.is_loopback());
-    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+    if (resource_authority != ResourceAuthority::Ambient
+        && url.scheme() != "https"
+        && !(url.scheme() == "http" && loopback))
+        || (resource_authority == ResourceAuthority::Ambient
+            && !matches!(url.scheme(), "http" | "https"))
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
     {
         return Err(McpError::OAuth("authorization URL is unsafe".into()));
     }
-    if colossus_policy::network_destination_match(destinations, authorization_url)
-        .map_err(|_| McpError::OAuth("authorization URL origin is invalid".into()))?
-        .is_none()
+    if resource_authority != ResourceAuthority::Ambient
+        && colossus_policy::network_destination_match(destinations, authorization_url)
+            .map_err(|_| McpError::OAuth("authorization URL origin is invalid".into()))?
+            .is_none()
     {
         return Err(McpError::OAuth(
             "authorization URL origin is not permitted".into(),
@@ -1262,19 +1290,20 @@ impl EffectExecutor for McpExecutor {
         let server = self.configured(&input, request)?.clone();
         let max_output_bytes = permit.obligations().max_output_bytes;
         if server.transport == McpTransportKind::StreamableHttp {
-            let (headers, mut secrets) = resolve_http_headers(&server, &permit)?;
             let endpoint = server
                 .url
                 .as_deref()
                 .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
             let http =
                 HardenedStreamableHttpClient::new(endpoint, &permit, &self.tls_roots).await?;
+            let (headers, mut secrets) = resolve_http_headers(&server, &permit)?;
             let timeout = Duration::from_millis(permit.obligations().timeout_ms);
             let call_dispatched = AtomicBool::new(false);
             let result = if server.oauth.is_some() {
                 let manager = self
                     .oauth_manager(
                         &server,
+                        permit.obligations().resource_authority,
                         &permit.obligations().network_destinations,
                         &permit.obligations().allowed_environment,
                         permit.obligations().timeout_ms,

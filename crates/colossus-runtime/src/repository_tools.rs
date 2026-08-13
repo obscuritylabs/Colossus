@@ -60,21 +60,26 @@ pub(super) struct RepositoryEffectExecutor {
 }
 
 impl RepositoryEffectExecutor {
-    pub(super) fn resolve(&self, relative: &str) -> Result<PathBuf, ExecutionError> {
-        let requested = Path::new(relative);
-        if relative.contains('\0')
-            || requested.is_absolute()
-            || requested.components().any(|component| {
-                matches!(component, std::path::Component::ParentDir)
-                    || matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
-            })
+    pub(super) fn resolve(&self, resource: &str, ambient: bool) -> Result<PathBuf, ExecutionError> {
+        let requested = Path::new(resource);
+        if resource.contains('\0')
+            || (!ambient
+                && (requested.is_absolute()
+                    || requested.components().any(|component| {
+                        matches!(component, std::path::Component::ParentDir)
+                            || matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
+                    })))
         {
             return Err(ExecutionError::Failed(
                 "repository paths must remain inside the workspace and outside control state"
                     .into(),
             ));
         }
-        let joined = self.workspace.join(requested);
+        let joined = if ambient && requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            self.workspace.join(requested)
+        };
         if fs::symlink_metadata(&joined)
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
@@ -85,7 +90,7 @@ impl RepositoryEffectExecutor {
         }
         let canonical =
             fs::canonicalize(&joined).map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        if !canonical.starts_with(&self.workspace) {
+        if !ambient && !canonical.starts_with(&self.workspace) {
             return Err(ExecutionError::Failed(
                 "repository path escaped the active workspace".into(),
             ));
@@ -97,25 +102,32 @@ impl RepositoryEffectExecutor {
         &self,
         root: &Path,
         maximum: usize,
+        ambient: bool,
     ) -> Result<(Vec<PathBuf>, bool), ExecutionError> {
         let mut files = Vec::new();
         let mut truncated = false;
         let hard_limit = maximum.clamp(1, 5_000);
-        let walker = WalkBuilder::new(root)
+        let mut walker = WalkBuilder::new(root);
+        walker
             .follow_links(false)
             .hidden(false)
-            .git_ignore(true)
-            .git_exclude(true)
-            .parents(false)
-            .build();
+            .ignore(!ambient)
+            .git_ignore(!ambient)
+            .git_global(!ambient)
+            .git_exclude(!ambient)
+            .parents(false);
+        let walker = walker.build();
         for entry in walker {
             let entry = entry.map_err(|error| ExecutionError::Failed(error.to_string()))?;
-            let relative = entry.path().strip_prefix(&self.workspace).map_err(|_| {
-                ExecutionError::Failed("repository walk escaped the active workspace".into())
+            let boundary = if ambient { root } else { &self.workspace };
+            let relative = entry.path().strip_prefix(boundary).map_err(|_| {
+                ExecutionError::Failed("repository walk escaped its authorized root".into())
             })?;
-            if relative.components().any(|component| {
-                matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
-            }) {
+            if !ambient
+                && relative.components().any(|component| {
+                    matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
+                })
+            {
                 continue;
             }
             if !entry.file_type().is_some_and(|kind| kind.is_file()) {
@@ -123,9 +135,9 @@ impl RepositoryEffectExecutor {
             }
             let canonical = fs::canonicalize(entry.path())
                 .map_err(|error| ExecutionError::Failed(error.to_string()))?;
-            if !canonical.starts_with(&self.workspace) {
+            if !canonical.starts_with(boundary) {
                 return Err(ExecutionError::Failed(
-                    "repository walk escaped the active workspace".into(),
+                    "repository walk escaped its authorized root".into(),
                 ));
             }
             if files.len() == hard_limit {
@@ -138,7 +150,10 @@ impl RepositoryEffectExecutor {
         Ok((files, truncated))
     }
 
-    pub(super) fn relative(&self, path: &Path) -> Result<String, ExecutionError> {
+    pub(super) fn relative(&self, path: &Path, ambient: bool) -> Result<String, ExecutionError> {
+        if ambient {
+            return Ok(path.display().to_string());
+        }
         path.strip_prefix(&self.workspace)
             .map(|path| {
                 if path.as_os_str().is_empty() {
@@ -163,21 +178,26 @@ impl RepositoryEffectExecutor {
         Ok(String::from_utf8(bytes).ok())
     }
 
-    pub(super) fn map(&self, path: &str, max_files: usize) -> Result<Value, ExecutionError> {
-        let root = self.resolve(path)?;
+    pub(super) fn map(
+        &self,
+        path: &str,
+        max_files: usize,
+        ambient: bool,
+    ) -> Result<Value, ExecutionError> {
+        let root = self.resolve(path, ambient)?;
         if !root.is_dir() {
             return Err(ExecutionError::Failed(
                 "repo.map path must be a directory".into(),
             ));
         }
-        let (files, truncated) = self.files(&root, max_files.clamp(1, 1_000))?;
+        let (files, truncated) = self.files(&root, max_files.clamp(1, 1_000), ambient)?;
         let entries = files
             .iter()
             .map(|file| {
                 let metadata = fs::metadata(file)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?;
                 Ok(json!({
-                    "path": self.relative(file)?,
+                    "path": self.relative(file, ambient)?,
                     "bytes": metadata.len(),
                     "extension": file.extension().and_then(|value| value.to_str()),
                 }))
@@ -192,7 +212,7 @@ impl RepositoryEffectExecutor {
             *extension_counts.entry(extension.into()).or_default() += 1;
         }
         Ok(json!({
-            "root": self.relative(&root)?,
+            "root": self.relative(&root, ambient)?,
             "files": entries,
             "file_count": entries.len(),
             "extension_counts": extension_counts,
@@ -205,15 +225,16 @@ impl RepositoryEffectExecutor {
         path: &str,
         pattern: &str,
         max_results: usize,
+        ambient: bool,
     ) -> Result<Value, ExecutionError> {
-        let root = self.resolve(path)?;
+        let root = self.resolve(path, ambient)?;
         if !root.is_dir() {
             return Err(ExecutionError::Failed(
                 "repository symbol search path must be a directory".into(),
             ));
         }
         let maximum = max_results.clamp(1, 500);
-        let (files, files_truncated) = self.files(&root, 5_000)?;
+        let (files, files_truncated) = self.files(&root, 5_000, ambient)?;
         let mut symbols = Vec::new();
         let mut truncated = files_truncated;
         'files: for file in files {
@@ -233,7 +254,7 @@ impl RepositoryEffectExecutor {
                 if !matched {
                     continue;
                 }
-                symbol["path"] = Value::String(self.relative(&file)?);
+                symbol["path"] = Value::String(self.relative(&file, ambient)?);
                 symbol["line"] = json!(index + 1);
                 symbols.push(symbol);
                 if symbols.len() == maximum {
@@ -255,15 +276,16 @@ impl RepositoryEffectExecutor {
         path: &str,
         needle: &str,
         max_results: usize,
+        ambient: bool,
     ) -> Result<Value, ExecutionError> {
-        let root = self.resolve(path)?;
+        let root = self.resolve(path, ambient)?;
         if !root.is_dir() {
             return Err(ExecutionError::Failed(
                 "repository search path must be a directory".into(),
             ));
         }
         let maximum = max_results.clamp(1, 500);
-        let (files, files_truncated) = self.files(&root, 5_000)?;
+        let (files, files_truncated) = self.files(&root, 5_000, ambient)?;
         let mut matches = Vec::new();
         let mut truncated = files_truncated;
         'files: for file in files {
@@ -276,7 +298,7 @@ impl RepositoryEffectExecutor {
                         continue;
                     }
                     matches.push(json!({
-                        "path": self.relative(&file)?,
+                        "path": self.relative(&file, ambient)?,
                         "line": index + 1,
                         "column": offset + 1,
                         "text": bounded_tool_text(line.trim(), 400),
@@ -300,8 +322,9 @@ impl RepositoryEffectExecutor {
         &self,
         path: &str,
         max_lines: usize,
+        ambient: bool,
     ) -> Result<Value, ExecutionError> {
-        let file = self.resolve(path)?;
+        let file = self.resolve(path, ambient)?;
         if !file.is_file() {
             return Err(ExecutionError::Failed(
                 "repo.file_summary path must be a file".into(),
@@ -344,7 +367,7 @@ impl RepositoryEffectExecutor {
             .map(|line| bounded_tool_text(line, 500))
             .collect::<Vec<_>>();
         Ok(json!({
-            "path": self.relative(&file)?,
+            "path": self.relative(&file, ambient)?,
             "bytes": content.len(),
             "line_count": line_count,
             "extension": file.extension().and_then(|value| value.to_str()),
@@ -362,11 +385,12 @@ impl EffectExecutor for RepositoryEffectExecutor {
     async fn execute(
         &self,
         request: &EffectRequest,
-        _permit: ExecutionPermit,
+        permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let operation: RepositoryOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        let expected_resource = self.resolve(operation.resource())?;
+        let ambient = permit.obligations().resource_authority == ResourceAuthority::Ambient;
+        let expected_resource = self.resolve(operation.resource(), ambient)?;
         if request.action != operation.action()
             || Path::new(&request.resource) != expected_resource.as_path()
         {
@@ -375,19 +399,19 @@ impl EffectExecutor for RepositoryEffectExecutor {
             ));
         }
         let value = match operation {
-            RepositoryOperation::Map { path, max_files } => self.map(&path, max_files)?,
+            RepositoryOperation::Map { path, max_files } => self.map(&path, max_files, ambient)?,
             RepositoryOperation::SymbolSearch {
                 pattern,
                 path,
                 max_results,
-            } => self.symbol_search(&path, &pattern, max_results)?,
+            } => self.symbol_search(&path, &pattern, max_results, ambient)?,
             RepositoryOperation::References {
                 symbol,
                 path,
                 max_results,
-            } => self.search(&path, &symbol, max_results)?,
+            } => self.search(&path, &symbol, max_results, ambient)?,
             RepositoryOperation::FileSummary { path, max_lines } => {
-                self.file_summary(&path, max_lines)?
+                self.file_summary(&path, max_lines, ambient)?
             }
         };
         Ok(QuarantinedEffectResult {

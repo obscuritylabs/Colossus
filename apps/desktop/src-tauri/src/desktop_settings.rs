@@ -22,7 +22,7 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 3;
+const SETTINGS_SCHEMA_VERSION: u16 = 4;
 const SETTINGS_FILE: &str = "settings.json";
 const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
@@ -61,10 +61,18 @@ pub(crate) const CODEX_BASE_URL: &str = colossus_codex_auth::CODEX_API_BASE_URL;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AccessProfileSetting {
     Minimal,
-    #[default]
     Development,
-    #[serde(rename = "allow_all")]
-    LegacyAllowAll,
+    #[default]
+    AllowAll,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ExecutionBoundarySetting {
+    #[default]
+    FullAccess,
+    WorkspaceIsolated,
+    OfflineIsolated,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -206,6 +214,7 @@ pub(crate) struct DesktopSettings {
     #[serde(default)]
     pub(crate) additional_ca_bundle: Option<CaBundleSetting>,
     pub(crate) access_profile: AccessProfileSetting,
+    pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
     /// Versioned native confirmation for local-user shell authority. A missing or
     /// older value keeps previously persisted TUI consent from silently enabling
@@ -260,7 +269,8 @@ impl Default for DesktopSettings {
             model_roles: BTreeMap::new(),
             pending_provider_cleanup_ids: Vec::new(),
             additional_ca_bundle: None,
-            access_profile: AccessProfileSetting::Development,
+            access_profile: AccessProfileSetting::AllowAll,
+            execution_boundary: ExecutionBoundarySetting::FullAccess,
             terminal_enabled: false,
             local_terminal_consent_version: 0,
             selected_target_id: None,
@@ -386,12 +396,12 @@ impl SettingsStore {
             })
             .and_then(|value| u16::try_from(value).ok())
             .ok_or_else(storage_error)?;
-        let (mut settings, migrated_provider_config) = if schema_version == 1 {
+        let (mut settings, migrated_settings) = if schema_version == 1 {
             let legacy: LegacyDesktopSettingsV1 =
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?;
             (migrate_v1_settings(legacy)?, true)
-        } else if schema_version == 2 {
-            (migrate_v2_settings(&bytes)?, true)
+        } else if matches!(schema_version, 2 | 3) {
+            (migrate_legacy_settings(&bytes, schema_version)?, true)
         } else {
             (
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
@@ -427,14 +437,11 @@ impl SettingsStore {
                 target.requires_credential_enrollment = true;
             }
         }
-        if settings.access_profile == AccessProfileSetting::LegacyAllowAll {
-            settings.access_profile = AccessProfileSetting::Development;
-        }
         validate_settings(&settings)?;
         if let Some(bundle) = &settings.additional_ca_bundle {
             self.ca_bundle_path(bundle)?;
         }
-        if migrated_legacy_workspace || migrated_provider_config {
+        if migrated_legacy_workspace || migrated_settings {
             self.save(&settings)?;
         }
         Ok(settings)
@@ -695,6 +702,7 @@ fn migrate_v1_settings(
     if pending.len() > MAX_PENDING_PROVIDER_CLEANUPS {
         return Err(storage_error());
     }
+    let access_profile = migrate_legacy_access_profile(legacy.access_profile);
     Ok(DesktopSettings {
         schema_version: SETTINGS_SCHEMA_VERSION,
         managed_instance_id: legacy.managed_instance_id,
@@ -704,7 +712,8 @@ fn migrate_v1_settings(
         model_roles: BTreeMap::new(),
         pending_provider_cleanup_ids: pending,
         additional_ca_bundle: None,
-        access_profile: legacy.access_profile,
+        access_profile,
+        execution_boundary: legacy_execution_boundary(access_profile),
         terminal_enabled: legacy.terminal_enabled,
         local_terminal_consent_version: 0,
         selected_target_id: legacy
@@ -715,14 +724,17 @@ fn migrate_v1_settings(
     })
 }
 
-fn migrate_v2_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+fn migrate_legacy_settings(
+    bytes: &[u8],
+    expected_schema_version: u16,
+) -> Result<DesktopSettings, CommandErrorDto> {
     let mut value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| storage_error())?;
     let object = value.as_object_mut().ok_or_else(storage_error)?;
     if object
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
-        != Some(2)
+        != Some(u64::from(expected_schema_version))
     {
         return Err(storage_error());
     }
@@ -730,7 +742,43 @@ fn migrate_v2_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto>
         "schemaVersion".into(),
         serde_json::Value::from(SETTINGS_SCHEMA_VERSION),
     );
+    let legacy_access_profile = object
+        .get("accessProfile")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(storage_error)?;
+    let (access_profile, execution_boundary) = match legacy_access_profile {
+        "minimal" => ("minimal", "offline_isolated"),
+        "development" | "allow_all" => ("development", "workspace_isolated"),
+        _ => return Err(storage_error()),
+    };
+    object.insert(
+        "accessProfile".into(),
+        serde_json::Value::from(access_profile),
+    );
+    // Schemas 1-3 always ran the managed runtime through the platform-isolating
+    // backend. Preserve that boundary during migration instead of silently opting an
+    // existing user into the new schema-v4 full-access default.
+    object.insert(
+        "executionBoundary".into(),
+        serde_json::Value::from(execution_boundary),
+    );
     serde_json::from_value(value).map_err(|_| storage_error())
+}
+
+const fn migrate_legacy_access_profile(profile: AccessProfileSetting) -> AccessProfileSetting {
+    match profile {
+        AccessProfileSetting::AllowAll => AccessProfileSetting::Development,
+        AccessProfileSetting::Minimal | AccessProfileSetting::Development => profile,
+    }
+}
+
+const fn legacy_execution_boundary(profile: AccessProfileSetting) -> ExecutionBoundarySetting {
+    match profile {
+        AccessProfileSetting::Minimal => ExecutionBoundarySetting::OfflineIsolated,
+        AccessProfileSetting::Development | AccessProfileSetting::AllowAll => {
+            ExecutionBoundarySetting::WorkspaceIsolated
+        }
+    }
 }
 
 fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
@@ -752,7 +800,6 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
         .as_deref()
         .is_some_and(|value| value != "managed-local" && !target_ids.contains(value))
         || settings.workspace.as_ref().is_some_and(invalid_workspace)
-        || settings.access_profile == AccessProfileSetting::LegacyAllowAll
     {
         return Err(storage_error());
     }
@@ -1421,6 +1468,11 @@ mod tests {
         let home = ColossusHome::ensure_at(parent.join(".colossus")).expect("home");
         let store = SettingsStore::open_home(home.clone()).expect("Desktop store");
         let settings = DesktopSettings::default();
+        assert_eq!(settings.access_profile, AccessProfileSetting::AllowAll);
+        assert_eq!(
+            settings.execution_boundary,
+            ExecutionBoundarySetting::FullAccess
+        );
         store.save(&settings).expect("save Desktop settings");
         assert!(home.root().join("desktop/settings.json").is_file());
         assert_eq!(
@@ -1657,9 +1709,50 @@ mod tests {
         assert!(migrated.model_roles.is_empty());
         assert_eq!(migrated.pending_provider_cleanup_ids, [credential_id]);
         assert_eq!(migrated.access_profile, AccessProfileSetting::Minimal);
+        assert_eq!(
+            migrated.execution_boundary,
+            ExecutionBoundarySetting::OfflineIsolated
+        );
         assert!(migrated.terminal_enabled);
         assert!(migrated.selected_target_id.is_none());
         assert!(migrated.legacy_connection_migrated);
+    }
+
+    #[test]
+    fn v1_legacy_allow_all_migrates_to_development_access() {
+        let (_root_guard, canonical_root, store) = test_store();
+        let encoded = serde_json::json!({
+            "schemaVersion": 1,
+            "managedInstanceId": Uuid::now_v7().to_string(),
+            "workspace": null,
+            "provider": null,
+            "pendingProviderCleanupIds": [],
+            "accessProfile": "allow_all",
+            "terminalEnabled": false,
+            "selectedTargetId": null,
+            "externalTargets": [],
+            "legacyConnectionMigrated": true,
+        });
+        let path = canonical_root.join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            serde_json::to_vec(&encoded).expect("legacy settings"),
+        )
+        .expect("settings");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
+
+        let migrated = store.load().expect("migrate v1 settings");
+        assert_eq!(migrated.access_profile, AccessProfileSetting::Development);
+        assert_eq!(
+            migrated.execution_boundary,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        );
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("rewritten settings"))
+                .expect("rewritten JSON");
+        assert_eq!(rewritten["accessProfile"], "development");
+        assert_eq!(rewritten["executionBoundary"], "workspace_isolated");
     }
 
     #[test]
@@ -1669,6 +1762,10 @@ mod tests {
             configured_settings(ProviderKindSetting::Compatible, OPENROUTER_BASE_URL, None);
         let mut encoded = serde_json::to_value(settings).expect("settings");
         encoded["schemaVersion"] = serde_json::Value::from(2);
+        encoded
+            .as_object_mut()
+            .expect("settings object")
+            .remove("executionBoundary");
         let path = canonical_root.join(SETTINGS_FILE);
         fs::write(&path, serde_json::to_vec(&encoded).expect("v2 settings")).expect("settings");
         #[cfg(unix)]
@@ -1677,6 +1774,11 @@ mod tests {
         let migrated = store.load().expect("migrate v2 settings");
         assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
         assert_eq!(migrated.providers[0].timeout_ms, Some(120_000));
+        assert_eq!(migrated.access_profile, AccessProfileSetting::Development);
+        assert_eq!(
+            migrated.execution_boundary,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        );
         let rewritten: serde_json::Value =
             serde_json::from_slice(&fs::read(path).expect("rewritten settings"))
                 .expect("rewritten JSON");
@@ -1684,6 +1786,39 @@ mod tests {
             rewritten["providers"][0]["timeoutMs"],
             serde_json::Value::from(120_000)
         );
+        assert_eq!(rewritten["accessProfile"], "development");
+        assert_eq!(rewritten["executionBoundary"], "workspace_isolated");
+    }
+
+    #[test]
+    fn v3_settings_migrate_legacy_allow_all_and_preserve_workspace_isolation() {
+        let (_root_guard, canonical_root, store) = test_store();
+        let mut settings =
+            configured_settings(ProviderKindSetting::Compatible, OPENROUTER_BASE_URL, None);
+        settings.access_profile = AccessProfileSetting::AllowAll;
+        let mut encoded = serde_json::to_value(settings).expect("settings");
+        encoded["schemaVersion"] = serde_json::Value::from(3);
+        encoded
+            .as_object_mut()
+            .expect("settings object")
+            .remove("executionBoundary");
+        let path = canonical_root.join(SETTINGS_FILE);
+        fs::write(&path, serde_json::to_vec(&encoded).expect("v3 settings")).expect("settings");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
+
+        let migrated = store.load().expect("migrate v3 settings");
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.execution_boundary,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        );
+        assert_eq!(migrated.access_profile, AccessProfileSetting::Development);
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("rewritten settings"))
+                .expect("rewritten JSON");
+        assert_eq!(rewritten["executionBoundary"], "workspace_isolated");
+        assert_eq!(rewritten["accessProfile"], "development");
     }
 
     #[test]

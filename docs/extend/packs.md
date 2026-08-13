@@ -19,6 +19,8 @@ and expose only its reviewed tools.
   the payload.
 - The publisher's verified Ed25519 public key.
 - Approval for trust and lifecycle mutations.
+- An isolating `native`, `oci`, or `windows_job` execution boundary for packs that
+  declare executable tools or stdio MCP servers.
 
 ## Steps
 
@@ -69,6 +71,12 @@ Enabled fixed-argument tools become access candidates on the next runtime start.
 Their declared permissions are a ceiling, not authority; policy and sandbox still
 constrain every call.
 
+Do not use `danger_full_access` for executable packs. Runtime composition rejects an
+enabled pack that declares tools or stdio MCP servers under that backend because direct
+execution cannot enforce the manifest's filesystem, network, environment, and
+credential ceilings. Select an isolating boundary before enabling it. Data-only skills
+do not acquire execution authority through a pack.
+
 ## Expected result
 
 The installed lifecycle identifies the exact manifest and publisher key. Only enabled,
@@ -86,6 +94,9 @@ Confirm that executable paths and requested permissions match the reviewed manif
 - **Payload is undeclared:** update the manifest and signature from reviewed source.
 - **Permission ceiling is too broad:** narrow pack and tool declarations before
   installation.
+- **Executable pack is rejected under full access:** select an isolating `native`,
+  `oci`, or `windows_job` boundary; acknowledging ambient access cannot replace a
+  manifest permission ceiling.
 - **Tool remains hidden:** inspect lifecycle, trust, access profile, and exact
   prerequisites.
 - **Call outcome is unknown:** reconcile the external effect before retrying.

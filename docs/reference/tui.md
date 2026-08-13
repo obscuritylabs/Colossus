@@ -14,8 +14,10 @@ output is streaming, then collapses back to the sticky composer and status as so
 that output completes. Use `--alt-screen` for the application-owned full-screen
 transcript viewport; `--no-alt-screen` remains a compatibility alias for the default.
 
-The current directory or `-w, --workspace` selects the repository/tool boundary, while
-configuration and workspace-partitioned state follow the
+The current directory or `-w, --workspace` selects repository context, relative-path
+anchoring, and state identity. It is also the resource boundary under workspace
+isolation, but not under acknowledged full access. Configuration and
+workspace-partitioned state follow the
 [Colossus home resolution contract](colossus-home.md). Every top-level interactive run
 also snapshots the bounded home and repository `AGENTS.md` instructions before its
 first provider turn.

@@ -4,6 +4,7 @@ pub(super) fn default_obligations() -> PolicyObligations {
     PolicyObligations {
         sandbox_backend: "broker".into(),
         sandbox_profile: "offline-default".into(),
+        resource_authority: ResourceAuthority::Declared,
         filesystem: Vec::new(),
         protected_filesystem: Vec::new(),
         network_destinations: Vec::new(),
@@ -95,6 +96,22 @@ impl BuiltInPolicy {
         self
     }
 
+    /// Select declared or acknowledged ambient resource authority.
+    pub fn with_resource_authority(mut self, authority: ResourceAuthority) -> Self {
+        self.obligations.resource_authority = authority;
+        match authority {
+            ResourceAuthority::Declared => {
+                self.obligations.audit_labels.remove("resource_authority");
+            }
+            ResourceAuthority::Ambient => {
+                self.obligations
+                    .audit_labels
+                    .insert("resource_authority".into(), "ambient".into());
+            }
+        }
+        self
+    }
+
     /// Allow one exact environment variable name inside sandboxed processes.
     pub fn with_environment(mut self, name: impl Into<String>) -> Self {
         self.obligations.allowed_environment.push(name.into());
@@ -139,7 +156,10 @@ impl BuiltInPolicy {
         self
     }
 
-    /// Restrict one exact action to its own filesystem, environment, and network grants.
+    /// Restrict one exact action to declared filesystem, environment, and network grants.
+    ///
+    /// Action-scoped restrictions are permission ceilings, so they must never inherit
+    /// ambient authority from the surrounding runtime policy.
     pub fn with_action_restrictions(
         mut self,
         action: impl Into<String>,
@@ -148,6 +168,8 @@ impl BuiltInPolicy {
         network_destinations: Vec<String>,
     ) -> Self {
         let mut obligations = self.obligations.clone();
+        obligations.resource_authority = ResourceAuthority::Declared;
+        obligations.audit_labels.remove("resource_authority");
         obligations.filesystem = filesystem;
         obligations.allowed_environment = allowed_environment;
         obligations.network_destinations = network_destinations;

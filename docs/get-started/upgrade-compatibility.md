@@ -15,8 +15,9 @@ configuration or silently importing incompatible state.
 ## Prerequisites
 
 - The release archive, checksum, and release notes for the target version.
-- A verified backup of configuration, encrypted state, secure anchor, and the matching
-  key material or credential-store entries.
+- A verified backup of configuration and canonical state, plus the secure anchor and
+  matching key material or credential-store entries when protected storage is
+  configured.
 - A maintenance window for verification.
 
 This site documents only the latest supported release. The root `CHANGELOG.md` is the
@@ -55,19 +56,22 @@ command. Version 0.10.1 and later require `schemaVersion: 2`, which separates pr
 profiles from model profiles and logical role routing. Schema version 1 is rejected
 instead of being silently reinterpreted.
 
-Generate a fresh configuration at a separate path:
+Generate a fresh configuration at a separate path. Pass an isolating preset explicitly
+when you do not want the new full-access default:
 
 ```bash
 colossus --config .colossus/config.next.yaml config init \
-  --access-profile development
+  --access-profile development \
+  --sandbox-profile workspace-development
 ```
 
-Configurations without the required `access` block, or with removed `agent.tools`,
-`policy.allow_actions`, or `policy.approval_actions` fields, are rejected. Copy required
-provider connections into `providers.profiles`; copy model identifiers, context limits,
-capabilities, and role mappings into `models.profiles` and `models.roles`. Transfer
-storage, policy, sandbox, and integration settings deliberately, and retain credential
-references rather than secret values. `config init` never overwrites an existing file.
+Only `schemaVersion` and `storage` are required at the document root. Ordinary nested
+groups are recursively defaultable, while explicit tagged variants still require their
+`kind` and unknown fields remain errors. Copy required provider connections into
+`providers.profiles`; copy model identifiers, context limits, capabilities, and role
+mappings into `models.profiles` and `models.roles`. Transfer storage, policy, sandbox,
+and integration settings deliberately, and retain credential references rather than
+secret values. `config init` never overwrites an existing file.
 Inspect the completed file before making it active:
 
 ```bash
@@ -81,10 +85,30 @@ replacement. Existing repository-local `.colossus/config.yaml` files still take
 precedence and omitted `storage.location` retains historical `workspace` behavior, so
 their state paths continue to work without silent relocation.
 
+This release intentionally changes the meaning of omitted schema-version-2 access and
+sandbox fields. An omitted or empty `access` group resolves to `allow_all`; an omitted
+or empty `sandbox` group resolves to acknowledged `danger_full_access`. That widening
+applies to existing sparse files without a schema-version bump, including workflows and
+background effects. Existing files that explicitly select a native, Windows, OCI,
+external, or custom sandbox retain that selection. Run `config show` and `config
+effective` before returning an upgraded host to service, and add an explicit isolating
+sandbox block if ambient host filesystem, process, and HTTP(S) authority is not intended.
+
 Desktop Managed Local starts fresh in the selected workspace's isolated Desktop home
 partition. Earlier application-support data is preserved but ignored; Colossus neither
 imports nor deletes it. Keep it until the new Desktop state is verified, then handle it
 through your normal retention process.
+
+Fresh schema-v4 Desktop settings default to **Allow all** with **Full access**. Existing
+schema-v1–v3 settings instead preserve their earlier platform-isolated behavior during
+migration: **Minimal** maps to **Offline isolated**, while **Development** and the legacy
+`allow_all` spelling map to **Workspace isolated**. Review the new execution-boundary
+selector separately from the approval-mode selector. **Offline isolated** hides the
+generic model-visible `network.http`, `web.fetch`, and `docs.fetch` tools, but it retains
+the selected provider's exact service and authentication/refresh destinations. It is
+not an air gap; use the
+[offline and air-gapped operation guide](../admin/offline-airgap.md) when remote provider
+transport must also be absent.
 
 ### 5. Verify local state, then run explicit diagnostics
 

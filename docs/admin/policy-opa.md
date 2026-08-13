@@ -49,7 +49,10 @@ one-use permits, sandbox, quarantine, and terminal audit events.
 3. Keep `access.actions.allow`, `requireApproval`, and `deny` empty when OPA is active.
    OPA is the sole action decision point.
 
-4. Grant the exact OPA origin in the sandbox, then diagnose:
+4. Under an isolating execution boundary, grant the exact OPA origin in the sandbox,
+   then diagnose. Acknowledged full access supplies destination authority, but remote
+   OPA remains a stricter security-channel exception and still requires HTTPS, pinned
+   CA trust, and mTLS identity:
 
     ```bash
     colossus --config .colossus/config.yaml policy doctor
@@ -60,10 +63,17 @@ OPA receives the complete logical request after hard secrets are replaced by bou
 hashes and references. Policy input is bounded. Raw credentials, authentication headers,
 private keys, key material, and hidden reasoning are not disclosed.
 
+OPA also owns the complete returned obligations. `resource_authority` defaults to
+`declared` when omitted. Returning `resource_authority: ambient` requests full host
+resource authority for that exact decision; the Safety Kernel accepts it only when the
+runtime has acknowledged `sandbox.backend: danger_full_access`. Selecting the danger
+backend does not silently rewrite an OPA response from `declared` to `ambient`.
+
 ## Expected result
 
 `policy doctor` reports a healthy decision channel and `config effective` attributes
-action decisions to the selected engine.
+action decisions to the selected engine. Effect audit records identify whether the
+accepted obligation used `declared` or `ambient` resource authority.
 
 ## Verification
 

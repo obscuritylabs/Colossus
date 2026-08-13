@@ -42,9 +42,10 @@ colossus --config .colossus/config.yaml run --max-turns 12 \
 Use `--role ROLE` to select an operator-configured model role. The role chooses a route;
 the model cannot choose an endpoint or credential.
 
-For development work that may execute shell commands, keep `access.profile:
-development`, select `sandbox.profile: workspace-development`, and satisfy each
-execution approval interactively or with a reviewed mode:
+The sparse default is immediately usable `allow_all` plus acknowledged full host
+access. For a narrower development session, explicitly select `access.profile:
+development` and `sandbox.profile: workspace-development`, then satisfy each execution
+approval interactively or with a reviewed mode:
 
 ```bash
 colossus -w /absolute/path/to/repository \
@@ -115,7 +116,8 @@ Use `--session SESSION_ID` instead when the exact session matters.
 ## Expected result
 
 The command returns one final response, records the run in a durable session, and appends
-provider and effect lifecycle evidence to the encrypted journal.
+provider and effect lifecycle evidence to the hash-chained journal. Configured protected
+storage encrypts its payloads.
 
 ## Verification
 

@@ -13,8 +13,10 @@ A **run** is one bounded agent execution. A **session** is the durable conversat
 work context to which runs append. Starting a new run can create a session, attach to an
 exact session, or resume the most recent one.
 
-Messages remain canonical encrypted events. Context compaction creates a derived
-snapshot for future provider requests; it does not erase history.
+Messages remain canonical journal events. Protected storage encrypts their payloads;
+the keyless default stores plaintext while retaining payload hashes and record-chain
+verification. Context compaction creates a derived snapshot for future provider
+requests; it does not erase history.
 
 ## Models and roles
 
@@ -36,7 +38,8 @@ For an effect to occur:
 1. the tool must be visible;
 2. policy must allow it or receive a valid approval;
 3. the Safety Kernel must issue a matching one-use permit;
-4. the sandbox must grant the exact resource;
+4. the execution boundary must supply declared or acknowledged ambient resource
+   authority;
 5. the adapter must obey bounds; and
 6. quarantined output must pass any required post-effect release decision.
 
@@ -47,12 +50,25 @@ These controls are deliberately independent:
 - **Access profile:** selects visible tools and built-in action defaults.
 - **Policy:** decides the exact request and obligations.
 - **Approval mode:** can satisfy an approval obligation; it cannot reverse a deny.
-- **Sandbox:** constrains concrete roots, executables, environment names, network
-  origins, time, memory, output, process count, and concurrency.
+- **Execution boundary and sandbox:** select declared roots, executables, environment
+  names, and network origins or acknowledged ambient authority. Isolating boundaries
+  enforce time, memory, output, process-count, and concurrency ceilings; direct Unix
+  supervision cannot guarantee process-tree limits or cleanup for deliberately detached
+  descendants.
 
-`development` is the ordinary starting profile. `minimal` narrows the surface,
-`allow_all` removes built-in approval friction without bypassing enforcement, and
-`pinned` uses exact tool and action choices.
+Sparse schema-version-2 configuration starts with `allow_all`, which removes built-in
+approval friction, and acknowledged `danger_full_access`, which gives authorized tools
+ambient host resources. This is deliberately convenient and unsafe. `development`
+adds approval obligations, `minimal` narrows the surface, and `pinned` uses exact tool
+and action choices. Choose a native, Windows, OCI, or external execution boundary to
+restore resource isolation. Even under full access, configured capability declarations,
+policy, one-use permits, audit, quarantine, credentials, transport validation, and
+configured bounds remain active. Under direct Unix execution, timeout and output bind
+the supervised effect, while a hostile `setsid` or double-fork descendant may escape
+process/memory accounting, outlive the effect, and act outside its audit record. Use
+native, OCI, Windows Job, or a containing external host boundary when strict process
+containment is required. Executable pack tools and pack stdio MCP servers are rejected
+under full access because their manifest permission ceilings require isolation.
 
 ## Durable work
 

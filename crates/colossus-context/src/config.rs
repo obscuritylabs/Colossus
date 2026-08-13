@@ -2,7 +2,7 @@ use super::*;
 
 /// Strict context-window and compaction settings.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContextConfig {
     /// Create snapshots automatically when the threshold is crossed.
     pub auto_compaction: bool,

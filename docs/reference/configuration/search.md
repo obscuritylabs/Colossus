@@ -39,9 +39,16 @@ search:
 | `search.roles.agent` | Existing profile name for ordinary agent search |
 | `search.roles.research` | Existing profile name for research search |
 
-Routes never silently fall back. Every profile origin must be present in
-`sandbox.networkDestinations`; the destination contains only the canonical origin,
-while the search path remains in `endpoint`.
+Under an isolating boundary, a non-loopback endpoint must use HTTPS. Acknowledged full
+access also accepts canonical non-loopback plaintext HTTP; that transport has no TLS
+confidentiality or server authentication and can expose queries or credentials in
+transit.
+
+Routes never silently fall back. Under an isolating boundary, every profile origin must
+be present in `sandbox.networkDestinations`; the destination contains only the
+canonical origin, while the search path remains in `endpoint`. Acknowledged full access
+authorizes the exact configured HTTP(S) endpoint without a duplicate destination, but
+still does not create a search profile or route.
 
 ## Hosted model plus local search example
 
@@ -81,7 +88,9 @@ sandbox:
     - http://127.0.0.1:8888
 ```
 
-The wildcard covers the public OpenRouter HTTPS origin. The local SearXNG loopback
-origin remains an exact entry. The provider credential stays outside YAML.
+Under isolation, the wildcard covers the public OpenRouter HTTPS origin and the local
+SearXNG loopback origin remains an exact entry. Under acknowledged full access these
+entries do not constrain ambient authority. The provider credential stays outside
+YAML.
 
 Return to the [configuration overview](../configuration.md).

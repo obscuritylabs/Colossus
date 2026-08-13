@@ -27,14 +27,14 @@ use colossus_contracts::{
     ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck,
     ProviderResponseDiagnostic, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
     QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
-    ResearchRun, ResearchSource, ResearchSourceKind, RiskAssessment, RunTelemetryDetail,
-    RunTelemetrySummary, SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse,
-    SearchRoute, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
-    SessionMessage, SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate,
-    SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry,
-    SkillResourceRead, SkillScaffoldResult, SkillValidationResult, SkillWriteResult,
-    StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord,
-    TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
+    ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority, RiskAssessment,
+    RunTelemetryDetail, RunTelemetrySummary, SandboxBoundaryMode, SearchProfileSummary,
+    SearchRequest, SearchResponse, SearchRoute, SecurityPostureFinding, SecurityPostureReport,
+    SecurityPostureSeverity, SessionMessage, SessionMessagePage, SessionSummary, SkillComposition,
+    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
+    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
+    SkillWriteResult, StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus,
+    TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
     UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
 };
 use colossus_home::ConfinedRoot;
@@ -49,8 +49,8 @@ use colossus_journal_redb::{
 use colossus_mcp::{
     MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor,
     McpOAuthCredentialStoreKind, McpOAuthLogin, McpOAuthStatus, McpOperation, McpServerConfig,
-    McpServerSummary, McpToolSummary, McpToolsPage, validate_config as validate_mcp_config,
-    validate_tool_arguments,
+    McpServerSummary, McpToolSummary, McpToolsPage, McpValidationContext,
+    validate_config as validate_mcp_config, validate_tool_arguments,
 };
 use colossus_memory::{
     EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,

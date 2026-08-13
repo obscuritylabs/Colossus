@@ -3,8 +3,11 @@ use super::{
     compile_openapi, normalize_native_response, operation_url, prepare_native_request,
     redact_exact_secret,
 };
-use colossus_contracts::{DecisionOutcome, IntegrationAuth, IntegrationStatus};
-use colossus_policy::{EffectExecutor, system_actor};
+use colossus_contracts::{
+    CredentialReference, DecisionOutcome, IntegrationAuth, IntegrationStatus, ResourceAuthority,
+    SandboxBoundaryMode,
+};
+use colossus_policy::{EffectExecutor, SandboxBoundaryGate, system_actor};
 use colossus_ports::{EventJournal, ExtensionRepository};
 use colossus_testkit::{InMemoryEventJournal, assert_extension_repository_conformance};
 use serde_json::json;
@@ -253,6 +256,100 @@ async fn canonical_credential_reference_mismatch_fails_before_network_execution(
         .await
         .expect_err("mismatched disclosure must fail");
     assert!(error.to_string().contains("credential disclosure"));
+}
+
+#[tokio::test]
+async fn remote_plaintext_integration_requires_ambient_authority_in_the_permit() {
+    let credential = "env:COLOSSUS_TEST_MISSING_PLAINTEXT_INTEGRATION_KEY";
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn ExtensionRepository> =
+        Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
+    let connection = compile_openapi(
+        "plaintext",
+        &document(),
+        Some("http://192.0.2.1:9/v1/"),
+        IntegrationAuth::Bearer {
+            header: "Authorization".into(),
+            scheme: "Bearer".into(),
+        },
+        Some(credential.into()),
+        Vec::new(),
+        "2026-01-01T00:00:00Z".into(),
+        "2026-01-01T00:00:00Z".into(),
+    )
+    .expect("potential ambient connection");
+    repository
+        .save_integration(connection, system_actor("test"))
+        .expect("save");
+    let executor = IntegrationExecutor::new(repository).expect("executor");
+    let request = || {
+        let operation = IntegrationRequest::Invoke {
+            connection: "plaintext".into(),
+            tool_name: "openapi.plaintext.getwidget".into(),
+            arguments: json!({"id":"1"}),
+        };
+        let mut request = colossus_policy::effect_request(
+            system_actor("test"),
+            operation.action(),
+            operation.resource(),
+            serde_json::to_value(&operation).expect("request"),
+        );
+        request.capabilities = vec!["integration.invoke".into()];
+        request.credential_references = vec![CredentialReference {
+            reference: credential.into(),
+            value_hash: None,
+        }];
+        request
+    };
+
+    let declared = colossus_policy::EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(
+            colossus_policy::BuiltInPolicy::offline_default()
+                .with_action("openapi.plaintext.getwidget", DecisionOutcome::Allow)
+                .with_network_destination("http://192.0.2.1:9"),
+        ),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["integration.invoke".into()]),
+        [71_u8; 32],
+    );
+    let error = declared
+        .execute(request(), &executor as &dyn EffectExecutor)
+        .await
+        .expect_err("declared exact origin must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+
+    let ambient = colossus_policy::EffectGateway::new(
+        journal,
+        Arc::new(
+            colossus_policy::BuiltInPolicy::offline_default()
+                .with_action("openapi.plaintext.getwidget", DecisionOutcome::Allow)
+                .with_sandbox("danger_full_access", "test", false)
+                .with_resource_authority(ResourceAuthority::Ambient)
+                .with_limits(25, 1024 * 1024, 1, 64 * 1024 * 1024, 1),
+        ),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["integration.invoke".into()])
+            .with_sandbox_boundary_gate(Arc::new(SandboxBoundaryGate::new(
+                Some(SandboxBoundaryMode::DangerFullAccess),
+                true,
+            ))),
+        [72_u8; 32],
+    );
+    let error = ambient
+        .execute(request(), &executor as &dyn EffectExecutor)
+        .await
+        .expect_err("missing credential must stop before dispatch");
+    assert!(error.to_string().contains("credential"));
+    assert!(
+        !error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
 }
 
 #[test]

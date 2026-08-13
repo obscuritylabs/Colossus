@@ -8,6 +8,7 @@ pub struct RuntimeConfig {
     /// Configuration schema version.
     pub schema_version: u16,
     /// Unified model-visible tool and built-in policy profile.
+    #[serde(default)]
     pub access: AccessConfig,
     /// Canonical journal and key settings.
     pub storage: StorageConfig,
@@ -21,8 +22,10 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub observability: ObservabilityConfig,
     /// Policy decision point settings.
+    #[serde(default)]
     pub policy: PolicyConfig,
     /// Workflow definition libraries.
+    #[serde(default)]
     pub workflows: WorkflowLibraryConfig,
     /// Provider connection profiles.
     #[serde(default)]
@@ -64,7 +67,7 @@ pub struct RuntimeConfig {
 
 /// Shared trust settings for Colossus-owned outbound network clients.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkConfig {
     /// Optional PEM CA bundle added to the built-in public trust roots.
     pub ca_bundle_path: Option<PathBuf>,
@@ -101,13 +104,14 @@ pub enum AuditExporterConfig {
         /// Credential-free trailing-slash collection endpoint.
         endpoint: String,
         /// Optional environment-backed bearer credential reference.
+        #[serde(default)]
         credential_reference: Option<String>,
     },
 }
 
 /// Bounded agent-loop configuration.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
     /// Maximum provider turns in one run.
     pub max_turns: u16,
@@ -129,7 +133,7 @@ impl AgentConfig {
 
 /// Bounded durable child-agent scheduler configuration.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubagentConfig {
     /// Maximum child runs executing concurrently in one runtime.
     pub max_concurrent: usize,
@@ -159,7 +163,7 @@ struct OmittedRuntimeLimits<'a> {
 
 /// Runtime memory-index and retrieval configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct MemoryConfig {
     /// Whether the disposable Tantivy index is enabled.
     pub index_enabled: bool,
@@ -206,10 +210,12 @@ pub enum SemanticMemoryConfig {
         /// Disposable collection name managed by Colossus.
         collection: String,
         /// Optional `env:VARIABLE` token reference.
+        #[serde(default)]
         credential_reference: Option<String>,
         /// Per-operation transport timeout.
         timeout_ms: u64,
         /// Optional local file tracking the last applied journal sequence.
+        #[serde(default)]
         position_path: Option<PathBuf>,
         /// Caller-owned embedding profile; Chroma never generates canonical embeddings.
         embedding: Box<MemoryEmbeddingConfig>,
@@ -239,17 +245,19 @@ pub enum MemoryEmbeddingConfig {
         /// API base URL, normally ending in `/v1`.
         base_url: String,
         /// Optional `env:VARIABLE` credential reference.
+        #[serde(default)]
         credential_reference: Option<String>,
         /// Per-request transport timeout.
         timeout_ms: u64,
         /// Optional strict response dimension.
+        #[serde(default)]
         dimensions: Option<usize>,
     },
 }
 
 /// Bounded durable research orchestration configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResearchConfig {
     /// Maximum canonical evidence sources in one run.
     pub max_sources: usize,
@@ -296,6 +304,7 @@ pub enum SearchProfileConfig {
         /// Exact credential-free `/search` endpoint.
         endpoint: String,
         /// Optional environment-backed API-key reference.
+        #[serde(default)]
         credential_reference: Option<String>,
         /// Header receiving the optional SearXNG API key.
         #[serde(default = "default_searxng_auth_header")]
@@ -336,7 +345,7 @@ const fn default_search_timeout_ms() -> u64 {
 
 /// Declarative skill discovery and override configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct SkillsConfig {
     /// Whether prompt mentions and explicit activation are enabled.
     pub enabled: bool,
@@ -367,7 +376,7 @@ impl Default for SkillsConfig {
 
 /// Capability-pack installation configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct PacksConfig {
     /// Fresh Rust pack installation directory.
     pub install_root: PathBuf,
@@ -404,7 +413,7 @@ pub(super) fn default_research_user_agent() -> String {
 
 /// Strict provider connection profiles.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProvidersConfig {
     /// Named provider profiles.
     pub profiles: BTreeMap<String, ProviderProfileConfig>,
@@ -434,8 +443,10 @@ pub struct ProviderProfileConfig {
     /// Provider adapter kind.
     pub kind: ProviderKind,
     /// API version base URL for network providers.
+    #[serde(default)]
     pub base_url: Option<String>,
     /// Credential reference such as `env:OPENAI_API_KEY`, `codex:default`, or an injected `host:provider-main`.
+    #[serde(default)]
     pub credential_reference: Option<String>,
     /// Optional provider transport timeout override. Omission selects a host-aware default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -447,7 +458,7 @@ pub struct ProviderProfileConfig {
 
 /// Explicit model profiles and role routing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelsConfig {
     /// Named model profiles.
     pub profiles: BTreeMap<String, ModelProfileConfig>,
@@ -522,8 +533,8 @@ impl ProviderProfileConfig {
 }
 
 /// Strict sandbox composition and built-in-policy defaults.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SandboxConfig {
     /// Isolating backend or an explicitly acknowledged direct-execution boundary.
     pub backend: String,
@@ -573,17 +584,11 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
-            backend: if cfg!(target_os = "windows") {
-                "windows_job".into()
-            } else if cfg!(any(target_os = "linux", target_os = "macos")) {
-                "native".into()
-            } else {
-                "oci".into()
-            },
+            backend: "danger_full_access".into(),
             profile: "offline-default".into(),
             allow_broker_fallback: false,
             acknowledge_external_boundary: false,
-            acknowledge_danger_full_access: false,
+            acknowledge_danger_full_access: true,
             helper_path: None,
             oci_runtime: None,
             oci_image: None,
@@ -601,8 +606,136 @@ impl Default for SandboxConfig {
     }
 }
 
+impl SandboxConfig {
+    /// Platform-native isolating defaults for trusted hosts that explicitly opt out of
+    /// the schema's direct-execution starting point.
+    pub fn platform_isolating() -> Self {
+        Self {
+            backend: default_isolating_sandbox_backend().into(),
+            acknowledge_danger_full_access: false,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SandboxConfigSource {
+    #[serde(default = "default_danger_full_access_backend")]
+    backend: String,
+    #[serde(default = "default_sandbox_profile")]
+    profile: String,
+    #[serde(default)]
+    allow_broker_fallback: bool,
+    #[serde(default)]
+    acknowledge_external_boundary: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    acknowledge_danger_full_access: Option<bool>,
+    #[serde(default)]
+    helper_path: Option<PathBuf>,
+    #[serde(default)]
+    oci_runtime: Option<PathBuf>,
+    #[serde(default)]
+    oci_image: Option<String>,
+    #[serde(default)]
+    oci_proxy_image: Option<String>,
+    #[serde(default)]
+    filesystem: Vec<FilesystemGrant>,
+    #[serde(default)]
+    executables: Vec<PathBuf>,
+    #[serde(default)]
+    environment: Vec<String>,
+    #[serde(default)]
+    network_destinations: Vec<String>,
+    #[serde(default = "default_sandbox_timeout_ms")]
+    timeout_ms: u64,
+    #[serde(default = "default_sandbox_max_output_bytes")]
+    max_output_bytes: u64,
+    #[serde(default = "default_sandbox_max_processes")]
+    max_processes: u32,
+    #[serde(default = "default_sandbox_max_memory_bytes")]
+    max_memory_bytes: u64,
+    #[serde(default = "default_sandbox_max_concurrency")]
+    max_concurrency: u32,
+}
+
+impl<'de> Deserialize<'de> for SandboxConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let source = SandboxConfigSource::deserialize(deserializer)?;
+        let backend = source.backend;
+        let acknowledge_danger_full_access = source
+            .acknowledge_danger_full_access
+            .unwrap_or_else(|| backend == "danger_full_access");
+        Ok(Self {
+            backend,
+            profile: source.profile,
+            allow_broker_fallback: source.allow_broker_fallback,
+            acknowledge_external_boundary: source.acknowledge_external_boundary,
+            acknowledge_danger_full_access,
+            helper_path: source.helper_path,
+            oci_runtime: source.oci_runtime,
+            oci_image: source.oci_image,
+            oci_proxy_image: source.oci_proxy_image,
+            filesystem: source.filesystem,
+            executables: source.executables,
+            environment: source.environment,
+            network_destinations: source.network_destinations,
+            timeout_ms: source.timeout_ms,
+            max_output_bytes: source.max_output_bytes,
+            max_processes: source.max_processes,
+            max_memory_bytes: source.max_memory_bytes,
+            max_concurrency: source.max_concurrency,
+        })
+    }
+}
+
+fn deserialize_optional_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
+}
+
+fn default_danger_full_access_backend() -> String {
+    "danger_full_access".into()
+}
+
 fn default_sandbox_profile() -> String {
     "offline-default".into()
+}
+
+const fn default_sandbox_timeout_ms() -> u64 {
+    30_000
+}
+
+const fn default_sandbox_max_output_bytes() -> u64 {
+    1024 * 1024
+}
+
+const fn default_sandbox_max_processes() -> u32 {
+    16
+}
+
+const fn default_sandbox_max_memory_bytes() -> u64 {
+    256 * 1024 * 1024
+}
+
+const fn default_sandbox_max_concurrency() -> u32 {
+    1
+}
+
+/// Backend selected by an explicit platform-isolating preset.
+pub const fn default_isolating_sandbox_backend() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows_job"
+    } else if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "native"
+    } else {
+        "oci"
+    }
 }
 
 /// Canonical storage configuration.
@@ -710,8 +843,10 @@ pub enum PolicyConfig {
         /// Fixed OPA data decision path.
         decision_path: String,
         /// Optional pinned PEM CA path; required remotely.
+        #[serde(default)]
         ca_pem_path: Option<PathBuf>,
         /// Optional PEM mTLS identity path; required remotely.
+        #[serde(default)]
         identity_pem_path: Option<PathBuf>,
         /// Explicit full logical content disclosure acknowledgement.
         full_content_disclosure_acknowledged: bool,
@@ -722,14 +857,31 @@ pub enum PolicyConfig {
     },
 }
 
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self::BuiltIn {
+            require_post_effect: false,
+        }
+    }
+}
+
 /// Repository and user workflow libraries.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowLibraryConfig {
     /// Repository workflow directory.
     pub repository: PathBuf,
     /// Platform user workflow directory.
     pub user: PathBuf,
+}
+
+impl Default for WorkflowLibraryConfig {
+    fn default() -> Self {
+        Self {
+            repository: PathBuf::from(".colossus/workflows"),
+            user: PathBuf::from("workflows"),
+        }
+    }
 }
 
 impl RuntimeConfig {
@@ -767,12 +919,6 @@ impl RuntimeConfig {
         if has_legacy_tools || has_legacy_actions {
             return Err(RuntimeError::Config(
                 "agent.tools, policy.allow_actions, and policy.approval_actions are not supported; use access.tools and access.actions or generate a fresh configuration with `colossus --config PATH config init`"
-                    .into(),
-            ));
-        }
-        if !root.contains_key("access") {
-            return Err(RuntimeError::Config(
-                "access is required; add an access block or generate a fresh configuration with `colossus --config PATH config init`"
                     .into(),
             ));
         }
@@ -1005,11 +1151,14 @@ impl RuntimeConfig {
         validate_mcp_config(
             &config.mcp,
             &fs::canonicalize(std::env::current_dir()?)?,
-            &config.sandbox.executables,
-            &config.sandbox.filesystem,
-            &config.sandbox.environment,
-            config.sandbox.timeout_ms,
-            config.sandbox.max_output_bytes,
+            McpValidationContext {
+                resource_authority: configured_resource_authority(&config.sandbox),
+                sandbox_executables: &config.sandbox.executables,
+                sandbox_filesystem: &config.sandbox.filesystem,
+                sandbox_environment: &config.sandbox.environment,
+                sandbox_timeout_ms: config.sandbox.timeout_ms,
+                sandbox_max_output_bytes: config.sandbox.max_output_bytes,
+            },
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
         if config.skills.disabled.iter().any(|name| {
@@ -1041,6 +1190,12 @@ impl RuntimeConfig {
 
     /// Select the sandbox profile used by a newly generated configuration.
     pub fn set_sandbox_profile(&mut self, profile: impl Into<String>) {
+        self.sandbox.profile = profile.into();
+    }
+
+    /// Select a complete platform-isolating sandbox preset for generated configuration.
+    pub fn use_platform_isolating_sandbox(&mut self, profile: impl Into<String>) {
+        self.sandbox = SandboxConfig::platform_isolating();
         self.sandbox.profile = profile.into();
     }
 
@@ -1087,13 +1242,8 @@ impl RuntimeConfig {
             network: NetworkConfig::default(),
             audit: AuditConfig::default(),
             observability: ObservabilityConfig::default(),
-            policy: PolicyConfig::BuiltIn {
-                require_post_effect: false,
-            },
-            workflows: WorkflowLibraryConfig {
-                repository: PathBuf::from(".colossus/workflows"),
-                user: PathBuf::from("workflows"),
-            },
+            policy: PolicyConfig::default(),
+            workflows: WorkflowLibraryConfig::default(),
             providers: ProvidersConfig::default(),
             models: ModelsConfig::default(),
             agent: AgentConfig::default(),
@@ -1105,7 +1255,7 @@ impl RuntimeConfig {
             mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
             packs: PacksConfig::default(),
-            sandbox: SandboxConfig::default(),
+            sandbox: SandboxConfig::platform_isolating(),
         }
     }
 
@@ -1397,7 +1547,8 @@ pub(super) fn validate_audit_config(
             RuntimeError::Config("WORM audit credential must be an env:VARIABLE reference".into())
         })?;
         if !valid_environment_name(variable)
-            || !sandbox.environment.iter().any(|name| name == variable)
+            || (configured_resource_authority(sandbox) != ResourceAuthority::Ambient
+                && !sandbox.environment.iter().any(|name| name == variable))
         {
             return Err(RuntimeError::Config(format!(
                 "WORM audit credential variable {variable} requires an exact sandbox environment grant"
@@ -1427,7 +1578,9 @@ pub(super) fn validate_research_search_config(
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     });
-    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+    let ambient = configured_resource_authority(sandbox) == ResourceAuthority::Ambient;
+    if (!ambient && url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+        || (ambient && !matches!(url.scheme(), "http" | "https"))
         || url.cannot_be_a_base()
         || url.query().is_some()
         || url.fragment().is_some()
@@ -1483,9 +1636,10 @@ pub(super) fn effective_search_config(
     })
 }
 
-pub(super) fn configured_search_profile(
+pub(super) fn configured_search_profile_with_authority(
     name: &str,
     config: &SearchProfileConfig,
+    resource_authority: ResourceAuthority,
 ) -> Result<SearchProfile, RuntimeError> {
     let profile = match config {
         SearchProfileConfig::Searxng {
@@ -1494,7 +1648,7 @@ pub(super) fn configured_search_profile(
             auth_header,
             user_agent,
             timeout_ms,
-        } => SearchProfile::new(
+        } => SearchProfile::new_with_resource_authority(
             name,
             SearchKind::Searxng,
             endpoint,
@@ -1502,13 +1656,14 @@ pub(super) fn configured_search_profile(
             Some(auth_header.clone()),
             user_agent,
             *timeout_ms,
+            resource_authority,
         ),
         SearchProfileConfig::SerpApi {
             endpoint,
             credential_reference,
             user_agent,
             timeout_ms,
-        } => SearchProfile::new(
+        } => SearchProfile::new_with_resource_authority(
             name,
             SearchKind::SerpApi,
             endpoint,
@@ -1516,6 +1671,7 @@ pub(super) fn configured_search_profile(
             None,
             user_agent,
             *timeout_ms,
+            resource_authority,
         ),
     }?;
     Ok(profile)
@@ -1525,12 +1681,13 @@ pub(super) fn search_registry(
     config: &RuntimeConfig,
     tls_roots: &AdditionalRootCertificates,
 ) -> Result<SearchRegistry, RuntimeError> {
+    let resource_authority = configured_resource_authority(&config.sandbox);
     let config = effective_search_config(config)?;
     let profiles = config
         .profiles
         .iter()
         .map(|(name, profile)| {
-            configured_search_profile(name, profile)
+            configured_search_profile_with_authority(name, profile, resource_authority)
                 .map(SearchExecutor::new)
                 .map(|executor| executor.with_tls_roots(tls_roots.clone()))
         })
@@ -1551,7 +1708,11 @@ pub(super) fn validate_search_config(config: &RuntimeConfig) -> Result<(), Runti
         ));
     }
     for (name, profile) in &effective.profiles {
-        let profile = configured_search_profile(name, profile)?;
+        let profile = configured_search_profile_with_authority(
+            name,
+            profile,
+            configured_resource_authority(&config.sandbox),
+        )?;
         let origin = profile.network_origin()?;
         if !sandbox_allows_network(&config.sandbox, &origin)? {
             return Err(RuntimeError::Config(format!(
@@ -1584,13 +1745,15 @@ pub(super) fn validate_memory_config(
             "memory semantic Chroma requires indexEnabled: true".into(),
         ));
     }
-    let chroma = ChromaProfile::new(
+    let resource_authority = configured_resource_authority(sandbox);
+    let chroma = ChromaProfile::new_with_resource_authority(
         base_url,
         tenant,
         database,
         collection,
         credential_reference.clone(),
         *timeout_ms,
+        resource_authority,
     )?;
     let chroma_origin = chroma.network_origin()?;
     if !sandbox_allows_network(sandbox, &chroma_origin)? {
@@ -1610,13 +1773,14 @@ pub(super) fn validate_memory_config(
             timeout_ms,
             dimensions,
         } => {
-            let profile = OpenAiEmbeddingProfile::new(
+            let profile = OpenAiEmbeddingProfile::new_with_resource_authority(
                 profile,
                 model,
                 base_url,
                 credential_reference.clone(),
                 *timeout_ms,
                 *dimensions,
+                resource_authority,
             )?;
             let embedding_origin = profile.network_origin()?;
             if !sandbox_allows_network(sandbox, &embedding_origin)? {
@@ -1670,16 +1834,26 @@ pub(super) fn normalized_oci_path(value: &str) -> bool {
             .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
+#[cfg(test)]
 pub(super) fn provider_profile(
     name: &str,
     config: &ProviderProfileConfig,
 ) -> Result<ProviderProfile, RuntimeError> {
-    let profile = ProviderProfile::new(
+    provider_profile_with_authority(name, config, ResourceAuthority::Declared)
+}
+
+pub(super) fn provider_profile_with_authority(
+    name: &str,
+    config: &ProviderProfileConfig,
+    resource_authority: ResourceAuthority,
+) -> Result<ProviderProfile, RuntimeError> {
+    let profile = ProviderProfile::new_with_resource_authority(
         name,
         config.kind,
         config.base_url.clone(),
         config.credential_reference.clone(),
         config.effective_timeout_ms(),
+        resource_authority,
     )
     .map_err(RuntimeError::from)?;
     match config.chat_completions_output_token_parameter {
@@ -1696,12 +1870,13 @@ pub(super) fn provider_registry(
     credentials: Arc<dyn CredentialResolver>,
     codex_auth: Option<CodexAuthStore>,
     tls_roots: &AdditionalRootCertificates,
+    resource_authority: ResourceAuthority,
 ) -> Result<ProviderRegistry, RuntimeError> {
     let profiles = providers_config
         .profiles
         .iter()
         .map(|(name, profile)| {
-            provider_profile(name, profile).map(|profile| {
+            provider_profile_with_authority(name, profile, resource_authority).map(|profile| {
                 let executor =
                     ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
                         .with_tls_roots(tls_roots.clone());
@@ -1735,6 +1910,7 @@ pub(super) fn compose_memory_indexes(
     gateway: Arc<EffectGateway>,
     tls_roots: &AdditionalRootCertificates,
 ) -> Result<Vec<MemoryIndexRegistration>, RuntimeError> {
+    let resource_authority = configured_resource_authority(&config.sandbox);
     if !config.memory.index_enabled {
         let index: Arc<dyn MemoryIndex> = Arc::new(UnavailableMemoryIndex::new(
             "memory index disabled by configuration",
@@ -1777,13 +1953,14 @@ pub(super) fn compose_memory_indexes(
             timeout_ms,
             dimensions,
         } => {
-            let profile = OpenAiEmbeddingProfile::new(
+            let profile = OpenAiEmbeddingProfile::new_with_resource_authority(
                 profile,
                 model,
                 base_url,
                 credential_reference.clone(),
                 *timeout_ms,
                 *dimensions,
+                resource_authority,
             )?;
             let executor = Arc::new(
                 OpenAiEmbeddingExecutor::new(profile.clone()).with_tls_roots(tls_roots.clone()),
@@ -1795,13 +1972,14 @@ pub(super) fn compose_memory_indexes(
             ))
         }
     };
-    let profile = ChromaProfile::new(
+    let profile = ChromaProfile::new_with_resource_authority(
         base_url,
         tenant,
         database,
         collection,
         credential_reference.clone(),
         *timeout_ms,
+        resource_authority,
     )?;
     let executor = Arc::new(ChromaExecutor::new(profile.clone()).with_tls_roots(tls_roots.clone()));
     let position_path = position_path
@@ -1846,9 +2024,14 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
         Arc::new(EnvironmentCredentialResolver),
         None,
         &AdditionalRootCertificates::default(),
+        configured_resource_authority(&config.sandbox),
     )?;
     for (name, profile) in &config.providers.profiles {
-        let profile = provider_profile(name, profile)?;
+        let profile = provider_profile_with_authority(
+            name,
+            profile,
+            configured_resource_authority(&config.sandbox),
+        )?;
         if let Some(origin) = profile.network_origin()?
             && !sandbox_allows_network(&config.sandbox, &origin)?
         {
@@ -1871,7 +2054,32 @@ pub(super) fn sandbox_allows_network(
     sandbox: &SandboxConfig,
     resource: &str,
 ) -> Result<bool, RuntimeError> {
+    let _ = canonical_network_origin(resource)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    if configured_resource_authority(sandbox) == ResourceAuthority::Ambient {
+        return Ok(true);
+    }
     network_destination_match(&sandbox.network_destinations, resource)
         .map(|matched| matched.is_some())
         .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(super) fn configured_resource_authority(sandbox: &SandboxConfig) -> ResourceAuthority {
+    if sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend() {
+        ResourceAuthority::Ambient
+    } else {
+        ResourceAuthority::Declared
+    }
+}
+
+pub(super) fn globally_acknowledged_resource_authority(
+    sandbox: &SandboxConfig,
+) -> ResourceAuthority {
+    if configured_resource_authority(sandbox) == ResourceAuthority::Ambient
+        && sandbox.acknowledge_danger_full_access
+    {
+        ResourceAuthority::Ambient
+    } else {
+        ResourceAuthority::Declared
+    }
 }

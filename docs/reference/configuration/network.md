@@ -19,8 +19,16 @@ Keep these controls separate:
 | Authentication | How does Colossus authenticate to the service? | Provider, MCP, integration, audit, policy, or storage credential fields |
 | Local API identity | Is this the enrolled Colossus daemon? | Separately provisioned certificate pin; unaffected by this bundle |
 
-An endpoint normally needs both TLS trust and destination authorization. Adding a CA
-bundle alone never permits network access.
+An endpoint normally needs both TLS trust and destination authorization. Under
+acknowledged full access, the runtime supplies ambient HTTP(S) destination authority;
+HTTPS trust and endpoint-specific credential validation remain separate. Ambient
+authority also accepts canonical non-loopback plaintext HTTP, where a CA bundle has no
+effect and there is no TLS confidentiality or server authentication. Adding a CA bundle
+alone never permits network access under an isolating boundary.
+
+Security-channel adapters can impose stricter transport rules regardless of ambient
+authority. Remote OPA remains HTTPS with pinned CA trust and mTLS identity, and WORM
+audit export remains HTTPS-only, create-only, and hash-bound.
 
 ## Choose a starting point
 
@@ -164,6 +172,10 @@ the shared bundle.
 
 ## Practical examples
 
+The following examples include exact destination grants for an isolating execution
+boundary. Acknowledged full access needs no duplicate grants, and retaining these lists
+does not constrain ambient HTTP(S) authority.
+
 ### Private model provider
 
 The provider URL includes its API prefix. The sandbox receives only the canonical
@@ -242,7 +254,7 @@ The remote MCP adapter uses the shared CA bundle. A stdio MCP child would not.
 
 | Symptom | Check |
 | --- | --- |
-| The endpoint is still denied | Add its exact origin to `sandbox.networkDestinations`; CA trust is not authorization |
+| The endpoint is still denied under isolation | Add its exact origin to `sandbox.networkDestinations`; CA trust is not authorization |
 | Certificate validation still fails | Confirm the bundle contains the issuing trust anchor and restart the runtime |
 | A path works from one workspace only | Relative paths resolve from the selected workspace; use the intended workspace or an absolute managed path |
 | Remote OPA fails after adding a general enterprise bundle | OPA treats shared roots as an exclusive pin; use the intended OPA roots or set `policy.ca_pem_path` |

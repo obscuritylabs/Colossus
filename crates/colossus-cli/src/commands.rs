@@ -284,7 +284,7 @@ pub(super) enum PreferencesAction {
 
 #[derive(Subcommand)]
 pub(super) enum ConfigAction {
-    /// Create a strict offline configuration without overwriting an existing file.
+    /// Create a sparse default configuration without overwriting an existing file.
     Init {
         /// Create repository-local `.colossus/config.yaml` instead of the global config.
         #[arg(long)]
@@ -292,18 +292,18 @@ pub(super) enum ConfigAction {
         /// Use isolated redb state for source development.
         #[arg(long)]
         development: bool,
-        /// Clone non-storage settings from an existing strict configuration.
+        /// Clone settings into fresh development storage and key identity.
         #[arg(long, value_name = "PATH", requires = "development")]
         from: Option<PathBuf>,
         /// Unified tool and built-in policy profile.
-        #[arg(long, default_value = "development")]
-        access_profile: AccessProfile,
-        /// Resource sandbox preset; defaults from the selected access profile.
+        #[arg(long)]
+        access_profile: Option<AccessProfile>,
+        /// Select a complete platform-isolating resource sandbox preset.
         #[arg(long, value_enum)]
         sandbox_profile: Option<SandboxProfile>,
         /// Journal storage protection and key provider.
-        #[arg(long, value_enum, default_value = "none")]
-        storage_keys: StorageKeys,
+        #[arg(long, value_enum)]
+        storage_keys: Option<StorageKeys>,
     },
     /// Parse and print the active configuration with references intact.
     Show,

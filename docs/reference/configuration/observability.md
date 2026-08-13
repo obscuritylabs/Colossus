@@ -8,8 +8,8 @@ type: reference
 # Live observability
 
 `observability` is the opt-in live OpenTelemetry plane. It does not replace the
-encrypted-journal-derived `telemetry` commands, does not replay historical events, and
-does not change canonical storage or run results when an exporter is unavailable.
+journal-derived `telemetry` commands, does not replay historical events, and does not
+change canonical storage or run results when an exporter is unavailable.
 
 The complete disabled default is:
 

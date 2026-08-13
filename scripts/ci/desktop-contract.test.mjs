@@ -83,20 +83,14 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
   assert.match(packaging, /\[IO\.Path\]::GetTempPath\(\)/u);
   assert.match(packaging, /ConvertTo-Json -Compress -Depth 4/u);
   assert.match(packaging, /\[IO\.File\]::WriteAllText\(/u);
-  assert.equal(
-    packaging.match(/"--config", \$TauriOverridePath/gu)?.length,
-    2,
-  );
+  assert.equal(packaging.match(/"--config", \$TauriOverridePath/gu)?.length, 2);
   assert.doesNotMatch(packaging, /\$VersionOverride/u);
   assert.match(packaging, /write-desktop-bundle-manifest\.mjs/u);
   assert.match(packaging, /patch-desktop-manifest-binding\.mjs/u);
   const detach = packaging.indexOf("[IO.File]::Move");
   const binding = packaging.indexOf("patch-desktop-manifest-binding.mjs");
   assert.ok(detach >= 0 && detach < binding);
-  assert.match(
-    packaging,
-    /\[IO\.File\]::Move\(\$Detached, \$Path, \$true\)/u,
-  );
+  assert.match(packaging, /\[IO\.File\]::Move\(\$Detached, \$Path, \$true\)/u);
   assert.doesNotMatch(packaging, /\[IO\.File\]::Replace/u);
   assert.match(packaging, /Get-FileHash[\s\S]*detached executable/u);
   assert.match(packaging, /"--bundles", "nsis"/u);
@@ -218,11 +212,12 @@ test("terminal PTY authority is isolated from the main WebView", () => {
     "apps/desktop/src-tauri/src/terminal_process.rs",
   );
   assert.match(terminalProcess, /COLOSSUS_HOME/u);
-  assert.match(terminalProcess, /minimal_windows_environment\(colossus_home\)/u);
-  assert.match(terminalProcess, /minimal_environment\(colossus_home\)/u);
-  const managedRuntime = read(
-    "apps/desktop/src-tauri/src/managed_runtime.rs",
+  assert.match(
+    terminalProcess,
+    /minimal_windows_environment\(colossus_home\)/u,
   );
+  assert.match(terminalProcess, /minimal_environment\(colossus_home\)/u);
+  const managedRuntime = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   assert.match(
     managedRuntime,
     /without_automatic_agent_instructions_for_diagnostics\(\)/u,
@@ -296,7 +291,7 @@ test("workspace file preview is read-only, bounded, and workspace-bound", () => 
   );
   assert.match(
     implementation,
-    /settings\.access_profile != AccessProfileSetting::Development/u,
+    /settings\.access_profile == AccessProfileSetting::Minimal/u,
   );
   assert.match(implementation, /revalidate_workspace\(workspace\)/u);
   assert.match(implementation, /OFlags::NOFOLLOW/u);
@@ -314,6 +309,27 @@ test("workspace file preview is read-only, bounded, and workspace-bound", () => 
   assert.match(implementation, /"\.env"/u);
   assert.match(implementation, /"pem" \| "key"/u);
   assert.doesNotMatch(implementation, /write_all|create_dir|remove_file/u);
+});
+
+test("Managed Local trusted tool ceiling exactly matches declared built-ins", () => {
+  const builtinSource = read("crates/colossus-tools/src/builtin.rs");
+  const builtinNames = [
+    ...builtinSource.matchAll(/name: "([a-z][a-z0-9_.-]+)"\.into\(\)/gu),
+  ].map((match) => match[1]);
+  assert.ok(builtinNames.length > 0);
+
+  const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
+  const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");
+  const grantEnd = runtimeSource.indexOf("];", grantStart);
+  assert.ok(grantStart >= 0 && grantEnd > grantStart);
+  const grantNames = [
+    ...runtimeSource
+      .slice(grantStart, grantEnd)
+      .matchAll(/"([a-z][a-z0-9_.-]+)"/gu),
+  ].map((match) => match[1]);
+
+  assert.deepEqual(new Set(grantNames), new Set(builtinNames));
+  assert.equal(grantNames.length, new Set(grantNames).size);
 });
 
 test("Windows private storage is created with a protected native DACL", () => {
@@ -425,13 +441,16 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(commands, /!request\.replace_credential/u);
   assert.match(commands, /provider\.kind == request\.provider_kind/u);
   assert.match(commands, /verify_reused_provider_credential/u);
-  assert.match(commands, /fn development_access_elevation/u);
-  assert.match(commands, /confirm_development_access\(&app\)/u);
+  assert.match(commands, /fn access_profile_elevation/u);
+  assert.match(commands, /confirm_access_profile\(&app/u);
+  assert.match(commands, /fn execution_boundary_elevation/u);
+  assert.match(commands, /confirm_execution_boundary\(&app/u);
   assert.match(commands, /fn confirm_provider_origins/u);
   assert.match(commands, /fn rollback_staged_provider_credentials/u);
   assert.match(commands, /fn reject_active_managed_runs/u);
   assert.match(commands, /request_provider_secret\(\)/u);
-  assert.match(commands, /Enable Development/u);
+  assert.match(commands, /Unsafe: Full access/u);
+  assert.match(commands, /approval mode is a separate setting/u);
   for (const action of ["Import", "Connect", "Select", "Remove"]) {
     assert.match(commands, new RegExp(`ExternalConsentAction::${action}`, "u"));
   }

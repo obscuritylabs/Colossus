@@ -16,7 +16,8 @@ run, extract claims, or synthesize a cited report.
 ## Prerequisites
 
 - An operator-configured `search.roles.agent` or `search.roles.research` route.
-- The search profile's exact origin in `sandbox.networkDestinations`.
+- Under an isolating boundary, the search profile's exact HTTPS origin (or exact
+  loopback HTTP origin) in `sandbox.networkDestinations`.
 - The profile's environment-backed credential when its backend requires one.
 - Permission to perform the `web.search` action. Under the development access profile,
   a noninteractive command needs `--approval-mode ask` to prompt instead of failing
@@ -65,8 +66,8 @@ colossus --config .colossus/config.yaml \
 Set the role and limit explicitly when a reproducible diagnostic matters. Exact defaults
 and accepted bounds live in the
 [CLI reference](../reference/cli.md#important-defaults-and-bounds). Colossus sends the
-query through the selected profile, policy gateway, exact network-origin check,
-quarantine, and post-effect release decision.
+query through the selected profile, policy gateway, request-bound declared or ambient
+network-authority check, quarantine, and post-effect release decision.
 
 ### 4. Read the normalized response
 
@@ -115,7 +116,7 @@ flowchart LR
     D["Research web lane"] --> S["Logical role<br/>research"]
     R --> P1["Agent search profile"]
     S --> P2["Research search profile"]
-    P1 --> G["Policy + exact-origin sandbox"]
+    P1 --> G["Policy + resource authority"]
     P2 --> G
     G --> B{"Configured backend"}
     B --> X["SearXNG"]
@@ -128,7 +129,9 @@ flowchart LR
 
 Reading the diagram without color: the agent tool and research web lane resolve distinct
 logical roles. Each role names one operator-configured profile. Both profiles cross the
-same policy and exact-origin boundary before their backend results are normalized.
+same policy and request-bound resource-authority check before their backend results are
+normalized. Isolation uses declared exact origins; acknowledged full access uses
+ambient HTTP(S) authority.
 
 ## Expected result
 
@@ -150,8 +153,8 @@ Confirm that:
 
 - **Role is unavailable:** configure the exact `agent` or `research` mapping; there is no
   cross-role fallback.
-- **Origin is denied:** add the profile's exact scheme, host, and effective port to
-  `sandbox.networkDestinations`.
+- **Origin is denied under isolation:** add the profile's exact scheme, host, and
+  effective port to `sandbox.networkDestinations`.
 - **Approval is unavailable:** run from a terminal with `--approval-mode ask`, or ask an
   operator to grant the action through the configured policy.
 - **Credential is unavailable:** set the environment variable named by the profile's

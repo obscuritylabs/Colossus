@@ -10,7 +10,7 @@ use super::{
     RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig, SemanticMemoryConfig,
     SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter, TraceToolExecutor,
     WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
-    goal_objective_from_plan, model_workspace_path, provider_profile,
+    goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
     recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
     reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
     terminal_actor,
@@ -20,9 +20,9 @@ use colossus_contracts::{
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
     ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
-    ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult, RiskLevel,
-    RiskRecommendation, SandboxBoundaryMode, StartupVerificationMode, SubagentStatus, TaskStatus,
-    TerminalPreferences, ToolCall,
+    ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
+    ResourceAuthority, RiskLevel, RiskRecommendation, SandboxBoundaryMode, StartupVerificationMode,
+    SubagentStatus, TaskStatus, TerminalPreferences, ToolCall,
 };
 use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
 use colossus_mcp::{
@@ -48,7 +48,7 @@ use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
 use colossus_workflow::{WorkflowEffect, WorkflowEffectRunner};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -820,6 +820,284 @@ surprise: true
 }
 
 #[test]
+fn sparse_schema_materializes_recursive_defaults_and_show_expands_them() {
+    let yaml = r#"
+schemaVersion: 2
+storage:
+  path: state.redb
+access: {}
+network: {}
+audit: {}
+observability:
+  traces:
+    enabled: false
+  otlp: {}
+workflows:
+  repository: custom-workflows
+providers:
+  profiles:
+    echo:
+      kind: echo
+models: {}
+agent: {}
+subagents: {}
+context:
+  compactAtPercent: 60
+memory:
+  retrievalLimit: 4
+research:
+  maxWorkers: 2
+search: {}
+mcp: {}
+skills:
+  disabled:
+    - legacy
+packs: {}
+sandbox:
+  timeoutMs: 45000
+"#;
+    let config = RuntimeConfig::from_yaml(yaml).expect("sparse configuration");
+    assert_eq!(
+        config.access.profile,
+        colossus_access::AccessProfile::AllowAll
+    );
+    assert!(matches!(config.policy, super::PolicyConfig::BuiltIn { .. }));
+    assert_eq!(
+        config.workflows.repository,
+        PathBuf::from("custom-workflows")
+    );
+    assert_eq!(config.workflows.user, PathBuf::from("workflows"));
+    assert!(config.providers.profiles.contains_key("echo"));
+    assert!(config.models.profiles.contains_key("echo"));
+    assert_eq!(config.agent, super::AgentConfig::default());
+    assert_eq!(config.subagents, super::SubagentConfig::default());
+    assert_eq!(config.context.compact_at_percent, 60);
+    assert_eq!(config.context.target_percent, 45);
+    assert_eq!(config.memory.retrieval_limit, 4);
+    assert!(config.memory.index_enabled);
+    assert_eq!(config.research.max_workers, 2);
+    assert_eq!(config.research.max_sources, 20);
+    assert_eq!(config.skills.disabled, vec!["legacy".to_owned()]);
+    assert_eq!(config.packs.install_root, PathBuf::from(".colossus/packs"));
+    assert_eq!(config.sandbox.backend, "danger_full_access");
+    assert!(config.sandbox.acknowledge_danger_full_access);
+    assert_eq!(config.sandbox.timeout_ms, 45_000);
+
+    let expanded: Value = serde_saphyr::from_str(
+        &config
+            .to_resolved_yaml()
+            .expect("expanded configuration YAML"),
+    )
+    .expect("expanded configuration value");
+    for key in [
+        "access",
+        "network",
+        "audit",
+        "observability",
+        "policy",
+        "workflows",
+        "providers",
+        "models",
+        "agent",
+        "subagents",
+        "context",
+        "memory",
+        "research",
+        "search",
+        "mcp",
+        "skills",
+        "packs",
+        "sandbox",
+    ] {
+        assert!(expanded.get(key).is_some(), "expanded output omitted {key}");
+    }
+}
+
+#[test]
+fn previous_expanded_schema_v2_configuration_retains_its_explicit_posture() {
+    let yaml = r#"
+schemaVersion: 2
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
+storage:
+  location: home_workspace
+  path: state.redb
+  adapter: redb
+  startupVerification: incremental
+  keys:
+    kind: none
+network:
+  caBundlePath: null
+audit:
+  exporter:
+    kind: disabled
+observability:
+  enabled: false
+  serviceName: colossus
+  resourceAttributes: {}
+  traces:
+    enabled: false
+    sampleRatio: 1.0
+  metrics:
+    enabled: false
+    exportIntervalMs: 60000
+  logs:
+    otlp: false
+    stdoutJson: false
+    journalPayloads: disabled
+    acknowledgeSensitiveContent: false
+  otlp:
+    endpoint: null
+    protocol: grpc
+    timeoutMs: 10000
+    acknowledgeInsecureTransport: false
+policy:
+  kind: built_in
+  require_post_effect: false
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+providers:
+  profiles:
+    echo:
+      kind: echo
+      baseUrl: null
+      credentialReference: null
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
+  roles:
+    primary: echo
+context:
+  autoCompaction: true
+  compactAtPercent: 70
+  targetPercent: 45
+  preserveRecentMessages: 8
+  modelAssisted: true
+memory:
+  indexEnabled: true
+  indexPath: null
+  retrievalLimit: 6
+  semantic:
+    kind: disabled
+research:
+  maxSources: 20
+  maxWorkers: 4
+  search:
+    kind: disabled
+search:
+  profiles: {}
+  roles: {}
+mcp:
+  oauthCredentialStore: auto
+  servers: {}
+skills:
+  enabled: true
+  allowUserOverrides: false
+  bundled: bundled-skills
+  repository: .colossus/skills
+  user: skills
+  disabled: []
+packs:
+  installRoot: .colossus/packs
+sandbox:
+  backend: native
+  profile: workspace-development
+  allowBrokerFallback: false
+  acknowledgeExternalBoundary: false
+  acknowledgeDangerFullAccess: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: []
+  timeoutMs: 30000
+  maxOutputBytes: 1048576
+  maxProcesses: 16
+  maxMemoryBytes: 268435456
+  maxConcurrency: 1
+"#;
+
+    let config = RuntimeConfig::from_yaml(yaml).expect("previous expanded schema-v2 config");
+    assert_eq!(
+        config.access.profile,
+        colossus_access::AccessProfile::Development
+    );
+    assert_eq!(config.sandbox.backend, "native");
+    assert_eq!(config.sandbox.profile, "workspace-development");
+    assert!(!config.sandbox.acknowledge_danger_full_access);
+    assert_eq!(
+        config.storage.location,
+        super::StorageLocation::HomeWorkspace
+    );
+    assert_eq!(config.storage.path, Path::new("state.redb"));
+}
+
+#[test]
+fn sandbox_defaults_are_contextual_and_reject_stale_acknowledgements() {
+    let parse = |sandbox: &str| {
+        RuntimeConfig::from_yaml(&format!(
+            "schemaVersion: 2\nstorage:\n  path: state.redb\n{sandbox}"
+        ))
+    };
+
+    for sandbox in [
+        "",
+        "sandbox: {}\n",
+        "sandbox:\n  backend: danger_full_access\n",
+    ] {
+        let config = parse(sandbox).expect("dangerous default sandbox");
+        assert_eq!(config.sandbox.backend, "danger_full_access");
+        assert!(config.sandbox.acknowledge_danger_full_access);
+        assert_eq!(config.sandbox.profile, "offline-default");
+    }
+
+    let safe = parse("sandbox:\n  backend: native\n").expect("explicit safe backend");
+    assert!(!safe.sandbox.acknowledge_danger_full_access);
+    assert!(
+        parse("sandbox:\n  backend: native\n  acknowledgeDangerFullAccess: true\n").is_err(),
+        "a stale danger acknowledgement must fail"
+    );
+
+    let unacknowledged =
+        parse("sandbox:\n  backend: danger_full_access\n  acknowledgeDangerFullAccess: false\n")
+            .expect("explicit unacknowledged direct backend");
+    assert!(!unacknowledged.sandbox.acknowledge_danger_full_access);
+}
+
+#[test]
+fn sparse_schema_still_requires_storage_and_explicit_union_tags() {
+    assert!(RuntimeConfig::from_yaml("schemaVersion: 2\n").is_err());
+    assert!(
+        RuntimeConfig::from_yaml("schemaVersion: 2\nstorage:\n  path: state.redb\npolicy: {}\n")
+            .is_err()
+    );
+    assert!(
+        RuntimeConfig::from_yaml(
+            "schemaVersion: 2\nstorage:\n  path: state.redb\nstorageExtra: true\n"
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn storage_keys_default_to_explicit_plaintext_none() {
     let config = RuntimeConfig::offline_template("state.redb");
     assert!(matches!(config.storage.keys, super::KeyConfig::None));
@@ -1221,9 +1499,10 @@ fn security_posture_reports_danger_full_access_even_when_acknowledged() {
     assert!(
         report.findings[0]
             .summary
-            .contains("ambient runtime access")
+            .contains("ambient host authority")
     );
     assert!(report.findings[0].remediation.contains("isolation"));
+    assert!(report.findings[0].remediation.contains("detached"));
 }
 
 #[test]
@@ -1357,7 +1636,7 @@ providers:
 }
 
 #[test]
-fn access_is_required_and_removed_fields_are_rejected() {
+fn omitted_access_defaults_to_allow_all_and_removed_fields_are_rejected() {
     let active = RuntimeConfig::offline_template("state.redb");
     let mut document: Value = serde_saphyr::from_str(&active.to_yaml().expect("active YAML"))
         .expect("configuration value");
@@ -1390,9 +1669,11 @@ fn access_is_required_and_removed_fields_are_rejected() {
         policy.remove("approval_actions");
     }
     let yaml = serde_saphyr::to_string(&document).expect("configuration YAML");
-    let error = RuntimeConfig::from_yaml(&yaml).expect_err("missing access must fail");
-    assert!(error.to_string().contains("access is required"));
-    assert!(!error.to_string().contains("migrate"));
+    let parsed = RuntimeConfig::from_yaml(&yaml).expect("missing access uses compiled defaults");
+    assert_eq!(
+        parsed.access.profile,
+        colossus_access::AccessProfile::AllowAll
+    );
 }
 
 #[test]
@@ -1422,6 +1703,7 @@ fn built_in_registry_classifies_every_tool_once() {
             git_executable: true,
             any_executable: true,
             network_destination: true,
+            model_network_tools: true,
             agent_search_route: true,
             interactive: true,
             mcp_configured: true,
@@ -1436,6 +1718,109 @@ fn built_in_registry_classifies_every_tool_once() {
             .windows(2)
             .all(|pair| pair[0].name < pair[1].name)
     );
+}
+
+#[test]
+fn runtime_host_can_keep_provider_network_without_offering_general_fetch_tools() {
+    let ordinary_workspace = tempdir().expect("ordinary workspace");
+    let offline_workspace = tempdir().expect("offline workspace");
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.providers.profiles.insert(
+        "managed".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: Some("https://provider.example/v1".into()),
+            credential_reference: None,
+            timeout_ms: Some(30_000),
+            chat_completions_output_token_parameter: None,
+        },
+    );
+    configure_primary_model(&mut config, "managed", "managed", "test-model");
+    config
+        .sandbox
+        .network_destinations
+        .push("https://provider.example".into());
+
+    let ordinary = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(ordinary_workspace.path()).expect("ordinary options"),
+    )
+    .expect("ordinary isolated runtime");
+    let ordinary_tools = ordinary
+        .tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<BTreeSet<_>>();
+    for expected in ["network.http", "web.fetch", "docs.fetch"] {
+        assert!(ordinary_tools.contains(expected), "{expected}");
+    }
+
+    let provider_only = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(offline_workspace.path())
+            .expect("offline options")
+            .without_model_network_tools(),
+    )
+    .expect("provider-only network runtime");
+    assert!(
+        provider_only
+            .provider_profiles()
+            .iter()
+            .any(|profile| profile.profile == "managed"),
+        "configured provider remains available"
+    );
+    let provider_only_tools = provider_only
+        .tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<BTreeSet<_>>();
+    for hidden in ["network.http", "web.fetch", "docs.fetch"] {
+        assert!(!provider_only_tools.contains(hidden), "{hidden}");
+    }
+}
+
+#[test]
+fn unacknowledged_danger_reports_declared_configured_resource_authority() {
+    let workspace = tempdir().expect("workspace");
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.backend = SandboxBoundaryMode::DangerFullAccess.as_backend().into();
+    config.sandbox.acknowledge_danger_full_access = false;
+
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("runtime options"),
+    )
+    .expect("unacknowledged runtime");
+
+    let effective = runtime.effective_access();
+    assert_eq!(effective["sandbox"]["resource_authority"], "declared");
+    for resource in ["process", "filesystem", "network", "environment"] {
+        assert_eq!(
+            effective["sandbox"]["resource_matrix"][resource], "configured",
+            "{resource}"
+        );
+    }
+    assert_eq!(
+        effective["sandbox"]["workspace_role"],
+        "repository context, relative-path anchor, state identity, and configured resource boundary"
+    );
+
+    let doctor = runtime.sandbox_doctor();
+    assert_eq!(doctor.resource_authority, ResourceAuthority::Declared);
+    assert!(!doctor.direct_execution_globally_acknowledged);
+    for resource in ["process", "filesystem", "network", "environment"] {
+        assert_eq!(
+            doctor.resource_matrix.get(resource).map(String::as_str),
+            Some("configured"),
+            "{resource}"
+        );
+    }
 }
 
 #[test]
@@ -1559,6 +1944,63 @@ fn public_wildcard_config_allows_public_origins_but_not_loopback_routes() {
 }
 
 #[test]
+fn selected_danger_backend_accepts_private_plaintext_profiles_before_acknowledgement() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.sandbox.backend = "danger_full_access".into();
+    config.sandbox.acknowledge_danger_full_access = false;
+    config.providers.profiles.insert(
+        "private".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: Some("http://10.0.0.8:8080/v1".into()),
+            credential_reference: None,
+            timeout_ms: Some(30_000),
+            chat_completions_output_token_parameter: None,
+        },
+    );
+    configure_primary_model(&mut config, "private", "private", "test");
+    config.search = SearchConfig {
+        profiles: BTreeMap::from([(
+            "metadata".into(),
+            SearchProfileConfig::Searxng {
+                endpoint: "http://169.254.169.254/search".into(),
+                credential_reference: None,
+                auth_header: "X-Searxng-Key".into(),
+                user_agent: "colossus-test".into(),
+                timeout_ms: 30_000,
+            },
+        )]),
+        roles: BTreeMap::from([("agent".into(), "metadata".into())]),
+    };
+    config.memory.semantic = SemanticMemoryConfig::Chroma {
+        base_url: "http://10.0.0.9:8000".into(),
+        tenant: "tenant".into(),
+        database: "database".into(),
+        collection: "collection".into(),
+        credential_reference: None,
+        timeout_ms: 5_000,
+        position_path: None,
+        embedding: Box::new(MemoryEmbeddingConfig::Local { dimensions: 128 }),
+    };
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("ambient YAML")).is_ok(),
+        "selected danger authority should validate profiles before session acknowledgement"
+    );
+
+    config.sandbox.backend = "native".into();
+    config.sandbox.acknowledge_danger_full_access = false;
+    config.sandbox.network_destinations = vec![
+        "http://10.0.0.8:8080".into(),
+        "http://169.254.169.254".into(),
+        "http://10.0.0.9:8000".into(),
+    ];
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("declared YAML")).is_err(),
+        "declared authority must keep non-loopback HTTPS requirements"
+    );
+}
+
+#[test]
 fn shell_helpers_enforce_noninteractive_isolated_execution() {
     let shell = if cfg!(target_os = "windows") {
         std::path::Path::new("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
@@ -1639,6 +2081,29 @@ fn model_workspace_path_rejects_absolute_paths_outside_workspace() {
         model_workspace_path(&workspace, &requested.to_string_lossy()),
         Err(colossus_ports::ToolError::Denied(_))
     ));
+}
+
+#[test]
+fn ambient_model_resource_paths_accept_absolute_control_state_and_parent_traversal() {
+    let workspace = tempdir().expect("workspace");
+    let outside = tempdir().expect("outside");
+    let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let outside = fs::canonicalize(outside.path()).expect("canonical outside");
+
+    assert_eq!(
+        model_resource_path(
+            &workspace,
+            &outside.join(".colossus/data").to_string_lossy(),
+            true
+        )
+        .expect("absolute ambient path"),
+        outside.join(".colossus/data")
+    );
+    assert_eq!(
+        model_resource_path(&workspace, "../outside/.git/config", true).expect("ambient traversal"),
+        workspace.join("../outside/.git/config")
+    );
+    assert!(model_resource_path(&workspace, "../outside", false).is_err());
 }
 
 #[cfg(target_os = "windows")]
@@ -5381,6 +5846,124 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
     assert!(event_types.contains(&"effect.release_requested.v1".into()));
 }
 
+#[tokio::test]
+async fn ambient_structured_filesystem_and_repository_tools_accept_external_control_paths() {
+    let workspace = tempdir().expect("workspace");
+    let outside = tempdir().expect("outside");
+    let control = outside.path().join(".colossus");
+    fs::create_dir_all(&control).expect("control directory");
+    let source = control.join("ambient.txt");
+    fs::write(&source, "ambient access\n").expect("source");
+    let destination = outside.path().join("written.txt");
+    let actions = [
+        "filesystem.read",
+        "filesystem.write",
+        "repo.map",
+        "repo.file_summary",
+    ];
+    let mut policy = colossus_policy::BuiltInPolicy::offline_default()
+        .with_sandbox("danger_full_access", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
+    for action in actions {
+        policy = policy.with_action(action, DecisionOutcome::Allow);
+    }
+    let gateway = Arc::new(colossus_policy::EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(actions.map(str::to_owned)).with_sandbox_boundary_gate(
+            Arc::new(colossus_policy::SandboxBoundaryGate::new(
+                Some(SandboxBoundaryMode::DangerFullAccess),
+                true,
+            )),
+        ),
+        [45_u8; 32],
+    ));
+    let executor = GatewayToolExecutor {
+        gateway,
+        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+        process: None,
+        http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+        work: None,
+        memory: None,
+        skills: None,
+        pack_processes: None,
+        integrations: None,
+        mcp: None,
+        bound_effects: None,
+        search: None,
+        workspace: fs::canonicalize(workspace.path()).expect("canonical workspace"),
+        repository_id: "ambient-repo-test".into(),
+        executables: Vec::new(),
+    };
+    let invoke = |name: &str, arguments: Value| ToolCall {
+        call_id: format!("call-{name}"),
+        name: name.into(),
+        arguments,
+    };
+
+    let read = executor
+        .execute(
+            invoke("filesystem.read", json!({"path": source})),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("external control-state read");
+    assert_eq!(read.output, "ambient access\n");
+
+    executor
+        .execute(
+            invoke(
+                "filesystem.write",
+                json!({"path": destination, "content": "written", "mode": "create"}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("external write");
+    assert_eq!(
+        fs::read_to_string(&destination).expect("written file"),
+        "written"
+    );
+
+    let summary = executor
+        .execute(
+            invoke(
+                "repo.file_summary",
+                json!({"path": source, "max_lines": 10}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("external .colossus repository summary");
+    let summary: Value = serde_json::from_str(&summary.output).expect("summary JSON");
+    assert_eq!(
+        summary["path"],
+        fs::canonicalize(&source)
+            .expect("canonical source")
+            .display()
+            .to_string()
+    );
+
+    let mapped = executor
+        .execute(
+            invoke("repo.map", json!({"path": outside.path(), "max_files": 10})),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("ambient repository map");
+    let mapped: Value = serde_json::from_str(&mapped.output).expect("map JSON");
+    assert!(
+        mapped["files"]
+            .as_array()
+            .is_some_and(|files| files.iter().any(|file| file["path"]
+                == fs::canonicalize(&source)
+                    .expect("canonical mapped source")
+                    .display()
+                    .to_string()))
+    );
+}
+
 struct FakeProcessExecutor {
     actions: Arc<Mutex<Vec<String>>>,
 }
@@ -5461,7 +6044,8 @@ async fn danger_full_access_shell_needs_no_process_resource_configuration() {
     let outside_cwd = tempdir().expect("outside cwd");
     let policy = colossus_policy::BuiltInPolicy::offline_default()
         .with_action("shell.run", DecisionOutcome::Allow)
-        .with_sandbox("danger_full_access", "test", false);
+        .with_sandbox("danger_full_access", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
         Arc::new(InMemoryEventJournal::default()),
         Arc::new(policy),
@@ -5540,7 +6124,8 @@ async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
     let candidate = outside_cwd.path().join("candidate");
     let policy = colossus_policy::BuiltInPolicy::offline_default()
         .with_action("shell.run", DecisionOutcome::Allow)
-        .with_sandbox("danger_full_access", "test", false);
+        .with_sandbox("danger_full_access", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
         Arc::new(InMemoryEventJournal::default()),
         Arc::new(policy),

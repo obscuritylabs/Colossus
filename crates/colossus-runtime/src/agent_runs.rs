@@ -1815,6 +1815,7 @@ mod plan_mode_instruction_tests {
                 let root = fs::canonicalize(directory.path()).expect("canonical runtime directory");
                 let suffix = Uuid::now_v7().simple().to_string();
                 let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
+                config.access.profile = colossus_access::AccessProfile::Development;
                 config.storage.keys = KeyConfig::Environment {
                     journal_variable: "COLOSSUS_RUNTIME_PLAN_TEST_JOURNAL".into(),
                     journal_key_id: format!("journal-{suffix}"),

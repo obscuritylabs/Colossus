@@ -8,9 +8,12 @@ type: reference
 # Colossus home and workspace resolution
 
 Colossus keeps per-user control state in one owner-private home while treating the
-selected workspace as the repository and maximum filesystem/tool boundary. These are
-separate concepts: `-w, --workspace` changes what repository a run can access; it does
-not move the Colossus home.
+selected workspace as repository context and state-partition identity. These are
+separate concepts: `-w, --workspace` changes the repository, relative-path anchor, and
+partition; it does not move the Colossus home. Under an isolating sandbox it also
+anchors configured filesystem scope. Under the schema-version-2 full-access default it
+is not a maximum security boundary: authorized tools may reach ambient host paths and
+HTTP(S) origins outside it.
 
 ## Resolve the home
 
@@ -116,6 +119,13 @@ ordinary access diagnostics:
 | `statePath` | Absolute resolved storage path |
 
 This metadata contains no credentials or private sidecar bootstrap material.
+
+Ordinary initialization writes a sparse source document containing only
+`schemaVersion` and storage location/path. Use `config show` to inspect every resolved
+default and `config effective` to inspect the active authority mode. Sparse documents
+default to `allow_all` and acknowledged `danger_full_access`; pass an explicit
+`--sandbox-profile workspace-development` or `offline-default` during initialization,
+or edit the sandbox block, to select platform isolation.
 
 ## Resolve storage
 

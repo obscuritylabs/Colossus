@@ -22,25 +22,28 @@ see the [Sandbox administration guide](../../admin/sandbox.md).
 | Automation or a durable workflow | `offline-default` or a custom label | Supported isolating backend | Explicit least-privilege grants |
 | Reproducible container execution | Any nonempty profile | `oci` | Explicit mounts, image executables, and optional network origins |
 | Coder/Kubernetes with a separately managed isolation boundary | `offline-default` or a custom label | `external` | Explicit acknowledgement of the external boundary |
-| Intentionally unrestricted process execution | `offline-default` or a custom label | `danger_full_access` | Explicit danger acknowledgement |
+| Intentionally unrestricted host resource access | `offline-default` or a custom label | `danger_full_access` | Schema-default danger acknowledgement; explicit `false` blocks effects |
 | Externally brokered execution | Any profile except `workspace-development` | `broker` | Explicit acknowledgement; no Colossus process isolation |
 
-Start with `workspace-development` for local interactive use. Use explicit grants for
-workflows, shared workers, and production automation so their authority does not depend
-on an interactive development preset.
+Omitting `sandbox` selects acknowledged `danger_full_access`. This intentionally unsafe
+pre-1.0 default makes local work immediately usable across CLI, TUI, Desktop Managed
+Local, SDK hosts, workflows, and background effects. Start with
+`workspace-development`, `offline-default`, or another explicit isolating boundary when
+ambient host authority is inappropriate.
 
 ## Complete default shape
 
-This block shows every sandbox field. The platform default for `backend` is `native` on
-macOS and Linux, `windows_job` on Windows, and `oci` on other supported platforms.
+This block shows every resolved sandbox field. The schema default is full access on all
+platforms; platform-isolating presets explicitly choose `native` on macOS/Linux,
+`windows_job` on Windows, or another supported backend.
 
 ```yaml
 sandbox:
-  backend: native
-  profile: workspace-development
+  backend: danger_full_access
+  profile: offline-default
   allowBrokerFallback: false
   acknowledgeExternalBoundary: false
-  acknowledgeDangerFullAccess: false
+  acknowledgeDangerFullAccess: true
   helperPath: null
   ociRuntime: null
   ociImage: null
@@ -66,6 +69,14 @@ omitted. Two names have built-in meaning:
 | `offline-default` | Adds no interactive workspace authority; configure needed resources explicitly |
 | `workspace-development` | Derives a writable selected workspace, trusted shell, Git when available, read-only system command/runtime roots, isolated `HOME` and temporary directories, and a sanitized `PATH` |
 | Any other nonempty value | Acts as a custom policy label and derives no extra grants |
+
+The `offline-default` profile name is not an air-gap guarantee. Desktop Managed Local's
+**Offline isolated** boundary combines that resource posture with platform isolation and
+hides the generic model-visible `network.http`, `web.fetch`, and `docs.fetch` tools, but
+retains the configured provider's exact service and authentication/refresh destinations.
+Those retained destinations do not make the generic fetch tools visible. Use the
+[offline and air-gapped operation guide](../../admin/offline-airgap.md) when remote
+provider transport must also be absent.
 
 The development preset applies only to terminal users and agents without workflow
 lineage. It is rejected with `policy.kind: opa`, because OPA must return complete
@@ -104,13 +115,22 @@ before deriving development grants. Shell processes cannot read or modify that d
 
 ### Direct-execution acknowledgements
 
-`external` and `danger_full_access` are explicit modes; Colossus never falls back to
-them when another backend is unavailable. Both retain authenticated helper execution,
+`external` and `danger_full_access` are direct backend values; Colossus never falls back
+to them when another backend is unavailable, although the sparse schema selects
+acknowledged danger mode by default. Both retain authenticated helper execution,
 time/output bounds, resource supervision where supported, the effect gateway, audit,
 policy decisions, and approval obligations. `external` also retains exact executable
 and environment-name validation. `danger_full_access` deliberately drops those process
 allowlists and inherits the runtime environment after a process permit is minted.
 Neither mode supplies Colossus filesystem or network isolation.
+
+On Unix, direct-mode timeout and output bounds cover the supervised request and attached
+process group. Process-count, memory, whole-tree termination, and cleanup are
+best-effort for descendants that deliberately escape with `setsid`, double-forking, or
+reparenting. Such a descendant may outlive the effect and its later activity is outside
+that effect's audit record. Strict containment requires native or OCI isolation, a
+Windows Job Object, or an external host boundary that owns the complete process
+namespace/job.
 
 For a Coder or Kubernetes workload whose pod/container boundary is managed separately,
 edit the existing sandbox block:
@@ -137,25 +157,40 @@ sandbox:
   acknowledgeDangerFullAccess: true
 ```
 
-`acknowledgeDangerFullAccess` follows the same TUI/headless behavior and defaults to
-`false`. Selecting either direct backend does not change approval mode and does not
-auto-approve any policy obligation. The two acknowledgement fields are valid only with
-their matching backend, which prevents a stale acknowledgement from silently applying
-after a backend change.
+`acknowledgeDangerFullAccess` defaults to `true` only when the effective backend is the
+default `danger_full_access`. A partial block that explicitly selects an isolating
+backend contextually defaults the acknowledgement to `false`; an explicitly stale
+acknowledgement is rejected. Selecting a backend does not itself change approval mode,
+though the separate default `access.profile: allow_all` allows registered actions.
 
-In direct modes, `filesystem` and `networkDestinations` remain policy/audit declarations
-and continue to constrain Colossus-owned filesystem and HTTP adapters. They are not an
-OS-enforced allowlist for arbitrary child-process access; the external platform owns
-that enforcement for `external`, and no such enforcement is asserted for
-`danger_full_access`. Process working directories and path-like arguments therefore do
-not require matching `filesystem` entries in either direct mode. `external` still
-requires exact executable and environment-name grants. After its explicit danger
-acknowledgement, `danger_full_access` resolves absolute executables or command names on
-ambient `PATH`, permits working directories outside the workspace, inherits ambient
-environment variables, accepts explicit environment overrides, and leaves child-process
-network access unrestricted without `networkDestinations`. Internal helper-control
-variables are never inherited. Approval decisions, time/output/process limits, permits,
-quarantine, and audit still apply.
+In `external`, configured filesystem and network declarations continue to constrain
+Colossus-owned adapters while the external platform owns child-process containment.
+Acknowledged `danger_full_access` instead supplies explicit ambient resource authority
+to every eligible effect. Structured filesystem, repository, patch, trace, process,
+and related tools may use absolute host paths and relative paths that traverse outside
+`-w`, including `.git`, `.colossus`, live state, configuration, and credential files.
+Structured network tools may reach any canonical HTTP(S) origin, including loopback,
+private, link-local, and cloud-metadata destinations, without duplicate
+`networkDestinations` entries. It resolves executables from absolute paths or ambient
+`PATH`, permits outside working directories, inherits ambient environment variables,
+and leaves child-process networking unrestricted. Internal helper-control variables
+are never inherited.
+
+Ambient authority does not invent a capability. Provider/model routing, credential
+references, configured MCP servers and `allowedTools`, connected integration schemas,
+pack signatures and trust, known action identities, strict request validation,
+authenticated one-use permits, durable audit, quarantine and post-effect release,
+transport validation, and configured resource bounds remain mandatory. Configured `*`
+retains its public-only meaning; ambient authority is represented separately.
+
+Enabled pack tools and pack-declared stdio MCP servers are rejected under
+`danger_full_access`. Direct ambient execution cannot enforce their manifest resource
+and credential ceilings; select an isolating boundary instead.
+
+For HTTPS, certificate and hostname validation still apply. Ambient authority also
+accepts canonical plaintext HTTP outside loopback. That transport provides no TLS
+confidentiality or server authentication and can expose request bodies and credentials;
+select an isolating boundary when non-loopback HTTP must remain invalid.
 
 ### `allowBrokerFallback`
 
@@ -274,7 +309,8 @@ An origin contains only the scheme, host, and non-default port when needed. Put 
 paths in the provider, search, MCP, integration, or audit configuration—not in the
 sandbox grant. Entries must be unique.
 
-`"*"` authorizes public `http` and `https` origins only:
+`"*"` matches public HTTP(S) origins, but under a declared or isolating boundary the
+permit-bearing adapters still require HTTPS outside exact loopback development:
 
 ```yaml
 sandbox:
@@ -284,14 +320,18 @@ sandbox:
 ```
 
 Loopback, private, link-local, and metadata destinations never match the wildcard and
-must be listed exactly. The wildcard does not authorize raw sockets, non-HTTP protocols,
-credentials, actions, or a sandbox bypass. Network effects retain DNS pinning, TLS
-authority checks, disabled ambient proxies and redirects, bounded connections, and
+must be listed exactly. An exact declaration authorizes the destination, but does not
+weaken the transport: non-loopback plaintext HTTP still requires acknowledged ambient
+authority. The wildcard does not authorize raw sockets, non-HTTP protocols, credentials,
+actions, or a sandbox bypass. Network effects retain DNS pinning, TLS authority checks
+for HTTPS, disabled ambient proxies and redirects, bounded connections, and
 private-address rejection for wildcard destinations.
 
-These destinations still constrain Colossus-owned HTTP adapters in every backend. They
-do not constrain raw child-process networking in either direct mode; in
-`danger_full_access`, unrestricted child networking is intentional and needs no entry.
+These destinations constrain Colossus-owned HTTP adapters under configured and external
+boundaries. Acknowledged `danger_full_access` instead binds each requested canonical
+HTTP(S) origin into its one-use permit, including non-public origins. Raw child-process
+networking is unrestricted in that mode. Adding the list does not narrow ambient
+authority; choose an isolating backend before treating it as an allowlist.
 
 ## Resource limits
 
@@ -300,7 +340,7 @@ tool request may narrow them but cannot widen them.
 
 | Field | Values / constraint |
 | --- | --- |
-| `timeoutMs` | Maximum wall time for the complete effect and confirmed cleanup; must be positive |
+| `timeoutMs` | Maximum wall time for the supervised effect and attached-group cleanup; isolating backends confirm whole-tree cleanup; must be positive |
 | `maxOutputBytes` | Request/result and captured-output ceiling in bytes; at least `1024` |
 | `maxProcesses` | Maximum process-tree count where the backend supports it; must be positive |
 | `maxMemoryBytes` | Maximum process-tree memory in bytes where supported; must be positive |
@@ -426,11 +466,11 @@ preloaded images.
 
 | Symptom | Check |
 | --- | --- |
-| A path is rejected | Use a canonical absolute root and grant the required mode |
+| A path is rejected under an isolating boundary | Use a canonical absolute root and grant the required mode |
 | A command is unavailable | Add its exact executable path; only acknowledged `danger_full_access` relies on ambient `PATH` |
 | A child-process variable is unavailable | Add only its name here; acknowledged `danger_full_access` instead inherits ambient names and accepts explicit overrides |
-| A remote endpoint is denied | Grant its origin without a path, query, fragment, or credentials |
-| A local service is denied with `"*"` | Add the exact loopback or private origin |
+| A remote endpoint is denied under an isolating boundary | Grant its origin without a path, query, fragment, or credentials |
+| A local service is denied with `"*"` | Add the exact loopback origin; for a private non-loopback service, use HTTPS and add its exact origin |
 | OCI configuration is rejected | Use preloaded immutable image digests and reserve the required cleanup timeout |
 | A granted operation is still denied | Configure the matching `access` and `policy` decision; sandbox grants are not action permission |
 

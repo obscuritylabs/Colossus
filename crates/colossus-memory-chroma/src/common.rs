@@ -50,7 +50,11 @@ pub(super) fn resolve_credential(reference: &str) -> Result<String, StoreError> 
         .map_err(|_| adapter(format!("environment credential {variable} is unset")))
 }
 
-pub(super) fn normalize_base_url(raw: &str, allow_path: bool) -> Result<String, StoreError> {
+pub(super) fn normalize_base_url(
+    raw: &str,
+    allow_path: bool,
+    resource_authority: ResourceAuthority,
+) -> Result<String, StoreError> {
     let mut url = Url::parse(raw).map_err(adapter)?;
     let loopback = url.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
@@ -58,7 +62,11 @@ pub(super) fn normalize_base_url(raw: &str, allow_path: bool) -> Result<String, 
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     });
-    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+    if (resource_authority != ResourceAuthority::Ambient
+        && url.scheme() != "https"
+        && !(url.scheme() == "http" && loopback))
+        || (resource_authority == ResourceAuthority::Ambient
+            && !matches!(url.scheme(), "http" | "https"))
         || url.host_str().is_none()
         || url.username() != ""
         || url.password().is_some()

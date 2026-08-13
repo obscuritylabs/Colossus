@@ -83,7 +83,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - Ports are owned by the application, not infrastructure.
 - The runtime owns adapter construction and opaque permit-bearing executors.
 - Runtime composition canonicalizes one explicit workspace. CLI `-w, --workspace`,
-  embedded open options, and worker workspace matching all feed that same boundary.
+  embedded open options, and worker workspace matching all feed the same repository
+  context and state identity. An isolating execution boundary may confine resources to
+  it; acknowledged full access deliberately does not.
 - Shared home resolution selects absolute `COLOSSUS_HOME` or the platform user home,
   validates its owner-private no-follow boundary, and derives one opaque partition from
   canonical workspace path and object identity. Interfaces consume the resolved
@@ -94,8 +96,10 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - CLI/TUI and Desktop use distinct children of the same workspace partition. Their
   database leases, worker identities, provider credentials, and lifecycle ownership do
   not cross interface boundaries.
-- Access resolution produces visibility and action decisions; sandbox-profile
-  resolution independently produces explicit and derived resource obligations.
+- Access resolution produces visibility and action decisions; execution-boundary and
+  sandbox-profile resolution independently produce explicit, derived, or ambient
+  resource obligations. Ambient obligations remain request-bound and require the
+  acknowledged danger runtime envelope.
 - CLI and TUI construct requests, invoke application services, and render typed results.
 - Desktop workspace browsing remains an interface-only, read-only view. Its native
   commands accept one opaque selected-workspace identity plus a validated relative

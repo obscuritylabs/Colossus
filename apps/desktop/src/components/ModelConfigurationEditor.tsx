@@ -145,6 +145,7 @@ export async function submitModelConfiguration(
   models: ManagedModelConfiguration[],
   roles: Record<string, string>,
   accessProfile: ApplyManagedModelConfigurationRequest["accessProfile"],
+  executionBoundary: ApplyManagedModelConfigurationRequest["executionBoundary"],
   apply: (request: ApplyManagedModelConfigurationRequest) => Promise<boolean>,
 ): Promise<boolean> {
   if (
@@ -162,6 +163,7 @@ export async function submitModelConfiguration(
     models,
     roles,
     accessProfile,
+    executionBoundary,
   });
 }
 
@@ -199,6 +201,9 @@ export function ModelConfigurationEditor({
   const [accessProfile, setAccessProfile] = useState<
     ApplyManagedModelConfigurationRequest["accessProfile"]
   >(desktop.accessProfile);
+  const [executionBoundary, setExecutionBoundary] = useState<
+    ApplyManagedModelConfigurationRequest["executionBoundary"]
+  >(desktop.executionBoundary);
 
   function updateProvider(index: number, update: Partial<EditableProvider>) {
     setProviders((current) =>
@@ -227,6 +232,7 @@ export function ModelConfigurationEditor({
       models,
       roles,
       accessProfile,
+      executionBoundary,
       onApply,
     );
   }
@@ -638,9 +644,39 @@ export function ModelConfigurationEditor({
             <option value="development">
               Development — approval-gated effects
             </option>
+            <option value="allow_all">
+              Allow all — every declared built-in tool
+            </option>
+          </select>
+        </label>
+        <label className="provider-wide-field">
+          <span>Execution boundary</span>
+          <select
+            value={executionBoundary}
+            disabled={busy}
+            onChange={(event) =>
+              setExecutionBoundary(
+                event.target
+                  .value as ApplyManagedModelConfigurationRequest["executionBoundary"],
+              )
+            }
+          >
+            <option value="full_access">Full access — unsafe</option>
+            <option value="workspace_isolated">Workspace isolated</option>
+            <option value="offline_isolated">Offline isolated</option>
           </select>
         </label>
       </fieldset>
+
+      {executionBoundary === "full_access" ? (
+        <div className="unsafe-execution-note" role="alert">
+          <p>
+            <strong>Unsafe: Full access.</strong> Commands can use host files,
+            environment variables, and network access without Colossus
+            isolation. Approval mode is configured separately.
+          </p>
+        </div>
+      ) : null}
 
       <div className="provider-security-note">
         <p>

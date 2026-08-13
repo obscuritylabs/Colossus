@@ -10,8 +10,8 @@ type: how-to
 ## Goal
 
 Replace the offline `echo` route with a provider connection and explicit model profile
-while keeping the credential outside configuration and granting only the provider's
-exact network origin.
+while keeping the credential outside configuration. Under an isolating execution
+boundary, grant only the provider's exact network origin.
 
 For a provider-specific copy/paste path, choose from
 [Connect a model provider](../use/providers/index.md). This onboarding page retains the
@@ -23,7 +23,8 @@ OpenRouter, local servers, and other compatible endpoints separately.
 - A completed [five-minute quickstart](quickstart.md).
 - A provider account and model identifier. API-backed providers also need an API
   credential; a Codex subscription uses a ChatGPT sign-in instead.
-- Permission to expose the provider's exact HTTPS origin from the Colossus sandbox.
+- Permission to expose the provider endpoint. Under isolation, authorize its exact
+  HTTPS origin in the Colossus sandbox.
 - For an endpoint issued by a private CA, a PEM CA certificate bundle.
 
 ## Steps
@@ -184,9 +185,12 @@ block.
         - https://openrouter.ai
     ```
 
-Merge the fragments into the generated file; keep its other required `sandbox` fields.
-The origin grant contains only scheme, host, and effective port. The API path remains in
-`baseUrl`.
+Merge the provider and model fragments into the generated file. The shown sandbox
+fragments are exact grants for an explicitly isolating boundary; their origin contains
+only scheme, host, and effective port, while the API path remains in `baseUrl`.
+Acknowledged full access needs no duplicate destination and adding one does not narrow
+ambient HTTP(S) authority. See [Sandbox configuration](../reference/configuration/sandbox.md)
+before treating an origin list as confinement.
 
 ### 3. Inspect routing and readiness
 
@@ -230,7 +234,7 @@ The credential value must not appear in configuration, output, or audit evidence
 - **Credential unavailable:** for Codex, run `colossus codex status` and sign in again;
   for an API provider, confirm that the referenced variable is present in the Colossus
   process environment.
-- **Origin absent from the sandbox:** add the exact provider origin, not its URL path.
+- **Origin denied under isolation:** add the exact provider origin, not its URL path.
 - **Provider or model not found:** verify `kind`, `baseUrl`, and `model` with the
   provider.
 - **TLS or certificate failure:** set `network.caBundlePath` to the PEM bundle that

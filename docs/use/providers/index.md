@@ -33,7 +33,9 @@ Each guide configures the same four pieces:
 1. A **provider profile** selects the transport and a late-bound credential reference.
 2. A **model profile** names the exact model, limits, and supported capabilities.
 3. The **primary role** selects that model profile for ordinary runs.
-4. A **sandbox destination** grants only the endpoint's exact network origin.
+4. Under isolation, a **sandbox destination** grants only the endpoint's exact network
+   origin. Acknowledged full access instead supplies ambient HTTP(S) authority, and an
+   origin entry does not narrow it.
 
 The API prefix, such as `/v1`, belongs in `baseUrl`; the sandbox grant contains only the
 scheme, host, and effective port. Secret values never belong in YAML.

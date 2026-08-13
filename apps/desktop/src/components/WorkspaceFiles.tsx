@@ -443,8 +443,8 @@ export function WorkspaceFiles({
             <IconShieldLock size={23} stroke={1.5} aria-hidden="true" />
             <strong>Managed Local files unavailable</strong>
             <p>
-              Select the local workspace and enable Development access to browse
-              it safely.
+              Select the local workspace and enable Development or Allow all
+              access to browse it.
             </p>
             <button
               className="button secondary"

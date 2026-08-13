@@ -64,10 +64,12 @@ For an `agent` step, exact tool names in this list are also the model-visible to
 ceiling. A tool omitted from the pinned definition is not offered to the workflow
 agent, even when it is available to an interactive primary run.
 
-Workflows never inherit `workspace-development` grants, even when invoked by a main
-agent that has them. An agent executing inside workflow lineage also loses development
-inheritance and is ineligible for `risk-auto`. Configure exact filesystem,
-executables, environment names, and network origins for every effectful workflow.
+Workflows never inherit the special `workspace-development` preset, even when invoked
+by a main agent that has it. An agent executing inside workflow lineage also remains
+ineligible for `risk-auto`. However, an acknowledged ambient full-access execution
+boundary is runtime-wide and therefore applies to workflow, background, and system
+effects too. Choose an isolating boundary and configure exact filesystem, executables,
+environment names, and network origins when a workflow must be contained.
 
 A locked-down workflow deployment therefore uses an ordinary explicit sandbox profile:
 

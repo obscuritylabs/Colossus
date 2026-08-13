@@ -1,9 +1,9 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
-    IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedModelCapabilities,
-    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
-    ManagedRuntimeConfig, NativeSidecarLifecycle, RunMode, RunStatus, SdkError, Secret,
-    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
+    ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
+    ManagedReasoningEffort, ManagedRuntimeConfig, NativeSidecarLifecycle, RunMode, RunStatus,
+    SdkError, Secret, SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
     SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
@@ -13,8 +13,8 @@ use crate::{
     bundle::VerifiedBundle,
     desktop_dto::{ManagedRuntimeStateDto, RuntimeFailureCodeDto},
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, ProviderKindSetting, ReasoningEffortSetting,
-        SettingsStore, load_provider_secret, revalidate_workspace,
+        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ProviderKindSetting,
+        ReasoningEffortSetting, SettingsStore, load_provider_secret, revalidate_workspace,
     },
     dto::CommandErrorDto,
     state::{AppState, MANAGED_TARGET_ID, ManagedHealth},
@@ -33,7 +33,7 @@ const PRIMARY_SCOPES: [&str; 6] = [
     scopes::ARTIFACTS_WRITE,
 ];
 
-const DEVELOPMENT_TOOL_GRANT: &[&str] = &[
+const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "agent.delegate",
     "agent.list",
     "agent.result",
@@ -63,16 +63,30 @@ const DEVELOPMENT_TOOL_GRANT: &[&str] = &[
     "memory.search",
     "memory.supersede",
     "memory.update",
+    "mcp.call",
+    "mcp.servers",
+    "mcp.tools",
+    "network.http",
     "patch.apply",
     "patch.preview",
     "patch.reverse",
     "plan.create",
+    "plan.approve_request",
     "plan.show",
+    "plan.update",
     "repo.file_summary",
     "repo.map",
     "repo.references",
     "repo.symbol_search",
     "shell.run",
+    "skill.install",
+    "skill.inspect",
+    "skill.read",
+    "skill.resource.list",
+    "skill.resource.read",
+    "skill.scaffold",
+    "skill.validate",
+    "skill.write",
     "task.create",
     "task.list",
     "task.update",
@@ -80,6 +94,9 @@ const DEVELOPMENT_TOOL_GRANT: &[&str] = &[
     "trace.export",
     "trace.show",
     "user.ask",
+    "web.fetch",
+    "web.search",
+    "docs.fetch",
 ];
 
 pub(crate) async fn start(
@@ -200,7 +217,8 @@ pub(crate) async fn self_test(
         ApiMajor::new(1).map_err(CommandErrorDto::from_sdk)?,
     )
     .map_err(CommandErrorDto::from_sdk)?;
-    let runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal);
+    let runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal)
+        .with_execution_boundary(ManagedExecutionBoundary::OfflineIsolated);
     let colossus_home = store.home_root()?.to_owned();
     // Keep this trusted diagnostic suppression explicit: the desktop security contract
     // audits this exact call site rather than accepting an indirect function pointer.
@@ -467,6 +485,7 @@ fn managed_bootstrap(
 ) -> Result<SidecarBootstrapConfig, SdkError> {
     let runtime = ManagedRuntimeConfig {
         access_profile: access_profile(settings.access_profile),
+        execution_boundary: execution_boundary(settings.execution_boundary),
         providers: settings
             .providers
             .iter()
@@ -618,7 +637,7 @@ fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplication
     let tools = if profile == AccessProfileSetting::Minimal {
         vec!["echo".to_owned()]
     } else {
-        DEVELOPMENT_TOOL_GRANT
+        TRUSTED_BUILTIN_TOOL_GRANT
             .iter()
             .map(|tool| (*tool).to_owned())
             .collect()
@@ -647,9 +666,16 @@ fn self_test_grant() -> Result<SidecarApplicationGrant, SdkError> {
 const fn access_profile(profile: AccessProfileSetting) -> ManagedAccessProfile {
     match profile {
         AccessProfileSetting::Minimal => ManagedAccessProfile::Minimal,
-        AccessProfileSetting::Development | AccessProfileSetting::LegacyAllowAll => {
-            ManagedAccessProfile::Development
-        }
+        AccessProfileSetting::Development => ManagedAccessProfile::Development,
+        AccessProfileSetting::AllowAll => ManagedAccessProfile::AllowAll,
+    }
+}
+
+const fn execution_boundary(boundary: ExecutionBoundarySetting) -> ManagedExecutionBoundary {
+    match boundary {
+        ExecutionBoundarySetting::FullAccess => ManagedExecutionBoundary::FullAccess,
+        ExecutionBoundarySetting::WorkspaceIsolated => ManagedExecutionBoundary::WorkspaceIsolated,
+        ExecutionBoundarySetting::OfflineIsolated => ManagedExecutionBoundary::OfflineIsolated,
     }
 }
 
@@ -733,15 +759,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_grant_includes_bounded_delegation_and_excludes_worker_admin() {
+    fn desktop_grant_includes_every_declared_builtin_without_inventing_capabilities() {
         let grant = application_grant(AccessProfileSetting::Development).expect("grant");
         let debug = format!("{grant:?}");
-        for denied in ["skill.install", "mcp.call"] {
-            assert!(!debug.contains(denied));
+        for required in [
+            "agent.delegate",
+            "filesystem.read",
+            "shell.run",
+            "skill.install",
+            "mcp.call",
+            "web.search",
+            "network.http",
+            "plan.approve_request",
+        ] {
+            assert!(debug.contains(required));
         }
-        assert!(debug.contains("agent.delegate"));
-        assert!(debug.contains("filesystem.read"));
-        assert!(debug.contains("shell.run"));
+        assert!(!debug.contains("worker.admin"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
         assert_eq!(PRIMARY_SCOPES.len(), 6);
         for required in PRIMARY_SCOPES {
@@ -764,6 +797,22 @@ mod tests {
         let debug = format!("{grant:?}");
         assert!(debug.contains("echo"));
         assert!(!debug.contains("filesystem.read"));
+    }
+
+    #[test]
+    fn allow_all_maps_independently_from_the_execution_boundary() {
+        assert_eq!(
+            access_profile(AccessProfileSetting::AllowAll),
+            ManagedAccessProfile::AllowAll
+        );
+        assert_eq!(
+            execution_boundary(ExecutionBoundarySetting::FullAccess),
+            ManagedExecutionBoundary::FullAccess
+        );
+        assert_eq!(
+            execution_boundary(ExecutionBoundarySetting::WorkspaceIsolated),
+            ManagedExecutionBoundary::WorkspaceIsolated
+        );
     }
 
     #[test]

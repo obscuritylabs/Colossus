@@ -17,8 +17,8 @@ pub(super) fn build_security_posture(
         findings.push(SecurityPostureFinding {
             code: "sandbox.danger_full_access".into(),
             severity: SecurityPostureSeverity::Warning,
-            summary: "Danger full access is enabled: process execution has ambient runtime access without an isolation boundary.".into(),
-            remediation: "Use an isolating native, windows_job, or oci sandbox backend, or use external only when a trusted host enforces the required filesystem and network isolation.".into(),
+            summary: "Danger full access is enabled: authorized process, filesystem, and HTTP effects have ambient host authority without an isolation boundary.".into(),
+            remediation: "Use an isolating native, windows_job, or oci execution boundary, or use external only when a trusted host enforces the required filesystem and network isolation. Full access can expose host files, environment secrets, Colossus control state, private services, and metadata endpoints; on Unix, deliberately detached descendants can outlive the recorded process effect and its best-effort direct-mode limits.".into(),
         });
     }
     if config.observability.logs.journal_payloads

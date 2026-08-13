@@ -1,6 +1,8 @@
 use super::*;
-use colossus_contracts::{ActorType, DecisionOutcome};
-use colossus_policy::{AllowApproval, BuiltInPolicy, EffectGateway, SafetyKernel};
+use colossus_contracts::{ActorType, DecisionOutcome, SandboxBoundaryMode};
+use colossus_policy::{
+    AllowApproval, BuiltInPolicy, EffectGateway, SafetyKernel, SandboxBoundaryGate,
+};
 use colossus_ports::{KeyProvider, StoreError};
 use colossus_testkit::InMemoryEventJournal;
 use sha2::Sha256;
@@ -171,6 +173,20 @@ fn remote_server(endpoint: &str) -> McpServerConfig {
     }
 }
 
+fn validation_context(
+    resource_authority: ResourceAuthority,
+    sandbox_environment: &[String],
+) -> McpValidationContext<'_> {
+    McpValidationContext {
+        resource_authority,
+        sandbox_executables: &[],
+        sandbox_filesystem: &[],
+        sandbox_environment,
+        sandbox_timeout_ms: 30_000,
+        sandbox_max_output_bytes: 1024 * 1024,
+    }
+}
+
 #[test]
 fn streamable_http_config_accepts_env_credentials_and_rejects_unsafe_http_identity() {
     let mut server = remote_server("https://splunk.example.com/services/mcp");
@@ -185,15 +201,12 @@ fn streamable_http_config_accepts_env_credentials_and_rejects_unsafe_http_identi
         oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
         servers: BTreeMap::from([("splunk".into(), server.clone())]),
     };
+    let sandbox_environment = ["SPLUNK_MCP_TOKEN".into()];
     let validate = |config: &McpConfig| {
         validate_config(
             config,
             Path::new("."),
-            &[],
-            &[],
-            &["SPLUNK_MCP_TOKEN".into()],
-            30_000,
-            1024 * 1024,
+            validation_context(ResourceAuthority::Declared, &sandbox_environment),
         )
     };
     validate(&config).expect("valid remote config");
@@ -267,6 +280,90 @@ fn streamable_http_config_accepts_env_credentials_and_rejects_unsafe_http_identi
         },
     );
     assert!(validate(&config).is_err());
+}
+
+#[test]
+fn ambient_streamable_http_accepts_private_http_without_relaxing_url_validation() {
+    let mut server = remote_server("http://10.20.30.40:8787/mcp");
+    let mut config = McpConfig {
+        oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+        servers: BTreeMap::from([("private".into(), server.clone())]),
+    };
+    let validate = |config: &McpConfig, ambient_resources| {
+        validate_config(
+            config,
+            Path::new("."),
+            validation_context(
+                if ambient_resources {
+                    ResourceAuthority::Ambient
+                } else {
+                    ResourceAuthority::Declared
+                },
+                &[],
+            ),
+        )
+    };
+
+    assert!(validate(&config, false).is_err());
+    validate(&config, true).expect("acknowledged ambient authority permits private HTTP");
+
+    server.url = Some("http://10.20.30.40:8787/mcp?token=secret".into());
+    config.servers.insert("private".into(), server);
+    assert!(validate(&config, true).is_err());
+}
+
+#[test]
+fn ambient_validation_keeps_exact_mcp_declarations_but_omits_duplicate_sandbox_grants() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let command = std::env::current_exe().expect("test executable");
+    let mut stdio = McpServerConfig {
+        transport: McpTransportKind::Stdio,
+        command,
+        args: Vec::new(),
+        working_directory: Some(workspace.path().to_owned()),
+        environment: BTreeMap::from([("TOKEN".into(), "env:HOST_TOKEN".into())]),
+        url: None,
+        headers: BTreeMap::new(),
+        credential_headers: BTreeMap::new(),
+        allow_stateless: false,
+        oauth: None,
+        allowed_tools: vec!["*".into()],
+        research_tools: Vec::new(),
+        timeout_ms: None,
+        max_output_bytes: None,
+        effect_action_prefix: None,
+        provenance: None,
+    };
+    let mut config = McpConfig {
+        oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+        servers: BTreeMap::from([("ambient".into(), stdio.clone())]),
+    };
+    assert!(
+        validate_config(
+            &config,
+            workspace.path(),
+            validation_context(ResourceAuthority::Declared, &[]),
+        )
+        .is_err()
+    );
+    validate_config(
+        &config,
+        workspace.path(),
+        validation_context(ResourceAuthority::Ambient, &[]),
+    )
+    .expect("ambient resource authority");
+
+    stdio.command = PathBuf::from("relative-command");
+    config.servers.insert("ambient".into(), stdio);
+    assert!(
+        validate_config(
+            &config,
+            workspace.path(),
+            validation_context(ResourceAuthority::Ambient, &[]),
+        )
+        .is_err(),
+        "ambient authority must not weaken exact server declarations"
+    );
 }
 
 struct McpEffectShapeExecutor;
@@ -354,6 +451,102 @@ async fn gateway_preserves_remote_credential_reference_shape_and_session_mode() 
         .execute(request, &McpEffectShapeExecutor)
         .await
         .expect("gateway execution");
+}
+
+#[tokio::test]
+async fn remote_plaintext_mcp_requires_ambient_authority_in_the_permit() {
+    let endpoint = "http://192.0.2.1:9/mcp";
+    let mut server = remote_server(endpoint);
+    server.credential_headers.insert(
+        "Authorization".into(),
+        McpCredentialHeaderConfig {
+            scheme: Some("Bearer".into()),
+            reference: "env:COLOSSUS_TEST_MISSING_PLAINTEXT_MCP_KEY".into(),
+        },
+    );
+    let config = McpConfig {
+        oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+        servers: BTreeMap::from([("remote".into(), server)]),
+    };
+    validate_config(
+        &config,
+        Path::new("."),
+        validation_context(ResourceAuthority::Ambient, &[]),
+    )
+    .expect("potential ambient config");
+    let executor = McpExecutor::new(
+        &config,
+        Path::new("."),
+        "danger_full_access",
+        Arc::new(McpEffectShapeExecutor),
+    )
+    .expect("MCP executor");
+    let request = || {
+        executor
+            .request(
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "mcp-plaintext-transport".into(),
+                },
+                ExecutionContext::default(),
+                McpOperation::ListTools {
+                    server: "remote".into(),
+                    cursor: None,
+                },
+            )
+            .expect("request")
+    };
+
+    let declared = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("mcp.tools", DecisionOutcome::Allow)
+                .with_network_destination("http://192.0.2.1:9"),
+        ),
+        Arc::new(AllowApproval {
+            approved_by: "test".into(),
+        }),
+        SafetyKernel::new(["mcp.invoke".into()]),
+        [67_u8; 32],
+    );
+    let error = declared
+        .execute(request(), &executor)
+        .await
+        .expect_err("declared exact origin must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+
+    let ambient = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("mcp.tools", DecisionOutcome::Allow)
+                .with_sandbox("danger_full_access", "test", false)
+                .with_resource_authority(ResourceAuthority::Ambient)
+                .with_limits(25, 1024 * 1024, 1, 64 * 1024 * 1024, 1),
+        ),
+        Arc::new(AllowApproval {
+            approved_by: "test".into(),
+        }),
+        SafetyKernel::new(["mcp.invoke".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [68_u8; 32],
+    );
+    let error = ambient
+        .execute(request(), &executor)
+        .await
+        .expect_err("missing credential must stop before dispatch");
+    assert!(error.to_string().contains("environment variable"));
+    assert!(
+        !error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
 }
 
 #[test]

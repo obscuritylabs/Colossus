@@ -119,7 +119,7 @@ fn authorize_workspace<'a>(
     workspace_id: &str,
 ) -> Result<&'a WorkspaceSetting, CommandErrorDto> {
     if settings.selected_target_id.as_deref() != Some(MANAGED_TARGET_ID)
-        || settings.access_profile != AccessProfileSetting::Development
+        || settings.access_profile == AccessProfileSetting::Minimal
     {
         return Err(files_unavailable());
     }
@@ -474,7 +474,7 @@ fn invalid_path() -> CommandErrorDto {
 fn files_unavailable() -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "workspace_files_unavailable",
-        "Files are available only for the selected Managed Local workspace with Development access.",
+        "Files are available only for the selected Managed Local workspace with workspace-tool access.",
         false,
     )
 }
@@ -617,7 +617,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn authorization_binds_development_access_selected_target_and_workspace_id() {
+    fn authorization_binds_nonminimal_access_selected_target_and_workspace_id() {
         let root = tempdir().expect("root");
         let canonical = fs::canonicalize(root.path()).expect("canonical root");
         let workspace = validate_workspace(&canonical).expect("workspace");
@@ -636,7 +636,7 @@ mod tests {
         assert!(authorize_workspace(&settings, "other-workspace").is_err());
         settings.access_profile = AccessProfileSetting::Minimal;
         assert!(authorize_workspace(&settings, &workspace.id).is_err());
-        settings.access_profile = AccessProfileSetting::Development;
+        settings.access_profile = AccessProfileSetting::AllowAll;
         settings.selected_target_id = Some("external".into());
         assert!(authorize_workspace(&settings, &workspace.id).is_err());
     }
