@@ -50,6 +50,8 @@ impl InteractiveHost for FixtureHost {
                 created_at: "2026-07-15T00:00:00Z".into(),
             })
             .collect();
+        let history_navigation_fixture =
+            std::env::var_os("COLOSSUS_TUI_HISTORY_NAVIGATION_FIXTURE").is_some();
         Ok(InteractiveSnapshot {
             session_id: "019f-pty".into(),
             transcript: SessionMessagePage {
@@ -58,8 +60,20 @@ impl InteractiveHost for FixtureHost {
                 has_more: inline,
             },
             preferences: TerminalPreferences::default(),
-            history: Vec::new(),
-            completions: vec!["/tools".into()],
+            history: if history_navigation_fixture {
+                vec![
+                    "first prompt".into(),
+                    "second prompt".into(),
+                    "third prompt".into(),
+                ]
+            } else {
+                Vec::new()
+            },
+            completions: if history_navigation_fixture {
+                vec!["/tools".into(), "@repo-review".into()]
+            } else {
+                vec!["/tools".into()]
+            },
             footer: FooterState {
                 role: "primary".into(),
                 route: "fixture@local".into(),
@@ -494,6 +508,103 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
             .any(|window| window == b"\x1b[?1000h"),
         "inline mode must preserve native mouse scrollback"
     );
+}
+
+#[test]
+fn submitted_input_history_traverses_repeatedly_and_completion_keeps_key_precedence() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_HISTORY_NAVIGATION_FIXTURE", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    writer.write_all(b"/").expect("open slash completion");
+    writer
+        .write_all(b"\x1b[A\x1b[B")
+        .expect("navigate slash completion");
+    writer.flush().expect("flush slash completion navigation");
+    wait_for_screen(&output, 24, 80, "Commands");
+    assert!(!screen_contents(&output, 24, 80).contains("third prompt"));
+    writer
+        .write_all(&[27, 127])
+        .expect("dismiss and clear slash completion");
+
+    writer.write_all(b"@r").expect("open skill completion");
+    writer
+        .write_all(b"\x1b[A\x1b[B")
+        .expect("navigate skill completion");
+    writer.flush().expect("flush skill completion navigation");
+    wait_for_screen(&output, 24, 80, "Skills");
+    assert!(!screen_contents(&output, 24, 80).contains("third prompt"));
+    writer
+        .write_all(&[27, 127, 127])
+        .expect("dismiss and clear skill completion");
+
+    writer.write_all(b"unsent draft").expect("type draft");
+    writer.write_all(b"\x1b[A").expect("recall newest history");
+    writer.flush().expect("flush newest history");
+    wait_for_screen(&output, 24, 80, "third prompt");
+    writer.write_all(b"\x1b[A").expect("recall middle history");
+    writer.flush().expect("flush middle history");
+    wait_for_screen(&output, 24, 80, "second prompt");
+    writer.write_all(b"\x1b[A").expect("recall oldest history");
+    writer.flush().expect("flush oldest history");
+    wait_for_screen(&output, 24, 80, "first prompt");
+
+    writer
+        .write_all(b"\x1b[B")
+        .expect("advance to middle history");
+    writer.flush().expect("flush middle history");
+    wait_for_screen(&output, 24, 80, "second prompt");
+    writer
+        .write_all(b"\x1b[B")
+        .expect("advance to newest history");
+    writer.flush().expect("flush newest history");
+    wait_for_screen(&output, 24, 80, "third prompt");
+    writer.write_all(b"\x1b[B").expect("restore original draft");
+    writer.flush().expect("flush restored draft");
+    wait_for_screen(&output, 24, 80, "unsent draft");
+
+    writer.write_all(&[3]).expect("Ctrl-C exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    assert!(
+        status.success(),
+        "fixture failed: {}",
+        String::from_utf8_lossy(&output.lock().expect("output"))
+    );
+    drop(writer);
+    reader_thread.join().expect("reader thread");
 }
 
 #[test]

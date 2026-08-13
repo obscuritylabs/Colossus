@@ -1083,24 +1083,67 @@ fn unicode_editing_never_splits_a_character() {
 }
 
 #[test]
-fn multiline_history_search_and_boundary_navigation_preserve_the_draft() {
+fn repeated_history_navigation_restores_the_original_draft_and_resets_after_editing() {
+    let mut source = snapshot();
+    source.history = vec![
+        "first prompt".into(),
+        "second prompt".into(),
+        "third prompt".into(),
+    ];
+    let mut state = TuiState::from_snapshot(source);
+    state.composer.insert("unsent draft");
+
+    state.previous_history();
+    assert_eq!(state.draft(), "third prompt");
+    state.previous_history();
+    assert_eq!(state.draft(), "second prompt");
+    state.previous_history();
+    assert_eq!(state.draft(), "first prompt");
+    state.previous_history();
+    assert_eq!(state.draft(), "first prompt");
+
+    state.next_history();
+    assert_eq!(state.draft(), "second prompt");
+    state.next_history();
+    assert_eq!(state.draft(), "third prompt");
+    state.next_history();
+    assert_eq!(state.draft(), "unsent draft");
+    assert_eq!(state.cursor(), "unsent draft".len());
+    assert_eq!(state.composer.history_index, None);
+
+    state.previous_history();
+    assert_eq!(state.draft(), "third prompt");
+    state.composer.insert(" edited");
+    assert_eq!(state.composer.history_index, None);
+    state.next_history();
+    assert_eq!(state.draft(), "third prompt edited");
+}
+
+#[test]
+fn multiline_history_search_and_first_line_navigation_preserve_the_draft() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.preferences.multiline = true;
     state.composer.insert("first");
     state.composer.insert("\n");
     state.composer.insert("界");
     assert_eq!(state.draft(), "first\n界");
-    state.composer.cursor = 0;
+
+    state.previous_history();
+    assert_eq!(state.draft(), "first\n界");
+    assert_eq!(state.composer.history_index, None);
+
+    state.composer.cursor = "first".len();
     state.previous_history();
     assert_eq!(state.draft(), "older prompt");
     state.next_history();
-    assert!(state.draft().is_empty());
-    state.composer.insert("unsent draft");
+    assert_eq!(state.draft(), "first\n界");
+    assert_eq!(state.cursor(), "first".len());
+
     state.overlay = Some(Overlay::HistorySearch {
         query: "older".into(),
     });
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(state.draft(), "unsent draft");
+    assert_eq!(state.draft(), "first\n界");
 }
 
 #[test]
