@@ -84,6 +84,16 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - The runtime owns adapter construction and opaque permit-bearing executors.
 - Runtime composition canonicalizes one explicit workspace. CLI `-w, --workspace`,
   embedded open options, and worker workspace matching all feed that same boundary.
+- Shared home resolution selects absolute `COLOSSUS_HOME` or the platform user home,
+  validates its owner-private no-follow boundary, and derives one opaque partition from
+  canonical workspace path and object identity. Interfaces consume the resolved
+  context; they do not independently invent configuration or state paths.
+- Configuration resolution selects one explicit, repository-local, or user-level
+  document without merging. Runtime composition receives the selected source and
+  resolved storage path after `storage.location` confinement has succeeded.
+- CLI/TUI and Desktop use distinct children of the same workspace partition. Their
+  database leases, worker identities, provider credentials, and lifecycle ownership do
+  not cross interface boundaries.
 - Access resolution produces visibility and action decisions; sandbox-profile
   resolution independently produces explicit and derived resource obligations.
 - CLI and TUI construct requests, invoke application services, and render typed results.
@@ -93,6 +103,13 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - Desktop's native Managed Local permission selector uses the narrow authenticated
   `colossus-worker-protocol` control client. The Desktop process does not link runtime,
   model, tool, policy, or worker-host implementation crates.
+- Desktop Codex account commands remain native interface adapters: they delegate login
+  and logout to `colossus-codex-auth`, while runtime/provider construction stays in the
+  sidecar and `colossus-runtime`. The renderer receives status only.
+- Top-level user-facing runs snapshot bounded home and repository `AGENTS.md`
+  instructions before provider execution. Goal iterations and delegated subagents
+  carry that immutable snapshot and provenance; internal risk, summarization, and
+  diagnostic model roles do not consume it.
 - External applications enter through the authenticated public worker API or a
   caller-bound embedded SDK backend; they never depend on agent internals.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in

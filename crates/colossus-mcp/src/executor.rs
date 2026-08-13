@@ -142,6 +142,20 @@ impl McpExecutor {
         Ok(self)
     }
 
+    /// Persist OAuth records in an already no-follow, owner-validated encrypted file.
+    pub fn with_encrypted_oauth_storage_file(
+        mut self,
+        file: std::fs::File,
+        keys: Arc<dyn colossus_ports::KeyProvider>,
+        repository_id: impl Into<String>,
+    ) -> Result<Self, McpError> {
+        self.oauth_store = Some(
+            OAuthStoreFactory::encrypted_state_file(file, keys, repository_id.into())
+                .map_err(safe_oauth_error)?,
+        );
+        Ok(self)
+    }
+
     /// Persist OAuth records in a dedicated owner-private plaintext redb sidecar.
     pub fn with_plaintext_oauth_storage(
         mut self,
@@ -150,6 +164,19 @@ impl McpExecutor {
     ) -> Result<Self, McpError> {
         self.oauth_store = Some(
             OAuthStoreFactory::plaintext_state(path, repository_id.into())
+                .map_err(safe_oauth_error)?,
+        );
+        Ok(self)
+    }
+
+    /// Persist OAuth records in an already no-follow, owner-validated plaintext file.
+    pub fn with_plaintext_oauth_storage_file(
+        mut self,
+        file: std::fs::File,
+        repository_id: impl Into<String>,
+    ) -> Result<Self, McpError> {
+        self.oauth_store = Some(
+            OAuthStoreFactory::plaintext_state_file(file, repository_id.into())
                 .map_err(safe_oauth_error)?,
         );
         Ok(self)

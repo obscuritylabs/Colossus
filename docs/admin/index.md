@@ -13,6 +13,8 @@ not grant it access to a repository, and an approval does not widen the sandbox.
 
 Start with the operational layer that matches your job:
 
+- [Colossus home and workspace resolution](../reference/colossus-home.md) for
+  per-user state, configuration selection, and repository instructions.
 - [Configuration recipes](configuration.md) for a safe, inspectable baseline.
 - [Providers and routing](providers-routing.md) for hosted or local models.
 - [Access and approvals](access-and-approvals.md) for tool visibility and effect decisions.

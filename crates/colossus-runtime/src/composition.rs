@@ -68,6 +68,9 @@ fn observe_startup_phase<T, E>(
 /// Fully composed auditable runtime.
 pub struct Runtime {
     pub(super) workspace: PathBuf,
+    pub(super) colossus_home_root: Option<ConfinedRoot>,
+    pub(super) automatic_agent_instructions: bool,
+    pub(super) instruction_snapshots: Arc<InstructionSnapshotStore>,
     pub(super) writer_lease: Option<RedbWriterLease>,
     pub(super) storage_diagnostic: Value,
     pub(super) security_posture: SecurityPostureReport,
@@ -184,6 +187,29 @@ impl Runtime {
         options: RuntimeOpenOptions,
         provider_credentials: Arc<dyn CredentialResolver>,
     ) -> Result<Self, RuntimeError> {
+        Self::open_with_provider_credentials_and_codex_auth(
+            config,
+            approvals,
+            user_prompts,
+            options,
+            provider_credentials,
+            None,
+        )
+    }
+
+    /// Compose the runtime with host-provided API credentials and one explicit Codex
+    /// credential store selected by trusted composition code.
+    ///
+    /// The store remains behind the permit-bearing provider adapter. Its path is never
+    /// added to runtime configuration, model input, or public diagnostics.
+    pub fn open_with_provider_credentials_and_codex_auth(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn ApprovalProvider>,
+        user_prompts: Option<Arc<dyn UserPromptProvider>>,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+        codex_auth: Option<CodexAuthStore>,
+    ) -> Result<Self, RuntimeError> {
         let storage_adapter = match config.storage.adapter {
             StorageAdapter::Redb => "redb",
             StorageAdapter::Postgres => "postgresql",
@@ -205,6 +231,22 @@ impl Runtime {
         );
         let _startup_guard = startup_span.enter();
         let mut startup_observation = StartupObservation::new(startup_span.clone());
+        let colossus_home = options.colossus_home.clone();
+        let colossus_home_root = options.colossus_home_root.clone();
+        let automatic_agent_instructions = options.automatic_agent_instructions;
+        match (&colossus_home, &colossus_home_root) {
+            (None, None) => {}
+            (Some(home), Some(root)) if home == root.path() => {
+                root.revalidate().map_err(|error| {
+                    RuntimeError::Config(format!("the explicit Colossus home is unsafe: {error}"))
+                })?
+            }
+            _ => {
+                return Err(RuntimeError::Config(
+                    "the explicit Colossus home authority is inconsistent".into(),
+                ));
+            }
+        }
         let workspace = fs::canonicalize(&options.workspace)?;
         if !workspace.is_dir() {
             return Err(RuntimeError::Config(format!(
@@ -239,9 +281,11 @@ impl Runtime {
         let workspace_identity = workspace_lease.identity();
         workspace_identity.revalidate()?;
         let development_sandbox = derive_development_sandbox(config, &workspace)?;
-        let storage_path = workspace_absolute_path(&workspace, &config.storage.path);
+        let storage_path = config.resolved_storage_path_at(&workspace)?;
         let repository_id = repository_identity(&workspace);
-        if let Some(parent) = storage_path.parent() {
+        if !config.has_resolved_home_workspace()
+            && let Some(parent) = storage_path.parent()
+        {
             fs::create_dir_all(parent)?;
         }
         let (keys, signer): (Arc<dyn KeyProvider>, Arc<dyn CheckpointSigner>) =
@@ -271,6 +315,8 @@ impl Runtime {
                     signing_variable,
                     anchor_path,
                 } => {
+                    config.revalidate_resolved_home_file(anchor_path)?;
+                    config.revalidate_resolved_home_file(&anchor_path.with_extension("tmp"))?;
                     let signing_key = explicit_secret(signing_variable)?;
                     (
                         Arc::new(EnvironmentKeyProvider::new(
@@ -291,13 +337,42 @@ impl Runtime {
             || -> Result<StorageComposition, RuntimeError> {
                 Ok(match config.storage.adapter {
                     StorageAdapter::Redb => {
-                        let lease = RedbWriterLease::acquire(&storage_path)?;
-                        let redb = Arc::new(RedbEventJournal::open_with_startup_verification(
-                            &storage_path,
-                            Arc::clone(&keys),
-                            signer.clone(),
-                            config.storage.startup_verification,
-                        )?);
+                        let mut lock_path = storage_path.as_os_str().to_os_string();
+                        lock_path.push(".writer.lock");
+                        let lock_path = PathBuf::from(lock_path);
+                        let (lease, redb) = match (
+                            config.open_resolved_home_file(&lock_path)?,
+                            config.open_resolved_home_file(&storage_path)?,
+                        ) {
+                            (Some(lock), Some(state)) => {
+                                let lease = RedbWriterLease::acquire_file(
+                                    lock.path().to_owned(),
+                                    lock.into_file(),
+                                )?;
+                                let redb = RedbEventJournal::open_file_with_startup_verification(
+                                    state.into_file(),
+                                    Arc::clone(&keys),
+                                    signer.clone(),
+                                    config.storage.startup_verification,
+                                )?;
+                                (lease, Arc::new(redb))
+                            }
+                            (None, None) => {
+                                let lease = RedbWriterLease::acquire(&storage_path)?;
+                                let redb = RedbEventJournal::open_with_startup_verification(
+                                    &storage_path,
+                                    Arc::clone(&keys),
+                                    signer.clone(),
+                                    config.storage.startup_verification,
+                                )?;
+                                (lease, Arc::new(redb))
+                            }
+                            _ => {
+                                return Err(RuntimeError::Config(
+                                    "home-workspace storage authority is inconsistent".into(),
+                                ));
+                            }
+                        };
                         let recovery_reason = redb.recovery_reason()?;
                         let startup_verification = redb.startup_verification_report()?;
                         StorageComposition {
@@ -357,6 +432,7 @@ impl Runtime {
             journal,
             config.observability.logs.journal_payloads,
         ));
+        let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
@@ -505,6 +581,7 @@ impl Runtime {
             &config.providers,
             &config.models,
             provider_credentials,
+            codex_auth,
             &tls_roots,
         )?);
         let searches = Arc::new(search_registry(config, &tls_roots)?);
@@ -795,17 +872,34 @@ impl Runtime {
         } else {
             match active_pack_extensions.mcp.oauth_credential_store {
                 McpOAuthCredentialStoreKind::Auto => match &config.storage.keys {
-                    KeyConfig::None => mcp_executor.with_plaintext_oauth_storage(
-                        &storage_path.with_extension("mcp-oauth.redb"),
-                        repository_id.clone(),
-                    )?,
+                    KeyConfig::None => {
+                        let path = storage_path.with_extension("mcp-oauth.redb");
+                        match config.open_resolved_home_file(&path)? {
+                            Some(file) => mcp_executor.with_plaintext_oauth_storage_file(
+                                file.into_file(),
+                                repository_id.clone(),
+                            )?,
+                            None => mcp_executor
+                                .with_plaintext_oauth_storage(&path, repository_id.clone())?,
+                        }
+                    }
                     KeyConfig::Platform { service, .. } => mcp_executor
                         .with_platform_oauth_storage(service.clone(), repository_id.clone()),
-                    KeyConfig::Environment { .. } => mcp_executor.with_encrypted_oauth_storage(
-                        &storage_path.with_extension("mcp-oauth.redb"),
-                        Arc::clone(&keys),
-                        repository_id.clone(),
-                    )?,
+                    KeyConfig::Environment { .. } => {
+                        let path = storage_path.with_extension("mcp-oauth.redb");
+                        match config.open_resolved_home_file(&path)? {
+                            Some(file) => mcp_executor.with_encrypted_oauth_storage_file(
+                                file.into_file(),
+                                Arc::clone(&keys),
+                                repository_id.clone(),
+                            )?,
+                            None => mcp_executor.with_encrypted_oauth_storage(
+                                &path,
+                                Arc::clone(&keys),
+                                repository_id.clone(),
+                            )?,
+                        }
+                    }
                 },
                 McpOAuthCredentialStoreKind::Platform => {
                     let service = match &config.storage.keys {
@@ -815,11 +909,17 @@ impl Runtime {
                     };
                     mcp_executor.with_platform_oauth_storage(service, repository_id.clone())
                 }
-                McpOAuthCredentialStoreKind::PlaintextState => mcp_executor
-                    .with_plaintext_oauth_storage(
-                        &storage_path.with_extension("mcp-oauth.redb"),
-                        repository_id.clone(),
-                    )?,
+                McpOAuthCredentialStoreKind::PlaintextState => {
+                    let path = storage_path.with_extension("mcp-oauth.redb");
+                    match config.open_resolved_home_file(&path)? {
+                        Some(file) => mcp_executor.with_plaintext_oauth_storage_file(
+                            file.into_file(),
+                            repository_id.clone(),
+                        )?,
+                        None => mcp_executor
+                            .with_plaintext_oauth_storage(&path, repository_id.clone())?,
+                    }
+                }
                 McpOAuthCredentialStoreKind::EncryptedState => {
                     if matches!(config.storage.keys, KeyConfig::None) {
                         return Err(RuntimeError::Config(
@@ -827,11 +927,19 @@ impl Runtime {
                                 .into(),
                         ));
                     }
-                    mcp_executor.with_encrypted_oauth_storage(
-                        &storage_path.with_extension("mcp-oauth.redb"),
-                        Arc::clone(&keys),
-                        repository_id.clone(),
-                    )?
+                    let path = storage_path.with_extension("mcp-oauth.redb");
+                    match config.open_resolved_home_file(&path)? {
+                        Some(file) => mcp_executor.with_encrypted_oauth_storage_file(
+                            file.into_file(),
+                            Arc::clone(&keys),
+                            repository_id.clone(),
+                        )?,
+                        None => mcp_executor.with_encrypted_oauth_storage(
+                            &path,
+                            Arc::clone(&keys),
+                            repository_id.clone(),
+                        )?,
+                    }
                 }
             }
         };
@@ -910,6 +1018,7 @@ impl Runtime {
         let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
             repository: Arc::clone(&work),
+            instruction_snapshots: Arc::clone(&instruction_snapshots),
         });
         let presentation_executor = Arc::new(PresentationEffectExecutor {
             repository: Arc::clone(&presentation),
@@ -1113,6 +1222,9 @@ impl Runtime {
         startup_observation.success();
         Ok(Self {
             workspace,
+            colossus_home_root,
+            automatic_agent_instructions,
+            instruction_snapshots,
             writer_lease,
             storage_diagnostic,
             security_posture,

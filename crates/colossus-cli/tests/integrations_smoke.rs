@@ -1,5 +1,8 @@
 //! Credential-free end-to-end OpenAPI connection and dynamic-tool smoke test.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::Value;
 use std::{
     fs,
@@ -15,7 +18,9 @@ const JOURNAL_KEY: &str = "99999999999999999999999999999999999999999999999999999
 const SIGNING_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, workspace);
+    command
         .current_dir(workspace)
         .arg("--config")
         .arg(config)

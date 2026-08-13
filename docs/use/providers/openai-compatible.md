@@ -37,7 +37,8 @@ trust roots already validate the endpoint.
 
 ### 2. Configure the compatible route
 
-Keep the other required fields from your generated configuration. Apply this validated
+Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
+keep its other required fields. Apply this validated
 overlay, replacing the example host, model ID, limits, and CA path with exact deployment
 values.
 
@@ -91,16 +92,16 @@ request headers; do not assume a service requiring additional headers is compati
 ### 3. Inspect routing and readiness
 
 ```bash
-colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider models compatible-provider
-colossus --config .colossus/config.yaml provider doctor compatible-provider
-colossus --config .colossus/config.yaml models doctor compatible
+colossus -w . models route primary
+colossus -w . provider models compatible-provider
+colossus -w . provider doctor compatible-provider
+colossus -w . models doctor compatible
 ```
 
 ### 4. Send one bounded model turn
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w . run \
   "Reply with exactly: connected"
 ```
 
@@ -111,7 +112,7 @@ configured trust and timeout, and the smoke test returns `connected`.
 
 ## Verification
 
-Run `colossus --config .colossus/config.yaml config effective` and confirm the provider
+Run `colossus -w . config effective` and confirm the provider
 origin is granted exactly once. Confirm `config show` contains only the credential
 reference and CA bundle path, never the token or certificate private keys.
 

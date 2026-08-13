@@ -409,6 +409,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
         model: model.model,
         contextWindowTokens: model.contextWindowTokens,
         maxOutputTokens: model.maxOutputTokens,
+        reasoningEffort: model.reasoningEffort,
         capabilities: model.capabilities,
       })),
       roles: configuration.roles,

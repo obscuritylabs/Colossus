@@ -44,6 +44,7 @@ impl EffectExecutor for PresentationEffectExecutor {
 pub(super) struct WorkEffectExecutor {
     pub(super) service: Arc<WorkService>,
     pub(super) repository: Arc<dyn WorkRepository>,
+    pub(super) instruction_snapshots: Arc<InstructionSnapshotStore>,
 }
 
 impl WorkEffectExecutor {
@@ -413,6 +414,7 @@ impl EffectExecutor for WorkEffectExecutor {
                 task,
                 role,
                 allowed_tools,
+                instruction_snapshot_id,
             } => work_result(self.service.create_subagent(
                 colossus_work::CreateSubagentRequest {
                     session_id,
@@ -421,6 +423,7 @@ impl EffectExecutor for WorkEffectExecutor {
                     task,
                     role,
                     allowed_tools,
+                    instruction_snapshot_id,
                 },
                 actor,
             )),

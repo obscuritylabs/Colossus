@@ -838,6 +838,192 @@ impl WorkerPromptHandler for FailingSocketPromptHandler {
     }
 }
 
+struct HostedWorkerFixture {
+    _directory: tempfile::TempDir,
+    client: WorkerClient,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<Result<(), WorkerError>>,
+}
+
+impl HostedWorkerFixture {
+    async fn stop(self) {
+        let _ = self.shutdown.send(());
+        tokio::time::timeout(Duration::from_secs(5), self.server)
+            .await
+            .expect("worker fixture shutdown timeout")
+            .expect("worker fixture server task")
+            .expect("worker fixture graceful shutdown");
+    }
+}
+
+async fn hosted_worker_fixture() -> HostedWorkerFixture {
+    let directory = tempfile::tempdir().expect("worker fixture directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical worker fixture directory");
+    let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
+    config.workflows.repository = root.join("workflows-bundled");
+    config.workflows.user = root.join("workflows-user");
+    config.skills.bundled = root.join("skills-bundled");
+    config.skills.repository = root.join("skills-repository");
+    config.skills.user = root.join("skills-user");
+    config.packs.install_root = root.join("packs");
+    for path in [
+        &config.workflows.repository,
+        &config.workflows.user,
+        &config.skills.bundled,
+        &config.skills.repository,
+        &config.skills.user,
+        &config.packs.install_root,
+    ] {
+        std::fs::create_dir_all(path).expect("worker fixture library directory");
+    }
+
+    let server = WorkerServer::open_at_workspace(
+        &config,
+        Arc::new(AllowApproval {
+            approved_by: "worker-stack-regression".into(),
+        }),
+        RuntimeOpenOptions::for_workspace(&root).expect("worker fixture options"),
+    )
+    .expect("worker fixture server")
+    .prepare_worker_ipc()
+    .await
+    .expect("bound worker fixture server");
+    let client = WorkerClient::from_config(&config).expect("worker fixture client");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::spawn(server.serve_until(async move {
+        let _ = shutdown_rx.await;
+    }));
+    tokio::time::timeout(Duration::from_secs(5), client.ping())
+        .await
+        .expect("worker fixture readiness timeout")
+        .expect("worker fixture readiness");
+    HostedWorkerFixture {
+        _directory: directory,
+        client,
+        shutdown: shutdown_tx,
+        server: server_task,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_run_plan_polls_snapshot_scoped_agent_on_worker_stack() {
+    let fixture = hosted_worker_fixture().await;
+    let mut observer = SilentSocketObserver;
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.client.run_model(
+            WorkerOperation::RunPlan {
+                role: "primary".into(),
+                instructions: "Create one bounded plan".into(),
+                prompt: "Plan a bounded test change".into(),
+                attachments: Vec::new(),
+                max_turns: Some(1),
+                session_id: None,
+                explicit_skills: Vec::new(),
+                sticky_skills: Vec::new(),
+            },
+            &mut observer,
+        ),
+    )
+    .await
+    .expect("hosted RunPlan timeout");
+    assert!(
+        matches!(result, Err(WorkerError::Remote(ref message)) if message.contains("required plan create or update")),
+        "the echo provider should reach the expected Plan finalization error: {result:?}"
+    );
+    fixture
+        .client
+        .ping()
+        .await
+        .expect("worker survived hosted RunPlan");
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_direct_plan_execute_polls_snapshot_scoped_agent_on_worker_stack() {
+    let fixture = hosted_worker_fixture().await;
+    let session = fixture
+        .client
+        .call(WorkerOperation::SessionCreate {
+            title: Some("worker stack regression".into()),
+        })
+        .await
+        .expect("create hosted Plan session");
+    let session_id = session["id"]
+        .as_str()
+        .expect("hosted session id")
+        .to_owned();
+    let draft = fixture
+        .client
+        .call(WorkerOperation::PlanCreate {
+            session_id: session_id.clone(),
+            prompt: "Execute the bounded hosted Plan".into(),
+            content: "# Hosted Plan".into(),
+            steps: vec![PlanStep {
+                index: 1,
+                title: "Echo".into(),
+                detail: "Complete one offline provider turn".into(),
+                requires_mutation: false,
+            }],
+        })
+        .await
+        .expect("create hosted Plan");
+    let plan_id = draft["id"].as_str().expect("hosted Plan id").to_owned();
+    let approved = fixture
+        .client
+        .call(WorkerOperation::PlanApprove {
+            plan_id: plan_id.clone(),
+        })
+        .await
+        .expect("approve hosted Plan");
+    let revision = approved["revision"]
+        .as_u64()
+        .expect("approved hosted Plan revision");
+
+    let mut observer = SilentSocketObserver;
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture
+            .client
+            .call_interactive::<colossus_contracts::PlanExecutionOutcome>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::PlanExecute {
+                        role: "primary".into(),
+                        session_id,
+                        plan_id,
+                        revision,
+                        strategy: PlanExecutionStrategy::Direct,
+                        max_turns: Some(1),
+                    },
+                    approval_mode: None,
+                    sandbox_boundary_acknowledgement: None,
+                },
+                &mut observer,
+                &FailingSocketPromptHandler,
+                &RunControl::default(),
+            ),
+    )
+    .await
+    .expect("hosted direct Plan execution timeout")
+    .expect("hosted direct Plan execution");
+    assert!(matches!(
+        outcome,
+        colossus_contracts::PlanExecutionOutcome::Direct {
+            terminal: colossus_contracts::ControlledAgentTerminal::Completed { .. },
+            ..
+        }
+    ));
+    fixture
+        .client
+        .ping()
+        .await
+        .expect("worker survived hosted direct Plan execution");
+    fixture.stop().await;
+}
+
 fn socket_test_event() -> RunEventEnvelope {
     RunEventEnvelope {
         schema_version: 1,

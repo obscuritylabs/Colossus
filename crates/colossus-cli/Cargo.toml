@@ -19,6 +19,7 @@ colossus-codex-auth.workspace = true
 colossus-api.workspace = true
 colossus-contracts.workspace = true
 colossus-grpc.workspace = true
+colossus-home.workspace = true
 colossus-observability = { workspace = true, features = ["host-exporters"] }
 colossus-policy.workspace = true
 colossus-presentation.workspace = true

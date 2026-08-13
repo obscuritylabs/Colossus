@@ -145,6 +145,7 @@ pub(crate) fn spawn_verified_windows_tui(
     workspace_identity: colossus_windows_native::FileIdentity,
     executable_identity: colossus_windows_native::FileIdentity,
     size: portable_pty::PtySize,
+    colossus_home: &std::path::Path,
 ) -> Result<crate::terminal::SpawnedTerminal, TerminalError> {
     use portable_pty::MasterPty as _;
 
@@ -156,7 +157,7 @@ pub(crate) fn spawn_verified_windows_tui(
         executable,
         executable_identity,
         &arguments,
-        &minimal_windows_environment(),
+        &minimal_windows_environment(colossus_home),
         workspace,
         workspace_identity,
         size.rows,
@@ -199,7 +200,9 @@ pub(crate) fn spawn_verified_windows_tui(
 }
 
 #[cfg(target_os = "windows")]
-fn minimal_windows_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+fn minimal_windows_environment(
+    colossus_home: &std::path::Path,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     let mut environment = [
         ("TERM", "xterm-256color"),
         ("COLORTERM", "truecolor"),
@@ -208,6 +211,7 @@ fn minimal_windows_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)
     .into_iter()
     .map(|(name, value)| (name.into(), value.into()))
     .collect::<Vec<_>>();
+    environment.push(("COLOSSUS_HOME".into(), colossus_home.as_os_str().to_owned()));
     for name in [
         "SystemRoot",
         "WINDIR",
@@ -335,6 +339,7 @@ pub(crate) fn spawn_verified_tui(
     executable: &std::path::Path,
     arguments: &[std::path::PathBuf],
     identity: &colossus_sdk::MacosCodeIdentity,
+    colossus_home: &std::path::Path,
 ) -> Result<
     (
         Box<dyn Child + Send + Sync>,
@@ -347,7 +352,7 @@ pub(crate) fn spawn_verified_tui(
         .iter()
         .map(|argument| argument.as_os_str().to_owned())
         .collect::<Vec<_>>();
-    let environment = minimal_environment();
+    let environment = minimal_environment(colossus_home);
     let spawned =
         colossus_sdk::spawn_suspended_macos_tty(executable, &arguments, &environment, tty)
             .map_err(|_| TerminalError::SpawnFailed)?;
@@ -387,7 +392,7 @@ pub(crate) fn spawn_verified_tui(
 }
 
 #[cfg(target_os = "macos")]
-fn minimal_environment() -> Vec<std::ffi::OsString> {
+fn minimal_environment(colossus_home: &std::path::Path) -> Vec<std::ffi::OsString> {
     let mut environment = [
         "TERM=xterm-256color".to_owned(),
         "COLORTERM=truecolor".to_owned(),
@@ -403,6 +408,13 @@ fn minimal_environment() -> Vec<std::ffi::OsString> {
 
         let mut value = b"HOME=".to_vec();
         value.extend_from_slice(home.home_dir().as_os_str().as_bytes());
+        environment.push(std::ffi::OsString::from_vec(value));
+    }
+    {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        let mut value = b"COLOSSUS_HOME=".to_vec();
+        value.extend_from_slice(colossus_home.as_os_str().as_bytes());
         environment.push(std::ffi::OsString::from_vec(value));
     }
     environment
@@ -439,6 +451,33 @@ impl MacosPtyChild {
         } else {
             ExitStatus::with_exit_code(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tui_environment_keeps_the_validated_colossus_home() {
+        use std::{ffi::OsString, path::Path};
+
+        let home = Path::new("/private/tmp/desktop-colossus-home");
+        let environment = super::minimal_environment(home);
+        assert!(environment.contains(&OsString::from(
+            "COLOSSUS_HOME=/private/tmp/desktop-colossus-home"
+        )));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_tui_environment_keeps_the_validated_colossus_home() {
+        use std::{ffi::OsString, path::Path};
+
+        let home = Path::new(r"C:\Users\tester\.colossus");
+        let environment = super::minimal_windows_environment(home);
+        assert!(
+            environment.contains(&(OsString::from("COLOSSUS_HOME"), home.as_os_str().to_owned(),))
+        );
     }
 }
 

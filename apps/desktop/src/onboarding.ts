@@ -41,6 +41,11 @@ export function managedProviderDefaults(
       model: "gpt-5",
     };
   }
+  if (providerKind === "open_ai_codex") {
+    return {
+      model: "",
+    };
+  }
   return {
     model: "deepseek/deepseek-v4-flash",
   };

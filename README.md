@@ -19,12 +19,14 @@ irm https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-
 ```
 
 The installer selects the native archive for the host, verifies its adjacent SHA-256
-sidecar, and installs to `$HOME/.local` without `sudo` or profile changes. The
+sidecar, installs to `$HOME/.local` without `sudo` or profile changes, and prepares an
+empty owner-private `$HOME/.colossus` home. The
 [installation guide](docs/get-started/install.md) includes a review-before-running form,
 exact-version selection, Nix, offline archives, supported targets, updates, and
 uninstallation.
 
-Initialize a local configuration and prove the runtime offline:
+Initialize your user configuration and prove the runtime offline in the current
+repository:
 
 ```bash
 colossus config init
@@ -33,14 +35,19 @@ colossus audit verify
 ```
 
 The generated `echo` provider is credential-free and makes this first run completely
-offline. Start the terminal UI with:
+offline. State is isolated beneath the current workspace's partition in the Colossus
+home. Start the terminal UI with:
 
 ```bash
 colossus
 ```
 
-The working directory identifies the repository Colossus can reason about. Policy,
-approvals, and sandbox grants still determine which effects it may perform.
+The working directory, or explicit `-w`, identifies the repository Colossus can reason
+about; it does not relocate the Colossus home. A repository can replace user defaults
+with `.colossus/config.yaml` and can supply bounded instructions through `AGENTS.md`.
+Policy, approvals, and sandbox grants still determine which effects are possible. See
+[Colossus home and workspace resolution](docs/reference/colossus-home.md) for the exact
+load order and storage layout.
 
 [Read the five-minute quickstart](docs/get-started/quickstart.md) or open the
 [published documentation](https://obscuritylabs.github.io/Colossus/).

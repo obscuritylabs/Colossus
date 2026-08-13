@@ -933,6 +933,7 @@ dependencies = [
  "colossus-contracts",
  "colossus-darwin-process",
  "colossus-grpc",
+ "colossus-home",
  "colossus-observability",
  "colossus-packs",
  "colossus-policy",
@@ -976,7 +977,9 @@ name = "colossus-codex-auth"
 version = "0.10.7"
 dependencies = [
  "base64",
+ "colossus-windows-native",
  "directories",
+ "fs4",
  "rustix",
  "serde",
  "serde_json",
@@ -1069,6 +1072,19 @@ dependencies = [
  "uuid",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "colossus-home"
+version = "0.10.7"
+dependencies = [
+ "colossus-windows-native",
+ "directories",
+ "hex",
+ "rustix",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1412,6 +1428,7 @@ dependencies = [
  "colossus-audit",
  "colossus-context",
  "colossus-contracts",
+ "colossus-home",
  "colossus-integrations",
  "colossus-journal-postgres",
  "colossus-journal-redb",
@@ -1565,6 +1582,7 @@ dependencies = [
  "colossus-access",
  "colossus-api",
  "colossus-grpc",
+ "colossus-home",
  "colossus-network",
  "colossus-ports",
  "colossus-provider",

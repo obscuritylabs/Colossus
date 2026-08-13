@@ -23,30 +23,29 @@ state, optionally with protected storage.
 
 ## Steps
 
-1. Verify the transferred archive checksum before extracting. For a signed bundle, use:
+1. Verify the transferred archive checksum before extracting.
 
-    ```bash
-    colossus --config .colossus/config.yaml bundle verify ./bundle
-    ```
-
-2. Install the native archive using its included `install.sh` or `install.ps1`, or
-   install the running target from a verified bundle:
-
-    ```bash
-    colossus --config .colossus/config.yaml --approval-mode ask \
-      bundle install ./bundle --prefix "$HOME/.local"
-    ```
+2. Install the native archive using its included `install.sh` or `install.ps1`.
 
 3. Create fresh configuration and state:
 
     ```bash
-    colossus -w . --config .colossus/config.yaml config init \
+    colossus -w . config init \
       --sandbox-profile offline-default
-    colossus --config .colossus/config.yaml config show
-    colossus --config .colossus/config.yaml config effective
+    colossus -w . config show
+    colossus -w . config effective
     ```
 
-4. Keep `sandbox.networkDestinations` empty, or limit it to exact loopback origins.
+4. When upgrading an existing installation from a signed offline bundle, verify and
+   install it only after the configuration above exists:
+
+    ```bash
+    colossus -w . bundle verify ./bundle
+    colossus -w . --approval-mode ask \
+      bundle install ./bundle --prefix "$HOME/.local"
+    ```
+
+5. Keep `sandbox.networkDestinations` empty, or limit it to exact loopback origins.
    Never use `*` in an air-gapped configuration: it intentionally means public HTTP(S)
    egress.
    The built-in `echo` route, redb journal, built-in policy, local workflows, repository
@@ -56,15 +55,15 @@ state, optionally with protected storage.
    `--storage-keys environment` or `--storage-keys platform` when confidentiality,
    signed checkpoints, and rollback anchors are required.
 
-5. Run the acceptance sequence:
+6. Run the acceptance sequence:
 
     ```bash
-    colossus --config .colossus/config.yaml policy doctor
-    colossus --config .colossus/config.yaml state doctor
-    colossus --config .colossus/config.yaml sandbox doctor
-    colossus --config .colossus/config.yaml run "airgap acceptance"
-    colossus --config .colossus/config.yaml audit verify
-    colossus --config .colossus/config.yaml audit anchor-status
+    colossus -w . policy doctor
+    colossus -w . state doctor
+    colossus -w . sandbox doctor
+    colossus -w . run "airgap acceptance"
+    colossus -w . audit verify
+    colossus -w . audit anchor-status
     ```
 
 For a local OpenAI-compatible model, grant only its loopback origin, define a provider

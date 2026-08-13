@@ -37,6 +37,7 @@ use colossus_contracts::{
     TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
     UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
 };
+use colossus_home::ConfinedRoot;
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
 };
@@ -86,8 +87,8 @@ use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
 };
 pub use colossus_provider::{
-    ChatCompletionsOutputTokenParameter, CredentialResolver, EnvironmentCredentialResolver,
-    HostCredentialResolver,
+    ChatCompletionsOutputTokenParameter, CodexAuthStore, CredentialResolver,
+    EnvironmentCredentialResolver, HostCredentialResolver,
 };
 use colossus_provider::{
     ModelProfile, ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind,
@@ -149,6 +150,7 @@ mod extensions;
 mod gateway_tool_dispatch;
 mod gateway_tool_helpers;
 mod generic_effects;
+mod instruction_snapshots;
 mod memory;
 mod memory_gateway;
 mod operations;
@@ -184,7 +186,7 @@ pub use config::{
     ModelProfileConfig, ModelsConfig, NetworkConfig, PacksConfig, PolicyConfig,
     ProviderProfileConfig, ProvidersConfig, ResearchConfig, ResearchSearchConfig, RuntimeConfig,
     SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig,
-    StorageAdapter, StorageConfig, SubagentConfig, WorkflowLibraryConfig,
+    StorageAdapter, StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;
@@ -198,6 +200,7 @@ use development_sandbox::*;
 use error::{explicit_secret, read_optional};
 use gateway_tool_helpers::*;
 use generic_effects::*;
+use instruction_snapshots::*;
 use memory_gateway::*;
 use operations::*;
 use pack_extensions::*;

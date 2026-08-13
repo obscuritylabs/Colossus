@@ -349,6 +349,230 @@ fn config_init_from_requires_development_mode() {
 }
 
 #[test]
+fn config_init_local_conflicts_with_an_explicit_config() {
+    let parsed = Cli::try_parse_from([
+        "colossus",
+        "--config",
+        "custom.yaml",
+        "config",
+        "init",
+        "--local",
+    ])
+    .expect("Clap must parse global and nested arguments without panicking");
+    let Command::Config(ConfigCommand {
+        command: ConfigAction::Init { local, .. },
+    }) = parsed.command
+    else {
+        panic!("config init command");
+    };
+    let error = validate_config_init_scope(parsed.config.as_deref(), local)
+        .expect_err("local and explicit config must conflict");
+    assert!(error.to_string().contains("cannot be combined"));
+}
+
+#[test]
+fn config_selection_uses_explicit_workspace_global_precedence_without_fallback() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+
+    assert!(select_config(None, &workspace, &home).is_err());
+    fs::write(home.config_path(), "global").expect("global config");
+    let global = select_config(None, &workspace, &home).expect("global selection");
+    assert_eq!(global.source, ConfigSource::Global);
+    assert_eq!(global.path, home.config_path());
+
+    let local_path = workspace.join(".colossus/config.yaml");
+    fs::create_dir_all(local_path.parent().expect("local parent")).expect("local parent");
+    fs::write(&local_path, "malformed higher-priority config").expect("local config");
+    let local = select_config(None, &workspace, &home).expect("local selection");
+    assert_eq!(local.source, ConfigSource::Workspace);
+    assert_eq!(local.path, local_path);
+    assert!(load_selected_config(&local, &workspace, &home).is_err());
+
+    let explicit = select_config(Some(Path::new("missing.yaml")), &workspace, &home)
+        .expect("explicit selection");
+    assert_eq!(explicit.source, ConfigSource::Explicit);
+    assert_eq!(explicit.path, workspace.join("missing.yaml"));
+    assert!(RuntimeConfig::from_path(&explicit.path).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn automatic_local_config_rejects_linked_file_and_parent_without_global_fallback() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    let outside = root.join("outside");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&outside).expect("outside");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+    fs::write(home.config_path(), "global").expect("global config");
+    fs::create_dir(workspace.join(".colossus")).expect("local directory");
+    fs::write(outside.join("config.yaml"), "outside").expect("outside config");
+    symlink(
+        outside.join("config.yaml"),
+        workspace.join(".colossus/config.yaml"),
+    )
+    .expect("config link");
+    assert!(select_config(None, &workspace, &home).is_err());
+
+    fs::remove_file(workspace.join(".colossus/config.yaml")).expect("remove config link");
+    fs::remove_dir(workspace.join(".colossus")).expect("remove local directory");
+    symlink(&outside, workspace.join(".colossus")).expect("directory link");
+    assert!(select_config(None, &workspace, &home).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn automatic_local_config_rejects_fifo_without_global_fallback() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(workspace.join(".colossus")).expect("local directory");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+    fs::write(home.config_path(), "global").expect("global config");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(workspace.join(".colossus/config.yaml"))
+            .status()
+            .expect("run mkfifo")
+            .success()
+    );
+
+    assert!(select_config(None, &workspace, &home).is_err());
+
+    fs::remove_file(workspace.join(".colossus/config.yaml")).expect("remove local FIFO");
+    fs::remove_file(home.config_path()).expect("remove global config");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(home.config_path())
+            .status()
+            .expect("run mkfifo")
+            .success()
+    );
+    assert!(select_config(None, &workspace, &home).is_err());
+}
+
+#[test]
+fn default_and_local_config_init_select_the_expected_storage_locations() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+    let identity = detect_workspace_identity(&workspace).expect("workspace identity");
+    let home_workspace = home
+        .workspace_surface_dir(
+            identity.canonical_path(),
+            identity.as_ref(),
+            HomeSurface::Cli,
+        )
+        .expect("home workspace");
+
+    let global_target = config_init_target(None, false, &workspace, &home, &home_workspace, false);
+    init_config_at(
+        &global_target,
+        false,
+        None,
+        AccessProfile::Development,
+        None,
+        StorageKeys::None,
+    )
+    .expect("global init");
+    let global = RuntimeConfig::from_path(home.config_path()).expect("global config");
+    assert_eq!(global.storage.location, StorageLocation::HomeWorkspace);
+    assert_eq!(global.storage.path, Path::new("state.redb"));
+    let resolved = global
+        .resolve_storage_paths(&workspace, &home_workspace)
+        .expect("resolved global storage");
+    assert_eq!(resolved.storage.path, home_workspace.join("state.redb"));
+
+    let local_target = config_init_target(None, true, &workspace, &home, &home_workspace, false);
+    init_config_at(
+        &local_target,
+        false,
+        None,
+        AccessProfile::Development,
+        None,
+        StorageKeys::None,
+    )
+    .expect("local init");
+    let local =
+        RuntimeConfig::from_path(workspace.join(".colossus/config.yaml")).expect("local config");
+    assert_eq!(local.storage.location, StorageLocation::Workspace);
+    assert_eq!(local.storage.path, Path::new(".colossus/state.redb"));
+}
+
+#[test]
+fn global_development_init_replaces_source_storage_with_partition_relative_state() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+    let identity = detect_workspace_identity(&workspace).expect("workspace identity");
+    let home_workspace = home
+        .workspace_surface_dir(
+            identity.canonical_path(),
+            identity.as_ref(),
+            HomeSurface::Cli,
+        )
+        .expect("home workspace");
+    let source_path = root.join("source.yaml");
+    let mut source = RuntimeConfig::offline_template(root.join("source-state.redb"));
+    source.agent.max_turns = 7;
+    fs::write(&source_path, source.to_yaml().expect("source YAML")).expect("source config");
+
+    let target = config_init_target(None, false, &workspace, &home, &home_workspace, true);
+    init_config_at(
+        &target,
+        true,
+        Some(&source_path),
+        AccessProfile::Development,
+        None,
+        StorageKeys::None,
+    )
+    .expect("global development init");
+    let generated = RuntimeConfig::from_path(home.config_path()).expect("global config");
+    assert_eq!(generated.agent.max_turns, 7);
+    assert_eq!(generated.storage.location, StorageLocation::HomeWorkspace);
+    assert_eq!(generated.storage.path, Path::new("state.dev.redb"));
+    assert_ne!(generated.storage.path, source.storage.path);
+}
+
+#[test]
+fn effective_resolution_metadata_is_credential_free_and_complete() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+    let selection = ConfigSelection {
+        path: home.config_path(),
+        source: ConfigSource::Global,
+    };
+    let report = config_resolution_report(
+        &selection,
+        &home,
+        "0123456789abcdef",
+        &root.join("state.redb"),
+    );
+    assert_eq!(report["configSource"], "global");
+    assert_eq!(report["configScope"], "global");
+    assert_eq!(report["configPath"], json!(home.config_path()));
+    assert_eq!(report["colossusHome"], json!(home.root()));
+    assert_eq!(report["workspacePartitionId"], "0123456789abcdef");
+    assert_eq!(report["statePath"], json!(root.join("state.redb")));
+    let encoded = serde_json::to_string(&report).expect("resolution JSON");
+    assert!(!encoded.contains("credential"));
+    assert!(!encoded.contains("secret"));
+}
+
+#[test]
 fn development_config_init_refuses_orphaned_state() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("config.dev.yaml");

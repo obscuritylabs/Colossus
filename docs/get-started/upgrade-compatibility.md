@@ -32,9 +32,11 @@ configuration or operational changes.
 
 ### 2. Preserve the current authority set
 
-Back up the YAML configuration, journal, secure anchor, index positions, and their
-corresponding key identities. A state file without its keys and anchor is not a complete
-recovery set.
+Stop Desktop and active workers, then back up the Colossus home YAML configuration,
+`AGENTS.md`, required workspace partitions, journal, secure anchor, index positions,
+and their corresponding key identities. A state file without its keys and anchor is
+not a complete recovery set. See
+[Colossus home and workspace resolution](../reference/colossus-home.md#back-up-restore-and-uninstall).
 
 ### 3. Install the new binary beside the old one
 
@@ -72,6 +74,17 @@ Inspect the completed file before making it active:
 colossus --config .colossus/config.next.yaml config show
 colossus --config .colossus/config.next.yaml config effective
 ```
+
+Normal `config init` now creates `$COLOSSUS_HOME/config.yaml` with
+`storage.location: home_workspace`; `config init --local` creates the repository
+replacement. Existing repository-local `.colossus/config.yaml` files still take
+precedence and omitted `storage.location` retains historical `workspace` behavior, so
+their state paths continue to work without silent relocation.
+
+Desktop Managed Local starts fresh in the selected workspace's isolated Desktop home
+partition. Earlier application-support data is preserved but ignored; Colossus neither
+imports nor deletes it. Keep it until the new Desktop state is verified, then handle it
+through your normal retention process.
 
 ### 5. Verify local state, then run explicit diagnostics
 

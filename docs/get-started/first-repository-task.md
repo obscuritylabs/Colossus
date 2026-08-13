@@ -29,7 +29,7 @@ Initialize from the repository, then add its canonical absolute path:
 
 ```bash
 colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml config init \
+  config init --local \
   --sandbox-profile offline-default
 ```
 
@@ -49,7 +49,6 @@ executables, and unrelated network origins absent.
 
 ```bash
 colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml \
   config effective
 ```
 
@@ -60,7 +59,7 @@ capabilities remain unavailable or approval-gated without matching grants.
 
 ```bash
 colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml run \
+  run \
   "Map this repository. Name its three most important components and cite the files that support your answer. Do not change anything."
 ```
 
@@ -79,7 +78,6 @@ Check the repository and the audit trail:
 ```bash
 git status --short
 colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml \
   audit show --limit 20
 ```
 

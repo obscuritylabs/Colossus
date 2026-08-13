@@ -1,5 +1,8 @@
 //! Cross-process automatic compaction, visibility, and raw-history acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
 use tempfile::tempdir;
@@ -8,8 +11,11 @@ const JOURNAL_KEY: &str = "67676767676767676767676767676767676767676767676767676
 const SIGNING_KEY: &str = "7878787878787878787878787878787878787878787878787878787878787878";
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output {
-    Command::new(binary)
-        .current_dir(config.parent().expect("config directory"))
+    let root = config.parent().expect("config directory");
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, root);
+    command
+        .current_dir(root)
         .arg("--config")
         .arg(config)
         .args(arguments)

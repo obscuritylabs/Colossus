@@ -5,23 +5,70 @@ use super::*;
 pub struct RuntimeOpenOptions {
     /// Canonical repository workspace used by tools and repository identity.
     pub workspace: PathBuf,
+    /// Explicit Colossus home selected and validated by the trusted host.
+    ///
+    /// Embedded SDK hosts that do not opt into the shared user home leave this unset.
+    /// Runtime composition never resolves ambient home-directory environment state.
+    pub colossus_home: Option<PathBuf>,
+    /// Retained authority for descriptor-relative reads beneath `colossus_home`.
+    pub(super) colossus_home_root: Option<ConfinedRoot>,
+    /// Whether user-facing runs automatically load home and workspace AGENTS.md files.
+    ///
+    /// This is disabled only by trusted native composition for a dedicated internal
+    /// diagnostic probe; public run requests cannot change it.
+    pub(super) automatic_agent_instructions: bool,
     pub(super) expected_workspace_identity: Option<WorkspaceIdentityToken>,
 }
 
 impl RuntimeOpenOptions {
     /// Resolve one existing workspace directory without changing process state.
     pub fn for_workspace(workspace: impl AsRef<Path>) -> Result<Self, RuntimeError> {
-        let workspace = fs::canonicalize(workspace)?;
-        if !workspace.is_dir() {
+        Self {
+            workspace: workspace.as_ref().to_owned(),
+            colossus_home: None,
+            colossus_home_root: None,
+            automatic_agent_instructions: true,
+            expected_workspace_identity: None,
+        }
+        .canonicalized()
+    }
+
+    /// Revalidate and canonicalize the selected workspace without discarding host context.
+    pub fn canonicalized(mut self) -> Result<Self, RuntimeError> {
+        self.workspace = fs::canonicalize(&self.workspace)?;
+        if !self.workspace.is_dir() {
             return Err(RuntimeError::Config(format!(
                 "workspace is not a directory: {}",
-                workspace.display()
+                self.workspace.display()
             )));
         }
-        Ok(Self {
-            workspace,
-            expected_workspace_identity: None,
-        })
+        Ok(self)
+    }
+
+    /// Suppress automatic AGENTS.md loading for one trusted internal diagnostic runtime.
+    ///
+    /// Explicit probe and immutable runtime-mode instructions remain active. This option
+    /// belongs to native bootstrap composition and is not a per-run authority control.
+    #[must_use]
+    pub fn without_automatic_agent_instructions_for_diagnostics(mut self) -> Self {
+        self.automatic_agent_instructions = false;
+        self
+    }
+
+    /// Attach the absolute Colossus home resolved by a trusted interface adapter.
+    pub fn with_colossus_home(mut self, home: impl Into<PathBuf>) -> Result<Self, RuntimeError> {
+        let home = home.into();
+        if !home.is_absolute() {
+            return Err(RuntimeError::Config(
+                "the explicit Colossus home must be an absolute path".into(),
+            ));
+        }
+        let root = ConfinedRoot::bind(&home).map_err(|error| {
+            RuntimeError::Config(format!("the explicit Colossus home is unsafe: {error}"))
+        })?;
+        self.colossus_home = Some(root.path().to_owned());
+        self.colossus_home_root = Some(root);
+        Ok(self)
     }
 
     /// Require runtime lease acquisition to retain the exact directory identity
@@ -50,6 +97,51 @@ mod tests {
         assert_eq!(
             selected.workspace,
             fs::canonicalize(root.path()).expect("canonical root")
+        );
+        assert!(selected.colossus_home.is_none());
+        assert!(selected.colossus_home_root.is_none());
+        assert!(selected.automatic_agent_instructions);
+    }
+
+    #[test]
+    fn diagnostic_suppression_is_explicit_and_survives_canonicalization() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let selected = RuntimeOpenOptions::for_workspace(workspace.path())
+            .expect("workspace options")
+            .without_automatic_agent_instructions_for_diagnostics()
+            .canonicalized()
+            .expect("canonicalized options");
+        assert!(!selected.automatic_agent_instructions);
+    }
+
+    #[test]
+    fn workspace_options_accept_an_explicit_non_ambient_colossus_home() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let home = tempfile::tempdir().expect("home");
+        let home_path = home.path().canonicalize().expect("canonical home");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&home_path, fs::Permissions::from_mode(0o700))
+                .expect("private home permissions");
+        }
+        let selected = RuntimeOpenOptions::for_workspace(workspace.path())
+            .expect("workspace options")
+            .with_colossus_home(&home_path)
+            .expect("absolute home")
+            .canonicalized()
+            .expect("canonicalized options");
+        assert_eq!(selected.colossus_home.as_deref(), Some(home_path.as_path()));
+        assert_eq!(
+            selected.colossus_home_root.as_ref().map(ConfinedRoot::path),
+            Some(home_path.as_path())
+        );
+        assert!(
+            RuntimeOpenOptions::for_workspace(workspace.path())
+                .expect("workspace options")
+                .with_colossus_home("relative-home")
+                .is_err()
         );
     }
 

@@ -14,6 +14,8 @@ pub struct CreateSubagentRequest {
     pub role: String,
     /// Persisted exact model-tool ceiling, or trusted private-call compatibility.
     pub allowed_tools: Option<Vec<String>>,
+    /// Content-addressed private instruction snapshot inherited from the parent run.
+    pub instruction_snapshot_id: Option<String>,
 }
 
 /// Validated application service shared by CLI, TUI, tools, and embedded callers.
@@ -538,6 +540,20 @@ impl WorkService {
         actor: Actor,
     ) -> Result<SubagentJob, StoreError> {
         self.require_session(&request.session_id)?;
+        if request
+            .instruction_snapshot_id
+            .as_deref()
+            .is_some_and(|id| {
+                id.len() != 64
+                    || !id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+        {
+            return Err(StoreError::Adapter(
+                "invalid subagent instruction snapshot reference".into(),
+            ));
+        }
         let id = format!("agent-{}", Uuid::now_v7());
         let child_session_id = Uuid::now_v7().to_string();
         self.sessions.create_session(
@@ -546,7 +562,7 @@ impl WorkService {
             actor.clone(),
         )?;
         let timestamp = now()?;
-        self.repository.create_subagent(
+        self.repository.create_subagent_with_instruction_snapshot(
             SubagentJob {
                 id,
                 session_id: request.session_id,
@@ -565,6 +581,7 @@ impl WorkService {
                 started_at: None,
                 completed_at: None,
             },
+            request.instruction_snapshot_id,
             actor,
         )
     }

@@ -7,7 +7,7 @@ use crate::{
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, MAX_MANAGED_MODELS, MAX_MANAGED_PROVIDERS,
         ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        WorkspaceSetting,
+        ReasoningEffortSetting, WorkspaceSetting, provider_base_url,
     },
     dto::{CommandErrorDto, ConnectionStatusDto},
 };
@@ -186,6 +186,7 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) managed_state: ManagedRuntimeStateDto,
     pub(crate) workspace: Option<WorkspaceSummaryDto>,
     pub(crate) provider: ProviderSummaryDto,
+    pub(crate) codex_auth: crate::codex_auth::CodexAuthStatusDto,
     pub(crate) managed_model_configuration: ManagedModelConfigurationDto,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) approval_mode: DesktopApprovalModeDto,
@@ -268,6 +269,7 @@ pub(crate) struct ManagedModelDto {
     pub(crate) context_window_tokens: u64,
     pub(crate) max_output_tokens: u64,
     pub(crate) capabilities: ModelCapabilitiesSetting,
+    pub(crate) reasoning_effort: Option<ReasoningEffortSetting>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -303,6 +305,7 @@ impl ManagedModelConfigurationDto {
                     context_window_tokens: model.context_window_tokens,
                     max_output_tokens: model.max_output_tokens,
                     capabilities: model.capabilities,
+                    reasoning_effort: model.reasoning_effort,
                 })
                 .collect(),
             roles: settings.model_roles.clone(),
@@ -337,6 +340,8 @@ pub(crate) struct ManagedModelInput {
     pub(crate) context_window_tokens: u64,
     pub(crate) max_output_tokens: u64,
     pub(crate) capabilities: ModelCapabilitiesSetting,
+    #[serde(default)]
+    pub(crate) reasoning_effort: Option<ReasoningEffortSetting>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -376,10 +381,17 @@ impl ApplyManagedModelConfigurationInput {
 
         let mut providers = BTreeSet::new();
         for provider in &self.providers {
+            let provider_connection_valid = if provider.provider_kind == ProviderKindSetting::Codex
+            {
+                provider.base_url == provider_base_url(provider.provider_kind)
+                    && provider.credential_action == CredentialActionInput::None
+            } else {
+                validate_managed_provider_base_url(&provider.base_url).is_ok()
+            };
             if !valid_profile(&provider.profile)
                 || !providers.insert(provider.profile.as_str())
                 || provider.timeout_ms == Some(0)
-                || validate_managed_provider_base_url(&provider.base_url).is_err()
+                || !provider_connection_valid
             {
                 return Err(CommandErrorDto::invalid(
                     "providers",
@@ -448,6 +460,7 @@ impl ApplyManagedModelConfigurationInput {
                 context_window_tokens: model.context_window_tokens,
                 max_output_tokens: model.max_output_tokens,
                 capabilities: model.capabilities,
+                reasoning_effort: model.reasoning_effort,
             })
             .collect()
     }
@@ -495,6 +508,12 @@ impl ConfigureManagedRuntimeInput {
                 "Managed Local accepts only the Minimal or Development access profile.",
             ));
         }
+        if self.provider_kind == ProviderKindSetting::Codex && self.replace_credential {
+            return Err(CommandErrorDto::invalid(
+                "replaceCredential",
+                "Codex uses the official ChatGPT sign-in instead of an API key.",
+            ));
+        }
         Ok(())
     }
 }
@@ -506,7 +525,7 @@ mod tests {
     fn input() -> ConfigureManagedRuntimeInput {
         ConfigureManagedRuntimeInput {
             workspace_id: uuid::Uuid::now_v7().to_string(),
-            provider_kind: ProviderKindSetting::OpenAiCompatible,
+            provider_kind: ProviderKindSetting::Compatible,
             model: "test-model".into(),
             access_profile: AccessProfileSetting::Development,
             replace_credential: false,
@@ -518,7 +537,7 @@ mod tests {
             workspace_id: uuid::Uuid::now_v7().to_string(),
             providers: vec![ManagedProviderInput {
                 profile: "local-provider".into(),
-                provider_kind: ProviderKindSetting::OpenAiCompatible,
+                provider_kind: ProviderKindSetting::Compatible,
                 base_url: base_url.into(),
                 timeout_ms: Some(30_000),
                 credential_action: CredentialActionInput::None,
@@ -533,6 +552,7 @@ mod tests {
                     tool_calls: false,
                     streaming: true,
                 },
+                reasoning_effort: None,
             }],
             roles: BTreeMap::from([
                 ("primary".into(), "primary".into()),
@@ -605,8 +625,9 @@ mod tests {
     #[test]
     fn managed_input_accepts_the_renderer_provider_wire_values() {
         for (wire, expected) in [
-            ("openai_responses", ProviderKindSetting::OpenAiResponses),
-            ("openai_compatible", ProviderKindSetting::OpenAiCompatible),
+            ("openai_responses", ProviderKindSetting::Responses),
+            ("openai_compatible", ProviderKindSetting::Compatible),
+            ("open_ai_codex", ProviderKindSetting::Codex),
         ] {
             let input: ConfigureManagedRuntimeInput = serde_json::from_value(serde_json::json!({
                 "workspaceId": uuid::Uuid::now_v7().to_string(),
@@ -680,12 +701,25 @@ mod tests {
     }
 
     #[test]
+    fn managed_codex_configuration_has_a_fixed_origin_and_no_key_action() {
+        let mut input = managed_input(crate::desktop_settings::CODEX_BASE_URL);
+        input.providers[0].provider_kind = ProviderKindSetting::Codex;
+        input.validate().expect("Codex input");
+
+        input.providers[0].credential_action = CredentialActionInput::Replace;
+        assert!(input.validate().is_err());
+        input.providers[0].credential_action = CredentialActionInput::None;
+        input.providers[0].base_url = "https://example.test/v1".into();
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
     fn renderer_configuration_summary_omits_native_credential_ids() {
         let credential_id = uuid::Uuid::now_v7().to_string();
         let settings = DesktopSettings {
             providers: vec![ProviderSetting {
                 profile: "provider".into(),
-                kind: ProviderKindSetting::OpenAiCompatible,
+                kind: ProviderKindSetting::Compatible,
                 base_url: "https://models.example.test/v1".into(),
                 credential_id: Some(credential_id.clone()),
                 timeout_ms: Some(30_000),
@@ -700,6 +734,7 @@ mod tests {
                     tool_calls: true,
                     streaming: false,
                 },
+                reasoning_effort: Some(ReasoningEffortSetting::High),
             }],
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()

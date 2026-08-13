@@ -53,6 +53,194 @@ function Assert-OwnedDirectory([string]$Path) {
     }
 }
 
+function Get-CurrentUserSid() {
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $currentUserSid = $currentIdentity.User
+    } finally {
+        $currentIdentity.Dispose()
+    }
+    if ($null -eq $currentUserSid) {
+        Throw-InstallerError "current Windows token has no user SID"
+    }
+    return $currentUserSid
+}
+
+function Assert-PrivateHomeDirectory([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        Throw-InstallerError "Colossus home is missing, linked, or not a directory: $Path"
+    }
+
+    $currentUserSid = Get-CurrentUserSid
+    $acl = Get-Acl -LiteralPath $Path
+    $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if (-not $ownerSid.Equals($currentUserSid)) {
+        Throw-InstallerError "Colossus home is not owned by the current user: $Path"
+    }
+
+    $trustedSids = @(
+        $currentUserSid.Value,
+        "S-1-5-18",       # LocalSystem
+        "S-1-5-32-544"   # Builtin Administrators
+    )
+    $accessRules = $acl.GetAccessRules(
+        $true,
+        $true,
+        [Security.Principal.SecurityIdentifier]
+    )
+    foreach ($rule in $accessRules) {
+        if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $rule.IdentityReference.Value -cnotin $trustedSids) {
+            Throw-InstallerError "Colossus home grants access to an untrusted principal: $Path"
+        }
+    }
+}
+
+function Assert-SafeHomeAncestor([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        Throw-InstallerError "Colossus home ancestor is linked or not a directory: $Path"
+    }
+
+    $currentUserSid = Get-CurrentUserSid
+    $trustedSids = @(
+        $currentUserSid.Value,
+        "S-1-5-18",       # LocalSystem
+        "S-1-5-32-544",  # Builtin Administrators
+        "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" # TrustedInstaller
+    )
+    $acl = Get-Acl -LiteralPath $Path
+    $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if ($ownerSid.Value -cnotin $trustedSids) {
+        Throw-InstallerError "Colossus home ancestor is owned by an untrusted principal: $Path"
+    }
+
+    $namespaceMutationRights =
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [Security.AccessControl.FileSystemRights]::TakeOwnership
+    $accessRules = $acl.GetAccessRules(
+        $true,
+        $true,
+        [Security.Principal.SecurityIdentifier]
+    )
+    foreach ($rule in $accessRules) {
+        $inheritOnly = ($rule.PropagationFlags -band
+            [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0
+        if (-not $inheritOnly -and
+            $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $rule.IdentityReference.Value -cnotin $trustedSids -and
+            ($rule.FileSystemRights -band $namespaceMutationRights) -ne 0) {
+            Throw-InstallerError "Colossus home ancestor grants namespace control to an untrusted principal: $Path"
+        }
+    }
+}
+
+function Assert-SafeHomeAncestors([string]$Path) {
+    $current = [IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrEmpty($current)) {
+        if (Test-Path -LiteralPath $current) {
+            Assert-SafeHomeAncestor $current
+        }
+        $parent = [IO.Directory]::GetParent($current)
+        if ($null -eq $parent) { break }
+        $current = $parent.FullName
+    }
+}
+
+function Set-OwnerPrivateDirectoryAcl([string]$Path) {
+    $currentUserSid = Get-CurrentUserSid
+    $privateAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $privateAcl.SetOwner($currentUserSid)
+    $privateAcl.SetAccessRuleProtection($true, $false)
+    $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+        $currentUserSid,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]::Allow
+    )
+    $privateAcl.AddAccessRule($rule) | Out-Null
+    Set-Acl -LiteralPath $Path -AclObject $privateAcl
+}
+
+function New-OwnerPrivateDirectoryPath([string]$Path) {
+    if (Test-Path -LiteralPath $Path) { return }
+    $parent = [IO.Directory]::GetParent($Path)
+    if ($null -eq $parent) {
+        Throw-InstallerError "Colossus home has no creatable parent: $Path"
+    }
+    if (-not (Test-Path -LiteralPath $parent.FullName)) {
+        New-OwnerPrivateDirectoryPath $parent.FullName
+    }
+    Assert-SafeHomeAncestors $parent.FullName
+
+    $created = $false
+    try {
+        New-Item -ItemType Directory -Path $Path | Out-Null
+        $created = $true
+    } catch {
+        if (-not (Test-Path -LiteralPath $Path)) { throw }
+    }
+    if ($created) {
+        Set-OwnerPrivateDirectoryAcl $Path
+    }
+    Assert-NoReparseComponents $Path
+    Assert-SafeHomeAncestors $Path
+    Assert-PrivateHomeDirectory $Path
+}
+
+function Initialize-ColossusHome() {
+    $configuredHome = [Environment]::GetEnvironmentVariable("COLOSSUS_HOME", "Process")
+    if ($null -eq $configuredHome) {
+        if ([string]::IsNullOrWhiteSpace($HOME)) {
+            Throw-InstallerError "HOME must be set when COLOSSUS_HOME is omitted"
+        }
+        $configuredHome = Join-Path $HOME ".colossus"
+    } elseif ([string]::IsNullOrWhiteSpace($configuredHome)) {
+        Throw-InstallerError "COLOSSUS_HOME cannot be empty"
+    }
+    if (-not [IO.Path]::IsPathRooted($configuredHome)) {
+        Throw-InstallerError "Colossus home must be absolute"
+    }
+    if ($configuredHome.IndexOfAny([char[]](0..31)) -ge 0) {
+        Throw-InstallerError "Colossus home cannot contain control characters"
+    }
+
+    $homePath = [IO.Path]::GetFullPath($configuredHome)
+    Assert-NoReparseComponents $homePath
+    Assert-SafeHomeAncestors $homePath
+    if (-not (Test-Path -LiteralPath $homePath)) {
+        New-OwnerPrivateDirectoryPath $homePath
+    }
+    Assert-NoReparseComponents $homePath
+    Assert-SafeHomeAncestors $homePath
+    Assert-PrivateHomeDirectory $homePath
+    return $homePath
+}
+
+function Test-PrivilegedSystemInstall() {
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        if ($null -eq $currentIdentity.User -or
+            $currentIdentity.User.Value -ceq "S-1-5-18") {
+            return $true
+        }
+        $principal = [Security.Principal.WindowsPrincipal]::new($currentIdentity)
+        return $principal.IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator
+        )
+    } finally {
+        $currentIdentity.Dispose()
+    }
+}
+
 $sourceBinary = Join-Path $PSScriptRoot "colossus.exe"
 $metadataPath = Join-Path $PSScriptRoot "install-metadata"
 if (-not (Test-Path -LiteralPath $sourceBinary -PathType Leaf)) {
@@ -116,6 +304,11 @@ if ($metadata.installer_kind -cne "direct") {
 $binaryVersion = (& $sourceBinary --version | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $binaryVersion -cne "colossus $($metadata.version)") {
     Throw-InstallerError "package binary version disagrees with metadata"
+}
+
+$colossusHome = $null
+if (-not (Test-PrivilegedSystemInstall)) {
+    $colossusHome = Initialize-ColossusHome
 }
 
 $binDirectory = Join-Path $Prefix "bin"
@@ -221,3 +414,8 @@ if (-not $binaryCommitted) {
 }
 Write-Output "installed $target"
 Write-Output "recorded direct installation receipt at $receipt"
+if ($null -ne $colossusHome) {
+    Write-Output "prepared Colossus home at $colossusHome"
+} else {
+    Write-Output "deferred Colossus home creation until first non-privileged user launch"
+}

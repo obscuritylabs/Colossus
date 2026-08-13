@@ -1,3 +1,4 @@
+use colossus_home::{ColossusHome, HomeSurface, WorkspaceIdentityRef};
 use colossus_sdk::{
     REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity, default_managed_provider_timeout_ms,
     validate_managed_model_identifier, validate_managed_provider_base_url,
@@ -22,11 +23,11 @@ use std::fs::File;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 const SETTINGS_SCHEMA_VERSION: u16 = 3;
-const SETTINGS_FILE: &str = "desktop-settings.json";
+const SETTINGS_FILE: &str = "settings.json";
 const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
 const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
-const SELF_TEST_DIRECTORY: &str = "offline-self-test";
+const SELF_TEST_DIRECTORY: &str = "self-test";
 const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
@@ -54,6 +55,7 @@ const MODEL_ROLES: [&str; 7] = [
 ];
 pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub(crate) const CODEX_BASE_URL: &str = colossus_codex_auth::CODEX_API_BASE_URL;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,16 +70,33 @@ pub(crate) enum AccessProfileSetting {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) enum ProviderKindSetting {
     #[serde(rename = "openai_responses", alias = "open_ai_responses")]
-    OpenAiResponses,
+    Responses,
     #[serde(rename = "openai_compatible", alias = "open_ai_compatible")]
-    OpenAiCompatible,
+    Compatible,
+    #[serde(rename = "open_ai_codex")]
+    Codex,
 }
 
 pub(crate) const fn provider_base_url(kind: ProviderKindSetting) -> &'static str {
     match kind {
-        ProviderKindSetting::OpenAiResponses => OPENAI_BASE_URL,
-        ProviderKindSetting::OpenAiCompatible => OPENROUTER_BASE_URL,
+        ProviderKindSetting::Responses => OPENAI_BASE_URL,
+        ProviderKindSetting::Compatible => OPENROUTER_BASE_URL,
+        ProviderKindSetting::Codex => CODEX_BASE_URL,
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReasoningEffortSetting {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
+    Ultra,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -129,6 +148,8 @@ pub(crate) struct ModelSetting {
     pub(crate) context_window_tokens: u64,
     pub(crate) max_output_tokens: u64,
     pub(crate) capabilities: ModelCapabilitiesSetting,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_effort: Option<ReasoningEffortSetting>,
 }
 
 pub(crate) struct SelfTestStorage {
@@ -282,6 +303,7 @@ impl DesktopSettings {
 #[derive(Clone, Debug)]
 pub(crate) struct SettingsStore {
     root: PathBuf,
+    home: Option<ColossusHome>,
 }
 
 pub(crate) struct ManagedWorkspaceStorage {
@@ -290,9 +312,28 @@ pub(crate) struct ManagedWorkspaceStorage {
 }
 
 impl SettingsStore {
+    pub(crate) fn open_application() -> Result<Self, CommandErrorDto> {
+        let home = ColossusHome::resolve_and_ensure().map_err(|_| storage_error())?;
+        Self::open_home(home)
+    }
+
     pub(crate) fn open(root: PathBuf) -> Result<Self, CommandErrorDto> {
         ensure_private_directory(&root)?;
-        Ok(Self { root })
+        Ok(Self { root, home: None })
+    }
+
+    fn open_home(home: ColossusHome) -> Result<Self, CommandErrorDto> {
+        let root = home.desktop_root().map_err(|_| storage_error())?;
+        let mut store = Self::open(root)?;
+        store.home = Some(home);
+        Ok(store)
+    }
+
+    pub(crate) fn home_root(&self) -> Result<&Path, CommandErrorDto> {
+        self.home
+            .as_ref()
+            .map(ColossusHome::root)
+            .ok_or_else(storage_error)
     }
 
     pub(crate) fn load(&self) -> Result<DesktopSettings, CommandErrorDto> {
@@ -451,15 +492,31 @@ impl SettingsStore {
         partition_digest.update(identity.version.to_le_bytes());
         partition_digest.update(identity.sha256.as_bytes());
         let partition = partition_digest.finalize();
-        let managed_root = self.root.join(MANAGED_DIRECTORY);
-        ensure_private_directory(&managed_root)?;
-        let directory = managed_root.join(hex::encode(&partition[..]));
-        ensure_private_directory(&directory)?;
+        let (directory, instance_partition) = if let Some(home) = &self.home {
+            let identity = WorkspaceIdentityRef {
+                version: identity.version,
+                sha256: &identity.sha256,
+            };
+            let partition_id = home
+                .workspace_partition_id(&canonical, identity)
+                .map_err(|_| storage_error())?;
+            let directory = home
+                .workspace_surface_dir(&canonical, identity, HomeSurface::Desktop)
+                .map_err(|_| storage_error())?;
+            (directory, partition_id.into_bytes())
+        } else {
+            let managed_root = self.root.join(MANAGED_DIRECTORY);
+            ensure_private_directory(&managed_root)?;
+            let partition_id = hex::encode(&partition[..]);
+            let directory = managed_root.join(&partition_id);
+            ensure_private_directory(&directory)?;
+            (directory, partition_id.into_bytes())
+        };
 
         let mut instance_digest = Sha256::new();
         instance_digest.update(WORKSPACE_INSTANCE_DOMAIN);
         instance_digest.update(seed.as_bytes());
-        instance_digest.update(partition);
+        instance_digest.update(instance_partition);
         let digest = instance_digest.finalize();
         let mut bytes = [0_u8; 16];
         bytes.copy_from_slice(&digest[..16]);
@@ -536,16 +593,6 @@ impl SettingsStore {
             workspace,
         })
     }
-}
-
-pub(crate) fn application_support_root() -> Result<PathBuf, CommandErrorDto> {
-    BaseDirs::new()
-        .map(|directories| {
-            directories
-                .data_dir()
-                .join("com.obscuritylabs.colossus.desktop")
-        })
-        .ok_or_else(storage_error)
 }
 
 pub(crate) fn validate_workspace(path: &Path) -> Result<WorkspaceSetting, CommandErrorDto> {
@@ -787,6 +834,11 @@ fn validate_managed_configuration(
                 .credential_id
                 .as_deref()
                 .is_some_and(|id| !valid_opaque_id(id))
+        {
+            return Err(storage_error());
+        }
+        if provider.kind == ProviderKindSetting::Codex
+            && (provider.base_url != CODEX_BASE_URL || provider.credential_id.is_some())
         {
             return Err(storage_error());
         }
@@ -1336,6 +1388,7 @@ mod tests {
                     tool_calls: true,
                     streaming: true,
                 },
+                reasoning_effort: None,
             }],
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
@@ -1351,6 +1404,63 @@ mod tests {
         let canonical_root = fs::canonicalize(&root).expect("canonical store root");
         assert_eq!(canonical_root, root);
         (parent, canonical_root, store)
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn application_home_uses_desktop_settings_and_workspace_surface_layout() {
+        let parent = tempfile::tempdir().expect("home parent");
+        let parent = fs::canonicalize(parent.path()).expect("canonical home parent");
+        // Represents the former Tauri Application Support root. Fresh shared-home
+        // startup never receives this path and therefore must neither migrate nor
+        // delete its contents.
+        let legacy_application_support = parent.join("legacy-application-support");
+        fs::create_dir(&legacy_application_support).expect("legacy application support");
+        let legacy_marker = legacy_application_support.join("legacy-state.marker");
+        fs::write(&legacy_marker, b"preserve exactly").expect("legacy marker");
+        let home = ColossusHome::ensure_at(parent.join(".colossus")).expect("home");
+        let store = SettingsStore::open_home(home.clone()).expect("Desktop store");
+        let settings = DesktopSettings::default();
+        store.save(&settings).expect("save Desktop settings");
+        assert!(home.root().join("desktop/settings.json").is_file());
+        assert_eq!(
+            fs::read(&legacy_marker).expect("unchanged legacy marker"),
+            b"preserve exactly"
+        );
+        assert_eq!(
+            fs::read_dir(&legacy_application_support)
+                .expect("legacy directory")
+                .count(),
+            1,
+            "fresh Desktop startup must ignore legacy application-support data"
+        );
+
+        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace_path = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let workspace = validate_workspace(&workspace_path).expect("workspace identity");
+        let storage = store
+            .managed_workspace_storage(
+                &settings.managed_instance_id,
+                &workspace.path,
+                workspace.identity.as_ref().expect("current identity"),
+            )
+            .expect("managed storage");
+        assert_eq!(
+            storage
+                .instance_dir
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("desktop")
+        );
+        assert_eq!(
+            storage
+                .instance_dir
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("workspaces")
+        );
     }
 
     #[cfg(windows)]
@@ -1388,32 +1498,36 @@ mod tests {
     #[test]
     fn provider_kind_wire_values_match_renderer_and_accept_preview_aliases() {
         assert_eq!(
-            serde_json::to_string(&ProviderKindSetting::OpenAiResponses).expect("serialize"),
+            serde_json::to_string(&ProviderKindSetting::Responses).expect("serialize"),
             r#""openai_responses""#,
         );
         assert_eq!(
-            serde_json::to_string(&ProviderKindSetting::OpenAiCompatible).expect("serialize"),
+            serde_json::to_string(&ProviderKindSetting::Compatible).expect("serialize"),
             r#""openai_compatible""#,
+        );
+        assert_eq!(
+            serde_json::to_string(&ProviderKindSetting::Codex).expect("serialize"),
+            r#""open_ai_codex""#,
         );
         assert_eq!(
             serde_json::from_str::<ProviderKindSetting>(r#""open_ai_responses""#)
                 .expect("legacy responses"),
-            ProviderKindSetting::OpenAiResponses,
+            ProviderKindSetting::Responses,
         );
         assert_eq!(
             serde_json::from_str::<ProviderKindSetting>(r#""open_ai_compatible""#)
                 .expect("legacy compatible"),
-            ProviderKindSetting::OpenAiCompatible,
+            ProviderKindSetting::Compatible,
         );
         assert_eq!(
             serde_json::from_str::<ProviderKindSetting>(r#""openai_responses""#)
                 .expect("canonical responses"),
-            ProviderKindSetting::OpenAiResponses,
+            ProviderKindSetting::Responses,
         );
         assert_eq!(
             serde_json::from_str::<ProviderKindSetting>(r#""openai_compatible""#)
                 .expect("canonical compatible"),
-            ProviderKindSetting::OpenAiCompatible,
+            ProviderKindSetting::Compatible,
         );
     }
 
@@ -1455,7 +1569,7 @@ mod tests {
     #[test]
     fn preview_provider_kind_is_loaded_and_rewritten_canonically() {
         let settings = configured_settings(
-            ProviderKindSetting::OpenAiCompatible,
+            ProviderKindSetting::Compatible,
             OPENROUTER_BASE_URL,
             Some(Uuid::now_v7().to_string()),
         );
@@ -1473,7 +1587,7 @@ mod tests {
     fn settings_round_trip_never_contains_provider_secret() {
         let (_root_guard, canonical_root, store) = test_store();
         let settings = configured_settings(
-            ProviderKindSetting::OpenAiCompatible,
+            ProviderKindSetting::Compatible,
             OPENROUTER_BASE_URL,
             Some(Uuid::now_v7().to_string()),
         );
@@ -1484,12 +1598,23 @@ mod tests {
     }
 
     #[test]
+    fn codex_settings_require_the_fixed_backend_without_a_key_reference() {
+        let settings = configured_settings(ProviderKindSetting::Codex, CODEX_BASE_URL, None);
+        validate_settings(&settings).expect("Codex settings");
+
+        let mut with_key = settings.clone();
+        with_key.providers[0].credential_id = Some(Uuid::now_v7().to_string());
+        assert!(validate_settings(&with_key).is_err());
+
+        let mut changed_origin = settings;
+        changed_origin.providers[0].base_url = "https://example.test/v1".into();
+        assert!(validate_settings(&changed_origin).is_err());
+    }
+
+    #[test]
     fn settings_reject_renderer_visible_model_controls() {
-        let mut settings = configured_settings(
-            ProviderKindSetting::OpenAiCompatible,
-            OPENROUTER_BASE_URL,
-            None,
-        );
+        let mut settings =
+            configured_settings(ProviderKindSetting::Compatible, OPENROUTER_BASE_URL, None);
         settings.models[0].model = "model\nforged-status".into();
 
         assert!(validate_settings(&settings).is_err());
@@ -1540,11 +1665,8 @@ mod tests {
     #[test]
     fn v2_provider_timeout_is_preserved_as_an_explicit_override() {
         let (_root_guard, canonical_root, store) = test_store();
-        let settings = configured_settings(
-            ProviderKindSetting::OpenAiCompatible,
-            OPENROUTER_BASE_URL,
-            None,
-        );
+        let settings =
+            configured_settings(ProviderKindSetting::Compatible, OPENROUTER_BASE_URL, None);
         let mut encoded = serde_json::to_value(settings).expect("settings");
         encoded["schemaVersion"] = serde_json::Value::from(2);
         let path = canonical_root.join(SETTINGS_FILE);
@@ -1566,11 +1688,8 @@ mod tests {
 
     #[test]
     fn automatic_desktop_timeout_uses_the_resolved_host_default() {
-        let mut settings = configured_settings(
-            ProviderKindSetting::OpenAiCompatible,
-            OPENROUTER_BASE_URL,
-            None,
-        );
+        let mut settings =
+            configured_settings(ProviderKindSetting::Compatible, OPENROUTER_BASE_URL, None);
         settings.providers[0].timeout_ms = None;
         assert_eq!(settings.providers[0].effective_timeout_ms(), 300_000);
 
@@ -1627,7 +1746,7 @@ mod tests {
         fs::create_dir(&workspace).expect("workspace");
         let old_seed = Uuid::now_v7().to_string();
         let mut legacy = configured_settings(
-            ProviderKindSetting::OpenAiCompatible,
+            ProviderKindSetting::Compatible,
             OPENROUTER_BASE_URL,
             Some(Uuid::now_v7().to_string()),
         );

@@ -681,6 +681,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-codex-auth"
+version = "0.10.7"
+dependencies = [
+ "base64 0.22.1",
+ "colossus-windows-native",
+ "directories",
+ "fs4",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-contracts"
 version = "0.10.7"
 dependencies = [
@@ -702,6 +720,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "colossus-codex-auth",
+ "colossus-home",
  "colossus-network",
  "colossus-sdk",
  "colossus-sidecar-protocol",
@@ -772,6 +792,18 @@ dependencies = [
  "uuid",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "colossus-home"
+version = "0.10.7"
+dependencies = [
+ "colossus-windows-native",
+ "directories",
+ "hex",
+ "rustix",
+ "sha2",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1607,6 +1639,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs4"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
+dependencies = [
+ "rustix",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

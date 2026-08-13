@@ -1,5 +1,8 @@
 //! End-to-end strict configuration and secret-safe diagnostic acceptance.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
 use tempfile::tempdir;
@@ -13,6 +16,7 @@ const RAW_CONFIG_SECRET: &str =
 
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
     command
         .args(["--config", config.to_str().expect("config path")])
         .env("COLOSSUS_CONFIG_DISPLAY_JOURNAL_SECRET", JOURNAL_SECRET)

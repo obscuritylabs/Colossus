@@ -36,6 +36,28 @@ impl RedbEventJournal {
         mode: StartupVerificationMode,
     ) -> Result<Self, StoreError> {
         let database = Database::create(path).map_err(adapter_error)?;
+        Self::open_database(database, keys, signer, mode)
+    }
+
+    /// Open from an already no-follow, owner-validated read/write file.
+    pub fn open_file_with_startup_verification(
+        file: File,
+        keys: Arc<dyn KeyProvider>,
+        signer: Arc<dyn CheckpointSigner>,
+        mode: StartupVerificationMode,
+    ) -> Result<Self, StoreError> {
+        let database = Database::builder()
+            .create_file(file)
+            .map_err(adapter_error)?;
+        Self::open_database(database, keys, signer, mode)
+    }
+
+    fn open_database(
+        database: Database,
+        keys: Arc<dyn KeyProvider>,
+        signer: Arc<dyn CheckpointSigner>,
+        mode: StartupVerificationMode,
+    ) -> Result<Self, StoreError> {
         Self::ensure_schema(&database)?;
         let payload_protection = keys.payload_protection();
         Self::initialize_payload_protection(&database, payload_protection)?;

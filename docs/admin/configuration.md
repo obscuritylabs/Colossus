@@ -15,41 +15,45 @@ effective access surface easy to review.
 ## Prerequisites
 
 - An installed `colossus` binary.
-- A repository where `.colossus/` may hold local configuration and state.
+- An owner-private [Colossus home](../reference/colossus-home.md).
+- A repository where `.colossus/config.yaml` may intentionally replace user defaults.
 - Absolute paths for every filesystem root and executable you intend to grant.
 
 ## Steps
 
-1. Select the repository workspace and create configuration without overwriting any
-   existing file:
+1. Select the repository workspace and create the user-level configuration without
+   overwriting any existing file:
 
     ```bash
-    colossus -w /absolute/path/to/repository \
-      --config .colossus/config.yaml config init
+    colossus -w /absolute/path/to/repository config init
     ```
 
    `config init` defaults `access.profile: development` to
-   `sandbox.profile: workspace-development` and uses keyless plaintext journal storage.
-   Override these choices explicitly:
+   `sandbox.profile: workspace-development`, uses keyless plaintext journal storage,
+   and writes `storage.location: home_workspace`. Override these choices explicitly:
 
     ```bash
     colossus -w /absolute/path/to/repository \
-      --config .colossus/config.yaml config init \
+      config init \
       --access-profile pinned \
       --sandbox-profile offline-default \
       --storage-keys platform
     ```
 
+   When one repository needs a complete replacement, use `config init --local` to
+   create `<workspace>/.colossus/config.yaml`. Explicit, local, and user configurations
+   are selected in that order and never merged.
+
 2. Parse and render the result:
 
     ```bash
-    colossus --config .colossus/config.yaml config show
+    colossus -w /absolute/path/to/repository config show
     ```
 
 3. Inspect resolved tools, decisions, and unmet prerequisites:
 
     ```bash
-    colossus --config .colossus/config.yaml config effective
+    colossus -w /absolute/path/to/repository config effective
     ```
 
 4. Add only the provider, access, and sandbox entries needed for this deployment.
@@ -59,9 +63,9 @@ effective access surface easy to review.
 5. Run the bounded diagnostic set after every material edit:
 
     ```bash
-    colossus --config .colossus/config.yaml state doctor
-    colossus --config .colossus/config.yaml policy doctor
-    colossus --config .colossus/config.yaml sandbox doctor
+    colossus -w /absolute/path/to/repository state doctor
+    colossus -w /absolute/path/to/repository policy doctor
+    colossus -w /absolute/path/to/repository sandbox doctor
     ```
 
 Common deployment shapes are:
@@ -99,21 +103,22 @@ instead of attempting an in-place change.
 On a headless host that requires encryption, generate the references directly:
 
 ```bash
-colossus --config .colossus/config.yaml config init --storage-keys environment
+colossus config init --storage-keys environment
 ```
 
 This produces an equivalent `storage.keys` block without secret values:
 
 ```yaml
 storage:
-  path: .colossus/state.redb
+  location: home_workspace
+  path: state.redb
   startupVerification: incremental
   keys:
     kind: environment
     journal_variable: COLOSSUS_JOURNAL_KEY
     journal_key_id: journal-production
     signing_variable: COLOSSUS_SIGNING_KEY
-    anchor_path: .colossus/secure-anchor.json
+    anchor_path: secure-anchor.json
 ```
 
 Generate two independent 32-byte values for the process. These commands place the
@@ -154,8 +159,8 @@ and all doctor commands report a usable deployment or a specific unmet obligatio
 Run a credential-free turn before connecting an external provider:
 
 ```bash
-colossus --config .colossus/config.yaml run "configuration smoke"
-colossus --config .colossus/config.yaml audit verify
+colossus -w /absolute/path/to/repository run "configuration smoke"
+colossus -w /absolute/path/to/repository audit verify
 ```
 
 The run should complete through the configured role and the audit chain should verify.
@@ -166,12 +171,13 @@ The run should complete through the configured role and the audit chain should v
   [Configuration fields](../reference/configuration.md).
 - An exact tool include with a missing prerequisite is an error; inherited tools with
   missing prerequisites are hidden and explained by `config effective`.
-- Relative explicit sandbox roots and executables are rejected; workspace-owned config,
-  state, workflow, skill, and pack paths resolve from the canonical `--workspace`.
+- Relative explicit sandbox roots and executables are rejected. Workspace-owned config,
+  workflow, skill, and pack paths resolve from canonical `--workspace`; storage uses
+  its explicit `location`.
 - A configured remote origin must also appear in `sandbox.networkDestinations`.
 - A public HTTP(S) origin may match `*`; loopback/private/metadata origins require an
   exact entry.
-- `config init` intentionally refuses to overwrite. Back up or choose a new path.
+- `config init` intentionally refuses to overwrite. Back up or choose a new home/path.
 
 Do not weaken multiple controls at once to clear an error. Follow the first unmet
 obligation reported by the diagnostics.

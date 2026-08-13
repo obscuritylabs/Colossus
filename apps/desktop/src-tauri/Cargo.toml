@@ -28,6 +28,8 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.22.1"
+colossus-codex-auth = { version = "=0.10.7", path = "../../../crates/colossus-codex-auth" }
+colossus-home = { version = "=0.10.7", path = "../../../crates/colossus-home" }
 colossus-network = { version = "=0.10.7", path = "../../../crates/colossus-network" }
 colossus-sdk = { version = "=0.10.7", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
 colossus-sidecar-protocol = { version = "=0.10.7", path = "../../../crates/colossus-sidecar-protocol" }

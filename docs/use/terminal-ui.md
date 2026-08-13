@@ -23,15 +23,16 @@ one-use prompts safely, and leave without losing durable work.
 ### 1. Start the interface
 
 ```bash
-colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml
+colossus -w /absolute/path/to/repository
 ```
 
-The explicit form is `colossus --config .colossus/config.yaml tui`. Resume the most
+The explicit form is `colossus -w /absolute/path/to/repository tui`. Configuration is
+selected from an explicit path, the repository, then the Colossus home without merging.
+`-w` chooses the repository/tool boundary, not the state directory. Resume the most
 recent session with:
 
 ```bash
-colossus --config .colossus/config.yaml tui --resume
+colossus -w /absolute/path/to/repository tui --resume
 ```
 
 Use `--session SESSION_ID` for an exact session. The default inline viewport writes
@@ -45,9 +46,13 @@ For a development session with eligible low-risk shell and read-only network rev
 
 ```bash
 colossus -w /absolute/path/to/repository \
-  --config .colossus/config.yaml \
   --approval-mode risk-auto tui
 ```
+
+At top-level run start, the TUI snapshots bounded instructions from the home and
+repository `AGENTS.md` files. All turns, Goal iterations, and delegated subagents from
+that run keep the same snapshot. See
+[Colossus home and workspace resolution](../reference/colossus-home.md#load-agentsmd).
 
 Automatic low-risk grants appear inline as warning-toned **Automatic approval review**
 cards. The notice is informational and never opens a modal or interrupts typing.
@@ -74,12 +79,14 @@ policy and approval obligation still applies.
 
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never
-falls back to a second local writer. This TUI retains normal Colossus policy and
-audit behavior, and `/permissions` uses an authenticated client-scoped override without
-changing the worker default used by Desktop or other clients. Desktop rejects arbitrary
-Shell PTYs at the native boundary; only the authenticated bundled TUI contract is
-available. See
-[Colossus Desktop](../get-started/desktop.md#7-opt-into-the-local-tui).
+falls back to a second local writer. This TUI retains normal Colossus policy and audit
+behavior, and `/permissions` uses an authenticated client-scoped override without
+changing the worker default used by Desktop or other clients. On macOS, the separately
+confirmed **Open Shell** action launches only the validated system `/bin/zsh -l`; it is
+a direct local-user terminal outside Colossus policy, approvals, journal, and audit and
+receives no worker authentication. Neither terminal action accepts a renderer-selected
+program or arguments. See
+[Colossus Desktop](../get-started/desktop.md#7-opt-into-local-terminals).
 
 ### 2. Inspect the session before acting
 

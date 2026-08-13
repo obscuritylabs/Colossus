@@ -15,8 +15,8 @@ colossus [OPTIONS] <COMMAND>
 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `-w`, `--workspace PATH` | Existing directory | Current directory | Select and canonicalize the repository workspace |
-| `--config PATH` | YAML path | `.colossus/config.yaml` | Select configuration |
+| `-w`, `--workspace PATH` | Existing directory | Current directory | Select and canonicalize the repository and maximum tool-access boundary |
+| `--config PATH` | YAML path | See below | Select one explicit configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
 | `--alt-screen` | Flag | Off | Use the full-screen application-owned transcript viewport |
@@ -32,10 +32,13 @@ colossus -w /absolute/path/to/repository \
   --approval-mode ask workflow list
 ```
 
-Relative `--config` paths resolve against `--workspace`. Embedded runtime callers retain
+Relative `--config` paths resolve against `--workspace`. Without it, Colossus selects
+`<workspace>/.colossus/config.yaml` and then `$COLOSSUS_HOME/config.yaml`; files replace
+rather than merge. A selected malformed file fails without fallback. `--workspace`
+does not relocate the Colossus home or state partition. Embedded runtime callers retain
 current-directory behavior unless they opt into the explicit workspace-aware open API.
 An active worker publishes its canonical workspace and rejects a client selecting a
-different one.
+different one. See [Colossus home and workspace resolution](colossus-home.md).
 
 Interactive TUI and the long-running bare `worker` default to `ask`. Other commands
 executed in-process default to `deny`; when an active worker handles a command, that
@@ -71,7 +74,7 @@ model output.
 | `network` | Perform policy-allowed brokered HTTP requests |
 | `workflow` | Validate, register, run, trigger, recover, and inspect workflows |
 | `provider` | Inspect and diagnose model profiles |
-| `codex` | Login, inspect, or logout the ChatGPT sign-in used by Codex subscription providers |
+| `codex` | Login, validate, or logout the file-backed ChatGPT sign-in used by Codex subscription providers; completion means the runtime credential state was verified |
 | `search` | Inspect and query provider-neutral search routes |
 | `models` | Inspect role-to-profile routing |
 | `artifacts` | Upload, inspect, and download caller-owned released artifacts |
@@ -108,7 +111,7 @@ positional:
 | Group | Leaf routes |
 | --- | --- |
 | `update` | `[--version vX.Y.Z]`, `check` |
-| `config` | `init [--access-profile PROFILE] [--sandbox-profile PROFILE]`, `show`, `effective` |
+| `config` | `init [--local] [--development] [--from PATH] [--access-profile PROFILE] [--sandbox-profile PROFILE] [--storage-keys MODE]`, `show`, `effective` |
 | `audit` | `verify`, `show`, `export`, `anchor-status`, `exporter-status`, `exporter-drain`, `exporter-reset` |
 | `policy` | `doctor` |
 | `projection` | `status`, `drain`, `rebuild [NAME]` |
@@ -157,7 +160,7 @@ positional:
 | `update [--version vX.Y.Z]` | Replace only a validated direct installation through the embedded reviewed bootstrap; refuse unknown ownership and downgrades |
 | `audit show` | `--from 1`, `--limit 100` |
 | `audit export` | `--from 1`, `--limit 1000` |
-| `config init` | `--access-profile development`; `--storage-keys none`; sandbox defaults to `workspace-development` for development and `offline-default` otherwise |
+| `config init` | Global home config with `storage.location: home_workspace`; `--local` selects the repository replacement; `--access-profile development`; `--storage-keys none`; sandbox defaults from access |
 | `process run` | Exact executable; `--cwd .`; `--env KEY=VALUE` repeats; arguments after `--` are literal |
 | `workflow run` | `--inputs {}`; foreground unless `--queued` |
 | `workflow schedule create` | cadence required in `60..=2678400`; `--misfire fire-once`; enabled by default |
@@ -290,6 +293,16 @@ the response status and content type, encoding information, and a truncation mar
 configured provider credential is replaced with `[REDACTED]`. This explicit diagnostic
 output crosses post-effect policy but is not attached to ordinary runs, TUI events, or
 durable audit payloads.
+
+A Doctor command exits zero when it successfully produces its diagnostic report, even
+when the report says the checked provider or model is not ready. Automation must inspect
+the JSON readiness field instead of treating process success as readiness:
+
+```bash
+colossus --output json provider doctor PROFILE | jq -e '.ready == true'
+```
+
+Configuration, argument, and report-construction failures remain nonzero.
 
 ## Common routes
 

@@ -20,7 +20,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 5;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 2;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -345,6 +345,31 @@ pub enum ManagedProviderKind {
     OpenAiResponses,
     /// OpenAI-compatible chat completions API.
     OpenAiCompatible,
+    /// Fixed ChatGPT Codex subscription backend using the official Codex credential store.
+    OpenAiCodex,
+}
+
+/// Provider-neutral reasoning effort carried by app-managed model configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedReasoningEffort {
+    /// Disable reasoning when supported.
+    None,
+    /// Use the smallest nonzero reasoning budget.
+    Minimal,
+    /// Prefer lower latency and lighter reasoning.
+    Low,
+    /// Balance latency and reasoning depth.
+    Medium,
+    /// Allocate more reasoning for complex work.
+    High,
+    /// Allocate extra-high reasoning.
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// Allocate the model's maximum ordinary reasoning budget.
+    Max,
+    /// Use the Codex model's provider-defined ultra mode.
+    Ultra,
 }
 
 /// Chat Completions field used by an app-managed OpenAI-compatible provider to carry
@@ -415,6 +440,11 @@ impl ManagedProviderConfig {
                     return Err(ProtocolError::InvalidFrame);
                 }
             }
+            ManagedProviderKind::OpenAiCodex => {
+                if self.base_url.is_some() || self.credential_id.is_some() {
+                    return Err(ProtocolError::InvalidFrame);
+                }
+            }
         }
         Ok(())
     }
@@ -446,6 +476,9 @@ pub struct ManagedModelConfig {
     pub max_output_tokens: u64,
     /// Explicit model capabilities.
     pub capabilities: ManagedModelCapabilities,
+    /// Optional provider-neutral reasoning effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ManagedReasoningEffort>,
 }
 
 impl ManagedModelConfig {
@@ -567,6 +600,7 @@ impl ManagedRuntimeConfig {
                     tool_calls: true,
                     streaming: true,
                 },
+                reasoning_effort: None,
             }],
             roles: BTreeMap::from([("primary".into(), "echo".into())]),
         }
@@ -677,12 +711,30 @@ pub struct BootstrapRequest {
     pub workspace: String,
     /// Opaque identity of the exact workspace directory opened by the native parent.
     pub workspace_identity: WorkspaceIdentity,
+    /// Optional owner-private Colossus home used only for bounded user instructions.
+    ///
+    /// This path travels only through inherited bootstrap IPC and is never emitted in
+    /// generated runtime configuration or renderer DTOs.
+    #[serde(default)]
+    pub colossus_home: Option<String>,
+    /// Suppress home/workspace AGENTS.md only for a trusted native diagnostic probe.
+    ///
+    /// Explicit probe instructions and immutable runtime-mode instructions remain active.
+    /// This bootstrap-only bit is never accepted by public run APIs.
+    #[serde(default)]
+    pub suppress_automatic_agent_instructions: bool,
     /// Optional app-private PEM bundle copied and validated by the native host.
     ///
     /// This path travels only on the authenticated local bootstrap channel and is
     /// never part of the public API or renderer DTOs.
     #[serde(default)]
     pub ca_bundle_path: Option<String>,
+    /// Optional native-selected official Codex credential file.
+    ///
+    /// This path travels only through inherited bootstrap IPC. It is required exactly
+    /// when a managed provider uses `open_ai_codex` and never enters generated YAML.
+    #[serde(default)]
+    pub codex_auth_path: Option<String>,
     /// Compact secret-free app-managed runtime configuration.
     pub runtime: ManagedRuntimeConfig,
     /// Exact application authority.
@@ -707,7 +759,13 @@ impl BootstrapRequest {
             || self.api_major != 1
             || !absolute_non_root(Path::new(&self.instance_dir))
             || !absolute_non_root(Path::new(&self.workspace))
+            || self.colossus_home.as_deref().is_some_and(|path| {
+                path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
+            })
             || self.ca_bundle_path.as_deref().is_some_and(|path| {
+                path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
+            })
+            || self.codex_auth_path.as_deref().is_some_and(|path| {
                 path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
             })
             || self.host_credentials.len() > MAX_HOST_CREDENTIALS
@@ -720,6 +778,14 @@ impl BootstrapRequest {
             grant.validate_approval_broker(&self.grant)?;
         }
         self.runtime.validate()?;
+        let uses_codex = self
+            .runtime
+            .providers
+            .iter()
+            .any(|provider| provider.kind == ManagedProviderKind::OpenAiCodex);
+        if uses_codex != self.codex_auth_path.is_some() {
+            return Err(ProtocolError::InvalidFrame);
+        }
         let mut ids = BTreeSet::new();
         for credential in &self.host_credentials {
             credential.validate()?;
@@ -752,7 +818,13 @@ impl fmt::Debug for BootstrapRequest {
             .field("instance_dir", &"[PRIVATE PATH]")
             .field("workspace", &"[PRIVATE PATH]")
             .field("workspace_identity", &self.workspace_identity)
+            .field("colossus_home_configured", &self.colossus_home.is_some())
+            .field(
+                "automatic_agent_instructions",
+                &!self.suppress_automatic_agent_instructions,
+            )
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
+            .field("codex_auth_configured", &self.codex_auth_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
             .field("host_credentials", &"[REDACTED]")
@@ -1210,7 +1282,10 @@ mod tests {
             instance_dir: absolute_test_path("sidecar-instance"),
             workspace: absolute_test_path("sidecar-workspace"),
             workspace_identity: WorkspaceIdentity::from_unix_parts(42, 84),
+            colossus_home: None,
+            suppress_automatic_agent_instructions: false,
             ca_bundle_path: None,
+            codex_auth_path: None,
             runtime: ManagedRuntimeConfig {
                 access_profile: ManagedAccessProfile::Development,
                 providers: vec![ManagedProviderConfig {
@@ -1231,6 +1306,7 @@ mod tests {
                         tool_calls: true,
                         streaming: true,
                     },
+                    reasoning_effort: None,
                 }],
                 roles: BTreeMap::from([("primary".into(), "main".into())]),
             },
@@ -1295,6 +1371,68 @@ mod tests {
 
         decoded.ca_bundle_path = Some("../company-ca.pem".into());
         assert_eq!(decoded.validate(), Err(ProtocolError::InvalidFrame));
+    }
+
+    #[test]
+    fn codex_bootstrap_requires_only_a_private_native_auth_path() {
+        let mut request = request();
+        request.runtime.providers[0].kind = ManagedProviderKind::OpenAiCodex;
+        request.runtime.providers[0].base_url = None;
+        request.runtime.providers[0].credential_id = None;
+        request.runtime.models[0].reasoning_effort = Some(ManagedReasoningEffort::XHigh);
+        request.host_credentials.clear();
+
+        assert_eq!(request.validate(), Err(ProtocolError::InvalidFrame));
+
+        let auth_path = absolute_test_path("codex-auth.json");
+        request.codex_auth_path = Some(auth_path.clone());
+        request.validate().expect("Codex bootstrap");
+        let debug = format!("{request:?}");
+        assert!(debug.contains("codex_auth_configured: true"));
+        assert!(!debug.contains(&auth_path));
+
+        request.runtime.providers[0].base_url = Some("https://chatgpt.com".into());
+        assert_eq!(request.validate(), Err(ProtocolError::InvalidFrame));
+        request.runtime.providers[0].base_url = None;
+        request.runtime.providers[0].credential_id = Some("host-key".into());
+        assert_eq!(request.validate(), Err(ProtocolError::InvalidFrame));
+    }
+
+    #[test]
+    fn colossus_home_is_optional_absolute_and_redacted() {
+        let mut request = request();
+        let home = absolute_test_path("home");
+        request.colossus_home = Some(home.clone());
+        request.validate().expect("Colossus home bootstrap");
+        let debug = format!("{request:?}");
+        assert!(debug.contains("colossus_home_configured: true"));
+        assert!(!debug.contains(&home));
+
+        request.colossus_home = Some("../.colossus".into());
+        assert_eq!(request.validate(), Err(ProtocolError::InvalidFrame));
+    }
+
+    #[test]
+    fn diagnostic_instruction_suppression_is_private_and_defaults_to_loading() {
+        let mut request = request();
+        assert!(!request.suppress_automatic_agent_instructions);
+        request.suppress_automatic_agent_instructions = true;
+        request.validate().expect("diagnostic bootstrap");
+        assert!(
+            format!("{request:?}").contains("automatic_agent_instructions: false"),
+            "safe debug output may expose only the non-secret mode"
+        );
+
+        let mut legacy = serde_json::to_value(&request).expect("request JSON");
+        legacy
+            .as_object_mut()
+            .expect("request object")
+            .remove("suppress_automatic_agent_instructions");
+        let decoded: BootstrapRequest = serde_json::from_value(legacy).expect("defaulted request");
+        assert!(
+            !decoded.suppress_automatic_agent_instructions,
+            "an omitted private flag must preserve normal AGENTS.md loading"
+        );
     }
 
     #[test]

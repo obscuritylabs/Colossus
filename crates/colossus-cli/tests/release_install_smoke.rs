@@ -1,5 +1,8 @@
 //! Offline installation acceptance for packaged native Rust executables.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::Value;
 use std::{
     fs,
@@ -74,6 +77,7 @@ fn install(installer: &Path, prefix: &Path) -> Output {
         .arg(installer)
         .arg("--prefix")
         .arg(prefix)
+        .env("COLOSSUS_HOME", prefix.join("home/.colossus"))
         .env("XDG_DATA_HOME", prefix.join("data"))
         .output()
         .expect("run installer")
@@ -92,6 +96,7 @@ fn install(installer: &Path, prefix: &Path) -> Output {
         .arg(installer)
         .arg("-Prefix")
         .arg(prefix)
+        .env("COLOSSUS_HOME", prefix.join("home/.colossus"))
         .env("LOCALAPPDATA", prefix.join("data"))
         .output()
         .expect("run installer")
@@ -110,10 +115,9 @@ fn installed_binary(prefix: &Path) -> PathBuf {
 
 fn offline_command(binary: &Path, working_directory: &Path) -> Command {
     let mut command = Command::new(binary);
+    command.current_dir(working_directory).env_clear();
+    process_support::isolate_user_home(&mut command, working_directory);
     command
-        .current_dir(working_directory)
-        .env_clear()
-        .env("HOME", working_directory)
         .env("COLOSSUS_RELEASE_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_RELEASE_SIGNING_KEY", SIGNING_KEY);
     #[cfg(windows)]
@@ -137,6 +141,7 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     fs::create_dir_all(smoke.join("workflows")).expect("smoke workflows");
     let installer = prepare_package(source_binary, &package);
 
+    let mut installation_stdout = Vec::new();
     for _ in 0..2 {
         let installed = install(&installer, &prefix);
         assert!(
@@ -145,9 +150,83 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
             String::from_utf8_lossy(&installed.stdout),
             String::from_utf8_lossy(&installed.stderr)
         );
+        installation_stdout = installed.stdout;
     }
     let binary = installed_binary(&prefix);
     assert!(binary.is_file());
+    let colossus_home = prefix.join("home/.colossus");
+    if colossus_home.is_dir() {
+        assert_eq!(
+            fs::read_dir(&colossus_home)
+                .expect("empty installer-created Colossus home")
+                .count(),
+            0,
+            "the installer must not generate configuration or database files"
+        );
+    } else {
+        assert!(
+            String::from_utf8_lossy(&installation_stdout)
+                .contains("deferred Colossus home creation")
+        );
+    }
+    #[cfg(unix)]
+    if colossus_home.is_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(&colossus_home)
+                .expect("Colossus home metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // Make only the installer's first `id -u` report a privileged package
+        // context. Later ownership checks use the real identity, so this exercises
+        // deterministic deferral without requiring the test runner itself to be root.
+        let fake_bin = root.join("privileged-id-bin");
+        fs::create_dir(&fake_bin).expect("fake command directory");
+        let marker = root.join("privileged-id.marker");
+        let id = fake_bin.join("id");
+        fs::write(
+            &id,
+            "#!/bin/sh\nif [ \"${1:-}\" = -u ] && [ ! -e \"$COLOSSUS_TEST_PRIVILEGED_MARKER\" ]; then\n  : > \"$COLOSSUS_TEST_PRIVILEGED_MARKER\"\n  printf '0\\n'\n  exit 0\nfi\nexec /usr/bin/id \"$@\"\n",
+        )
+        .expect("fake id command");
+        fs::set_permissions(&id, fs::Permissions::from_mode(0o755)).expect("fake id permissions");
+        let mut search_path = vec![fake_bin.clone()];
+        search_path.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
+        ));
+        let deferred_home = root.join("privileged-home/.colossus");
+        let deferred = Command::new("/bin/sh")
+            .arg(&installer)
+            .arg("--prefix")
+            .arg(root.join("privileged-prefix"))
+            .env(
+                "PATH",
+                std::env::join_paths(search_path).expect("test PATH"),
+            )
+            .env("COLOSSUS_TEST_PRIVILEGED_MARKER", &marker)
+            .env("COLOSSUS_HOME", &deferred_home)
+            .env("XDG_DATA_HOME", root.join("privileged-data"))
+            .output()
+            .expect("run simulated privileged installer");
+        assert!(
+            deferred.status.success(),
+            "stdout={}\nstderr={}",
+            String::from_utf8_lossy(&deferred.stdout),
+            String::from_utf8_lossy(&deferred.stderr)
+        );
+        assert!(!deferred_home.exists());
+        assert!(
+            String::from_utf8_lossy(&deferred.stdout).contains("deferred Colossus home creation")
+        );
+    }
     let receipt = if cfg!(windows) {
         prefix.join("data/Colossus/install.json")
     } else {
@@ -257,7 +336,63 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let shared_home = root.join("shared-home");
+        fs::create_dir(&shared_home).expect("shared Colossus home");
+        fs::set_permissions(&shared_home, fs::Permissions::from_mode(0o755))
+            .expect("shared home permissions");
+        let rejected = Command::new("/bin/sh")
+            .arg(&installer)
+            .arg("--prefix")
+            .arg(root.join("shared-home-prefix"))
+            .env("COLOSSUS_HOME", &shared_home)
+            .env("XDG_DATA_HOME", root.join("shared-home-data"))
+            .output()
+            .expect("run installer with shared home");
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("must not grant group or other access")
+        );
+
+        let unsafe_parent = root.join("unsafe-home-parent");
+        fs::create_dir(&unsafe_parent).expect("unsafe home parent");
+        fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777))
+            .expect("unsafe parent permissions");
+        let rejected = Command::new("/bin/sh")
+            .arg(&installer)
+            .arg("--prefix")
+            .arg(root.join("unsafe-parent-prefix"))
+            .env("COLOSSUS_HOME", unsafe_parent.join(".colossus"))
+            .env("XDG_DATA_HOME", root.join("unsafe-parent-data"))
+            .output()
+            .expect("run installer below unsafe parent");
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("writable without sticky protection")
+        );
+
+        let real_home = root.join("real-home");
+        fs::create_dir(&real_home).expect("real Colossus home");
+        fs::set_permissions(&real_home, fs::Permissions::from_mode(0o700))
+            .expect("private home permissions");
+        let linked_home = root.join("linked-home");
+        symlink(&real_home, &linked_home).expect("linked Colossus home");
+        let rejected = Command::new("/bin/sh")
+            .arg(&installer)
+            .arg("--prefix")
+            .arg(root.join("linked-home-prefix"))
+            .env("COLOSSUS_HOME", &linked_home)
+            .env("XDG_DATA_HOME", root.join("linked-home-data"))
+            .output()
+            .expect("run installer with linked home");
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("refusing to install through linked path component")
+        );
 
         let linked_prefix = root.join("linked-prefix");
         let actual_bin = root.join("actual-bin");

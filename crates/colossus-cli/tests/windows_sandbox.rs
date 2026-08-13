@@ -1,6 +1,9 @@
 //! Native Windows AppContainer, Job Object, filesystem, environment, and network acceptance.
 #![cfg(windows)]
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
@@ -24,7 +27,9 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    command
         .arg("--config")
         .arg(config)
         .args(arguments)

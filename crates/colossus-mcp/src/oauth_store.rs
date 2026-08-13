@@ -8,7 +8,7 @@ use redb::{Database, ReadableDatabase as _, TableDefinition};
 use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::{fs, path::Path, sync::Arc};
+use std::{fs, fs::File, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
 pub(super) const OAUTH_RECORDS: TableDefinition<&str, &[u8]> =
@@ -63,6 +63,23 @@ impl OAuthStoreFactory {
         })
     }
 
+    pub(super) fn encrypted_state_file(
+        file: File,
+        keys: Arc<dyn KeyProvider>,
+        repository_id: String,
+    ) -> Result<Self, AuthError> {
+        validate_owner_private_file(&file)?;
+        let database = Database::builder()
+            .create_file(file)
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        initialize_database(&database)?;
+        Ok(Self::EncryptedState {
+            database: Arc::new(database),
+            keys,
+            repository_id,
+        })
+    }
+
     pub(super) fn plaintext_state(path: &Path, repository_id: String) -> Result<Self, AuthError> {
         prepare_owner_private_state(path)?;
         let database =
@@ -77,6 +94,21 @@ impl OAuthStoreFactory {
         write
             .commit()
             .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        Ok(Self::PlaintextState {
+            database: Arc::new(database),
+            repository_id,
+        })
+    }
+
+    pub(super) fn plaintext_state_file(
+        file: File,
+        repository_id: String,
+    ) -> Result<Self, AuthError> {
+        validate_owner_private_file(&file)?;
+        let database = Database::builder()
+            .create_file(file)
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        initialize_database(&database)?;
         Ok(Self::PlaintextState {
             database: Arc::new(database),
             repository_id,
@@ -426,6 +458,42 @@ fn validate_owner_private_state(path: &Path) -> Result<(), AuthError> {
         }
     }
     Ok(())
+}
+
+fn validate_owner_private_file(file: &File) -> Result<(), AuthError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(AuthError::InternalError(
+            "OAuth state must be a regular file".into(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.mode() & 0o777 != 0o600
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+        {
+            return Err(AuthError::InternalError(
+                "OAuth state must be a current-user owner-only single-link file".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn initialize_database(database: &Database) -> Result<(), AuthError> {
+    let write = database
+        .begin_write()
+        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+    write
+        .open_table(OAUTH_RECORDS)
+        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+    write
+        .commit()
+        .map_err(|error| AuthError::InternalError(error.to_string()))
 }
 
 fn identity(repository_id: &str, server: &str, endpoint: &str) -> String {

@@ -2,6 +2,9 @@
 
 #![cfg(unix)]
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
@@ -17,7 +20,9 @@ const JOURNAL_KEY: &str = "33333333333333333333333333333333333333333333333333333
 const SIGNING_KEY: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    command
         .arg("--config")
         .arg(config)
         .args(arguments)
@@ -111,7 +116,9 @@ fn live_oci_enforces_mount_environment_network_timeout_and_cleanup_boundaries() 
     let anchor = directory.path().join("anchor.json");
     // Container creation is charged to the sandbox process budget, and that budget is
     // further reduced by the OCI cleanup reserve, so rootless runtimes need real headroom
-    // for the phases that must succeed. Enforcement phases use `bounded_config` below.
+    // for the phases that must succeed: the first `--userns=keep-id` container also
+    // materializes an id-mapped copy of the image, which acceptance CI pays up front.
+    // Enforcement phases use `bounded_config` below.
     let config = directory.path().join("config.yaml");
     fs::write(
         &config,
@@ -158,7 +165,7 @@ sandbox:
     - /usr/local/bin/python3
   environment: [SAFE]
   networkDestinations: []
-  timeoutMs: 20000
+  timeoutMs: 30000
   maxOutputBytes: 1048576
   maxProcesses: 16
   maxMemoryBytes: 134217728
@@ -388,7 +395,7 @@ sandbox:
         &bounded_config,
         fs::read_to_string(&config)
             .expect("read config")
-            .replace("  timeoutMs: 20000", "  timeoutMs: 12000"),
+            .replace("  timeoutMs: 30000", "  timeoutMs: 12000"),
     )
     .expect("bounded config");
     let timeout = run(

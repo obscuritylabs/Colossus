@@ -21,6 +21,7 @@ Use this mental model when configuring storage:
 | Journal key | Encrypts event payloads in protected mode |
 | Signing key | Signs checkpoints in protected mode |
 | Secure anchor | Keeps the last trusted journal sequence and hash outside the journal so rollback or truncation can be detected |
+| `storage.location` | Selects the confinement base for a relative storage path |
 | `storage.path` | Selects the local redb file or, with PostgreSQL, the local Colossus instance identity |
 
 Both adapters support `keys.kind: none` and the fully protected `platform` and
@@ -52,7 +53,8 @@ Generated CLI and development configurations use this explicit shape:
 
 ```yaml
 storage:
-  path: .colossus/state.redb
+  location: home_workspace
+  path: state.redb
   adapter: redb
   startupVerification: incremental
   keys:
@@ -77,7 +79,8 @@ This is the recommended protected local configuration:
 
 ```yaml
 storage:
-  path: .colossus/state.redb
+  location: home_workspace
+  path: state.redb
   adapter: redb
   startupVerification: incremental
   keys:
@@ -96,10 +99,26 @@ across unrelated deployments makes their credential namespaces collide.
 
 ## Top-level storage fields
 
+### `storage.location`
+
+`location` selects the base for a relative `storage.path`:
+
+| Value | Behavior |
+| --- | --- |
+| `workspace` | Resolve from the canonical workspace; this is the compatibility default when omitted |
+| `home_workspace` | Resolve beneath the current workspace's `cli` home partition |
+
+The global `config init` writes `home_workspace`; `config init --local` writes
+`workspace`. Under `home_workspace`, `path` must be relative and confined. Absolute
+paths, parent components, and any result outside the CLI partition are rejected. This
+partition is distinct from Desktop Managed Local state. See
+[Colossus home and workspace resolution](../colossus-home.md).
+
 ### `storage.path`
 
-`path` may be workspace-relative or absolute. Relative paths resolve from the canonical
-selected workspace, and Colossus creates the parent directory when needed.
+With `location: workspace`, `path` may be workspace-relative or absolute and Colossus
+creates the parent directory when needed. With `location: home_workspace`, it must be a
+confined relative path and resolves from the selected workspace's CLI home partition.
 
 Its exact meaning depends on the adapter:
 
@@ -193,6 +212,7 @@ secret injection:
 
 ```yaml
 storage:
+  location: workspace
   path: .colossus/state.redb
   adapter: redb
   startupVerification: incremental
@@ -209,7 +229,7 @@ storage:
 | `journal_variable` | Name of the environment variable containing the journal key |
 | `journal_key_id` | Stable identity recorded with encrypted journal events |
 | `signing_variable` | Name of the environment variable containing the signing key |
-| `anchor_path` | Workspace-relative or absolute path for separately persisted integrity state |
+| `anchor_path` | With `location: workspace`, a workspace-relative or absolute integrity path; with `home_workspace`, a confined relative path resolved beneath the CLI partition |
 
 Each variable must contain exactly 32 bytes encoded as hexadecimal or base64. YAML
 stores only the variable names. There is no plaintext, generated-file, or keyring

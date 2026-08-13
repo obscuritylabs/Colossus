@@ -909,6 +909,25 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
     );
     assert_eq!(
         field(
+            named_step(premerge_windows, "Run Windows Colossus-home acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-home --lib -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                premerge_windows,
+                "Run Windows Codex credential-store acceptance"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-codex-auth --lib -- --nocapture")
+    );
+    assert_eq!(
+        field(
             named_step(
                 premerge_windows,
                 "Run Windows worker and AppContainer escape acceptance"
@@ -922,6 +941,8 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
     );
     for name in [
         "Run authenticated Windows native acceptance",
+        "Run Windows Colossus-home acceptance",
+        "Run Windows Codex credential-store acceptance",
         "Run Windows worker and AppContainer escape acceptance",
         "Prepare Windows Managed Local executables",
         "Lint the Windows native Desktop bridge",
@@ -942,6 +963,8 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         "RENDERER_TEST_OUTCOME",
         "CONTRACT_OUTCOME",
         "NATIVE_OUTCOME",
+        "HOME_OUTCOME",
+        "CODEX_AUTH_OUTCOME",
         "WORKER_OUTCOME",
         "PREPARE_OUTCOME",
         "CLIPPY_OUTCOME",
@@ -962,6 +985,22 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         )
         .as_str(),
         Some("cargo test --locked -p colossus-windows-native -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(release_job, "Run Windows Colossus-home acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-home --lib -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(release_job, "Run Windows Codex credential-store acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-codex-auth --lib -- --nocapture")
     );
     assert_eq!(
         field(

@@ -1,4 +1,5 @@
 use super::*;
+use colossus_home::{ConfinedFile, ConfinedRoot};
 
 /// Strict fresh Rust runtime configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -608,6 +609,9 @@ fn default_sandbox_profile() -> String {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StorageConfig {
+    /// Base directory used to resolve the local state identity.
+    #[serde(default)]
+    pub location: StorageLocation,
     /// Local state identity and redb state file when the redb adapter is active.
     pub path: PathBuf,
     /// Canonical journal and projection adapter.
@@ -622,6 +626,20 @@ pub struct StorageConfig {
     /// Optional journal protection provider. Missing configuration selects plaintext storage.
     #[serde(default)]
     pub keys: KeyConfig,
+    /// Retained private-root authority attached only by trusted host resolution.
+    #[serde(skip)]
+    resolved_home_workspace: Option<ConfinedRoot>,
+}
+
+/// Base directory used for relative canonical storage paths.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageLocation {
+    /// Resolve relative paths against the selected repository workspace.
+    #[default]
+    Workspace,
+    /// Resolve relative paths beneath the selected workspace's private Colossus-home partition.
+    HomeWorkspace,
 }
 
 /// Canonical storage adapter selection.
@@ -780,6 +798,14 @@ impl RuntimeConfig {
                     "storage.postgres is required when storage.adapter is postgres".into(),
                 ));
             }
+        }
+        if config.storage.location == StorageLocation::HomeWorkspace
+            && !confined_relative_storage_path(&config.storage.path)
+        {
+            return Err(RuntimeError::Config(
+                "storage.path must be a confined relative path when storage.location is home_workspace"
+                    .into(),
+            ));
         }
         validate_audit_config(&config.audit, &config.sandbox)?;
         config
@@ -1050,11 +1076,13 @@ impl RuntimeConfig {
             schema_version: 2,
             access: AccessConfig::default(),
             storage: StorageConfig {
+                location: StorageLocation::Workspace,
                 path: state_path.into(),
                 adapter: StorageAdapter::Redb,
                 startup_verification: StartupVerificationMode::Incremental,
                 postgres: None,
                 keys: KeyConfig::None,
+                resolved_home_workspace: None,
             },
             network: NetworkConfig::default(),
             audit: AuditConfig::default(),
@@ -1092,13 +1120,177 @@ impl RuntimeConfig {
         _anchor_path: impl Into<PathBuf>,
     ) -> Self {
         self.storage = StorageConfig {
+            location: StorageLocation::Workspace,
             path: state_path.into(),
             adapter: StorageAdapter::Redb,
             startup_verification: StartupVerificationMode::Incremental,
             postgres: None,
             keys: KeyConfig::None,
+            resolved_home_workspace: None,
         };
         self
+    }
+
+    /// Resolve local storage paths for one selected workspace without mutating the
+    /// credential-free source configuration.
+    pub fn resolve_storage_paths(
+        &self,
+        workspace: &Path,
+        home_workspace: &Path,
+    ) -> Result<Self, RuntimeError> {
+        let mut resolved = self.clone();
+        let confined_root = match self.storage.location {
+            StorageLocation::Workspace => None,
+            StorageLocation::HomeWorkspace => {
+                if !home_workspace.is_absolute()
+                    || !confined_relative_storage_path(&self.storage.path)
+                {
+                    return Err(RuntimeError::Config(
+                        "home-workspace storage requires an absolute private root and a confined relative storage.path"
+                            .into(),
+                    ));
+                }
+                Some(ConfinedRoot::bind(home_workspace).map_err(|error| {
+                    RuntimeError::Config(format!("home-workspace storage root is unsafe: {error}"))
+                })?)
+            }
+        };
+        if let Some(root) = confined_root {
+            resolved.storage.path = root.prepare_file(&self.storage.path).map_err(|error| {
+                RuntimeError::Config(format!("home-workspace storage.path is unsafe: {error}"))
+            })?;
+            if let KeyConfig::Environment { anchor_path, .. } = &mut resolved.storage.keys {
+                if !confined_relative_storage_path(anchor_path) {
+                    return Err(RuntimeError::Config(
+                        "storage.keys.anchorPath must be confined when storage.location is home_workspace"
+                            .into(),
+                    ));
+                }
+                *anchor_path = root.prepare_file(anchor_path).map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "home-workspace storage.keys.anchorPath is unsafe: {error}"
+                    ))
+                })?;
+            }
+            if resolved.memory.index_enabled {
+                let relative = resolved
+                    .memory
+                    .index_path
+                    .as_ref()
+                    .map_or_else(
+                        || Ok(self.storage.path.with_extension("memory-index")),
+                        |path| {
+                            if confined_relative_storage_path(path) {
+                                Ok(path.clone())
+                            } else {
+                                Err(RuntimeError::Config(
+                                    "memory.indexPath must be confined when storage.location is home_workspace"
+                                        .into(),
+                                ))
+                            }
+                        },
+                    )?;
+                resolved.memory.index_path =
+                    Some(root.prepare_directory(&relative).map_err(|error| {
+                        RuntimeError::Config(format!(
+                            "home-workspace memory index path is unsafe: {error}"
+                        ))
+                    })?);
+            }
+            if let SemanticMemoryConfig::Chroma { position_path, .. } =
+                &mut resolved.memory.semantic
+            {
+                let relative = position_path.as_ref().map_or_else(
+                    || Ok(self.storage.path.with_extension("chroma-position.json")),
+                    |path| {
+                        if confined_relative_storage_path(path) {
+                            Ok(path.clone())
+                        } else {
+                            Err(RuntimeError::Config(
+                                "memory.semantic.positionPath must be confined when storage.location is home_workspace"
+                                    .into(),
+                            ))
+                        }
+                    },
+                )?;
+                *position_path = Some(root.prepare_file(&relative).map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "home-workspace Chroma position path is unsafe: {error}"
+                    ))
+                })?);
+            }
+            resolved.storage.resolved_home_workspace = Some(root);
+        } else {
+            resolved.storage.path = workspace_absolute_path(workspace, &self.storage.path);
+            resolved.storage.resolved_home_workspace = None;
+        }
+        resolved.storage.location = StorageLocation::Workspace;
+        Ok(resolved)
+    }
+
+    /// Resolve and revalidate the canonical state path for runtime composition.
+    pub fn resolved_storage_path_at(&self, workspace: &Path) -> Result<PathBuf, RuntimeError> {
+        if self.storage.location == StorageLocation::HomeWorkspace {
+            return Err(RuntimeError::Config(
+                "storage.location home_workspace must be resolved by a trusted host before runtime composition"
+                    .into(),
+            ));
+        }
+        let path = workspace_absolute_path(workspace, &self.storage.path);
+        if let Some(root) = &self.storage.resolved_home_workspace {
+            root.revalidate_file(&path).map_err(|error| {
+                RuntimeError::Config(format!("home-workspace state path is unsafe: {error}"))
+            })?;
+        }
+        Ok(path)
+    }
+
+    /// Open a derived home-workspace file by retained descriptor authority.
+    ///
+    /// Workspace-local configurations return `None` and keep their legacy path-based
+    /// adapter behavior.
+    pub fn open_resolved_home_file(
+        &self,
+        path: &Path,
+    ) -> Result<Option<ConfinedFile>, RuntimeError> {
+        self.storage
+            .resolved_home_workspace
+            .as_ref()
+            .map(|root| {
+                let relative = root.relative(path)?;
+                root.open_file(relative)
+            })
+            .transpose()
+            .map_err(|error| {
+                RuntimeError::Config(format!("home-workspace derived file is unsafe: {error}"))
+            })
+    }
+
+    /// Whether this in-memory configuration retains trusted home-workspace authority.
+    pub fn has_resolved_home_workspace(&self) -> bool {
+        self.storage.resolved_home_workspace.is_some()
+    }
+
+    /// Revalidate one derived home-workspace file when a path-only adapter is used.
+    pub fn revalidate_resolved_home_file(&self, path: &Path) -> Result<(), RuntimeError> {
+        if let Some(root) = &self.storage.resolved_home_workspace {
+            root.revalidate_file(path).map_err(|error| {
+                RuntimeError::Config(format!("home-workspace derived file is unsafe: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Revalidate one derived home-workspace directory when a path-only adapter is used.
+    pub fn revalidate_resolved_home_directory(&self, path: &Path) -> Result<(), RuntimeError> {
+        if let Some(root) = &self.storage.resolved_home_workspace {
+            root.revalidate_directory(path).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "home-workspace derived directory is unsafe: {error}"
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     /// Render fresh YAML without resolving or exposing secrets.
@@ -1139,23 +1331,33 @@ impl RuntimeConfig {
 
     /// Worker endpoint with relative state resolved against an explicit workspace.
     pub fn worker_ipc_endpoint_at(&self, workspace: &Path) -> Result<String, RuntimeError> {
-        let state_path = workspace_absolute_path(workspace, &self.storage.path);
+        let state_path = self.resolved_storage_path_at(workspace)?;
         colossus_worker_protocol::worker_ipc_endpoint(&state_path)
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Owner-private local secret used by the normal worker IPC protocol.
     pub fn worker_ipc_auth_path(&self) -> Result<PathBuf, RuntimeError> {
-        Ok(self.worker_ipc_auth_path_at(&std::env::current_dir()?))
+        self.worker_ipc_auth_path_at(&std::env::current_dir()?)
     }
 
     /// Resolve the worker secret path against an explicit workspace.
-    pub fn worker_ipc_auth_path_at(&self, workspace: &Path) -> PathBuf {
-        let state_path = workspace_absolute_path(workspace, &self.storage.path);
+    pub fn worker_ipc_auth_path_at(&self, workspace: &Path) -> Result<PathBuf, RuntimeError> {
+        let state_path = self.resolved_storage_path_at(workspace)?;
         let mut path = state_path.as_os_str().to_os_string();
         path.push(".worker-auth");
-        PathBuf::from(path)
+        let path = PathBuf::from(path);
+        self.revalidate_resolved_home_file(&path)?;
+        Ok(path)
     }
+}
+
+fn confined_relative_storage_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 pub(super) fn validate_audit_config(
@@ -1492,6 +1694,7 @@ pub(super) fn provider_registry(
     providers_config: &ProvidersConfig,
     models_config: &ModelsConfig,
     credentials: Arc<dyn CredentialResolver>,
+    codex_auth: Option<CodexAuthStore>,
     tls_roots: &AdditionalRootCertificates,
 ) -> Result<ProviderRegistry, RuntimeError> {
     let profiles = providers_config
@@ -1499,8 +1702,13 @@ pub(super) fn provider_registry(
         .iter()
         .map(|(name, profile)| {
             provider_profile(name, profile).map(|profile| {
-                ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
-                    .with_tls_roots(tls_roots.clone())
+                let executor =
+                    ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
+                        .with_tls_roots(tls_roots.clone());
+                match &codex_auth {
+                    Some(store) => executor.with_codex_auth_store(store.clone()),
+                    None => executor,
+                }
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1541,6 +1749,7 @@ pub(super) fn compose_memory_indexes(
         .index_path
         .clone()
         .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
+    config.revalidate_resolved_home_directory(&path)?;
     let lexical: Arc<dyn MemoryIndex> = Arc::new(LazyTantivyMemoryIndex::new(path));
     let mut indexes = vec![MemoryIndexRegistration::new("memory.tantivy-v1", lexical)?];
     let SemanticMemoryConfig::Chroma {
@@ -1598,6 +1807,7 @@ pub(super) fn compose_memory_indexes(
     let position_path = position_path
         .clone()
         .unwrap_or_else(|| config.storage.path.with_extension("chroma-position.json"));
+    config.revalidate_resolved_home_file(&position_path)?;
     let semantic: Arc<dyn MemoryIndex> =
         match ChromaMemoryIndex::open(gateway, executor, embedding, profile, &position_path) {
             Ok(index) => Arc::new(index),
@@ -1634,6 +1844,7 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
         &config.providers,
         &config.models,
         Arc::new(EnvironmentCredentialResolver),
+        None,
         &AdditionalRootCertificates::default(),
     )?;
     for (name, profile) in &config.providers.profiles {

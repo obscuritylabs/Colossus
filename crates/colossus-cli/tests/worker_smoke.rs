@@ -2,6 +2,8 @@
 
 #[path = "support/audit.rs"]
 mod audit_support;
+#[path = "support/process.rs"]
+mod process_support;
 
 use colossus_worker_protocol::{WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint};
 use hmac::{Hmac, Mac as _};
@@ -44,6 +46,7 @@ impl Drop for ChildGuard {
 
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
     command
         .arg("--config")
         .arg(config)

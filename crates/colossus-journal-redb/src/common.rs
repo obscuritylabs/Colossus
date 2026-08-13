@@ -81,10 +81,18 @@ impl RedbWriterLease {
             .write(true)
             .open(&path)
             .map_err(adapter_error)?;
+        Self::acquire_file(path, file)
+    }
+
+    /// Acquire a writer lease from an already no-follow, owner-validated file.
+    pub fn acquire_file(path: impl Into<PathBuf>, file: File) -> Result<Self, StoreError> {
         if !file.try_lock_exclusive().map_err(adapter_error)? {
             return Err(StoreError::WriterLeaseHeld);
         }
-        Ok(Self { file, path })
+        Ok(Self {
+            file,
+            path: path.into(),
+        })
     }
 
     /// Lock file used to coordinate embedded and worker writers.

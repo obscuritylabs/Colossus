@@ -3151,6 +3151,20 @@ textarea {
   color: var(--cyan);
 }
 
+.codex-auth-row p {
+  flex: 1;
+}
+
+.codex-provider-auth {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 .onboarding-launch {
   justify-self: end;
 }

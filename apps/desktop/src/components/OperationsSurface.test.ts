@@ -50,6 +50,10 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
       kind: "openai_compatible",
       model: "deepseek/deepseek-v4-flash",
     },
+    codexAuth: {
+      state: "signed_out",
+      message: "Sign in with ChatGPT to use Codex.",
+    },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     approvalMode: "ask",
@@ -198,6 +202,7 @@ describe("OperationsSurface runtime targets", () => {
               model: "example/model",
               contextWindowTokens: 64_000,
               maxOutputTokens: 8_000,
+              reasoningEffort: "high",
               capabilities: { toolCalls: true, streaming: true },
             },
           ],

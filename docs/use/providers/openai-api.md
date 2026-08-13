@@ -32,9 +32,9 @@ reference with the secret value.
 
 ### 2. Configure the Responses route
 
-Keep the other required fields from your generated configuration. Apply this validated
-overlay, then replace `YOUR_OPENAI_MODEL_ID` and the model limits with exact values for
-the selected model.
+Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
+keep its other required fields. Apply this validated overlay, then replace
+`YOUR_OPENAI_MODEL_ID` and the model limits with exact values for the selected model.
 
 <!-- provider-guide-config:start -->
 ```yaml
@@ -71,16 +71,16 @@ from the catalog.
 ### 3. Inspect routing and readiness
 
 ```bash
-colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider doctor openai-provider
-colossus --config .colossus/config.yaml provider models openai-provider
-colossus --config .colossus/config.yaml models doctor openai
+colossus -w . models route primary
+colossus -w . provider doctor openai-provider
+colossus -w . provider models openai-provider
+colossus -w . models doctor openai
 ```
 
 ### 4. Send one bounded model turn
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w . run \
   "Reply with exactly: connected"
 ```
 
@@ -91,7 +91,7 @@ run returns `connected`.
 
 ## Verification
 
-Run `colossus --config .colossus/config.yaml config show` and confirm that the output
+Run `colossus -w . config show` and confirm that the output
 contains the credential reference and exact sandbox origin but not the API key value.
 
 ## Failure path

@@ -19,8 +19,8 @@ use colossus_ports::{
     UserPromptProvider,
 };
 use colossus_runtime::{
-    CredentialResolver, EnvironmentCredentialResolver, Runtime, RuntimeConfig, RuntimeError,
-    RuntimeOpenOptions, format_provider_response_diagnostic,
+    CodexAuthStore, CredentialResolver, EnvironmentCredentialResolver, Runtime, RuntimeConfig,
+    RuntimeError, RuntimeOpenOptions, format_provider_response_diagnostic,
 };
 use colossus_worker_protocol::PROTOCOL_VERSION;
 use hmac::{Hmac, Mac as _};
@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, Ordering},

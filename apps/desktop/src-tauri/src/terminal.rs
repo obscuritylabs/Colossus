@@ -7,6 +7,7 @@ use std::{
     thread,
 };
 
+use colossus_home::ColossusHome;
 use colossus_sdk::WorkspaceIdentity;
 use portable_pty::{Child, MasterPty, PtySize};
 #[cfg(target_os = "macos")]
@@ -49,6 +50,7 @@ pub(crate) struct TerminalWorkspace {
     pub(crate) display_name: String,
     pub(crate) workspace: PathBuf,
     pub(crate) workspace_identity: WorkspaceIdentity,
+    pub(crate) colossus_home: PathBuf,
     pub(crate) config: Option<PathBuf>,
     pub(crate) worker_authentication: Option<TerminalWorkerAuthentication>,
 }
@@ -61,6 +63,7 @@ impl std::fmt::Debug for TerminalWorkspace {
             .field("display_name", &self.display_name)
             .field("workspace", &"[PRIVATE PATH]")
             .field("workspace_identity", &"[OPAQUE IDENTITY]")
+            .field("colossus_home", &"[PRIVATE PATH]")
             .field("config", &self.config.as_ref().map(|_| "[PRIVATE PATH]"))
             .field("worker_authentication", &"[REDACTED]")
             .finish()
@@ -488,6 +491,11 @@ impl TerminalManager {
             &terminal_workspace.workspace,
             &terminal_workspace.workspace_identity,
         )?;
+        let colossus_home = ColossusHome::ensure_at(&terminal_workspace.colossus_home)
+            .map_err(|_| TerminalError::InvalidConfiguration)?;
+        if colossus_home.root() != terminal_workspace.colossus_home {
+            return Err(TerminalError::InvalidConfiguration);
+        }
         let (program, arguments) =
             self.command(kind, terminal_workspace, workspace.canonical_path())?;
 
@@ -514,8 +522,8 @@ impl TerminalManager {
             kind,
             &program,
             &arguments,
-            workspace.canonical_path(),
             &workspace,
+            colossus_home.root(),
         )?;
         match kind {
             TerminalKind::ColossusTui => {
@@ -708,8 +716,8 @@ impl TerminalManager {
         kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
-        workspace: &Path,
         workspace_binding: &BoundTerminalWorkspace,
+        colossus_home: &Path,
     ) -> Result<SpawnedTerminal, TerminalError> {
         let pair = NativePtySystem::default()
             .openpty(size)
@@ -742,6 +750,7 @@ impl TerminalManager {
                         program,
                         arguments,
                         &executable.macos_identity,
+                        colossus_home,
                     )?;
                 Ok(SpawnedTerminal {
                     master: pair.master,
@@ -754,7 +763,12 @@ impl TerminalManager {
             }
             TerminalKind::Shell => {
                 workspace_binding.revalidate()?;
-                let command = shell_command(program, arguments, workspace)?;
+                let command = shell_command(
+                    program,
+                    arguments,
+                    workspace_binding.canonical_path(),
+                    colossus_home,
+                )?;
                 let child = pair
                     .slave
                     .spawn_command(command)
@@ -780,8 +794,8 @@ impl TerminalManager {
         kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
-        workspace: &Path,
         workspace_binding: &BoundTerminalWorkspace,
+        colossus_home: &Path,
     ) -> Result<SpawnedTerminal, TerminalError> {
         if kind != TerminalKind::ColossusTui {
             return Err(TerminalError::ProgramUnavailable);
@@ -799,10 +813,11 @@ impl TerminalManager {
         crate::terminal_process::spawn_verified_windows_tui(
             program,
             arguments,
-            workspace,
+            workspace_binding.canonical_path(),
             workspace_binding.binding.identity(),
             executable.windows_identity,
             size,
+            colossus_home,
         )
     }
 
@@ -813,8 +828,8 @@ impl TerminalManager {
         kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
-        workspace: &Path,
         workspace_binding: &BoundTerminalWorkspace,
+        colossus_home: &Path,
     ) -> Result<SpawnedTerminal, TerminalError> {
         let _ = (
             self,
@@ -822,8 +837,8 @@ impl TerminalManager {
             kind,
             program,
             arguments,
-            workspace,
             workspace_binding,
+            colossus_home,
         );
         Err(TerminalError::ProgramUnavailable)
     }
@@ -896,6 +911,7 @@ fn shell_command(
     program: &Path,
     arguments: &[PathBuf],
     workspace: &Path,
+    colossus_home: &Path,
 ) -> Result<CommandBuilder, TerminalError> {
     if program != Path::new(MACOS_SYSTEM_SHELL) || arguments != [PathBuf::from("-l")] {
         return Err(TerminalError::ProgramUnavailable);
@@ -921,6 +937,7 @@ fn shell_command(
     if let Some(base_directories) = directories::BaseDirs::new() {
         command.env("HOME", base_directories.home_dir());
     }
+    command.env("COLOSSUS_HOME", colossus_home);
     Ok(command)
 }
 
@@ -1347,6 +1364,7 @@ mod tests {
             display_name: "Test".into(),
             workspace: workspace.clone(),
             workspace_identity: expected.clone(),
+            colossus_home: root.path().join(".colossus"),
             config: None,
             worker_authentication: None,
         };
@@ -1507,6 +1525,7 @@ mod tests {
             display_name: "Test".into(),
             workspace: workspace.clone(),
             workspace_identity,
+            colossus_home: directory.path().join(".colossus"),
             config: Some(config.clone()),
             worker_authentication: Some(
                 TerminalWorkerAuthentication::random().expect("worker authentication"),
@@ -1557,6 +1576,7 @@ mod tests {
 
         let debug = format!("{terminal_workspace:?}");
         assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains(terminal_workspace.colossus_home.to_string_lossy().as_ref()));
         assert!(!debug.contains(&terminal_workspace.workspace_identity.sha256));
         assert!(
             !debug.contains(&hex::encode(
@@ -1593,11 +1613,13 @@ mod tests {
 
         let workspace = tempfile::tempdir().expect("shell workspace");
         let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let colossus_home = workspace.join(".colossus");
         let terminal_workspace = TerminalWorkspace {
             id: "workspace:shell".into(),
             display_name: "Shell workspace".into(),
             workspace: workspace.clone(),
             workspace_identity: test_workspace_identity(&workspace),
+            colossus_home: colossus_home.clone(),
             config: None,
             worker_authentication: None,
         };
@@ -1608,8 +1630,8 @@ mod tests {
         assert_eq!(program, PathBuf::from(MACOS_SYSTEM_SHELL));
         assert_eq!(arguments, [PathBuf::from("-l")]);
 
-        let command =
-            shell_command(&program, &arguments, &workspace).expect("native shell builder");
+        let command = shell_command(&program, &arguments, &workspace, &colossus_home)
+            .expect("native shell builder");
         assert_eq!(
             command.get_argv(),
             &[
@@ -1627,6 +1649,10 @@ mod tests {
         assert_eq!(
             command.get_env("SHELL"),
             Some(OsStr::new(MACOS_SYSTEM_SHELL))
+        );
+        assert_eq!(
+            command.get_env("COLOSSUS_HOME"),
+            Some(colossus_home.as_os_str())
         );
 
         let privileged = TerminalWorkspace {

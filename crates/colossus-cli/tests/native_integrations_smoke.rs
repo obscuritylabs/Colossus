@@ -1,5 +1,8 @@
 //! End-to-end native GitHub, SearXNG, and OpenSearch connector smoke tests.
 
+#[path = "support/process.rs"]
+mod process_support;
+
 use serde_json::Value;
 use std::{
     fs,
@@ -16,7 +19,9 @@ const JOURNAL_KEY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 const SIGNING_KEY: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
 fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    process_support::isolate_user_home(&mut command, workspace);
+    command
         .current_dir(workspace)
         .arg("--config")
         .arg(config)

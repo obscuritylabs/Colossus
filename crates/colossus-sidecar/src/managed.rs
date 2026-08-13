@@ -3,19 +3,23 @@
 use colossus_access::AccessProfile;
 use colossus_api::{ApiScope, ApplicationKind};
 use colossus_grpc::{TlsIdentity, TlsKeySeed};
+use colossus_home::{ColossusHome, ConfinedRoot};
 use colossus_ports::StoreError;
-use colossus_provider::{ChatCompletionsOutputTokenParameter, ProviderKind};
+use colossus_provider::{
+    CODEX_AUTH_ORIGIN, CODEX_CREDENTIAL_REFERENCE, ChatCompletionsOutputTokenParameter,
+    CodexAuthStore, ProviderKind,
+};
 use colossus_runtime::{
     HostCredentialResolver, KeyConfig, ModelCapabilities, ModelProfileConfig, ModelsConfig,
-    ProviderProfileConfig, ProvidersConfig, RuntimeConfig, RuntimeError, RuntimeOpenOptions,
-    WorkspaceIdentityToken,
+    ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig, RuntimeError,
+    RuntimeOpenOptions, StorageLocation, WorkspaceIdentityToken,
 };
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
     FailureResponse, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
-    ManagedProviderKind, ManagedRuntimeConfig, PROTOCOL_VERSION, ParentFrame, ReadyResponse,
-    SecretString, WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication,
-    read_frame, write_frame,
+    ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, PROTOCOL_VERSION,
+    ParentFrame, ReadyResponse, SecretString, WorkspaceIdentity as BootstrapWorkspaceIdentity,
+    decode_worker_authentication, read_frame, write_frame,
 };
 use colossus_worker::{
     ApplicationGrant, PublicApiAuthenticationKey, PublicApiDeploymentMode, PublicApiHostOptions,
@@ -123,6 +127,14 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     let instance_id =
         Uuid::parse_str(&request.instance_id).map_err(|_| FailureCode::InvalidBootstrap)?;
     let instance_dir = private_directory(Path::new(&request.instance_dir))?;
+    let instance_root =
+        ConfinedRoot::bind(&instance_dir).map_err(|_| FailureCode::InvalidBootstrap)?;
+    let colossus_home = request
+        .colossus_home
+        .as_deref()
+        .map(ColossusHome::ensure_at)
+        .transpose()
+        .map_err(|_| FailureCode::InvalidBootstrap)?;
     let workspace =
         BoundWorkspace::open(Path::new(&request.workspace), &request.workspace_identity)?;
     // Bind process-relative operations to the descriptor that reproduced the native
@@ -144,17 +156,33 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         .as_deref()
         .map(|path| install_private_ca_bundle(Path::new(path), &instance_dir))
         .transpose()?;
-    let config = managed_runtime_config(
+    let source_config = managed_runtime_config(
         &request.runtime,
         instance_id,
         &instance_dir,
         ca_bundle_path.as_deref(),
     )?;
+    let config = source_config
+        .resolve_storage_paths(&workspace.canonical_path, instance_root.path())
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
     persist_managed_config(&instance_dir, &config)?;
-    let runtime_options = RuntimeOpenOptions::for_workspace(&workspace.canonical_path)
+    let mut runtime_options = RuntimeOpenOptions::for_workspace(&workspace.canonical_path)
         .map_err(|_| FailureCode::InvalidWorkspace)?
         .with_expected_workspace_identity(workspace.runtime_identity()?);
+    if let Some(home) = &colossus_home {
+        runtime_options = runtime_options
+            .with_colossus_home(home.root())
+            .map_err(|_| FailureCode::InvalidConfiguration)?;
+    }
+    runtime_options = apply_instruction_loading_mode(
+        runtime_options,
+        request.suppress_automatic_agent_instructions,
+    );
 
+    let codex_auth = request
+        .codex_auth_path
+        .as_deref()
+        .map(|path| CodexAuthStore::at_path(PathBuf::from(path)));
     let provider_credentials = HostCredentialResolver::new(
         request
             .host_credentials
@@ -174,19 +202,21 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     // own retained descriptor and per-effect identity checks are active.
     let _workspace_binding = workspace;
     let server = if let Some(authentication) = worker_authentication {
-        WorkerServer::open_with_mode_at_workspace_provider_credentials_and_authentication(
+        WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
             &config,
             WorkerApprovalMode::Ask,
             runtime_options,
             provider_credentials,
+            codex_auth,
             WorkerAuthenticationKey::from_zeroizing(authentication),
         )
     } else {
-        WorkerServer::open_with_mode_at_workspace_and_provider_credentials(
+        WorkerServer::open_with_mode_at_workspace_and_provider_credentials_and_codex_auth(
             &config,
             WorkerApprovalMode::Ask,
             runtime_options,
             provider_credentials,
+            codex_auth,
         )
     }
     .map_err(map_worker_open_failure)?
@@ -360,6 +390,17 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     serve_result.map_err(|_| FailureCode::RuntimeFailed)
 }
 
+fn apply_instruction_loading_mode(
+    options: RuntimeOpenOptions,
+    suppress_automatic_agent_instructions: bool,
+) -> RuntimeOpenOptions {
+    if suppress_automatic_agent_instructions {
+        options.without_automatic_agent_instructions_for_diagnostics()
+    } else {
+        options
+    }
+}
+
 const fn chat_completions_output_token_parameter(
     parameter: ManagedChatCompletionsOutputTokenParameter,
 ) -> ChatCompletionsOutputTokenParameter {
@@ -385,7 +426,8 @@ fn managed_runtime_config(
     managed
         .validate()
         .map_err(|_| FailureCode::InvalidConfiguration)?;
-    let mut config = RuntimeConfig::offline_template(instance_dir.join("state.redb"));
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.storage.location = StorageLocation::HomeWorkspace;
     config.storage.keys = KeyConfig::Platform {
         service: MANAGED_KEYRING_SERVICE.into(),
         journal_key_id: format!("journal-{instance_id}"),
@@ -414,16 +456,21 @@ fn managed_runtime_config(
                     ManagedProviderKind::Echo => ProviderKind::Echo,
                     ManagedProviderKind::OpenAiResponses => ProviderKind::OpenAiResponses,
                     ManagedProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
+                    ManagedProviderKind::OpenAiCodex => ProviderKind::OpenAiCodex,
                 };
                 (
                     provider.profile.clone(),
                     ProviderProfileConfig {
                         kind,
                         base_url: provider.base_url.clone(),
-                        credential_reference: provider
-                            .credential_id
-                            .as_ref()
-                            .map(|identifier| format!("host:{identifier}")),
+                        credential_reference: if provider.kind == ManagedProviderKind::OpenAiCodex {
+                            Some(CODEX_CREDENTIAL_REFERENCE.into())
+                        } else {
+                            provider
+                                .credential_id
+                                .as_ref()
+                                .map(|identifier| format!("host:{identifier}"))
+                        },
                         timeout_ms: Some(provider.timeout_ms),
                         chat_completions_output_token_parameter: provider
                             .chat_completions_output_token_parameter
@@ -449,14 +496,14 @@ fn managed_runtime_config(
                             tool_calls: model.capabilities.tool_calls,
                             streaming: model.capabilities.streaming,
                         },
-                        reasoning_effort: None,
+                        reasoning_effort: model.reasoning_effort.map(reasoning_effort),
                     },
                 )
             })
             .collect(),
         roles: managed.roles.clone(),
     };
-    config.sandbox.network_destinations = managed
+    let mut network_destinations = managed
         .providers
         .iter()
         .filter_map(|provider| provider.base_url.as_deref())
@@ -465,10 +512,17 @@ fn managed_runtime_config(
                 .map_err(|_| FailureCode::InvalidConfiguration)
                 .map(|url| url.origin().ascii_serialization())
         })
-        .collect::<Result<BTreeSet<_>, _>>()?
-        .into_iter()
-        .collect();
-    config.memory.index_path = Some(instance_dir.join("memory-index"));
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if managed
+        .providers
+        .iter()
+        .any(|provider| provider.kind == ManagedProviderKind::OpenAiCodex)
+    {
+        network_destinations.insert("https://chatgpt.com".into());
+        network_destinations.insert(CODEX_AUTH_ORIGIN.into());
+    }
+    config.sandbox.network_destinations = network_destinations.into_iter().collect();
+    config.memory.index_path = Some(PathBuf::from("memory-index"));
     config.workflows.user = instance_dir.join("workflows");
     config.skills.user = instance_dir.join("skills");
     config.packs.install_root = instance_dir.join("packs");
@@ -476,6 +530,19 @@ fn managed_runtime_config(
         .to_yaml()
         .map_err(|_| FailureCode::InvalidConfiguration)?;
     RuntimeConfig::from_yaml(&yaml).map_err(|_| FailureCode::InvalidConfiguration)
+}
+
+const fn reasoning_effort(effort: ManagedReasoningEffort) -> ReasoningEffort {
+    match effort {
+        ManagedReasoningEffort::None => ReasoningEffort::None,
+        ManagedReasoningEffort::Minimal => ReasoningEffort::Minimal,
+        ManagedReasoningEffort::Low => ReasoningEffort::Low,
+        ManagedReasoningEffort::Medium => ReasoningEffort::Medium,
+        ManagedReasoningEffort::High => ReasoningEffort::High,
+        ManagedReasoningEffort::XHigh => ReasoningEffort::XHigh,
+        ManagedReasoningEffort::Max => ReasoningEffort::Max,
+        ManagedReasoningEffort::Ultra => ReasoningEffort::Ultra,
+    }
 }
 
 fn install_private_ca_bundle(
@@ -1064,6 +1131,62 @@ mod tests {
     use super::*;
     use colossus_sidecar_protocol::ManagedProviderConfig;
 
+    fn test_managed_runtime() -> ManagedRuntimeConfig {
+        ManagedRuntimeConfig {
+            access_profile: ManagedAccessProfile::Development,
+            providers: vec![ManagedProviderConfig {
+                profile: "echo".into(),
+                kind: ManagedProviderKind::Echo,
+                base_url: None,
+                credential_id: None,
+                timeout_ms: 120_000,
+                chat_completions_output_token_parameter: None,
+            }],
+            models: vec![colossus_sidecar_protocol::ManagedModelConfig {
+                profile: "primary".into(),
+                provider_profile: "echo".into(),
+                model: "echo".into(),
+                context_window_tokens: 32_768,
+                max_output_tokens: 4_096,
+                capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
+                    tool_calls: true,
+                    streaming: true,
+                },
+                reasoning_effort: None,
+            }],
+            roles: BTreeMap::from([("primary".into(), "primary".into())]),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_instance_rejects_state_symlink_and_hard_link_aliases() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary.path().canonicalize().expect("canonical root");
+        let workspace = root.join("workspace");
+        let instance = root.join("desktop-instance");
+        let cli_state = root.join("cli-state.redb");
+        std::fs::create_dir(&workspace).expect("workspace");
+        std::fs::create_dir(&instance).expect("instance");
+        std::fs::set_permissions(&instance, std::fs::Permissions::from_mode(0o700))
+            .expect("private instance permissions");
+        std::fs::write(&cli_state, []).expect("CLI state");
+        std::fs::set_permissions(&cli_state, std::fs::Permissions::from_mode(0o600))
+            .expect("CLI state permissions");
+        let config =
+            managed_runtime_config(&test_managed_runtime(), Uuid::now_v7(), &instance, None)
+                .expect("managed config");
+
+        symlink(&cli_state, instance.join("state.redb")).expect("state symlink");
+        assert!(config.resolve_storage_paths(&workspace, &instance).is_err());
+        std::fs::remove_file(instance.join("state.redb")).expect("remove symlink");
+
+        std::fs::hard_link(&cli_state, instance.join("state.redb")).expect("state hard link");
+        assert!(config.resolve_storage_paths(&workspace, &instance).is_err());
+    }
+
     #[cfg(unix)]
     fn bootstrap_workspace_identity(
         metadata: &std::fs::Metadata,
@@ -1266,6 +1389,7 @@ mod tests {
                     tool_calls: true,
                     streaming: true,
                 },
+                reasoning_effort: None,
             }],
             roles: BTreeMap::from([("primary".into(), "main".into())]),
         };
@@ -1319,6 +1443,7 @@ mod tests {
                     tool_calls: true,
                     streaming: true,
                 },
+                reasoning_effort: None,
             }],
             roles: BTreeMap::from([("primary".into(), "main".into())]),
         };
@@ -1333,5 +1458,76 @@ mod tests {
             std::fs::symlink_metadata(path).expect("metadata").mode() & 0o077,
             0
         );
+    }
+
+    #[test]
+    fn managed_codex_configuration_uses_fixed_auth_and_reasoning_contracts() {
+        let instance = tempfile::tempdir().expect("instance");
+        let managed = ManagedRuntimeConfig {
+            access_profile: ManagedAccessProfile::Development,
+            providers: vec![ManagedProviderConfig {
+                profile: "codex".into(),
+                kind: ManagedProviderKind::OpenAiCodex,
+                base_url: None,
+                credential_id: None,
+                timeout_ms: 120_000,
+                chat_completions_output_token_parameter: None,
+            }],
+            models: vec![colossus_sidecar_protocol::ManagedModelConfig {
+                profile: "primary".into(),
+                provider_profile: "codex".into(),
+                model: "gpt-5-codex".into(),
+                context_window_tokens: 128_000,
+                max_output_tokens: 16_000,
+                capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
+                    tool_calls: true,
+                    streaming: true,
+                },
+                reasoning_effort: Some(ManagedReasoningEffort::High),
+            }],
+            roles: BTreeMap::from([("primary".into(), "primary".into())]),
+        };
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+            .expect("managed Codex config");
+        let provider = &config.providers.profiles["codex"];
+        assert_eq!(provider.kind, ProviderKind::OpenAiCodex);
+        assert_eq!(provider.base_url, None);
+        assert_eq!(
+            provider.credential_reference.as_deref(),
+            Some(CODEX_CREDENTIAL_REFERENCE)
+        );
+        assert_eq!(
+            config.models.profiles["primary"].reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&"https://chatgpt.com".into())
+        );
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&CODEX_AUTH_ORIGIN.into())
+        );
+    }
+
+    #[test]
+    fn private_diagnostic_bootstrap_is_the_only_sidecar_suppression_path() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let normal = apply_instruction_loading_mode(
+            RuntimeOpenOptions::for_workspace(workspace.path()).expect("normal options"),
+            false,
+        );
+        let diagnostic = apply_instruction_loading_mode(
+            RuntimeOpenOptions::for_workspace(workspace.path()).expect("diagnostic options"),
+            true,
+        );
+
+        assert!(format!("{normal:?}").contains("automatic_agent_instructions: true"));
+        assert!(format!("{diagnostic:?}").contains("automatic_agent_instructions: false"));
     }
 }

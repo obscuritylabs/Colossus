@@ -6,7 +6,7 @@ use tauri::{
 };
 
 use crate::{
-    desktop_settings::{SettingsStore, application_support_root, revalidate_workspace},
+    desktop_settings::{SettingsStore, revalidate_workspace},
     dto::{
         CloseTerminalInput, CommandErrorDto, OpenTerminalDto, OpenTerminalInput,
         ResizeTerminalInput, ShowTerminalInput, SignalTerminalInput, TerminalContextDto,
@@ -349,7 +349,9 @@ fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
             TerminalError::ProgramUnavailable,
         ));
     }
-    let settings = SettingsStore::open(application_support_root()?)?.load()?;
+    let store = SettingsStore::open_application()?;
+    let colossus_home = store.home_root()?.to_owned();
+    let settings = store.load()?;
     if settings.selected_target_id.as_deref() != Some(MANAGED_TARGET_ID) {
         return Err(CommandErrorDto::from_terminal(
             TerminalError::InvalidWorkspace,
@@ -369,6 +371,7 @@ fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
         display_name: workspace.display_name.clone(),
         workspace: canonical_workspace,
         workspace_identity,
+        colossus_home,
         config: None,
         worker_authentication: None,
     })

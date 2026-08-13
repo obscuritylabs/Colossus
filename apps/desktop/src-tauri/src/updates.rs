@@ -10,7 +10,7 @@ use tauri_plugin_updater::{Update, UpdaterExt as _};
 
 use crate::{
     desktop_dto::{DesktopReleaseChannelDto, DesktopUpdateCheckDto},
-    desktop_settings::{SettingsStore, application_support_root},
+    desktop_settings::SettingsStore,
     dto::CommandErrorDto,
     state::AppState,
 };
@@ -213,7 +213,7 @@ fn valid_update_metadata(
 }
 
 fn additional_roots() -> Result<AdditionalRootCertificates, CommandErrorDto> {
-    let store = SettingsStore::open(application_support_root()?)?;
+    let store = SettingsStore::open_application()?;
     let settings = store.load()?;
     let Some(bundle) = settings.additional_ca_bundle.as_ref() else {
         return Ok(AdditionalRootCertificates::default());

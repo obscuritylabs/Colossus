@@ -10,9 +10,9 @@ pub(super) struct Cli {
     /// Repository workspace used by tools and relative configuration paths.
     #[arg(short = 'w', long, default_value = ".")]
     pub(super) workspace: PathBuf,
-    /// Fresh Rust YAML configuration path.
-    #[arg(long, default_value = ".colossus/config.yaml")]
-    pub(super) config: PathBuf,
+    /// Explicit fresh Rust YAML configuration path, resolved relative to the workspace.
+    #[arg(long)]
+    pub(super) config: Option<PathBuf>,
     /// Handling for policy decisions that require operator approval.
     #[arg(long, value_enum)]
     pub(super) approval_mode: Option<ApprovalMode>,

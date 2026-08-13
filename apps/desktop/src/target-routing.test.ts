@@ -95,6 +95,10 @@ function status(): DesktopStatus {
       kind: "openai_responses",
       model: "gpt",
     },
+    codexAuth: {
+      state: "signed_out",
+      message: "Sign in with ChatGPT to use Codex.",
+    },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     approvalMode: "ask",

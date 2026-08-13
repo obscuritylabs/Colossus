@@ -580,6 +580,18 @@ impl ToolExecutor for GatewayToolExecutor {
                     ToolError::Denied("agent.delegate requires a parent run".into())
                 })?;
                 let allowed_tools = context.offered_tools.clone();
+                let instruction_snapshot_id = if let Some(snapshot) = active_instruction_snapshot()
+                {
+                    self.work
+                        .as_ref()
+                        .ok_or_else(|| ToolError::Failed("work adapter is unavailable".into()))?
+                        .instruction_snapshots
+                        .persist(&snapshot)
+                        .map_err(|error| ToolError::Failed(error.to_string()))?;
+                    Some(snapshot.id().to_owned())
+                } else {
+                    None
+                };
                 self.execute_work_tool(
                     &call,
                     context,
@@ -590,6 +602,7 @@ impl ToolExecutor for GatewayToolExecutor {
                         task: required_tool_string(&call, "task")?.into(),
                         role: "subagent_default".into(),
                         allowed_tools: Some(allowed_tools),
+                        instruction_snapshot_id,
                     },
                 )
                 .await?

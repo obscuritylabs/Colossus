@@ -26,6 +26,13 @@ impl Runtime {
         role: &str,
     ) -> Result<SubagentJob, RuntimeError> {
         let lineage = format!("manual-{}", Uuid::now_v7());
+        let prepared = self.prepare_agent_instructions("", "")?;
+        let instruction_snapshot_id = if let Some(snapshot) = prepared.snapshot {
+            self.instruction_snapshots.persist(&snapshot)?;
+            Some(snapshot.id().to_owned())
+        } else {
+            None
+        };
         serde_json::from_value(
             self.execute_work_operation(WorkOperation::SubagentCreate {
                 session_id: session_id.into(),
@@ -34,6 +41,7 @@ impl Runtime {
                 task: task.into(),
                 role: role.into(),
                 allowed_tools: None,
+                instruction_snapshot_id,
             })
             .await?,
         )
@@ -110,12 +118,22 @@ impl Runtime {
             for job in running {
                 let agent = Arc::clone(&self.agent);
                 let max_turns = self.agent_max_turns;
+                let inherited_instructions =
+                    match self.work.subagent_instruction_snapshot_id(&job.id)? {
+                        Some(id) => self.instruction_snapshots.load(&id)?.compose(),
+                        None => String::new(),
+                    };
                 set.spawn(
                     async move {
-                        let instructions = format!(
+                        let child_instructions = format!(
                             "You are a durable Colossus child agent for job {}. Complete only the assigned task. Nested delegation is disabled. Return a concise result for the parent.",
                             job.id
                         );
+                        let instructions = if inherited_instructions.is_empty() {
+                            child_instructions
+                        } else {
+                            format!("{inherited_instructions}\n\n{child_instructions}")
+                        };
                         let result = agent
                             .run_subagent(
                                 &job.role,

@@ -30,7 +30,8 @@ Keep only `env:OPENROUTER_API_KEY` in YAML.
 
 ### 2. Configure the OpenRouter route
 
-Keep the other required fields from your generated configuration. Apply this validated
+Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
+keep its other required fields. Apply this validated
 overlay. The example uses OpenRouter's `openrouter/free` route; replace it with another
 exact catalog identifier and its limits when you need a specific model.
 
@@ -75,10 +76,10 @@ model budget and never probes by resubmitting a failed generation.
 ### 3. Confirm model visibility and readiness
 
 ```bash
-colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider models openrouter-provider
-colossus --config .colossus/config.yaml provider doctor openrouter-provider
-colossus --config .colossus/config.yaml models doctor openrouter
+colossus -w . models route primary
+colossus -w . provider models openrouter-provider
+colossus -w . provider doctor openrouter-provider
+colossus -w . models doctor openrouter
 ```
 
 Select a model ID exactly as the catalog returns it. Update context and output limits
@@ -87,7 +88,7 @@ and capability flags for that same model before using it.
 ### 4. Send one bounded model turn
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w . run \
   "Reply with exactly: connected"
 ```
 
@@ -98,7 +99,7 @@ succeed, and the run returns `connected`.
 
 ## Verification
 
-Run `colossus --config .colossus/config.yaml config show` and confirm that the output
+Run `colossus -w . config show` and confirm that the output
 contains only the environment reference, exact model ID, API prefix, and sandbox origin.
 
 ## Failure path
