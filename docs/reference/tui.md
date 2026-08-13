@@ -56,7 +56,7 @@ native scrollback byte-for-byte.
 | `Enter` | Composer | Submit the current turn |
 | `Enter` | Multiline composer | Insert a newline |
 | `Ctrl-Enter` / `Alt-Enter` | Multiline composer | Submit the current turn |
-| `Up` / `Down` | Composer | Navigate input history |
+| `Up` / `Down` | Composer | From the first composer line, `Up` enters submitted-input history. While browsing, `Up` / `Down` move through entries; `Down` past the newest restores the original draft and cursor. |
 | `Ctrl-R` | Composer | Search submitted-input history |
 | `Ctrl-C` | Idle TUI | Exit, including when a draft or non-running overlay is open |
 | `Ctrl-C` | Active run | Request cooperative cancellation; press again to exit |
