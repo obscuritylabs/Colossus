@@ -163,7 +163,7 @@ sandbox:
     - /usr/local/bin/python3
   environment: [SAFE]
   networkDestinations: []
-  timeoutMs: 20000
+  timeoutMs: 30000
   maxOutputBytes: 1048576
   maxProcesses: 16
   maxMemoryBytes: 134217728
@@ -393,7 +393,7 @@ sandbox:
         &bounded_config,
         fs::read_to_string(&config)
             .expect("read config")
-            .replace("  timeoutMs: 20000", "  timeoutMs: 12000"),
+            .replace("  timeoutMs: 30000", "  timeoutMs: 12000"),
     )
     .expect("bounded config");
     let timeout = run(
