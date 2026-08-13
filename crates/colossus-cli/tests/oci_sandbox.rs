@@ -118,7 +118,10 @@ fn live_oci_enforces_mount_environment_network_timeout_and_cleanup_boundaries() 
     // further reduced by the OCI cleanup reserve, so rootless runtimes need real headroom
     // for the phases that must succeed: the first `--userns=keep-id` container also
     // materializes an id-mapped copy of the image, which acceptance CI pays up front.
-    // Enforcement phases use `bounded_config` below.
+    // Rootless Podman container start is nonetheless bursty on shared CI hosts, where an
+    // otherwise four second launch has been observed to exceed a thirty second budget, so
+    // keep this headroom generous. It bounds nothing this test asserts: every enforcement
+    // boundary is proven with the tight `bounded_config` budget below.
     let config = directory.path().join("config.yaml");
     fs::write(
         &config,
@@ -165,7 +168,7 @@ sandbox:
     - /usr/local/bin/python3
   environment: [SAFE]
   networkDestinations: []
-  timeoutMs: 30000
+  timeoutMs: 90000
   maxOutputBytes: 1048576
   maxProcesses: 16
   maxMemoryBytes: 134217728
@@ -395,7 +398,7 @@ sandbox:
         &bounded_config,
         fs::read_to_string(&config)
             .expect("read config")
-            .replace("  timeoutMs: 30000", "  timeoutMs: 12000"),
+            .replace("  timeoutMs: 90000", "  timeoutMs: 12000"),
     )
     .expect("bounded config");
     let timeout = run(

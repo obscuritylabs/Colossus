@@ -500,9 +500,17 @@ jobs:
           # sandbox always runs workloads as `--userns=keep-id --user <uid>:<gid>`, and the
           # first such container materializes an id-mapped copy of the workload image in
           # Podman's store, so mirror those flags to keep that cost outside the budget too.
+          # Mirror the sandbox's resource limits, capability drop, and bind mount as well so
+          # the cgroup and id-mapped mount setup they trigger is also charged to this step.
+          warmup="$(mktemp --directory)"
           podman run --rm --pull=never --network=none --read-only \
-            --userns=keep-id --user "$(id -u):$(id -g)" --entrypoint /bin/true \
+            --userns=keep-id --user "$(id -u):$(id -g)" \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --pids-limit=16 --memory=134217728 \
+            --mount "type=bind,source=$warmup,target=$warmup" \
+            --workdir "$warmup" --entrypoint /bin/true \
             python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          rmdir "$warmup"
       - name: Run live Podman OCI escape and recovery suite
         env:
           COLOSSUS_OCI_RUNTIME: /usr/bin/podman
