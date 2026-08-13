@@ -493,9 +493,13 @@ fn windows_directory_path(
     let mut path = root.path.clone();
     for component in components {
         path.push(component);
-        if create && !path.exists() {
-            colossus_windows_native::create_private_directory(&path)
-                .map_err(|_| HomeError::UnsafeConfinedPath(path.clone()))?;
+        if create {
+            match colossus_windows_native::create_private_directory(&path) {
+                Ok(()) => {}
+                Err(colossus_windows_native::WindowsNativeError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return Err(HomeError::UnsafeConfinedPath(path.clone())),
+            }
         }
         let binding = colossus_windows_native::BoundPath::open_directory(&path)
             .map_err(|_| HomeError::UnsafeConfinedPath(path.clone()))?;
@@ -719,6 +723,35 @@ fn validate_directory_platform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn concurrent_private_directory_creation_reopens_the_winner() {
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 8;
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary.path().join("private");
+        let confined = ConfinedRoot::bind(&root).expect("confined root");
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let threads = (0..THREADS)
+            .map(|_| {
+                let confined = confined.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    confined.prepare_directory(Path::new("race/nested"))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread in threads {
+            assert!(
+                thread.join().expect("directory thread").is_ok(),
+                "a concurrent creator must reopen and validate the winning directory"
+            );
+        }
+    }
 
     #[test]
     fn nested_private_paths_are_created_and_reopened_by_descriptor() {

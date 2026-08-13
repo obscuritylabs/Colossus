@@ -3,7 +3,7 @@ use directories::BaseDirs;
 use sha2::{Digest as _, Sha256};
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 const HOME_ENVIRONMENT: &str = "COLOSSUS_HOME";
@@ -91,6 +91,9 @@ impl ColossusHome {
         let metadata = fs::symlink_metadata(canonical_workspace)
             .map_err(|error| HomeError::io(canonical_workspace, error))?;
         if !canonical_workspace.is_absolute()
+            || canonical_workspace
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
             || verified_canonical != canonical_workspace
             || metadata.file_type().is_symlink()
             || !metadata.is_dir()
@@ -142,10 +145,7 @@ fn update_path_digest(digest: &mut Sha256, path: &Path) {
 
 #[cfg(unix)]
 pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), HomeError> {
-    use std::{
-        os::unix::fs::{DirBuilderExt as _, MetadataExt as _},
-        path::Component,
-    };
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
 
     let mut current = PathBuf::new();
     for component in path.components() {
