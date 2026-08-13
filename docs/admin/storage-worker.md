@@ -14,9 +14,12 @@ models.
 
 ## Storage adapters
 
-When `storage.adapter` is omitted, Colossus uses embedded redb. It is the simplest
-single-host choice and holds the local writer lease. A multi-process deployment may
-select PostgreSQL:
+When `storage.adapter` is omitted, Colossus uses embedded file-backed redb. It is the
+simplest single-host choice and holds the local writer lease. `adapter: ephemeral`
+instead runs the same journal and projection schema over process memory without a state
+file or writer lease. It is intended for one-shot commands only: a process exit loses
+workflow progress, effect evidence, approvals, and every other canonical event. A
+multi-process deployment may select PostgreSQL:
 
 ```yaml
 storage:
@@ -62,7 +65,7 @@ sequence range, event count, and anchor version.
 
 ## Worker ownership
 
-Only one redb writer lease is allowed. A long-running worker can own it and expose an
+Only one file-backed redb writer lease is allowed. A long-running worker can own it and expose an
 authenticated local application protocol to CLI and TUI clients:
 
 ```bash

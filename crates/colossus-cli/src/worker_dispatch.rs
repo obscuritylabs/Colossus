@@ -24,6 +24,15 @@ pub(super) async fn dispatch_to_worker_if_active(
         inherited_worker,
         config_resolution,
     } = options;
+    if config.storage.adapter == colossus_runtime::StorageAdapter::Ephemeral {
+        if worker_required {
+            return Err(
+                "ephemeral storage cannot attach to an existing worker; use redb or PostgreSQL for the desktop TUI"
+                    .into(),
+            );
+        }
+        return Ok(false);
+    }
     let client = match inherited_worker {
         Some(client) => Some(client),
         None => WorkerClient::discover(config)?,

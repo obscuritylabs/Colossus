@@ -210,8 +210,10 @@ impl Runtime {
         provider_credentials: Arc<dyn CredentialResolver>,
         codex_auth: Option<CodexAuthStore>,
     ) -> Result<Self, RuntimeError> {
+        validate_storage_config(&config.storage)?;
         let storage_adapter = match config.storage.adapter {
             StorageAdapter::Redb => "redb",
+            StorageAdapter::Ephemeral => "ephemeral",
             StorageAdapter::Postgres => "postgresql",
         };
         let startup_verification = match config.storage.startup_verification {
@@ -284,7 +286,8 @@ impl Runtime {
         let development_sandbox = derive_development_sandbox(config, &workspace)?;
         let storage_path = config.resolved_storage_path_at(&workspace)?;
         let repository_id = repository_identity(&workspace);
-        if !config.has_resolved_home_workspace()
+        if config.storage.adapter != StorageAdapter::Ephemeral
+            && !config.has_resolved_home_workspace()
             && let Some(parent) = storage_path.parent()
         {
             fs::create_dir_all(parent)?;
@@ -337,6 +340,30 @@ impl Runtime {
             "storage_open",
             || -> Result<StorageComposition, RuntimeError> {
                 Ok(match config.storage.adapter {
+                    StorageAdapter::Ephemeral => {
+                        let redb =
+                            Arc::new(RedbEventJournal::open_in_memory_with_startup_verification(
+                                Arc::clone(&keys),
+                                signer.clone(),
+                                config.storage.startup_verification,
+                            )?);
+                        let recovery_reason = redb.recovery_reason()?;
+                        let startup_verification = redb.startup_verification_report()?;
+                        StorageComposition {
+                            writer_lease: None,
+                            journal: redb.clone(),
+                            projections: redb,
+                            recovery_reason,
+                            diagnostic: json!({
+                                "adapter": "ephemeral",
+                                "path": null,
+                                "instance_identity": storage_path,
+                                "persistence": "process",
+                                "payload_protection": config.storage.keys.protection_label(),
+                                "startup_verification": startup_verification,
+                            }),
+                        }
+                    }
                     StorageAdapter::Redb => {
                         let mut lock_path = storage_path.as_os_str().to_os_string();
                         lock_path.push(".writer.lock");
@@ -888,6 +915,11 @@ impl Runtime {
             mcp_executor
         } else {
             match active_pack_extensions.mcp.oauth_credential_store {
+                McpOAuthCredentialStoreKind::Auto
+                    if config.storage.adapter == StorageAdapter::Ephemeral =>
+                {
+                    mcp_executor.with_ephemeral_oauth_storage(repository_id.clone())?
+                }
                 McpOAuthCredentialStoreKind::Auto => match &config.storage.keys {
                     KeyConfig::None => {
                         let path = storage_path.with_extension("mcp-oauth.redb");

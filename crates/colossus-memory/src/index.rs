@@ -144,20 +144,38 @@ impl MemoryIndex for UnavailableMemoryIndex {
 }
 
 impl TantivyMemoryIndex {
+    /// Create a fresh process-local lexical projection backed only by memory.
+    pub fn in_memory() -> Result<Self, StoreError> {
+        let (schema, id, event_id, text, metadata, active) = memory_schema();
+        Self::from_index(
+            Index::create_in_ram(schema),
+            id,
+            event_id,
+            text,
+            metadata,
+            active,
+        )
+    }
+
     /// Open or create the offline lexical projection.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         std::fs::create_dir_all(path.as_ref()).map_err(adapter)?;
-        let mut builder = Schema::builder();
-        let id = builder.add_text_field("memory_id", STRING | STORED);
-        let event_id = builder.add_text_field("event_id", STRING | STORED);
-        let text = builder.add_text_field("text", TEXT);
-        let metadata = builder.add_text_field("metadata", STORED);
-        let active = builder.add_text_field("active", STRING);
-        let schema = builder.build();
+        let (schema, id, event_id, text, metadata, active) = memory_schema();
         let index = match Index::open_in_dir(path.as_ref()) {
             Ok(index) => index,
             Err(_) => Index::create_in_dir(path.as_ref(), schema).map_err(adapter)?,
         };
+        Self::from_index(index, id, event_id, text, metadata, active)
+    }
+
+    fn from_index(
+        index: Index,
+        id: Field,
+        event_id: Field,
+        text: Field,
+        metadata: Field,
+        active: Field,
+    ) -> Result<Self, StoreError> {
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
@@ -188,6 +206,16 @@ impl TantivyMemoryIndex {
             .map_err(adapter)?
             .is_empty())
     }
+}
+
+fn memory_schema() -> (Schema, Field, Field, Field, Field, Field) {
+    let mut builder = Schema::builder();
+    let id = builder.add_text_field("memory_id", STRING | STORED);
+    let event_id = builder.add_text_field("event_id", STRING | STORED);
+    let text = builder.add_text_field("text", TEXT);
+    let metadata = builder.add_text_field("metadata", STORED);
+    let active = builder.add_text_field("active", STRING);
+    (builder.build(), id, event_id, text, metadata, active)
 }
 
 #[async_trait]

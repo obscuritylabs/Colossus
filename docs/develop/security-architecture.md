@@ -110,6 +110,12 @@ global hash chain, indexes, projection outbox, per-read payload validation, and 
 or external rollback anchor. `platform` and `environment` enable authenticated payload
 encryption, Ed25519 checkpoints, and a separately protected anchor as one complete tier.
 
+`storage.adapter: ephemeral` retains those keyless integrity checks only for the life of
+one process. It rejects protected keys because their anchor would outlive the journal,
+emits a security-posture warning, and cannot provide crash recovery or durable evidence
+for uncertain external effects. Operators must select redb or PostgreSQL whenever that
+evidence is required across retry or restart.
+
 Each redb file and PostgreSQL schema stores a protection marker. Empty stores initialize
 from configuration; nonempty markerless stores are conservatively classified as
 encrypted. A mismatch aborts runtime construction before event writes. Mixed algorithms

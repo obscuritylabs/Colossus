@@ -5,12 +5,28 @@ pub(super) fn build_security_posture(
     mcp: &McpConfig,
 ) -> SecurityPostureReport {
     let mut findings = Vec::new();
+    if config.storage.adapter == StorageAdapter::Ephemeral {
+        findings.push(SecurityPostureFinding {
+            code: "storage.ephemeral".into(),
+            severity: SecurityPostureSeverity::Warning,
+            summary: "Canonical journal, projection, and recovery evidence is retained only for this process.".into(),
+            remediation: "Use redb or PostgreSQL whenever runs must survive process exit, interruption, or retry.".into(),
+        });
+    }
     if matches!(config.storage.keys, KeyConfig::None) {
         findings.push(SecurityPostureFinding {
             code: "storage.plaintext".into(),
             severity: SecurityPostureSeverity::Warning,
-            summary: "Journal payloads are stored as plaintext canonical JSON.".into(),
-            remediation: "Create a fresh configuration and storage path with storage.keys.kind set to platform or environment.".into(),
+            summary: if config.storage.adapter == StorageAdapter::Ephemeral {
+                "Journal payloads are held in memory as plaintext canonical JSON.".into()
+            } else {
+                "Journal payloads are stored as plaintext canonical JSON.".into()
+            },
+            remediation: if config.storage.adapter == StorageAdapter::Ephemeral {
+                "Use a fresh redb or PostgreSQL store with storage.keys.kind set to platform or environment when protected persistence is required.".into()
+            } else {
+                "Create a fresh configuration and storage path with storage.keys.kind set to platform or environment.".into()
+            },
         });
     }
     if config.sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend() {
@@ -38,6 +54,7 @@ pub(super) fn build_security_posture(
         mcp.oauth_credential_store,
         McpOAuthCredentialStoreKind::PlaintextState
     ) || (mcp.oauth_credential_store == McpOAuthCredentialStoreKind::Auto
+        && config.storage.adapter != StorageAdapter::Ephemeral
         && matches!(config.storage.keys, KeyConfig::None));
     if has_oauth && plaintext_oauth {
         findings.push(SecurityPostureFinding {

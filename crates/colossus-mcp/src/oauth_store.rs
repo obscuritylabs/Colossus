@@ -4,7 +4,7 @@ use chacha20poly1305::{
     aead::{Aead as _, Payload},
 };
 use colossus_ports::KeyProvider;
-use redb::{Database, ReadableDatabase as _, TableDefinition};
+use redb::{Database, ReadableDatabase as _, TableDefinition, backends::InMemoryBackend};
 use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -38,6 +38,17 @@ impl OAuthStoreFactory {
             service,
             repository_id,
         }
+    }
+
+    pub(super) fn ephemeral_state(repository_id: String) -> Result<Self, AuthError> {
+        let database = Database::builder()
+            .create_with_backend(InMemoryBackend::new())
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        initialize_database(&database)?;
+        Ok(Self::PlaintextState {
+            database: Arc::new(database),
+            repository_id,
+        })
     }
 
     pub(super) fn encrypted_state(

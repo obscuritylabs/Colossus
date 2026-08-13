@@ -102,6 +102,11 @@ Protection mode is fixed when a redb path or PostgreSQL schema is initialized. C
 rejects opening a nonempty journal with a different mode; create a fresh path or schema
 instead of attempting an in-place change.
 
+For a deliberately one-shot run, `storage.adapter: ephemeral` keeps the canonical redb
+journal, projections, default memory index, and automatic MCP OAuth state in process
+memory. It requires `keys.kind: none` and loses all recovery and audit evidence at
+process exit, so it is unsuitable for resumable or automatically retried effects.
+
 ## Headless environment-backed keys
 
 On a headless host that requires encryption, generate the references directly:

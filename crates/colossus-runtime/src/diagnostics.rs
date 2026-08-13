@@ -128,7 +128,14 @@ impl Runtime {
     pub fn state_doctor(&self) -> Result<Value, RuntimeError> {
         let (journal_head, record_hash) = self.journal.head()?;
         let writer_lease = self.writer_lease.as_ref().map_or_else(
-            || json!({"held": false, "reason": "database-coordinated"}),
+            || {
+                let reason = if self.storage_diagnostic["adapter"] == "ephemeral" {
+                    "process-local-ephemeral"
+                } else {
+                    "database-coordinated"
+                };
+                json!({"held": false, "reason": reason})
+            },
             |lease| json!({"held": true, "path": lease.path()}),
         );
         let projection_adapter = self

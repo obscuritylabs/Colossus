@@ -8,6 +8,13 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Added `storage.adapter: ephemeral` for one-shot process-local runs. It uses redb's
+  in-memory backend for the canonical journal and projections, keeps the default
+  Tantivy and automatic MCP OAuth state in memory, creates no canonical state or
+  writer-lock file, and reports the loss of restart/recovery evidence explicitly.
+
 ## [0.10.8] - 2026-08-13
 
 ### Added

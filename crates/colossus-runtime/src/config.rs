@@ -745,7 +745,7 @@ pub struct StorageConfig {
     /// Base directory used to resolve the local state identity.
     #[serde(default)]
     pub location: StorageLocation,
-    /// Local state identity and redb state file when the redb adapter is active.
+    /// Local state identity and redb state file when the file-backed redb adapter is active.
     pub path: PathBuf,
     /// Canonical journal and projection adapter.
     #[serde(default)]
@@ -782,9 +782,42 @@ pub enum StorageAdapter {
     /// Embedded single-writer redb journal and projections.
     #[default]
     Redb,
+    /// Fresh process-local redb journal and projections backed only by memory.
+    Ephemeral,
     /// Multi-process PostgreSQL journal and projections.
     #[serde(alias = "postgresql")]
     Postgres,
+}
+
+pub(super) fn validate_storage_config(storage: &StorageConfig) -> Result<(), RuntimeError> {
+    match (storage.adapter, storage.postgres.as_ref()) {
+        (StorageAdapter::Redb | StorageAdapter::Ephemeral, None) => {}
+        (StorageAdapter::Redb, Some(_)) => {
+            return Err(RuntimeError::Config(
+                "storage.postgres must be omitted when storage.adapter is redb".into(),
+            ));
+        }
+        (StorageAdapter::Ephemeral, Some(_)) => {
+            return Err(RuntimeError::Config(
+                "storage.postgres must be omitted when storage.adapter is ephemeral".into(),
+            ));
+        }
+        (StorageAdapter::Postgres, Some(postgres)) => postgres
+            .validate()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        (StorageAdapter::Postgres, None) => {
+            return Err(RuntimeError::Config(
+                "storage.postgres is required when storage.adapter is postgres".into(),
+            ));
+        }
+    }
+    if storage.adapter == StorageAdapter::Ephemeral && !matches!(storage.keys, KeyConfig::None) {
+        return Err(RuntimeError::Config(
+            "storage.adapter ephemeral requires storage.keys.kind none because protected anchors outlive process-local state"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Journal protection provider configuration.
@@ -929,22 +962,7 @@ impl RuntimeConfig {
             matches!(&config.policy, PolicyConfig::Opa { .. }),
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        match (config.storage.adapter, config.storage.postgres.as_ref()) {
-            (StorageAdapter::Redb, None) => {}
-            (StorageAdapter::Redb, Some(_)) => {
-                return Err(RuntimeError::Config(
-                    "storage.postgres must be omitted when storage.adapter is redb".into(),
-                ));
-            }
-            (StorageAdapter::Postgres, Some(postgres)) => postgres
-                .validate()
-                .map_err(|error| RuntimeError::Config(error.to_string()))?,
-            (StorageAdapter::Postgres, None) => {
-                return Err(RuntimeError::Config(
-                    "storage.postgres is required when storage.adapter is postgres".into(),
-                ));
-            }
-        }
+        validate_storage_config(&config.storage)?;
         if config.storage.location == StorageLocation::HomeWorkspace
             && !confined_relative_storage_path(&config.storage.path)
         {
@@ -1204,6 +1222,13 @@ impl RuntimeConfig {
         self.storage.keys = KeyConfig::None;
     }
 
+    /// Select a fresh process-local plaintext journal with no canonical state files.
+    pub fn use_ephemeral_storage(&mut self) {
+        self.storage.adapter = StorageAdapter::Ephemeral;
+        self.storage.postgres = None;
+        self.storage.keys = KeyConfig::None;
+    }
+
     /// Select a fresh platform credential identity for journal encryption and signing.
     pub fn use_platform_storage(&mut self) {
         let instance_id = Uuid::now_v7();
@@ -1288,6 +1313,7 @@ impl RuntimeConfig {
         workspace: &Path,
         home_workspace: &Path,
     ) -> Result<Self, RuntimeError> {
+        validate_storage_config(&self.storage)?;
         let mut resolved = self.clone();
         let confined_root = match self.storage.location {
             StorageLocation::Workspace => None,
@@ -1306,9 +1332,13 @@ impl RuntimeConfig {
             }
         };
         if let Some(root) = confined_root {
-            resolved.storage.path = root.prepare_file(&self.storage.path).map_err(|error| {
-                RuntimeError::Config(format!("home-workspace storage.path is unsafe: {error}"))
-            })?;
+            resolved.storage.path = if self.storage.adapter == StorageAdapter::Ephemeral {
+                root.path().join(&self.storage.path)
+            } else {
+                root.prepare_file(&self.storage.path).map_err(|error| {
+                    RuntimeError::Config(format!("home-workspace storage.path is unsafe: {error}"))
+                })?
+            };
             if let KeyConfig::Environment { anchor_path, .. } = &mut resolved.storage.keys {
                 if !confined_relative_storage_path(anchor_path) {
                     return Err(RuntimeError::Config(
@@ -1322,7 +1352,10 @@ impl RuntimeConfig {
                     ))
                 })?;
             }
-            if resolved.memory.index_enabled {
+            if resolved.memory.index_enabled
+                && (self.storage.adapter != StorageAdapter::Ephemeral
+                    || resolved.memory.index_path.is_some())
+            {
                 let relative = resolved
                     .memory
                     .index_path
@@ -1388,9 +1421,20 @@ impl RuntimeConfig {
         }
         let path = workspace_absolute_path(workspace, &self.storage.path);
         if let Some(root) = &self.storage.resolved_home_workspace {
-            root.revalidate_file(&path).map_err(|error| {
-                RuntimeError::Config(format!("home-workspace state path is unsafe: {error}"))
-            })?;
+            if self.storage.adapter == StorageAdapter::Ephemeral {
+                root.relative(&path).map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "home-workspace state identity is unsafe: {error}"
+                    ))
+                })?;
+                root.revalidate().map_err(|error| {
+                    RuntimeError::Config(format!("home-workspace root is unsafe: {error}"))
+                })?;
+            } else {
+                root.revalidate_file(&path).map_err(|error| {
+                    RuntimeError::Config(format!("home-workspace state path is unsafe: {error}"))
+                })?;
+            }
         }
         Ok(path)
     }
@@ -1920,13 +1964,19 @@ pub(super) fn compose_memory_indexes(
             index,
         )?]);
     }
-    let path = config
-        .memory
-        .index_path
-        .clone()
-        .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
-    config.revalidate_resolved_home_directory(&path)?;
-    let lexical: Arc<dyn MemoryIndex> = Arc::new(LazyTantivyMemoryIndex::new(path));
+    let lexical: Arc<dyn MemoryIndex> = if config.storage.adapter == StorageAdapter::Ephemeral
+        && config.memory.index_path.is_none()
+    {
+        Arc::new(TantivyMemoryIndex::in_memory()?)
+    } else {
+        let path = config
+            .memory
+            .index_path
+            .clone()
+            .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
+        config.revalidate_resolved_home_directory(&path)?;
+        Arc::new(LazyTantivyMemoryIndex::new(path))
+    };
     let mut indexes = vec![MemoryIndexRegistration::new("memory.tantivy-v1", lexical)?];
     let SemanticMemoryConfig::Chroma {
         base_url,

@@ -35,7 +35,7 @@ flowchart LR
     end
     subgraph Adapters
       Provider["Providers"]
-      Journal["redb or PostgreSQL"]
+      Journal["ephemeral/file redb or PostgreSQL"]
       Sandbox["Sandbox and effect adapters"]
       Extensions["Integrations, MCP, packs"]
     end

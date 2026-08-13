@@ -55,9 +55,11 @@ projection into authority.
 
 ## Process ownership
 
-redb permits one writer lease. The worker may own that lease and coordinate projection,
-index, trigger, workflow, and child-job drains. Embedded operation is available only
-when no valid worker endpoint owns the instance.
+File-backed redb permits one writer lease. The worker may own that lease and coordinate
+projection, index, trigger, workflow, and child-job drains. Embedded operation is
+available only when no valid worker endpoint owns the instance. Ephemeral redb has no
+writer lease and intentionally provides no recovery across process exit; it is for
+fresh one-shot runs, not durable workers or retryable effects.
 
 ## Recovery states
 

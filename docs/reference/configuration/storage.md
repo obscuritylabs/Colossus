@@ -1,6 +1,6 @@
 ---
 title: Storage configuration
-description: Configure keyless or protected canonical journal storage in redb and PostgreSQL.
+description: Configure ephemeral, redb, or PostgreSQL canonical journal storage.
 audience: operator
 type: reference
 ---
@@ -16,18 +16,20 @@ Use this mental model when configuring storage:
 
 | Component | Purpose |
 | --- | --- |
-| Journal adapter | Persists the canonical append-only event history in redb or PostgreSQL |
+| Journal adapter | Retains the canonical append-only event history in process memory, redb, or PostgreSQL |
 | Protection mode | Stores payloads as plaintext canonical JSON or authenticated ciphertext |
 | Journal key | Encrypts event payloads in protected mode |
 | Signing key | Signs checkpoints in protected mode |
 | Secure anchor | Keeps the last trusted journal sequence and hash outside the journal so rollback or truncation can be detected |
 | `storage.location` | Selects the confinement base for a relative storage path |
-| `storage.path` | Selects the local redb file or, with PostgreSQL, the local Colossus instance identity |
+| `storage.path` | Selects the local redb file or the local instance identity for `ephemeral` and PostgreSQL |
 
-Both adapters support `keys.kind: none` and the fully protected `platform` and
-`environment` modes. PostgreSQL TLS protects the database connection; it does not
-change payload protection at rest. Normal worker IPC uses an independent owner-only
-`<storage.path>.worker-auth` secret and never derives authentication from storage keys.
+redb and PostgreSQL support `keys.kind: none` and the fully protected `platform` and
+`environment` modes. Ephemeral storage requires `none`: a persistent secure anchor
+cannot safely describe a fresh process-local journal. PostgreSQL TLS protects the
+database connection; it does not change payload protection at rest. Normal worker IPC
+uses an independent owner-only `<storage.path>.worker-auth` secret and never derives
+authentication from storage keys.
 
 For deployment topology, worker ownership, projections, and the public application API,
 see [Storage and worker](../../admin/storage-worker.md).
@@ -36,16 +38,51 @@ see [Storage and worker](../../admin/storage-worker.md).
 
 | Scenario | Adapter | Key provider | Guidance |
 | --- | --- | --- | --- |
-| Disposable container or simple job | `redb` or `postgres` | `none` | Dependency-free default; protect the volume and accept plaintext payloads |
+| One-shot job with no restart or recovery requirement | `ephemeral` | `none` | Keeps canonical state, projections, the default memory index, and automatic MCP OAuth state in process memory |
+| Disposable container that must survive a process restart | `redb` | `none` | Place the file on an `emptyDir` or other Pod-lifetime volume |
 | Desktop managed deployment | `redb` | `platform` | The OS credential store protects keys and the anchor |
 | Headless single-host service | `redb` | `environment` | Inject both keys and preserve the file-backed anchor |
 | One long-running worker | `redb` | Either | Let the worker own the single redb writer lease |
 | Shared or multi-process deployment | `postgres` | Usually `environment` | Put the journal in PostgreSQL and inject identical keys into every runtime |
 | Same-host PostgreSQL processes under one OS identity | `postgres` | `platform` can work | Every process must resolve the same service and key accounts |
 
-Start with redb unless multiple processes need direct access to the canonical journal.
-Changing `adapter` is not a migration: Colossus does not import, merge, copy, or delete
-the other adapter's journal.
+Start with redb unless the complete run is deliberately process-local or multiple
+processes need direct access to the canonical journal. Changing `adapter` is not a
+migration: Colossus does not import, merge, copy, or delete another adapter's journal.
+
+## Process-local ephemeral storage
+
+Use `ephemeral` for a one-shot command or Kubernetes Job whose result is delivered to
+an external system and whose Colossus history is intentionally discarded at process
+exit:
+
+```yaml
+storage:
+  location: workspace
+  path: .colossus/ephemeral-instance
+  adapter: ephemeral
+  keys:
+    kind: none
+```
+
+This runs the production redb journal and projection implementation over redb's memory
+backend. It creates no canonical database or writer-lock file. The default Tantivy
+memory index and the MCP `oauthCredentialStore: auto` selection are also process-local.
+`storage.path` remains a logical identity for worker IPC and adjacent explicitly
+persistent features; ordinary one-shot commands do not use those files.
+
+Every invocation starts empty. Sessions, workflow progress, child jobs, approvals,
+idempotency claims, effect evidence, audit history, projections, memories, and OAuth
+tokens disappear when the process exits or crashes. A later Kubernetes retry is a new
+run and cannot determine whether an earlier external effect completed. Use file-backed
+redb or PostgreSQL whenever retry, resume, audit retention, or unknown-outcome recovery
+matters. `state doctor` reports `persistence: process` and emits an explicit security
+posture warning in this mode.
+
+Explicit external audit exporters, `mcp.oauthCredentialStore: platform`, Chroma
+projection metadata, and other separately configured adapters keep their documented
+persistence behavior; `ephemeral` governs the canonical journal/projection store and
+the automatic local defaults.
 
 ## Keyless plaintext default
 
@@ -116,19 +153,22 @@ partition is distinct from Desktop Managed Local state. See
 
 ### `storage.path`
 
-With `location: workspace`, `path` may be workspace-relative or absolute and Colossus
-creates the parent directory when needed. With `location: home_workspace`, it must be a
-confined relative path and resolves from the selected workspace's CLI home partition.
+With `location: workspace`, `path` may be workspace-relative or absolute. File-backed
+adapters create the parent directory when needed. With `location: home_workspace`, it
+must be a confined relative path and resolves from the selected workspace's CLI home
+partition. Ephemeral storage validates this identity without creating its leaf or
+parent directories.
 
 Its exact meaning depends on the adapter:
 
 | Adapter | Meaning of `storage.path` |
 | --- | --- |
 | `redb` | The canonical redb database file and the basis for its writer lease |
+| `ephemeral` | A logical local instance identity; it is not a database path |
 | `postgres` | A local instance identity used to derive worker IPC and adjacent local state paths; it is not the PostgreSQL journal location |
 
-With PostgreSQL, changing `storage.path` changes local instance identity even when the
-database connection and schema stay the same. Keep it stable for a deployed instance.
+With ephemeral storage or PostgreSQL, changing `storage.path` changes local instance
+identity without moving canonical data. Keep it stable for a deployed instance.
 
 Do not treat copying a redb file, changing this path, or switching adapters as a storage
 migration. Provision the destination explicitly, verify its keys and secure anchor, and
@@ -139,10 +179,12 @@ follow the operational recovery process.
 | Value | PostgreSQL block | Concurrency model |
 | --- | --- | --- |
 | Omitted or `redb` | Must be absent | One local writer lease; other clients should use the worker |
+| `ephemeral` | Must be absent | One fresh process-local store; no redb writer lease |
 | `postgres` | Required | Canonical journal is shared through PostgreSQL |
 
 The canonical spelling is `postgres`. An unknown adapter, a `postgres` block under
-redb, or `adapter: postgres` without that block fails configuration validation.
+redb or ephemeral, or `adapter: postgres` without that block fails configuration
+validation. Ephemeral storage additionally rejects `platform` and `environment` keys.
 
 ### `storage.startupVerification`
 
@@ -168,11 +210,12 @@ verified sequence range, event count, and secure-anchor version.
 complete protected tier: authenticated payload encryption, signed checkpoints, and
 secure anchors. Encryption and signing cannot be enabled independently.
 
-Each redb file and PostgreSQL schema stores a durable protection marker. An empty store
-is initialized from configuration. A nonempty store created before this marker existed
-is classified as encrypted. A configured mismatch fails startup before event writes;
-Colossus never creates mixed payload algorithms and does not migrate protection in
-place. Use a fresh path or schema to harden or simplify a deployment.
+Each redb file and PostgreSQL schema stores a durable protection marker. An ephemeral
+store initializes a plaintext marker for its process lifetime. A nonempty persistent
+store created before this marker existed is classified as encrypted. A configured
+mismatch fails startup before event writes; Colossus never creates mixed payload
+algorithms and does not migrate protection in place. Use a fresh path or schema to
+harden or simplify a deployment.
 
 The journal encryption key and checkpoint signing key are independent 32-byte secrets.
 Do not give them the same value. The identifiers in YAML are identities, not secret
@@ -252,6 +295,7 @@ rolled-back, or altered journal state.
 | Key provider | Anchor location |
 | --- | --- |
 | `none` | Disabled; `checkpoint` returns no checkpoint |
+| `none` with `ephemeral` | Disabled; all journal state ends with the process |
 | `platform` | Protected credential-store account derived from `service` and `journal_key_id` |
 | `environment` | JSON file at `anchor_path`, updated with an atomic rename |
 
@@ -351,10 +395,11 @@ Colossus-owned clients.
 
 ## Key and adapter combinations
 
-All six adapter/protection combinations are valid, but deployment topology matters:
+The supported adapter/protection combinations are:
 
 | Adapter | No keys | Platform keys | Environment keys |
 | --- | --- | --- | --- |
+| ephemeral | One-shot process-local jobs | Invalid | Invalid |
 | redb | Simple jobs and protected local volumes | Protected interactive single-host use | Services with injected secrets |
 | PostgreSQL | Simple shared jobs where database controls are sufficient | Same-host processes resolving the same entries | Multi-host deployments with a central secret manager |
 
@@ -366,8 +411,10 @@ as durable deployment state even though the journal is shared.
 
 | Symptom | Check |
 | --- | --- |
+| An ephemeral retry cannot find its prior run | This is expected; every process starts with an empty journal |
+| Ephemeral configuration rejects protected keys | Use `keys.kind: none`, or select redb/PostgreSQL when anchors and protected persistence are required |
 | redb startup reports a writer lease conflict | Another process owns the same `storage.path`; use its worker or stop the duplicate writer |
-| PostgreSQL configuration is rejected before connecting | `postgres` requires a `postgres` block, while redb forbids one |
+| PostgreSQL configuration is rejected before connecting | `postgres` requires a `postgres` block, while redb and ephemeral forbid one |
 | PostgreSQL is healthy but journal decryption fails | Every process must use the same journal key bytes and stable key ID |
 | An old journal becomes unreadable after a config edit | Changing key IDs or secret bytes does not rotate or migrate encrypted events |
 | Startup reports a payload-protection mismatch | The nonempty path or schema was initialized in another mode; select it or use fresh storage |
