@@ -6,6 +6,13 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(windows)]
+const WINDOWS_SHARING_VIOLATION: i32 = 32;
+#[cfg(windows)]
+const WINDOWS_RACE_RETRIES: usize = 100;
+#[cfg(windows)]
+const WINDOWS_RACE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
 /// A retained owner-private directory used as the authority for derived state paths.
 ///
 /// Relative components are opened one at a time without following links. On Unix the
@@ -543,27 +550,7 @@ fn open_file_platform(
     leaf: &OsStr,
 ) -> Result<(File, bool), HomeError> {
     let path = windows_directory_path(root, parents, true)?.join(leaf);
-    let created = match fs::symlink_metadata(&path) {
-        Ok(_) => false,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match colossus_windows_native::create_private_file(&path, &[]) {
-                Ok(()) => true,
-                // Another Colossus process sharing this home created the name first.
-                // `create_private_file` uses `CREATE_NEW`, so the winner's contents are
-                // never truncated, and the retained handle below still proves the adopted
-                // file is owner-private, matching the tolerated `EEXIST` path on Unix.
-                Err(colossus_windows_native::WindowsNativeError::Io { source, .. })
-                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
-                {
-                    false
-                }
-                Err(_) => return Err(HomeError::UnsafeConfinedPath(path.clone())),
-            }
-        }
-        Err(error) => return Err(HomeError::io(&path, error)),
-    };
-    let binding = colossus_windows_native::BoundPath::open_file_read_write(&path)
-        .map_err(|_| HomeError::UnsafeConfinedPath(path.clone()))?;
+    let (binding, created) = open_or_create_windows_private_file(&path)?;
     binding
         .validate_private_owner_dacl()
         .and_then(|()| binding.revalidate())
@@ -575,6 +562,41 @@ fn open_file_platform(
         .try_clone_file()
         .map_err(|_| HomeError::UnsafeConfinedPath(path.clone()))?;
     Ok((file, created))
+}
+
+#[cfg(windows)]
+fn open_or_create_windows_private_file(
+    path: &Path,
+) -> Result<(colossus_windows_native::BoundPath, bool), HomeError> {
+    let mut created = false;
+    let mut transient_failures = 0;
+    while transient_failures < WINDOWS_RACE_RETRIES {
+        match colossus_windows_native::BoundPath::open_file_read_write(path) {
+            Ok(binding) => return Ok((binding, created)),
+            Err(colossus_windows_native::WindowsNativeError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                match colossus_windows_native::create_private_file(path, &[]) {
+                    Ok(()) => {
+                        created = true;
+                        continue;
+                    }
+                    Err(colossus_windows_native::WindowsNativeError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::AlreadyExists
+                            || source.raw_os_error() == Some(WINDOWS_SHARING_VIOLATION) => {}
+                    Err(_) => return Err(HomeError::UnsafeConfinedPath(path.to_owned())),
+                }
+            }
+            Err(colossus_windows_native::WindowsNativeError::Io { source, .. })
+                if source.raw_os_error() == Some(WINDOWS_SHARING_VIOLATION) => {}
+            Err(_) => return Err(HomeError::UnsafeConfinedPath(path.to_owned())),
+        }
+        transient_failures += 1;
+        if transient_failures < WINDOWS_RACE_RETRIES {
+            std::thread::sleep(WINDOWS_RACE_RETRY_DELAY);
+        }
+    }
+    Err(HomeError::UnsafeConfinedPath(path.to_owned()))
 }
 
 #[cfg(windows)]
