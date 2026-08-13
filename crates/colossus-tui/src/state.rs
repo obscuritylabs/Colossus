@@ -5,6 +5,7 @@ pub(super) struct Composer {
     pub(super) draft: String,
     pub(super) cursor: usize,
     pub(super) history_index: Option<usize>,
+    history_draft: Option<(String, usize)>,
     pub(super) completion_index: Option<usize>,
     pub(super) completion_hidden: bool,
 }
@@ -48,6 +49,7 @@ impl Composer {
     pub(super) fn take(&mut self) -> String {
         self.cursor = 0;
         self.history_index = None;
+        self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = false;
         std::mem::take(&mut self.draft)
@@ -62,14 +64,29 @@ impl Composer {
     pub(super) fn set(&mut self, value: String) {
         self.cursor = value.len();
         self.draft = value;
+        self.history_index = None;
+        self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = true;
     }
 
     pub(super) fn reset_navigation(&mut self) {
         self.history_index = None;
+        self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = false;
+    }
+
+    fn cursor_is_on_first_line(&self) -> bool {
+        !self.draft[..self.cursor].contains('\n')
+    }
+
+    fn show_history(&mut self, value: String, index: usize) {
+        self.cursor = value.len();
+        self.draft = value;
+        self.history_index = Some(index);
+        self.completion_index = None;
+        self.completion_hidden = true;
     }
 }
 
@@ -632,30 +649,37 @@ impl TuiState {
     }
 
     pub(super) fn previous_history(&mut self) {
-        if self.composer.cursor != 0 || self.history.is_empty() {
+        if self.history.is_empty()
+            || (self.composer.history_index.is_none() && !self.composer.cursor_is_on_first_line())
+        {
             return;
         }
-        let index = self
-            .composer
-            .history_index
-            .map_or(self.history.len() - 1, |index| index.saturating_sub(1));
-        self.composer.history_index = Some(index);
-        self.composer.set(self.history[index].clone());
-        self.composer.history_index = Some(index);
+        let index = self.composer.history_index.map_or_else(
+            || {
+                self.composer.history_draft =
+                    Some((self.composer.draft.clone(), self.composer.cursor));
+                self.history.len() - 1
+            },
+            |index| index.saturating_sub(1),
+        );
+        self.composer
+            .show_history(self.history[index].clone(), index);
     }
 
     pub(super) fn next_history(&mut self) {
-        if self.composer.cursor != self.composer.draft.len() {
-            return;
-        }
         let Some(index) = self.composer.history_index else {
             return;
         };
         if index + 1 < self.history.len() {
-            self.composer.set(self.history[index + 1].clone());
-            self.composer.history_index = Some(index + 1);
+            self.composer
+                .show_history(self.history[index + 1].clone(), index + 1);
         } else {
-            self.composer.clear();
+            let (draft, cursor) = self.composer.history_draft.take().unwrap_or_default();
+            self.composer.draft = draft;
+            self.composer.cursor = cursor;
+            self.composer.history_index = None;
+            self.composer.completion_index = None;
+            self.composer.completion_hidden = false;
         }
     }
 

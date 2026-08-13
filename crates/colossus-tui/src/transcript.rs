@@ -195,7 +195,7 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "History".into(),
-                    "Up/Down at boundaries; Ctrl-R searches".into(),
+                    "Up on the first line starts history; Up/Down browse; Down past newest restores the draft; Ctrl-R searches".into(),
                 ),
                 (
                     "Cancel".into(),
