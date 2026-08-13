@@ -1136,7 +1136,21 @@ mod tests {
         assert!(!format!("{first:?}").contains(&lowercase_hex(&first.authentication_root[..])));
         drop(first);
 
-        let reopened = PublicApiEnvironment::open(&first_path, &store).expect("reopen");
+        // Another parallel test can fork while this test owns the close-on-exec
+        // lease descriptor. The child retains that descriptor only until exec,
+        // so tolerate that bounded test-process handoff before reopening.
+        let reopen_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let reopened = loop {
+            match PublicApiEnvironment::open(&first_path, &store) {
+                Ok(environment) => break environment,
+                Err(PublicApiAdminError::DirectoryBusy)
+                    if std::time::Instant::now() < reopen_deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(error) => panic!("reopen: {error:?}"),
+            }
+        };
         assert_eq!(reopened.namespace_service, first_service);
         assert_eq!(stable_instance_id(&reopened.instance_seed), first_instance);
         assert_eq!(

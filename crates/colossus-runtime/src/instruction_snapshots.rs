@@ -801,6 +801,8 @@ mod tests {
 
         let temporary = tempfile::tempdir().expect("temporary root");
         let root = temporary.path().canonicalize().expect("canonical root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("private temporary root permissions");
         let home = root.join("home");
         let displaced = root.join("displaced-home");
         fs::create_dir(&home).expect("home");

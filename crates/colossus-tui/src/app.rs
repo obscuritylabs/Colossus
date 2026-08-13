@@ -841,9 +841,13 @@ pub(super) fn submit_line(
     state.remember_history(&line);
     let history_host = Arc::clone(&host);
     let history_tx = event_tx.clone();
+    let history_session_id = state.session_id.clone();
     let history_line = line.clone();
     tokio::spawn(async move {
-        if let Err(error) = history_host.append_history(history_line).await {
+        if let Err(error) = history_host
+            .append_history(&history_session_id, history_line, history_tx.clone())
+            .await
+        {
             let _ = history_tx.send(HostEvent::HistoryWarning(error)).await;
         }
     });
@@ -1255,20 +1259,24 @@ pub(super) fn handle_local_command(
             state.operation = Some(OperationKind::Command);
             state.activity = Some("saving terminal preferences".into());
             let task_tx = event_tx.clone();
+            let session_id = state.session_id.clone();
             tokio::spawn(async move {
-                let result = host.save_preferences(preferences).await.map(|preferences| {
-                    OperationResult::Command(HostCommandResult {
-                        document: preferences_document(&preferences),
-                        session: None,
-                        preferences: Some(preferences),
-                        completions: None,
-                        sticky_skills: None,
-                        footer: None,
-                        plan_selection: PlanSelectionUpdate::Unchanged,
-                        continue_queue: true,
-                        clear_transcript: false,
-                    })
-                });
+                let result = host
+                    .save_preferences(&session_id, preferences, task_tx.clone())
+                    .await
+                    .map(|preferences| {
+                        OperationResult::Command(HostCommandResult {
+                            document: preferences_document(&preferences),
+                            session: None,
+                            preferences: Some(preferences),
+                            completions: None,
+                            sticky_skills: None,
+                            footer: None,
+                            plan_selection: PlanSelectionUpdate::Unchanged,
+                            continue_queue: true,
+                            clear_transcript: false,
+                        })
+                    });
                 let _ = task_tx
                     .send(HostEvent::OperationFinished(Box::new(result)))
                     .await;

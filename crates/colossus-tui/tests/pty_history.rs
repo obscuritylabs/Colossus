@@ -304,13 +304,20 @@ impl InteractiveHost for FixtureHost {
         Err("fixture does not execute plans".into())
     }
 
-    async fn append_history(&self, _entry: String) -> Result<(), String> {
+    async fn append_history(
+        &self,
+        _session_id: &str,
+        _entry: String,
+        _events: mpsc::Sender<HostEvent>,
+    ) -> Result<(), String> {
         Ok(())
     }
 
     async fn save_preferences(
         &self,
+        _session_id: &str,
         preferences: TerminalPreferences,
+        _events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
         Ok(preferences)
     }

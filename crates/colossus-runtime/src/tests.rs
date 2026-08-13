@@ -55,6 +55,18 @@ use std::{
 };
 use tempfile::tempdir;
 
+fn private_tempdir() -> tempfile::TempDir {
+    let temporary = tempdir().expect("private temporary root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
+            .expect("private temporary root permissions");
+    }
+    temporary
+}
+
 fn external_work_queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
     let store: Arc<dyn ProjectionStore> = Arc::new(InMemoryProjectionStore::default());
     Arc::new(JournalExternalWorkQueue::new(journal, store))
@@ -178,7 +190,7 @@ async fn provider_diagnostic_roles_exclude_automatic_agent_instructions() {
     const HOME_SENTINEL: &str = "private-home-agents-diagnostic-sentinel";
     const WORKSPACE_SENTINEL: &str = "private-workspace-agents-diagnostic-sentinel";
 
-    let temporary = tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let home = ColossusHome::ensure_at(root.join("home")).expect("Colossus home");
     fs::write(home.root().join("AGENTS.md"), HOME_SENTINEL).expect("home instructions");
@@ -709,6 +721,75 @@ async fn presentation_mutation_is_denied_before_repository_and_allowed_with_perm
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn interactive_presentation_mutations_retain_the_session_boundary_acknowledgement() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temporary = tempdir().expect("temporary root");
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
+        .expect("private temporary root");
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("Colossus home");
+    let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
+    config.sandbox.backend = "danger_full_access".into();
+    config.sandbox.acknowledge_danger_full_access = false;
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace)
+            .expect("workspace options")
+            .with_colossus_home(home.root())
+            .expect("home binding"),
+    )
+    .expect("runtime");
+    let session = runtime
+        .create_session(Some("interactive presentation"))
+        .expect("session");
+
+    let unacknowledged = runtime
+        .append_terminal_history_for_session(&session.id, "before acknowledgement")
+        .await
+        .expect_err("unacknowledged history must fail");
+    assert!(
+        unacknowledged.to_string().contains("is not acknowledged"),
+        "{unacknowledged}"
+    );
+
+    runtime
+        .acknowledge_sandbox_boundary(&session.id, SandboxBoundaryMode::DangerFullAccess)
+        .expect("session acknowledgement");
+    assert!(
+        runtime
+            .append_terminal_history("missing session binding")
+            .await
+            .is_err(),
+        "a session acknowledgement must not become process-global"
+    );
+    runtime
+        .append_terminal_history_for_session(&session.id, "persisted input")
+        .await
+        .expect("session-bound history");
+    let preferences = TerminalPreferences {
+        theme: colossus_contracts::ThemeName::HighContrast,
+        ..TerminalPreferences::default()
+    };
+    assert_eq!(
+        runtime
+            .save_presentation_preferences_for_session(&session.id, preferences.clone())
+            .await
+            .expect("session-bound preferences"),
+        preferences
+    );
+    assert_eq!(
+        runtime.terminal_history(10).expect("history"),
+        ["persisted input"]
+    );
+}
+
 #[async_trait::async_trait]
 impl colossus_ports::UserPromptProvider for FixedUserPrompt {
     async fn prompt(
@@ -1222,7 +1303,7 @@ fn home_workspace_storage_is_confined_and_resolves_private_paths() {
 
 #[test]
 fn distinct_workspaces_hold_distinct_home_writer_leases_and_surfaces() {
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let home = ColossusHome::ensure_at(root.join("home")).expect("Colossus home");
     let workspace_one = root.join("workspace-one");
@@ -1319,7 +1400,7 @@ fn unresolved_home_workspace_is_rejected_by_runtime_composition() {
 fn home_workspace_rejects_symlink_escape_and_desktop_state_alias() {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     let cli = root.join("cli");
@@ -1350,7 +1431,7 @@ fn home_workspace_rejects_symlink_escape_and_desktop_state_alias() {
 fn runtime_revalidates_home_state_after_resolution_before_open() {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     let cli = root.join("cli");
@@ -1385,7 +1466,7 @@ fn runtime_revalidates_home_state_after_resolution_before_open() {
 fn derived_home_runtime_paths_reject_cli_to_desktop_links() {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     let cli = root.join("cli");

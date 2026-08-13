@@ -5,7 +5,9 @@ mod audit_support;
 #[path = "support/process.rs"]
 mod process_support;
 
-use colossus_worker_protocol::{WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint};
+use colossus_worker_protocol::{
+    PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint,
+};
 use hmac::{Hmac, Mac as _};
 use serde_json::Value;
 use sha2::Sha256;
@@ -306,7 +308,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 11);
+    assert_eq!(status["protocol_version"], PROTOCOL_VERSION);
 
     let mut encoded_authentication =
         fs::read_to_string(&worker_auth_path).expect("read worker control authentication");

@@ -756,13 +756,25 @@ fn validate_directory_platform(
 mod tests {
     use super::*;
 
+    fn private_tempdir() -> tempfile::TempDir {
+        let temporary = tempfile::tempdir().expect("private temporary root");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
+                .expect("private temporary root permissions");
+        }
+        temporary
+    }
+
     #[cfg(windows)]
     #[test]
     fn concurrent_private_file_creation_reopens_the_winner() {
         use std::sync::{Arc, Barrier};
 
         const THREADS: usize = 8;
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().join("private");
         let confined = ConfinedRoot::bind(&root).expect("confined root");
         let barrier = Arc::new(Barrier::new(THREADS));
@@ -800,7 +812,7 @@ mod tests {
         use std::sync::{Arc, Barrier};
 
         const THREADS: usize = 8;
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().join("private");
         let confined = ConfinedRoot::bind(&root).expect("confined root");
         let barrier = Arc::new(Barrier::new(THREADS));
@@ -825,7 +837,7 @@ mod tests {
 
     #[test]
     fn nested_private_paths_are_created_and_reopened_by_descriptor() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary
             .path()
             .canonicalize()
@@ -874,7 +886,7 @@ mod tests {
     fn symlink_parent_escape_and_desktop_leaf_alias_are_rejected() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
 
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let canonical_temporary = temporary
             .path()
             .canonicalize()
@@ -909,7 +921,7 @@ mod tests {
     fn hard_link_alias_is_rejected() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let canonical_temporary = temporary
             .path()
             .canonicalize()
@@ -932,7 +944,7 @@ mod tests {
     fn existing_fifo_fails_without_blocking() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let canonical_temporary = temporary
             .path()
             .canonicalize()

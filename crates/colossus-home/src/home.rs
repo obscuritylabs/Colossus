@@ -273,12 +273,24 @@ mod tests {
     use super::*;
     use crate::detect_workspace_identity;
 
+    fn private_tempdir() -> tempfile::TempDir {
+        let temporary = tempfile::tempdir().expect("private temporary root");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
+                .expect("private temporary root permissions");
+        }
+        temporary
+    }
+
     #[test]
     fn explicit_home_builds_isolated_stable_workspace_surfaces() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let canonical_temporary = temporary.path().canonicalize().expect("canonical root");
         let home = ColossusHome::ensure_at(canonical_temporary.join("home")).expect("home");
-        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace = private_tempdir();
         let identity = detect_workspace_identity(workspace.path()).expect("identity");
         let cli = home
             .workspace_surface_dir(
@@ -320,7 +332,7 @@ mod tests {
 
     #[test]
     fn same_path_object_replacement_gets_a_new_partition() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().expect("canonical root");
         let home = ColossusHome::ensure_at(root.join("home")).expect("home");
         let workspace = root.join("workspace");
@@ -342,7 +354,7 @@ mod tests {
 
     #[test]
     fn renamed_workspace_object_gets_a_new_path_bound_partition() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().expect("canonical root");
         let home = ColossusHome::ensure_at(root.join("home")).expect("home");
         let workspace = root.join("workspace");
@@ -370,7 +382,7 @@ mod tests {
     fn replacing_the_bound_home_namespace_fails_closed() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().expect("canonical root");
         let home_path = root.join("home");
         let home = ColossusHome::ensure_at(&home_path).expect("home");
@@ -400,7 +412,7 @@ mod tests {
 
     #[test]
     fn absolute_colossus_home_override_wins_the_default_home() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().expect("canonical root");
         let override_path = root.join("override");
         let user_home = root.join("user-home");
@@ -416,7 +428,7 @@ mod tests {
 
     #[test]
     fn absent_override_uses_dot_colossus_beneath_the_user_home() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let user_home = temporary.path().canonicalize().expect("canonical home");
         assert_eq!(
             resolve_root(None, Some(user_home.clone())).expect("default home"),
@@ -429,7 +441,7 @@ mod tests {
     fn linked_or_shared_home_is_rejected() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
 
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let shared = temporary.path().join("shared");
         fs::create_dir(&shared).expect("shared directory");
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o755))
@@ -454,7 +466,7 @@ mod tests {
     fn non_sticky_writable_ancestor_is_rejected_but_sticky_namespace_is_allowed() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().expect("canonical root");
         let unsafe_parent = root.join("unsafe-parent");
         fs::create_dir(&unsafe_parent).expect("unsafe parent");
@@ -494,7 +506,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn ordinary_windows_home_spelling_binds_without_verbatim_prefix_rejection() {
-        let temporary = tempfile::tempdir().expect("temporary root");
+        let temporary = private_tempdir();
         let home_path = temporary.path().join(".colossus");
         let home = ColossusHome::ensure_at(&home_path).expect("ordinary Windows home");
 

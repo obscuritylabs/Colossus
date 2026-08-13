@@ -1398,9 +1398,14 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         Ok(result)
     }
 
-    async fn append_history(&self, entry: String) -> Result<(), String> {
+    async fn append_history(
+        &self,
+        session_id: &str,
+        entry: String,
+        _events: mpsc::Sender<HostEvent>,
+    ) -> Result<(), String> {
         self.runtime
-            .append_terminal_history(&entry)
+            .append_terminal_history_for_session(session_id, &entry)
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -1408,10 +1413,12 @@ impl InteractiveHost for EmbeddedInteractiveHost {
 
     async fn save_preferences(
         &self,
+        session_id: &str,
         preferences: TerminalPreferences,
+        _events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
         self.runtime
-            .save_presentation_preferences(preferences)
+            .save_presentation_preferences_for_session(session_id, preferences)
             .await
             .map_err(|error| error.to_string())
     }

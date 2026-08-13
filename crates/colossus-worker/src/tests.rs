@@ -247,6 +247,61 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
 }
 
 #[test]
+fn interactive_presentation_requests_bind_the_acknowledged_session() {
+    let history = WorkerOperation::RunInteractive {
+        request: InteractiveWorkerRequest::PresentationHistoryAppend {
+            session_id: "session-1".into(),
+            entry: "hello".into(),
+        },
+        approval_mode: None,
+        sandbox_boundary_acknowledgement: None,
+    };
+    let encoded = serde_json::to_value(&history).expect("serialize history request");
+    assert_eq!(encoded["request"]["session_id"], "session-1");
+    assert_eq!(encoded["request"]["entry"], "hello");
+    assert_eq!(
+        operation_name(&history),
+        "run_interactive.presentation_history_append"
+    );
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded).expect("history request"),
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::PresentationHistoryAppend {
+                session_id,
+                entry,
+            },
+            ..
+        } if session_id == "session-1" && entry == "hello"
+    ));
+
+    let preferences = TerminalPreferences {
+        theme: colossus_contracts::ThemeName::HighContrast,
+        ..TerminalPreferences::default()
+    };
+    let save = WorkerOperation::RunInteractive {
+        request: InteractiveWorkerRequest::PresentationSave {
+            session_id: "session-1".into(),
+            preferences: preferences.clone(),
+        },
+        approval_mode: None,
+        sandbox_boundary_acknowledgement: None,
+    };
+    let encoded = serde_json::to_value(&save).expect("serialize preference request");
+    assert_eq!(encoded["request"]["session_id"], "session-1");
+    assert_eq!(operation_name(&save), "run_interactive.presentation_save");
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded).expect("preference request"),
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::PresentationSave {
+                session_id,
+                preferences: decoded,
+            },
+            ..
+        } if session_id == "session-1" && decoded == preferences
+    ));
+}
+
+#[test]
 fn interactive_plan_run_binds_the_selected_revision() {
     let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
         request: InteractiveWorkerRequest::Run {
@@ -1593,7 +1648,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 11);
+    assert_eq!(PROTOCOL_VERSION, 12);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

@@ -62,7 +62,7 @@ impl WorkerServer {
         })
     }
 
-    /// Open a worker whose protocol-v11 attached clients own prompts, notices, and cancellation.
+    /// Open a worker whose protocol-v12 attached clients own prompts, notices, and cancellation.
     pub fn open_with_mode(
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,
@@ -579,6 +579,21 @@ async fn dispatch_interactive(
                     observer,
                     control,
                 )
+                .await?,
+        )?),
+        InteractiveWorkerRequest::PresentationHistoryAppend { session_id, entry } => {
+            Ok(serde_json::to_value(
+                runtime
+                    .append_terminal_history_for_session(&session_id, &entry)
+                    .await?,
+            )?)
+        }
+        InteractiveWorkerRequest::PresentationSave {
+            session_id,
+            preferences,
+        } => Ok(serde_json::to_value(
+            runtime
+                .save_presentation_preferences_for_session(&session_id, preferences)
                 .await?,
         )?),
         InteractiveWorkerRequest::PlanApprove {

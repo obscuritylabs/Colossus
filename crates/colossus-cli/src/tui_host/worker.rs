@@ -1592,21 +1592,63 @@ impl InteractiveHost for WorkerInteractiveHost {
         Ok(result)
     }
 
-    async fn append_history(&self, entry: String) -> Result<(), String> {
-        self.value(WorkerOperation::PresentationHistoryAppend { entry })
+    async fn append_history(
+        &self,
+        session_id: &str,
+        entry: String,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<(), String> {
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        self.client
+            .call_interactive::<String>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::PresentationHistoryAppend {
+                        session_id: session_id.into(),
+                        entry,
+                    },
+                    approval_mode: self.interactive_approval_mode()?,
+                    sandbox_boundary_acknowledgement: self
+                        .sandbox_boundary_acknowledgement(session_id)?,
+                },
+                &mut observer,
+                &prompts,
+                &RunControl::default(),
+            )
             .await
             .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     async fn save_preferences(
         &self,
+        session_id: &str,
         preferences: TerminalPreferences,
+        events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
-        serde_json::from_value(
-            self.value(WorkerOperation::PresentationSave { preferences })
-                .await?,
-        )
-        .map_err(|error| error.to_string())
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        self.client
+            .call_interactive(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::PresentationSave {
+                        session_id: session_id.into(),
+                        preferences,
+                    },
+                    approval_mode: self.interactive_approval_mode()?,
+                    sandbox_boundary_acknowledgement: self
+                        .sandbox_boundary_acknowledgement(session_id)?,
+                },
+                &mut observer,
+                &prompts,
+                &RunControl::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn older_messages(

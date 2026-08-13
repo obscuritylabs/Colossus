@@ -1,6 +1,18 @@
 use super::*;
 use std::collections::BTreeSet;
 
+fn private_tempdir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("private temporary directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private temporary directory permissions");
+    }
+    directory
+}
+
 #[test]
 fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
     assert!(sandbox_helper_requested(
@@ -77,15 +89,15 @@ fn update_defaults_to_apply_and_accepts_one_exact_version() {
         })
     ));
     let exact =
-        Cli::try_parse_from(["colossus", "update", "--version", "v0.10.7"]).expect("exact update");
+        Cli::try_parse_from(["colossus", "update", "--version", "v0.10.8"]).expect("exact update");
     assert!(matches!(
         exact.command,
         Command::Update(UpdateCommand {
             command: None,
             version: Some(ref version),
-        }) if version == "v0.10.7"
+        }) if version == "v0.10.8"
     ));
-    assert!(Cli::try_parse_from(["colossus", "update", "check", "--version", "v0.10.7"]).is_err());
+    assert!(Cli::try_parse_from(["colossus", "update", "check", "--version", "v0.10.8"]).is_err());
 }
 
 #[test]
@@ -593,7 +605,7 @@ fn config_init_local_conflicts_with_an_explicit_config() {
 
 #[test]
 fn config_selection_uses_explicit_workspace_global_precedence_without_fallback() {
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     fs::create_dir(&workspace).expect("workspace");
@@ -625,7 +637,7 @@ fn config_selection_uses_explicit_workspace_global_precedence_without_fallback()
 fn automatic_local_config_rejects_linked_file_and_parent_without_global_fallback() {
     use std::os::unix::fs::symlink;
 
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     let outside = root.join("outside");
@@ -651,7 +663,7 @@ fn automatic_local_config_rejects_linked_file_and_parent_without_global_fallback
 #[cfg(unix)]
 #[test]
 fn automatic_local_config_rejects_fifo_without_global_fallback() {
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     fs::create_dir(&workspace).expect("workspace");
@@ -682,7 +694,7 @@ fn automatic_local_config_rejects_fifo_without_global_fallback() {
 
 #[test]
 fn default_and_local_config_init_select_the_expected_storage_locations() {
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     fs::create_dir(&workspace).expect("workspace");
@@ -755,7 +767,7 @@ fn default_and_local_config_init_select_the_expected_storage_locations() {
 
 #[test]
 fn global_development_init_replaces_source_storage_with_partition_relative_state() {
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     fs::create_dir(&workspace).expect("workspace");
@@ -785,7 +797,7 @@ fn global_development_init_replaces_source_storage_with_partition_relative_state
 
 #[test]
 fn effective_resolution_metadata_is_credential_free_and_complete() {
-    let temporary = tempfile::tempdir().expect("temporary root");
+    let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let home = ColossusHome::ensure_at(root.join("home")).expect("home");
     let selection = ConfigSelection {
