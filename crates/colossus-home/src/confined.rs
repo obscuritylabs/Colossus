@@ -546,9 +546,19 @@ fn open_file_platform(
     let created = match fs::symlink_metadata(&path) {
         Ok(_) => false,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            colossus_windows_native::create_private_file(&path, &[])
-                .map_err(|_| HomeError::UnsafeConfinedPath(path.clone()))?;
-            true
+            match colossus_windows_native::create_private_file(&path, &[]) {
+                Ok(()) => true,
+                // Another Colossus process sharing this home created the name first.
+                // `create_private_file` uses `CREATE_NEW`, so the winner's contents are
+                // never truncated, and the retained handle below still proves the adopted
+                // file is owner-private, matching the tolerated `EEXIST` path on Unix.
+                Err(colossus_windows_native::WindowsNativeError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    false
+                }
+                Err(_) => return Err(HomeError::UnsafeConfinedPath(path.clone())),
+            }
         }
         Err(error) => return Err(HomeError::io(&path, error)),
     };
@@ -723,6 +733,44 @@ fn validate_directory_platform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn concurrent_private_file_creation_reopens_the_winner() {
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 8;
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary.path().join("private");
+        let confined = ConfinedRoot::bind(&root).expect("confined root");
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let threads = (0..THREADS)
+            .map(|_| {
+                let confined = confined.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    confined.open_file(Path::new("race/state.redb"))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let creators = threads
+            .into_iter()
+            .map(|thread| {
+                thread
+                    .join()
+                    .expect("file thread")
+                    .expect("a concurrent creator must reopen and validate the winning file")
+                    .was_created()
+            })
+            .filter(|created| *created)
+            .count();
+        assert_eq!(
+            creators, 1,
+            "exactly one concurrent creator may report creating the file"
+        );
+    }
 
     #[cfg(windows)]
     #[test]

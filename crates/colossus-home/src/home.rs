@@ -302,12 +302,18 @@ mod tests {
             Some("desktop")
         );
         fs::create_dir(identity.canonical_path().join("nested")).expect("nested workspace dir");
+        // Join the indirect path textually: `PathBuf::push` removes `..` from Windows
+        // verbatim paths, which would collapse this back onto the canonical path.
+        let mut indirect = identity.canonical_path().as_os_str().to_owned();
+        indirect.push(std::path::MAIN_SEPARATOR_STR);
+        indirect.push("nested");
+        indirect.push(std::path::MAIN_SEPARATOR_STR);
+        indirect.push("..");
+        let indirect = PathBuf::from(indirect);
+        assert_ne!(indirect, identity.canonical_path());
         assert!(
-            home.workspace_partition_id(
-                &identity.canonical_path().join("nested/.."),
-                identity.as_ref()
-            )
-            .is_err(),
+            home.workspace_partition_id(&indirect, identity.as_ref())
+                .is_err(),
             "partition callers must supply the exact canonical path"
         );
     }
