@@ -61,6 +61,7 @@ impl McpTransportKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpCredentialHeaderConfig {
     /// Optional authentication scheme prepended with one ASCII space, such as `Bearer`.
+    #[serde(default)]
     pub scheme: Option<String>,
     /// Environment-backed credential reference.
     pub reference: String,
@@ -73,6 +74,7 @@ pub struct McpOAuthConfig {
     /// Registered non-secret OAuth client identifier.
     pub client_id: String,
     /// Optional environment-backed confidential client secret.
+    #[serde(default)]
     pub client_secret_reference: Option<String>,
     /// Exact loopback callback port registered with the authorization server.
     pub callback_port: u16,
@@ -95,11 +97,13 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub args: Vec<String>,
     /// Optional absolute or workspace-relative working directory.
+    #[serde(default)]
     pub working_directory: Option<PathBuf>,
     /// Child environment name to `env:HOST_VARIABLE` credential reference.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     /// Exact Streamable HTTP endpoint.
+    #[serde(default)]
     pub url: Option<String>,
     /// Non-secret literal HTTP headers.
     #[serde(default)]
@@ -111,6 +115,7 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub allow_stateless: bool,
     /// Optional OAuth 2.1 authorization-code flow.
+    #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
     /// Exact tools that may be discovered or invoked, or the sole wildcard `*`.
     #[serde(default)]
@@ -119,8 +124,10 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub research_tools: Vec<McpResearchToolConfig>,
     /// Optional server-specific timeout bounded by sandbox policy.
+    #[serde(default)]
     pub timeout_ms: Option<u64>,
     /// Optional server-specific output cap bounded by sandbox policy.
+    #[serde(default)]
     pub max_output_bytes: Option<u64>,
     /// Runtime-only action prefix for verified pack-provided servers.
     #[serde(skip)]
@@ -137,6 +144,7 @@ pub struct McpResearchToolConfig {
     /// Exact allowlisted MCP tool name.
     pub tool: String,
     /// Optional bounded source title.
+    #[serde(default)]
     pub title: Option<String>,
     /// JSON object whose string values may contain `{query}`.
     #[serde(default = "empty_object")]
@@ -422,22 +430,37 @@ pub enum McpError {
     OAuth(String),
 }
 
+/// Resource declarations and ceilings used while validating configured MCP servers.
+#[derive(Clone, Copy, Debug)]
+pub struct McpValidationContext<'a> {
+    /// Potential resource authority selected by the configured execution backend.
+    /// Runtime acknowledgement is enforced separately before any effect permit is minted.
+    pub resource_authority: ResourceAuthority,
+    /// Exact executable identities declared by a confined sandbox.
+    pub sandbox_executables: &'a [PathBuf],
+    /// Filesystem roots declared by a confined sandbox.
+    pub sandbox_filesystem: &'a [FilesystemGrant],
+    /// Environment names declared by a confined sandbox.
+    pub sandbox_environment: &'a [String],
+    /// Maximum operation timeout enforced by the runtime.
+    pub sandbox_timeout_ms: u64,
+    /// Maximum output size enforced by the runtime.
+    pub sandbox_max_output_bytes: u64,
+}
+
 /// Validate strict MCP config against sandbox identities and bounds.
 pub fn validate_config(
     config: &McpConfig,
     workspace: &Path,
-    sandbox_executables: &[PathBuf],
-    sandbox_filesystem: &[FilesystemGrant],
-    sandbox_environment: &[String],
-    sandbox_timeout_ms: u64,
-    sandbox_max_output_bytes: u64,
+    context: McpValidationContext<'_>,
 ) -> Result<(), McpError> {
+    let ambient_resources = context.resource_authority == ResourceAuthority::Ambient;
     if config.servers.len() > 64 {
         return Err(McpError::Invalid(
             "at most 64 servers may be configured".into(),
         ));
     }
-    let allowed_environment = sandbox_environment.iter().collect::<BTreeSet<_>>();
+    let allowed_environment = context.sandbox_environment.iter().collect::<BTreeSet<_>>();
     for (name, server) in &config.servers {
         validate_name(name, "server")?;
         if server.effect_action_prefix.as_ref().is_some_and(|prefix| {
@@ -456,13 +479,17 @@ pub fn validate_config(
                 name,
                 server,
                 workspace,
-                sandbox_executables,
-                sandbox_filesystem,
+                ambient_resources,
+                context.sandbox_executables,
+                context.sandbox_filesystem,
                 &allowed_environment,
             )?,
-            McpTransportKind::StreamableHttp => {
-                validate_streamable_http_server(name, server, &allowed_environment)?
-            }
+            McpTransportKind::StreamableHttp => validate_streamable_http_server(
+                name,
+                server,
+                ambient_resources,
+                &allowed_environment,
+            )?,
         }
         if server.allowed_tools.len() > MAX_MCP_TOOLS {
             return Err(McpError::Invalid(format!(
@@ -495,10 +522,10 @@ pub fn validate_config(
         }
         if server
             .timeout_ms
-            .is_some_and(|value| value == 0 || value > sandbox_timeout_ms)
+            .is_some_and(|value| value == 0 || value > context.sandbox_timeout_ms)
             || server
                 .max_output_bytes
-                .is_some_and(|value| value < 1024 || value > sandbox_max_output_bytes)
+                .is_some_and(|value| value < 1024 || value > context.sandbox_max_output_bytes)
         {
             return Err(McpError::Invalid(format!(
                 "server {name} timeout or output cap exceeds sandbox policy"
@@ -512,6 +539,7 @@ fn validate_stdio_server(
     name: &str,
     server: &McpServerConfig,
     workspace: &Path,
+    ambient_resources: bool,
     sandbox_executables: &[PathBuf],
     sandbox_filesystem: &[FilesystemGrant],
     allowed_environment: &BTreeSet<&String>,
@@ -527,9 +555,10 @@ fn validate_stdio_server(
         )));
     }
     if !server.command.is_absolute()
-        || !sandbox_executables
-            .iter()
-            .any(|value| value == &server.command)
+        || (!ambient_resources
+            && !sandbox_executables
+                .iter()
+                .any(|value| value == &server.command))
     {
         return Err(McpError::Invalid(format!(
             "server {name} command must be an exact absolute sandbox executable"
@@ -562,7 +591,7 @@ fn validate_stdio_server(
         matches!(grant.mode.as_str(), "read" | "write")
             && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
     });
-    if !cwd_allowed {
+    if !ambient_resources && !cwd_allowed {
         return Err(McpError::Invalid(format!(
             "server {name} working directory requires a containing sandbox read or write grant"
         )));
@@ -574,7 +603,7 @@ fn validate_stdio_server(
     }
     for (child_name, reference) in &server.environment {
         if !valid_environment_name(child_name)
-            || !allowed_environment.contains(child_name)
+            || (!ambient_resources && !allowed_environment.contains(child_name))
             || environment_reference(reference).is_none()
         {
             return Err(McpError::Invalid(format!(
@@ -588,6 +617,7 @@ fn validate_stdio_server(
 fn validate_streamable_http_server(
     name: &str,
     server: &McpServerConfig,
+    ambient_resources: bool,
     allowed_environment: &BTreeSet<&String>,
 ) -> Result<(), McpError> {
     if !server.command.as_os_str().is_empty()
@@ -623,7 +653,7 @@ fn validate_streamable_http_server(
         host.eq_ignore_ascii_case("localhost")
             || colossus_network::parse_host_ip(host).is_some_and(|address| address.is_loopback())
     });
-    if url.scheme() != "https" && !loopback {
+    if !ambient_resources && url.scheme() != "https" && !loopback {
         return Err(McpError::Invalid(format!(
             "non-loopback Streamable HTTP server {name} requires HTTPS"
         )));
@@ -655,9 +685,10 @@ fn validate_streamable_http_server(
                 "server {name} credential header {header} requires env:VARIABLE"
             ))
         })?;
-        if !allowed_environment
-            .iter()
-            .any(|allowed| allowed.as_str() == variable)
+        if !ambient_resources
+            && !allowed_environment
+                .iter()
+                .any(|allowed| allowed.as_str() == variable)
         {
             return Err(McpError::Invalid(format!(
                 "server {name} credential header {header} requires sandbox environment grant {variable}"
@@ -681,7 +712,7 @@ fn validate_streamable_http_server(
         )));
     }
     if let Some(oauth) = server.oauth.as_ref() {
-        validate_oauth(name, oauth, allowed_environment)?;
+        validate_oauth(name, oauth, ambient_resources, allowed_environment)?;
     }
     Ok(())
 }
@@ -739,6 +770,7 @@ fn validate_header_value(server: &str, value: &str) -> Result<(), McpError> {
 fn validate_oauth(
     server: &str,
     oauth: &McpOAuthConfig,
+    ambient_resources: bool,
     allowed_environment: &BTreeSet<&String>,
 ) -> Result<(), McpError> {
     if oauth.client_id.is_empty()
@@ -774,9 +806,10 @@ fn validate_oauth(
                 "server {server} OAuth client secret requires env:VARIABLE"
             ))
         })?;
-        if !allowed_environment
-            .iter()
-            .any(|allowed| allowed.as_str() == variable)
+        if !ambient_resources
+            && !allowed_environment
+                .iter()
+                .any(|allowed| allowed.as_str() == variable)
         {
             return Err(McpError::Invalid(format!(
                 "server {server} OAuth client secret requires sandbox environment grant {variable}"

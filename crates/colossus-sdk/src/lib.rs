@@ -52,6 +52,7 @@ pub use colossus_api::{
 pub use colossus_darwin_process::{
     DarwinChild as MacosSuspendedChild, SpawnedTty as MacosSuspendedTty,
 };
+pub use colossus_sidecar_protocol::ManagedExecutionBoundary;
 pub use config::{
     ApiMajor, AppPrivateInstanceDir, InstanceId, MacosCodeSigningRequirement, Sha256Digest,
     TlsFingerprint, VerifiedExecutable,

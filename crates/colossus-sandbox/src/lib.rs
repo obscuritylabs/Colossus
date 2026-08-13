@@ -5,13 +5,14 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    EffectRequest, FilesystemGrant, PolicyObligations, QuarantinedEffectResult, SandboxBoundaryMode,
+    EffectRequest, FilesystemGrant, PolicyObligations, QuarantinedEffectResult, ResourceAuthority,
+    SandboxBoundaryMode,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS,
     MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, NetworkDestinationMatch,
-    network_destination_match, non_public_network_address,
+    http_transport_authority_match, network_destination_match, non_public_network_address,
 };
 use command_group::CommandGroup as _;
 use futures::{StreamExt as _, stream::FuturesUnordered};

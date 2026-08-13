@@ -208,6 +208,36 @@ impl Runtime {
         );
         report.direct_execution_globally_acknowledged =
             self.sandbox_boundary_gate.globally_acknowledged();
+        let ambient = self.sandbox_backend == SandboxBoundaryMode::DangerFullAccess.as_backend()
+            && report.direct_execution_globally_acknowledged;
+        report.resource_authority = if ambient {
+            ResourceAuthority::Ambient
+        } else {
+            ResourceAuthority::Declared
+        };
+        report.resource_matrix = BTreeMap::from([
+            (
+                "process".into(),
+                if ambient { "ambient" } else { "configured" }.into(),
+            ),
+            (
+                "filesystem".into(),
+                if ambient { "ambient" } else { "configured" }.into(),
+            ),
+            (
+                "network".into(),
+                if ambient {
+                    "ambient_http"
+                } else {
+                    "configured"
+                }
+                .into(),
+            ),
+            (
+                "environment".into(),
+                if ambient { "ambient" } else { "configured" }.into(),
+            ),
+        ]);
         report.sandbox_profile = self.sandbox_profile.clone();
         report.protected_path_exclusions_supported = match self.sandbox_backend.as_str() {
             "native" => report.protected_path_exclusions_supported,
@@ -337,12 +367,28 @@ impl Runtime {
     pub fn effective_access(&self) -> Value {
         let mut value = serde_json::to_value(&self.access).unwrap_or_else(|_| json!({}));
         if let Some(report) = value.as_object_mut() {
+            let ambient = self.sandbox_backend
+                == SandboxBoundaryMode::DangerFullAccess.as_backend()
+                && self.sandbox_boundary_gate.globally_acknowledged();
             report.insert("canonical_workspace".into(), json!(self.workspace));
             report.insert("security_posture".into(), json!(self.security_posture));
             report.insert(
                 "sandbox".into(),
                 json!({
                     "profile": self.sandbox_profile,
+                    "backend": self.sandbox_backend,
+                    "resource_authority": if ambient { "ambient" } else { "declared" },
+                    "resource_matrix": {
+                        "process": if ambient { "ambient" } else { "configured" },
+                        "filesystem": if ambient { "ambient" } else { "configured" },
+                        "network": if ambient { "ambient_http" } else { "configured" },
+                        "environment": if ambient { "ambient" } else { "configured" },
+                    },
+                    "workspace_role": if ambient {
+                        "repository context, relative-path anchor, and state partition identity"
+                    } else {
+                        "repository context, relative-path anchor, state identity, and configured resource boundary"
+                    },
                     "development_actor_scope": "terminal users, main agents, and child agents without workflow lineage",
                     "resolved_shell": self.development_sandbox.shell,
                     "protected_paths": self.development_sandbox.protected_filesystem,

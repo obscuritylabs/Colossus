@@ -2,7 +2,8 @@
 
 Colossus is an auditable runtime for agent work and durable automation. It combines a
 bounded model-and-tool loop, policy-controlled effects, resumable sessions, workflows,
-memory, research, and an encrypted event journal in one Rust binary.
+memory, research, and a hash-chained event journal with optional authenticated
+encryption in one Rust binary.
 
 ## Start in five minutes
 
@@ -42,10 +43,16 @@ home. Start the terminal UI with:
 colossus
 ```
 
-The working directory, or explicit `-w`, identifies the repository Colossus can reason
-about; it does not relocate the Colossus home. A repository can replace user defaults
-with `.colossus/config.yaml` and can supply bounded instructions through `AGENTS.md`.
-Policy, approvals, and sandbox grants still determine which effects are possible. See
+The working directory, or explicit `-w`, identifies the repository context and its
+workspace-partitioned state; it does not relocate the Colossus home. A repository can
+replace user defaults with `.colossus/config.yaml` and can supply bounded instructions
+through `AGENTS.md`. Fresh and sparse schema-version-2 configurations intentionally
+default to `allow_all` with acknowledged `danger_full_access`, so authorized tools may
+use ambient host resources outside `-w`. Select an isolating execution boundary when
+that authority is inappropriate. Policy, permits, audit, configured extension trust,
+credentials, and supervised time/output bounds remain enforced. Under direct Unix full
+access, descendant cleanup plus process-count and memory enforcement are best effort;
+select isolation when strict containment is required. See
 [Colossus home and workspace resolution](docs/reference/colossus-home.md) for the exact
 load order and storage layout.
 
@@ -69,8 +76,9 @@ colossus update
   recovery, signed packs, and collections.
 - Build Rust and Tauri applications in process, or connect enrolled Rust, TypeScript,
   Python, and Go backends through the durable authenticated application API.
-- Apply access profiles, approvals, OPA policy, sandbox limits, encrypted journaling,
-  audit verification, and offline operation without hiding security decisions in a UI.
+- Apply access profiles, approvals, OPA policy, sandbox limits, optional encrypted
+  journaling, audit verification, and offline operation without hiding security
+  decisions in a UI.
 
 ## Documentation
 

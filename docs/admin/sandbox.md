@@ -9,7 +9,10 @@ type: how-to
 
 ## Goal
 
-Permit only named resources and bounded effects for repository work.
+Select and verify the intended execution boundary for repository work. Sparse
+schema-version-2 configuration intentionally defaults to acknowledged
+`danger_full_access`; use this guide to opt down to named resources and platform
+isolation whenever ambient host authority is inappropriate.
 
 ## Prerequisites
 
@@ -62,7 +65,8 @@ Permit only named resources and bounded effects for repository work.
    additive grants. Never put environment values in YAML.
 
 3. Add network destinations as canonical origins such as
-   `https://api.example.com`. `*` means public HTTP(S) egress only:
+   `https://api.example.com`. `*` matches public HTTP(S) destinations; declared
+   execution still requires HTTPS outside exact loopback development:
 
     ```yaml
     sandbox:
@@ -120,11 +124,11 @@ the exclusion.
 
 | Backend | Use |
 | --- | --- |
-| `native` | Host-native isolation and the normal default |
+| `native` | Host-native isolation selected explicitly or by an isolating preset |
 | `oci` | Preloaded Docker or Podman image pinned by full `@sha256:` digest |
 | `windows_job` | AppContainer and Job Object isolation on Windows |
 | `external` | Direct execution inside an operator-asserted Coder/Kubernetes/host boundary |
-| `danger_full_access` | Direct execution with no asserted isolation boundary |
+| `danger_full_access` | Ambient process plus structured filesystem and HTTP(S) authority with no asserted isolation boundary; selected and acknowledged by the sparse schema default |
 | `broker` | Explicitly acknowledged downgrade only |
 
 Broker mode requires `allowBrokerFallback: true`, is not represented as sandbox
@@ -150,15 +154,32 @@ mode disables normal policy decisions or approval obligations, and neither may u
 `workspace-development` because Colossus cannot hide `.colossus` from the child process.
 
 Direct modes keep authenticated helper execution and resource/output supervision, but
-they do not enforce child-process filesystem or network allowlists. Process working
-directories and path-like arguments are not checked against `filesystem`. With
-`external`, exact executable and environment-name grants still apply and the platform
-boundary owns filesystem and network enforcement. With acknowledged
-`danger_full_access`, no process resource grants are required: executables resolve from
-absolute paths or ambient `PATH`, the child inherits the runtime environment, working
-directories may be outside the workspace, and child networking is unrestricted. No
-isolation boundary is asserted, but approval policy, process limits, permits,
-quarantine, and audit remain active.
+they do not enforce child-process filesystem or network allowlists. With `external`,
+configured structured-adapter grants still apply while the platform boundary owns
+filesystem and network enforcement. With acknowledged `danger_full_access`, no
+resource grants are required: structured path tools may use host paths outside the
+workspace, structured HTTP may reach public or non-public HTTP(S) origins, executables
+resolve from absolute paths or ambient `PATH`, the child inherits the runtime
+environment, working directories may be outside the workspace, and child networking is
+unrestricted. No isolation boundary is asserted, but configured capability identity,
+policy, configured effect bounds, permits, quarantine, transport validation, and audit
+remain active.
+HTTPS still validates certificates and hostnames. Canonical non-loopback plaintext HTTP
+is also accepted in this mode and has no TLS confidentiality or server authentication.
+
+On Unix direct backends, the configured timeout and output ceiling bind the supervised
+request and attached process group. Process-count, memory, whole-tree termination, and
+cleanup are best-effort when hostile code deliberately escapes that group with
+`setsid`, double-forking, or reparenting. Such a descendant can outlive the reported
+effect, and its later activity is outside that effect's audit evidence. Use native or
+OCI containment, a Windows Job Object, or an `external` host boundary that contains the
+entire process namespace/job when strict descendant cleanup and resource enforcement
+are required.
+
+`danger_full_access` also cannot enforce pack-manifest permission ceilings. An enabled
+pack that declares executable tools or stdio MCP servers is rejected during runtime
+composition under this backend. Select an isolating boundary for executable packs;
+ambient acknowledgement does not widen their manifests.
 
 ## Expected result
 
@@ -167,19 +188,24 @@ shows only tools whose static obligations are met.
 
 ## Verification
 
-Confirm that a workspace write succeeds, an outside-workspace write fails, and
-`.colossus` remains unchanged. If wildcard network is enabled, confirm a public HTTPS
-origin succeeds, metadata/private origins fail, and an explicitly listed loopback origin
-succeeds. Process results include a bounded `observed_origins` list for allowed proxy
-connections. Retain the diagnostic and audit evidence.
+For an isolating boundary, confirm that a workspace write succeeds, an
+outside-workspace write fails, and `.colossus` remains unchanged. If wildcard network
+is enabled, confirm a public HTTPS origin succeeds, metadata/private origins fail, and
+an explicitly listed loopback origin succeeds. For full access, run only
+non-destructive probes and confirm `config effective` reports ambient filesystem,
+network, process, and environment authority. Do not interpret a direct-backend process
+result as proof that deliberately detached Unix descendants terminated. Process results
+include a bounded `observed_origins` list for allowed proxy connections. Retain the
+diagnostic and audit evidence.
 
 ## Failure path
 
-Treat unavailable native isolation, a failed protected-path probe, an invalid helper, an
-unpinned OCI image, resource cleanup uncertainty, or Windows isolation setup failure as
-a blocked effect. Colossus fails closed; it does not silently fall back to broker or
-direct execution. Select and acknowledge `external` or `danger_full_access` explicitly
-when that behavior is intended.
+Treat unavailable native isolation, a failed protected-path probe, an invalid helper,
+an unpinned OCI image, unexpected cleanup uncertainty under an isolating boundary, or
+Windows isolation setup failure as a blocked effect. Colossus fails closed; it does not
+silently fall back to broker or direct execution. Deliberately select and acknowledge
+`external`, or retain the acknowledged `danger_full_access` default, only when that
+behavior is intended.
 
 ## Next step
 

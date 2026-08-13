@@ -71,7 +71,8 @@ Author versioned YAML workflows with retries, checkpoints, and approvals.
 
 ### Control every effect
 
-Enforce least-privilege policy for tools, data, network, and execution.
+Inspect every effect and choose acknowledged full host access or an explicit
+least-privilege boundary for tools, data, network, and execution.
 
 [Understand access and approvals](admin/access-and-approvals.md)
 
@@ -139,10 +140,10 @@ flowchart LR
     S --> D["Deterministic branch<br/>condition or emit"]
     S --> T
     T --> G["Authorization<br/>policy + approval + permit"]
-    G --> E["Sandboxed effect"]
+    G --> E["Authorized effect<br/>selected execution boundary"]
     E --> Q["Quarantine and release"]
     Q --> O["Bounded result<br/>to originating run"]
-    A --> J["Encrypted journal<br/>audit + recovery"]
+    A --> J["Hash-chained journal<br/>optional encryption"]
     F --> J
 ```
 
@@ -151,7 +152,8 @@ flowchart LR
 Interactive agent runs and triggered workflow runs are separate durable run types.
 Colossus authorizes and constrains each requested effect before execution, releases an
 allowed result only to its originating run, and records lifecycle evidence in the
-encrypted journal. The labels and arrows carry the meaning; color is decorative.
+hash-chained journal. Configured platform or environment keys add authenticated payload
+encryption. The labels and arrows carry the meaning; color is decorative.
 
 </section>
 

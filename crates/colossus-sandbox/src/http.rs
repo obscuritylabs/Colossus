@@ -46,20 +46,19 @@ impl EffectExecutor for HttpExecutor {
                 "WORM audit export URL must not contain credentials, a query, or a fragment",
             ));
         }
-        let origin = url.origin().ascii_serialization();
-        let matched =
-            network_destination_match(&permit.obligations().network_destinations, &origin)
-                .map_err(adapter_failure)?
-                .ok_or_else(|| adapter_failure("HTTP origin is not permitted"))?;
+        let matched = http_transport_authority_match(permit.obligations(), url.as_str())
+            .map_err(adapter_failure)?
+            .ok_or_else(|| adapter_failure("HTTP origin is not permitted"))?;
         let host = url
             .host_str()
             .ok_or_else(|| adapter_failure("HTTP URL has no host"))?;
         let port = url
             .port_or_known_default()
             .ok_or_else(|| adapter_failure("HTTP URL has no port"))?;
-        let allow_non_public = matched == NetworkDestinationMatch::Exact
-            && (host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let allow_non_public = matched == NetworkDestinationMatch::Ambient
+            || (matched == NetworkDestinationMatch::Exact
+                && (host.eq_ignore_ascii_case("localhost")
+                    || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
         let addresses = resolve_destinations(host, port, allow_non_public).await?;
         let client = self
             .tls_roots
@@ -99,11 +98,12 @@ impl EffectExecutor for HttpExecutor {
                 let variable = reference.reference.strip_prefix("env:").ok_or_else(|| {
                     adapter_failure("WORM audit credential must be environment-backed")
                 })?;
-                if !permit
-                    .obligations()
-                    .allowed_environment
-                    .iter()
-                    .any(|allowed| allowed == variable)
+                if permit.obligations().resource_authority != ResourceAuthority::Ambient
+                    && !permit
+                        .obligations()
+                        .allowed_environment
+                        .iter()
+                        .any(|allowed| allowed == variable)
                 {
                     return Err(adapter_failure(
                         "WORM audit credential is absent from permit obligations",

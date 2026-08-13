@@ -20,6 +20,7 @@ const draft: ManagedProviderDraft = {
   providerKind: "openai_compatible",
   model: " deepseek/deepseek-v4-flash ",
   accessProfile: "development",
+  executionBoundary: "workspace_isolated",
   replaceCredential: false,
 };
 
@@ -83,6 +84,7 @@ describe("Managed Local onboarding", () => {
       providerKind: "openai_compatible",
       model: "deepseek/deepseek-v4-flash",
       accessProfile: "development",
+      executionBoundary: "workspace_isolated",
       replaceCredential: false,
     });
     expect(request).not.toHaveProperty("displayName");

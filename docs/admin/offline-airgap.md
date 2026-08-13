@@ -47,7 +47,8 @@ state, optionally with protected storage.
 
 5. Keep `sandbox.networkDestinations` empty, or limit it to exact loopback origins.
    Never use `*` in an air-gapped configuration: it intentionally means public HTTP(S)
-   egress.
+   egress. The explicit `--sandbox-profile offline-default` above is essential because
+   the omitted sandbox default would otherwise permit ambient network access.
    The built-in `echo` route, redb journal, built-in policy, local workflows, repository
    tools, and lexical index need no internet access.
 

@@ -70,10 +70,22 @@ New installations select **Managed Local**. The signed app supervises its bundle
 same authenticated, pinned loopback gRPC contract used by application SDKs. A WebView
 reload does not stop the runtime.
 
-The repository remains the maximum filesystem/tool boundary. Selecting it does not
-relocate the Colossus home. Top-level Desktop agent runs automatically snapshot
+The repository remains Desktop's context, relative-path anchor, and state identity.
+Selecting it does not relocate the Colossus home. **Full access**, the default for fresh
+Managed Local settings, allows authorized tools to use host resources outside that
+repository; choose **Workspace isolated** or **Offline isolated** when it must be a
+resource boundary. Top-level Desktop agent runs automatically snapshot
 `$COLOSSUS_HOME/AGENTS.md` followed by the selected repository's `AGENTS.md`; see the
 [home and instruction reference](../reference/colossus-home.md#load-agentsmd).
+
+**Offline isolated** is not an air gap. It uses platform isolation without derived
+workspace resources and hides the generic model-visible `network.http`, `web.fetch`,
+and `docs.fetch` tools. Managed Local still retains the exact provider service and
+authentication/refresh destinations required by the selected provider, so model calls
+and Codex authentication can work; those retained destinations do not make the generic
+fetch tools visible. Search, MCP, and integration adapters remain independently
+controlled by their own configuration. For a deployment with no remote transport, use
+the [offline and air-gapped operation guide](../admin/offline-airgap.md).
 
 ### 3. Configure a model
 
@@ -103,14 +115,23 @@ the explicit offline self-test when you only need to validate local startup.
 ### 4. Start work
 
 Create new work, choose Plan or Execute, and submit a prompt. Every request names the
-selected runtime target. **Minimal** grants no workspace tools; **Development** grants
-the documented exact tool set with policy and approval still enforced. Managed Local's
-native layer requires an additional operating-system confirmation before first
-enabling Development or elevating from Minimal. Its
-primary credential has exactly the run and prompt scopes plus the tools derived from
-that selection. Approval responses use a separate native-only, tool-less credential after the
-operating-system confirmation. Neither credential grants administrative,
-delegated-agent, or unrestricted skill authority.
+selected runtime target. Access and execution boundary are separate controls. The
+default access profile is **Allow all**, and **Full access** is the default execution
+boundary for fresh Managed Local settings. Schema-v1–v3 migrations preserve the prior
+platform-isolated behavior: **Minimal** maps to **Offline isolated**, while
+**Development** and legacy `allow_all` map to **Workspace isolated**. Full access is
+intentionally unsafe: registered tools are allowed without built-in approval friction
+and may use ambient host filesystem, process, environment, and HTTP(S) resources. The
+interface keeps a persistent warning visible. Choose **Workspace isolated** or
+**Offline isolated** to restore platform containment; choose **Development** or
+**Minimal** to narrow tool decisions independently.
+Managed Local's native layer requires an operating-system confirmation before widening
+access or execution authority. Its
+primary credential has exactly the run and prompt scopes plus the reviewed built-in tool
+ceiling for that selection. That ceiling includes bounded, non-recursive delegation when
+`agent.delegate` is selected; it never creates undeclared tools or administrative authority.
+Approval responses use a separate native-only, tool-less credential after the operating-system
+confirmation. Neither credential grants administrative or unrestricted skill authority.
 
 The permission selector beside the Work composer changes how Managed Local handles
 approval-required effects for subsequent work without restarting the runtime. **Deny**
@@ -119,7 +140,7 @@ allows eligible low-risk effects after evaluator review, and **Full access** sat
 approval obligations without asking. Moving to Risk auto or Full access requires an
 operating-system confirmation, and the mode cannot change while a managed run is
 active. This runtime-local selection returns to Ask when Managed Local restarts. It
-does not change policy decisions, tool authority, access profile, or sandbox boundaries,
+does not change policy decisions, tool authority, access profile, or execution boundaries,
 and it is unavailable for independently administered External targets.
 
 Settings shows the runtime as `Starting`, `Ready`, `Restarting`, `Stopping`, or

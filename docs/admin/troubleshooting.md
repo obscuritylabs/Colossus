@@ -26,7 +26,7 @@ colossus --config .colossus/config.yaml tools list
 
 | Symptom | First check | Common cause | Safe action |
 | --- | --- | --- | --- |
-| Configuration does not parse | `config show` | Unknown field, missing `access`, removed exact tool/action fields, overlapping access entries, relative security path | Compare with [Configuration fields](../reference/configuration.md); for an incompatible shape, follow [Upgrade and compatibility](../get-started/upgrade-compatibility.md) |
+| Configuration does not parse | `config show` | Unknown field, missing `schemaVersion` or `storage.path`, missing tagged-variant `kind`, overlapping access entries, relative security path | Compare with [Configuration fields](../reference/configuration.md); for an incompatible shape, follow [Upgrade and compatibility](../get-started/upgrade-compatibility.md) |
 | Echo works; model fails | `provider doctor PROFILE` | Route, credential reference, origin, TLS, model ID, or response shape | Repair the first failing obligation |
 | Initial model request works, but a later TUI turn returns HTTP 400 | `/provider diagnostics on`, then retry the turn | Provider rejected continuation history, tool result encoding, schema, or a tool name | Inspect `Response body`, `Offered tool names`, and the exact `Request body`; run `/provider diagnostics off` afterward |
 | Local model returns HTTP 503 | Local endpoint health, then `provider doctor PROFILE` | Model process is still loading | Wait for endpoint readiness and retry the turn; Colossus marks this failure recoverable but never retries it implicitly |
@@ -35,15 +35,15 @@ colossus --config .colossus/config.yaml tools list
 | Tool is missing | `config effective` | Profile exclusion, exact exclude, missing static prerequisite, untrusted extension | Fix selection or prerequisite; do not widen unrelated controls |
 | Repository path is wrong | `config effective` canonical workspace | Missing or incorrect global `--workspace` | Retry with `-w /canonical/repository`; relative config resolves from it |
 | Worker rejects the client | `worker --status` workspace | Client and worker selected different canonical workspaces | Restart one side with the same `--workspace`; mismatch is never silently accepted |
-| Shell tool is missing | `config effective` sandbox report | `offline-default`, no explicit executable, unsupported protection, or workflow scope | Use `workspace-development` for an eligible actor or add exact grants |
+| Shell tool is missing under isolation | `config effective` sandbox report | `offline-default`, no explicit executable, unsupported protection, or workflow scope | Use `workspace-development` for an eligible actor or add exact grants |
 | Shell is denied | Action decision and approval mode | `development` requires approval for execution | Use `ask`, or reviewed `risk-auto` for eligible non-workflow shell calls |
 | Linux protected-path probe fails | `sandbox doctor` native details | Ubuntu AppArmor restricts capabilities in unprivileged user namespaces | Install the release archive's exact-path profile against a root-owned Colossus binary, or use OCI; never weaken the host-wide restriction |
-| Public request is denied | `sandbox doctor` destinations | `*` never matches loopback/private/link-local/metadata | Add the exact canonical private origin only when intended |
+| Public request is denied under isolation | `sandbox doctor` destinations | `*` never matches loopback/private/link-local/metadata | Add the exact canonical private HTTPS origin only when intended; plaintext HTTP remains loopback-only outside acknowledged full access |
 | Worker is unavailable | `worker --status` | Writer lease, stale endpoint, key/permission mismatch, incompatible protocol | Preserve state; stop or repair the owning worker |
 | First start after upgrade is slow | `state doctor` after completion | Legacy or missing version-two anchor requires one complete bootstrap audit | Allow the bounded bootstrap to finish; later clean starts should report `incremental`; use `full` only when policy requires it |
 | Read-only recovery | `audit verify` and `audit anchor-status` | Chain, checkpoint, anchor, decryption, or projection-position failure | Preserve evidence and investigate; never rewrite canonical events |
 | Memory search degraded | `memories index status` | Disposable index unavailable or behind | `sync` or explicitly `rebuild`; canonical records remain |
-| Web search hidden | `search profiles` and `config effective` | Missing role route, tool selection, action, or exact origin | Repair the explicit route and obligations |
+| Web search hidden | `search profiles` and `config effective` | Missing role route, tool selection, action, or resource authority | Repair the explicit route and obligations |
 
 ## Approval-required invocation
 

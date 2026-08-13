@@ -1,6 +1,6 @@
 ---
 title: Connect OpenRouter
-description: Configure OpenRouter as an OpenAI-compatible provider with an exact model route and sandbox origin.
+description: Configure OpenRouter as an OpenAI-compatible provider with an exact model route and reviewed network authority.
 audience: user
 type: how-to
 ---
@@ -31,7 +31,7 @@ Keep only `env:OPENROUTER_API_KEY` in YAML.
 ### 2. Configure the OpenRouter route
 
 Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
-keep its other required fields. Apply this validated
+keep its required `storage` block and any intended custom settings. Apply this validated
 overlay. The example uses OpenRouter's `openrouter/free` route; replace it with another
 exact catalog identifier and its limits when you need a specific model.
 
@@ -63,8 +63,10 @@ sandbox:
 ```
 <!-- provider-guide-config:end -->
 
-The API path remains in `baseUrl`; the sandbox receives only the exact origin. This
-guide uses the adapter's standard bearer authentication. Do not add provider-specific
+The API path remains in `baseUrl`. Under an isolating boundary, the sandbox receives
+only the exact origin; acknowledged full access needs no duplicate grant and an origin
+entry does not narrow ambient authority. This guide uses the adapter's standard bearer
+authentication. Do not add provider-specific
 headers that are not fields in the current Colossus provider schema.
 
 The example explicitly selects the legacy-compatible `max_tokens` request field. If
@@ -99,8 +101,10 @@ succeed, and the run returns `connected`.
 
 ## Verification
 
-Run `colossus -w . config show` and confirm that the output
-contains only the environment reference, exact model ID, API prefix, and sandbox origin.
+Run `colossus -w . config show` and confirm that the output contains only the
+environment reference, exact model ID, API prefix, and any isolation-only sandbox
+origin—not the credential value. Under full access, confirm `config effective` reports
+ambient network authority.
 
 ## Failure path
 
@@ -111,7 +115,7 @@ contains only the environment reference, exact model ID, API prefix, and sandbox
 - **The provider works but generation fails:** correct the selected model's limits and
   `chatCompletionsOutputTokenParameter`, `toolCalls`, or `streaming` declarations, then
   rerun `models doctor openrouter`.
-- **The origin is denied:** keep `/api/v1` in `baseUrl` and grant only
+- **The origin is denied under isolation:** keep `/api/v1` in `baseUrl` and grant only
   `https://openrouter.ai` in the sandbox.
 
 ## Next step

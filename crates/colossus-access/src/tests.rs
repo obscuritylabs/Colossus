@@ -1,4 +1,10 @@
 use super::*;
+
+#[test]
+fn default_access_is_allow_all() {
+    assert_eq!(AccessProfile::default(), AccessProfile::AllowAll);
+    assert_eq!(AccessConfig::default().profile, AccessProfile::AllowAll);
+}
 use colossus_contracts::ToolSpec;
 
 fn tool(name: &str, action: Option<&str>) -> ToolSpec {
@@ -42,7 +48,10 @@ fn profiles_apply_to_synthetic_future_capabilities_by_metadata() {
         ),
     ];
     let resolution = resolve_access(
-        &AccessConfig::default(),
+        &AccessConfig {
+            profile: AccessProfile::Development,
+            ..AccessConfig::default()
+        },
         &tools,
         descriptors,
         tool_descriptors.clone(),
@@ -303,6 +312,54 @@ fn inherited_prerequisites_hide_and_explicit_prerequisites_fail() {
         ),
         Err(AccessError::Invalid(_))
     ));
+}
+
+#[test]
+fn provider_origins_do_not_activate_general_network_tools_when_host_disables_them() {
+    let specs = [
+        tool("network.http", Some("network.http")),
+        tool("web.fetch", Some("network.http")),
+        tool("docs.fetch", Some("network.http")),
+    ];
+    let descriptors = specs
+        .iter()
+        .map(|spec| core_tool(&spec.name))
+        .collect::<Vec<_>>();
+    let context = AccessContext {
+        network_destination: true,
+        model_network_tools: false,
+        ..AccessContext::default()
+    };
+    let resolution = resolve_access(
+        &AccessConfig::default(),
+        &specs,
+        builtin_action_descriptors(),
+        descriptors.clone(),
+        &context,
+        false,
+    )
+    .expect("provider-only network origins remain diagnosable");
+    assert!(resolution.active_tool_names().is_empty());
+    assert!(resolution.tools.iter().all(|tool| {
+        tool.unmet_prerequisite.as_deref() == Some("model-visible network tools enabled by host")
+    }));
+
+    let enabled = resolve_access(
+        &AccessConfig::default(),
+        &specs,
+        builtin_action_descriptors(),
+        descriptors,
+        &AccessContext {
+            model_network_tools: true,
+            ..context
+        },
+        false,
+    )
+    .expect("ordinary configured network tools");
+    assert_eq!(
+        enabled.active_tool_names(),
+        ["docs.fetch", "network.http", "web.fetch"]
+    );
 }
 
 #[test]

@@ -113,8 +113,10 @@ pub(super) fn config_init_target(
         };
     }
     if local {
-        let storage_path = PathBuf::from(".colossus").join(state_name);
-        let anchor_path = PathBuf::from(".colossus").join(anchor_name);
+        // Preserve the portable forward-slash spelling in the authored document on
+        // Windows while PathBuf still accepts it for native resolution below.
+        let storage_path = PathBuf::from(format!(".colossus/{state_name}"));
+        let anchor_path = PathBuf::from(format!(".colossus/{anchor_name}"));
         return ConfigInitTarget {
             config_path: workspace.join(".colossus/config.yaml"),
             storage_location: StorageLocation::Workspace,
@@ -469,9 +471,9 @@ pub(super) fn init_config_at(
     target: &ConfigInitTarget,
     development: bool,
     from: Option<&Path>,
-    access_profile: AccessProfile,
+    access_profile: Option<AccessProfile>,
     sandbox_profile: Option<SandboxProfile>,
-    storage_keys: StorageKeys,
+    storage_keys: Option<StorageKeys>,
 ) -> Result<(), Box<dyn Error>> {
     let path = &target.config_path;
     if target.confined_config_root.is_none()
@@ -493,47 +495,28 @@ pub(super) fn init_config_at(
     {
         fs::create_dir_all(parent)?;
     }
-    if development
-        && (target.resolved_state_path.exists()
-            || (storage_keys == StorageKeys::Environment && target.resolved_anchor_path.exists()))
-    {
-        return Err(format!(
-            "refusing to create {} while isolated development state or anchor already exists; restore the matching config or remove both {} and {}",
-            path.display(),
-            target.resolved_state_path.display(),
-            target.resolved_anchor_path.display()
-        )
-        .into());
-    }
-    let mut config = if let Some(source) = from {
-        RuntimeConfig::from_path(source)?
-    } else {
-        RuntimeConfig::offline_template(&target.storage_path)
-    };
-    config.set_access_profile(access_profile);
-    config.set_sandbox_profile(
-        sandbox_profile
-            .unwrap_or_else(|| {
-                if access_profile == AccessProfile::Development {
-                    SandboxProfile::WorkspaceDevelopment
-                } else {
-                    SandboxProfile::OfflineDefault
-                }
-            })
-            .as_str(),
+    let encoded = config_init_yaml(target, from, access_profile, sandbox_profile, storage_keys)?;
+    let config = RuntimeConfig::from_yaml(&encoded)?;
+    let environment_keys = matches!(
+        &config.storage.keys,
+        colossus_runtime::KeyConfig::Environment { .. }
     );
-    let mut config = if development {
-        config.with_isolated_development_storage(&target.storage_path, target.anchor_path.clone())
-    } else {
-        config
-    };
-    config.storage.location = target.storage_location;
-    match storage_keys {
-        StorageKeys::None => config.use_plaintext_storage(),
-        StorageKeys::Platform => config.use_platform_storage(),
-        StorageKeys::Environment => config.use_environment_storage(&target.anchor_path),
+    if development {
+        let state_occupied = path_entry_exists(&target.resolved_state_path)?;
+        let anchor_temporary = target.resolved_anchor_path.with_extension("tmp");
+        let anchor_occupied = environment_keys
+            && (path_entry_exists(&target.resolved_anchor_path)?
+                || path_entry_exists(&anchor_temporary)?);
+        if state_occupied || anchor_occupied {
+            return Err(format!(
+                "refusing to create {} while isolated development state or anchor already exists; restore the matching config or remove both {} and {}",
+                path.display(),
+                target.resolved_state_path.display(),
+                target.resolved_anchor_path.display()
+            )
+            .into());
+        }
     }
-    let encoded = config.to_yaml()?;
     if let Some(root) = &target.confined_config_root {
         let opened = root.open_file(Path::new("config.yaml"))?;
         if !opened.was_created() {
@@ -551,9 +534,24 @@ pub(super) fn init_config_at(
             .open(path)?;
         destination.write_all(encoded.as_bytes())?;
     }
-    println!("created {}", path.display());
+    if human_output(io::stdout().is_terminal()) {
+        println!("created {}", path.display());
+    } else {
+        print_json(&json!({
+            "created": true,
+            "config_path": path,
+        }))?;
+    }
     emit_security_posture_warning(&config.security_posture())?;
     Ok(())
+}
+
+fn path_entry_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -561,9 +559,9 @@ pub(super) fn init_config(
     path: &Path,
     development: bool,
     from: Option<&Path>,
-    access_profile: AccessProfile,
+    access_profile: Option<AccessProfile>,
     sandbox_profile: Option<SandboxProfile>,
-    storage_keys: StorageKeys,
+    storage_keys: Option<StorageKeys>,
 ) -> Result<(), Box<dyn Error>> {
     let state_name = if development {
         "state.dev.redb"
@@ -597,4 +595,107 @@ pub(super) fn init_config(
         sandbox_profile,
         storage_keys,
     )
+}
+
+fn config_init_yaml(
+    target: &ConfigInitTarget,
+    from: Option<&Path>,
+    access_profile: Option<AccessProfile>,
+    sandbox_profile: Option<SandboxProfile>,
+    storage_keys: Option<StorageKeys>,
+) -> Result<String, Box<dyn Error>> {
+    let (mut document, inherited_storage_keys) = if let Some(source) = from {
+        let yaml = fs::read_to_string(source)?;
+        let source_config = RuntimeConfig::from_yaml(&yaml)?;
+        let document = serde_saphyr::from_str::<Value>(&yaml)?;
+        let keys_were_explicit = document
+            .get("storage")
+            .and_then(Value::as_object)
+            .is_some_and(|storage| storage.contains_key("keys"));
+        let inherited = keys_were_explicit
+            .then(|| isolated_development_keys(source_config.storage.keys, &target.anchor_path));
+        (document, inherited)
+    } else {
+        (json!({"schemaVersion": 2}), None)
+    };
+    let root = document
+        .as_object_mut()
+        .ok_or_else(|| cli_error("configuration root must be a YAML mapping"))?;
+    root.insert("schemaVersion".into(), json!(2));
+
+    let mut storage = serde_json::Map::new();
+    storage.insert(
+        "location".into(),
+        json!(match target.storage_location {
+            StorageLocation::Workspace => "workspace",
+            StorageLocation::HomeWorkspace => "home_workspace",
+        }),
+    );
+    storage.insert("path".into(), json!(target.storage_path));
+    let selected_keys = if let Some(mode) = storage_keys {
+        let mut generated = RuntimeConfig::offline_template(&target.storage_path);
+        match mode {
+            StorageKeys::None => generated.use_plaintext_storage(),
+            StorageKeys::Platform => generated.use_platform_storage(),
+            StorageKeys::Environment => generated.use_environment_storage(&target.anchor_path),
+        }
+        Some(generated.storage.keys)
+    } else {
+        inherited_storage_keys
+    };
+    if let Some(keys) = selected_keys {
+        storage.insert("keys".into(), serde_json::to_value(keys)?);
+    }
+    root.insert("storage".into(), Value::Object(storage));
+
+    if let Some(profile) = access_profile {
+        mapping_entry(root, "access")?.insert("profile".into(), json!(profile.to_string()));
+    }
+    if let Some(profile) = sandbox_profile {
+        root.insert(
+            "sandbox".into(),
+            json!({
+                "backend": colossus_runtime::SandboxConfig::platform_isolating().backend,
+                "profile": profile.as_str(),
+            }),
+        );
+    }
+    serde_saphyr::to_string(&document).map_err(|error| error.into())
+}
+
+fn isolated_development_keys(
+    source: colossus_runtime::KeyConfig,
+    anchor_path: &Path,
+) -> colossus_runtime::KeyConfig {
+    let instance_id = Uuid::now_v7();
+    match source {
+        colossus_runtime::KeyConfig::None => colossus_runtime::KeyConfig::None,
+        colossus_runtime::KeyConfig::Platform { service, .. } => {
+            colossus_runtime::KeyConfig::Platform {
+                service,
+                journal_key_id: format!("journal-{instance_id}"),
+                signing_key_id: format!("checkpoint-{instance_id}"),
+            }
+        }
+        colossus_runtime::KeyConfig::Environment {
+            journal_variable,
+            signing_variable,
+            ..
+        } => colossus_runtime::KeyConfig::Environment {
+            journal_variable,
+            journal_key_id: format!("journal-{instance_id}"),
+            signing_variable,
+            anchor_path: anchor_path.to_owned(),
+        },
+    }
+}
+
+fn mapping_entry<'a>(
+    root: &'a mut serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<&'a mut serde_json::Map<String, Value>, Box<dyn Error>> {
+    root.entry(name.to_owned())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| cli_error(format!("{name} must be a YAML mapping")).into())
 }

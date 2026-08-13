@@ -54,10 +54,18 @@ Run these commands from the repository root.
    the offline self-test when you want to verify the sidecar without a credential or
    network call.
 
+   Fresh settings select **Allow all** access and the intentionally unsafe **Full
+   access** execution boundary. Access and execution boundary are independent controls:
+   choose **Development** or **Minimal** to narrow tool decisions, and choose
+   **Workspace isolated** or **Offline isolated** to restore platform containment.
+   Legacy settings migrations retain their prior isolated posture. Native confirmation
+   is required for the first non-Minimal access selection, later access elevation, and
+   execution-boundary elevation; the Full access warning remains visible while that
+   Managed Local runtime is active.
+
    Settings reuses the stored key for same-provider model/profile changes. Select
    **Replace the stored API key** only when rotating it; first setup and provider
-   changes always use native secure input. Development access also requires a fixed
-   native authority confirmation.
+   changes always use native secure input.
 
    Codex auth tokens never enter the renderer or saved Desktop settings. Native code
    validates the Codex-owned credential file and supplies only its private path through

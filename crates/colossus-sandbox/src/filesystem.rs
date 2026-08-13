@@ -19,11 +19,7 @@ impl EffectExecutor for FilesystemExecutor {
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let mode = filesystem_mode(&request.action)?;
-        let target = authorized_path(
-            Path::new(&request.resource),
-            mode,
-            &permit.obligations().filesystem,
-        )?;
+        let target = authorized_path(Path::new(&request.resource), mode, permit.obligations())?;
         let max_output =
             usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
         match request.action.as_str() {
@@ -72,7 +68,12 @@ impl EffectExecutor for FilesystemExecutor {
                 entries.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
                 bounded_json(json!({"entries": entries}), max_output)
             }
-            "filesystem.search" => search_files(&target, &request.content, max_output),
+            "filesystem.search" => search_files(
+                &target,
+                &request.content,
+                max_output,
+                permit.obligations().resource_authority == ResourceAuthority::Ambient,
+            ),
             "filesystem.write" | "audit.export.write" => {
                 write_file(&target, &request.content, max_output)
             }
@@ -102,6 +103,7 @@ pub(super) fn search_files(
     root: &Path,
     content: &Value,
     max_output: usize,
+    ambient: bool,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
     if !root.is_dir() {
         return Err(adapter_failure(
@@ -151,9 +153,10 @@ pub(super) fn search_files(
     walker
         .follow_links(false)
         .hidden(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
+        .ignore(!ambient)
+        .git_ignore(!ambient)
+        .git_global(!ambient)
+        .git_exclude(!ambient)
         .max_filesize(Some(MAX_SEARCH_FILE_BYTES));
     for entry in walker.build().filter_map(Result::ok) {
         let path = entry.path();
@@ -164,7 +167,7 @@ pub(super) fn search_files(
             continue;
         }
         let relative = path.strip_prefix(root).map_err(adapter_failure)?;
-        if is_control_path(relative) || !glob_matches(glob.as_ref(), relative) {
+        if (!ambient && is_control_path(relative)) || !glob_matches(glob.as_ref(), relative) {
             continue;
         }
         let Ok(bytes) = fs::read(path) else {
@@ -280,7 +283,7 @@ pub(super) fn bounded_search_line(line: &str) -> &str {
 pub(super) fn authorized_path(
     requested: &Path,
     mode: &str,
-    grants: &[FilesystemGrant],
+    obligations: &PolicyObligations,
 ) -> Result<PathBuf, ExecutionError> {
     if !requested.is_absolute() {
         return Err(adapter_failure("effect paths must be absolute"));
@@ -301,7 +304,10 @@ pub(super) fn authorized_path(
     } else {
         fs::canonicalize(requested).map_err(adapter_failure)?
     };
-    let allowed = grants.iter().any(|grant| {
+    if obligations.resource_authority == ResourceAuthority::Ambient {
+        return Ok(target);
+    }
+    let allowed = obligations.filesystem.iter().any(|grant| {
         let mode_allowed = grant.mode == "write"
             || grant.mode == mode
             || (mode == "metadata" && grant.mode == "read");

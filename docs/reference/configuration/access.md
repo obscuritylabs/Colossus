@@ -30,7 +30,7 @@ Colossus resolves the effective tool surface in this order:
 | Trusted catalog | Built-in tools plus operations from configured integrations and enabled, reverified packs |
 | Profile | Selects the baseline tools and built-in action decisions |
 | Tool overrides | Adds exact includes, then removes exact excludes |
-| Prerequisites | Hides tools whose required filesystem, executable, network, search, UI, or MCP configuration is absent |
+| Prerequisites | Hides tools whose required declared-or-ambient filesystem, executable, network, search, UI, or MCP authority is absent |
 | Runtime mode | Plan Mode, Goal Mode, workflow lineage, and child scope may narrow the catalog further |
 | Effect authorization | Policy, approval, the Safety Kernel, a permit, sandbox obligations, quarantine, and post-effect policy govern each call |
 
@@ -44,16 +44,16 @@ repair a missing resource grant or bypass an earlier trust decision.
 | Offline smoke test | `minimal` | Expose effect-free support tools and keep non-provider effects denied |
 | Interactive repository development | `development` | Use with reviewed sandbox resources and explicit approval handling |
 | Production or narrowly scoped agent | `pinned` | Name every model-visible tool and opt in to its exact actions separately |
-| Disposable, tightly sandboxed test environment | `allow_all` | Removes built-in approval gates but preserves every other safety boundary |
+| Ordinary sparse developer configuration | `allow_all` | Removes built-in approval gates; paired with the separate full-access schema default |
+| Disposable, tightly sandboxed test environment | `allow_all` | Pair with an explicit isolating execution boundary |
 | OPA-controlled deployment | Usually `pinned` or `development` | Use the profile for tool selection; leave all local action override lists empty |
 
-`development` is the default profile, but the root `access` block is required. Child
-fields may be omitted and take their defaults; the complete explicit shape is easier to
-review:
+`allow_all` is the default profile, and the root `access` block may be omitted. Child
+fields may also be omitted independently; the complete explicit shape is:
 
 ```yaml
 access:
-  profile: development
+  profile: allow_all
   tools:
     include: []
     exclude: []
@@ -105,18 +105,20 @@ Use `development` for interactive engineering work. Read and Colossus-owned stat
 operations proceed under their normal obligations. Workspace mutation, command
 execution, external network access, and administration require approval.
 
-`config init` pairs this profile with `sandbox.profile: workspace-development` unless a
-different sandbox profile is selected. That pairing is a configuration-generation
-convenience, not an authority hidden inside `access`.
+Select `development` and `sandbox.profile: workspace-development` explicitly when you
+want the older approval-gated, workspace-isolated development posture. Access and the
+execution boundary remain independent.
 
 ### `allow_all`
 
-`allow_all` changes built-in action outcomes from approval-required to allowed. It does
-not provide filesystem roots, executables, environment names, network destinations,
-credentials, extension trust, protocol allowlists, or permits.
+`allow_all` changes built-in action outcomes from approval-required to allowed. The
+separate schema default of acknowledged `danger_full_access` supplies ambient resource
+authority for process, structured filesystem, and canonical HTTP(S) effects. It does
+not invent credentials, provider/model routes, extension trust, configured MCP servers
+or tools, integration operations, action identities, or permits.
 
-Use it only where those other boundaries already define a disposable and acceptably
-small blast radius. It is not a substitute for sandbox configuration.
+Treat that combined default as full host access. Select a platform-isolating sandbox
+when the blast radius must be smaller.
 
 ### `pinned`
 
@@ -156,9 +158,11 @@ access:
     deny: []
 ```
 
-This exact example also requires a readable filesystem grant and exactly one configured
-or derived Git executable. A non-echo provider requires its exact provider action to be
-opted in as well. Inspect the resolved names instead of guessing them.
+Under an isolating boundary, this exact example also requires a readable filesystem
+grant and exactly one configured or derived Git executable. Acknowledged full access
+supplies those resource prerequisites but does not change the pinned action list. A
+non-echo provider requires its exact provider action to be opted in as well. Inspect the
+resolved names instead of guessing them.
 
 ## Tool selection
 
@@ -223,14 +227,21 @@ grant the underlying resource.
 
 | Prerequisite | Example tools | Satisfied by |
 | --- | --- | --- |
-| Filesystem read | `filesystem.read`, repository tools, `patch.preview` | At least one read-, metadata-, or write-capable filesystem grant |
-| Filesystem write | `filesystem.write`, `patch.apply`, `trace.export` | At least one write-capable filesystem grant |
+| Filesystem read | `filesystem.read`, repository tools, `patch.preview` | At least one read-, metadata-, or write-capable filesystem grant, or acknowledged ambient authority |
+| Filesystem write | `filesystem.write`, `patch.apply`, `trace.export` | At least one write-capable filesystem grant, or acknowledged ambient authority |
 | Git executable | `git.status`, `git.diff`, `git.show` | Exactly one configured or derived Git executable, or Git on ambient `PATH` under acknowledged `danger_full_access` |
 | Any executable | `shell.run` | At least one configured or derived exact executable, or acknowledged `danger_full_access` |
-| Network destination | `web.fetch`, `docs.fetch`, `network.http` | At least one sandbox network destination |
+| Model network tools | `web.fetch`, `docs.fetch`, `network.http` | The runtime host enables generic model-visible direct fetch tools; Desktop Managed Local **Offline isolated** deliberately withholds this prerequisite |
+| Network destination | `web.fetch`, `docs.fetch`, `network.http` | At least one sandbox network destination, or acknowledged ambient authority |
 | Agent search route | `web.search` | A valid top-level `search.roles.agent` route |
 | Interactive interface | `user.ask` | A trusted prompt-capable interface for the current runtime |
 | MCP server | `mcp.servers`, `mcp.tools`, `mcp.call` | At least one configured and trusted MCP server |
+
+Provider service and authentication transports are independent from the model-network
+tool prerequisite. Managed Local **Offline isolated** retains the configured provider's
+exact service and authentication/refresh destinations while keeping `web.fetch`,
+`docs.fetch`, and `network.http` hidden. Search, MCP, and integration adapters remain
+independently governed by their own routes, declarations, trust, and host grants.
 
 When a profile or wildcard selects a tool with an unmet prerequisite, Colossus keeps it
 hidden and reports the reason in `config effective`. A named exact include is a stronger
@@ -378,10 +389,10 @@ See [Policy and audit configuration](policy-audit.md) and
 
 | Need | Configure it in |
 | --- | --- |
-| Read or write a path | `sandbox.filesystem` or the reviewed `workspace-development` profile |
-| Run a command | `sandbox.executables`, plus the appropriate filesystem and environment grants |
-| Reach a service | `sandbox.networkDestinations` and the owning provider, search, MCP, or integration declaration |
-| Read an environment variable in a subprocess | `sandbox.environment` and the effect's own declaration |
+| Read or write a path | Ambient authority under acknowledged full access, otherwise `sandbox.filesystem` or the reviewed `workspace-development` profile |
+| Run a command | Ambient executable, filesystem, and environment authority under acknowledged full access; otherwise `sandbox.executables` plus the appropriate grants |
+| Reach a service | Ambient HTTP(S) authority under acknowledged full access, otherwise `sandbox.networkDestinations`; the owning provider, search, MCP, or integration declaration always remains required |
+| Read an environment variable in a subprocess | Ambient environment authority under acknowledged full access; otherwise `sandbox.environment` and the effect's own declaration |
 | Use provider, MCP, or integration credentials | Credential references in the owning adapter configuration |
 | Load a pack or integration operation | Its installation, trust, enablement, connection, and declaration lifecycle |
 | Make a tool available in Plan Mode | Nothing can widen Plan Mode; it applies a fixed subset after access resolution |
@@ -402,7 +413,7 @@ Review [Sandbox configuration](sandbox.md), [Network configuration](network.md),
 | `shell.run` is hidden under development | Configure an exact executable, use the reviewed `workspace-development` sandbox profile, or explicitly select and acknowledge `danger_full_access` |
 | `web.search` is hidden despite network access | Configure an exact `search.roles.agent` route; a destination alone is insufficient |
 | `user.ask` is hidden in a worker or headless run | The current runtime has no trusted interactive prompt interface |
-| `allow_all` still cannot read, execute, or connect | Add the separate sandbox grant, credential, route, or trusted extension declaration |
+| A configured capability is hidden under full access | Add the required credential, route, MCP/integration declaration, or trusted extension; full access does not invent capabilities |
 | OPA configuration is rejected | Empty all three `access.actions` lists; OPA is the sole decision point |
 | A wildcard/name mixture is rejected | `"*"` must be the only `include` entry; put exceptions in `exclude` |
 | An MCP server tool remains unavailable | Configure the MCP server's own `allowedTools`; the access wildcard is a separate boundary |

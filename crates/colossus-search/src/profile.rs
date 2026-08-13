@@ -44,8 +44,32 @@ impl SearchProfile {
         user_agent: impl Into<String>,
         timeout_ms: u64,
     ) -> Result<Self, SearchAdapterError> {
+        Self::new_with_resource_authority(
+            name,
+            kind,
+            endpoint,
+            credential_reference,
+            auth_header,
+            user_agent,
+            timeout_ms,
+            ResourceAuthority::Declared,
+        )
+    }
+
+    /// Validate one profile under an explicit runtime resource authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_resource_authority(
+        name: impl Into<String>,
+        kind: SearchKind,
+        endpoint: impl Into<String>,
+        credential_reference: Option<String>,
+        auth_header: Option<String>,
+        user_agent: impl Into<String>,
+        timeout_ms: u64,
+        resource_authority: ResourceAuthority,
+    ) -> Result<Self, SearchAdapterError> {
         let name = name.into();
-        let endpoint = normalize_endpoint(kind, &endpoint.into())?;
+        let endpoint = normalize_endpoint(kind, &endpoint.into(), resource_authority)?;
         let user_agent = user_agent.into();
         if !valid_name(&name) || timeout_ms == 0 {
             return Err(SearchAdapterError::Configuration(

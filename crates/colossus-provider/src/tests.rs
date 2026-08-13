@@ -1,9 +1,12 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use colossus_contracts::{DecisionOutcome, EffectPhase, PolicyDecision, ProviderEvent};
+use colossus_contracts::{
+    DecisionOutcome, EffectPhase, PolicyDecision, ProviderEvent, SandboxBoundaryMode,
+};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, ExecutionError, GatewayError,
-    ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
+    ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate,
+    effect_request, system_actor,
 };
 use colossus_ports::{EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
@@ -32,6 +35,29 @@ struct CountingCredentialResolver {
 struct CountingHostCredentialResolver {
     calls: AtomicUsize,
     resolver: HostCredentialResolver,
+}
+
+#[test]
+fn ambient_provider_profiles_allow_non_loopback_http_only_explicitly() {
+    assert!(
+        ProviderProfile::new(
+            "private",
+            ProviderKind::OpenAiCompatible,
+            Some("http://10.0.0.8:8080/v1".into()),
+            None,
+            1_000,
+        )
+        .is_err()
+    );
+    ProviderProfile::new_with_resource_authority(
+        "private",
+        ProviderKind::OpenAiCompatible,
+        Some("http://10.0.0.8:8080/v1".into()),
+        None,
+        1_000,
+        ResourceAuthority::Ambient,
+    )
+    .expect("ambient private HTTP provider");
 }
 
 struct ProviderPostDenyPolicy(BuiltInPolicy);
@@ -1450,6 +1476,75 @@ async fn denial_happens_before_credential_resolution() {
         .expect_err("policy must deny provider call");
     assert!(matches!(error, GatewayError::Denied(_)));
     assert_eq!(credentials.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn remote_plaintext_provider_requires_ambient_authority_in_the_permit() {
+    let profile = ProviderProfile::new_with_resource_authority(
+        "remote-http",
+        ProviderKind::OpenAiCompatible,
+        Some("http://192.0.2.1:9/v1".into()),
+        Some("env:UNIT_PROVIDER_KEY".into()),
+        25,
+        ResourceAuthority::Ambient,
+    )
+    .expect("potential ambient profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let credentials = Arc::new(CountingCredentialResolver::new());
+    let executor = ProviderExecutor::with_credentials(
+        profile.clone(),
+        Arc::clone(&credentials) as Arc<dyn CredentialResolver>,
+    );
+
+    let declared = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+                .with_network_destination(&origin)
+                .with_post_effect(true),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [61_u8; 32],
+    );
+    let error = declared
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect_err("declared exact origin must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 0);
+
+    let ambient = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+                .with_sandbox("danger_full_access", "test", false)
+                .with_resource_authority(ResourceAuthority::Ambient)
+                .with_limits(25, 1024 * 1024, 1, 64 * 1024 * 1024, 1)
+                .with_post_effect(true),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [62_u8; 32],
+    );
+    let result = ambient.execute(provider_request(&profile), &executor).await;
+    assert!(result.as_ref().err().is_none_or(|error| {
+        !error
+            .to_string()
+            .contains("requires ambient resource authority")
+    }));
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]

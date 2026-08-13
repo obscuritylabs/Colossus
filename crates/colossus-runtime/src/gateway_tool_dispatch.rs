@@ -12,7 +12,8 @@ impl ToolExecutor for GatewayToolExecutor {
             "echo" => bounded_tool_text(required_tool_string(&call, "text")?, 32_768),
             "filesystem.list" => {
                 let input = optional_tool_string(&call, "path")?.unwrap_or(".");
-                let path = model_workspace_path(&self.workspace, input)?;
+                let ambient = self.danger_full_access(&context);
+                let path = model_resource_path(&self.workspace, input, ambient)?;
                 let mut request = effect_request(
                     model_actor(&call, &context),
                     "filesystem.list",
@@ -37,30 +38,38 @@ impl ToolExecutor for GatewayToolExecutor {
                 let entries = entries
                     .iter()
                     .filter(|entry| {
-                        !entry
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .is_some_and(|name| matches!(name, ".colossus" | ".git"))
+                        ambient
+                            || !entry
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| matches!(name, ".colossus" | ".git"))
                     })
                     .map(|entry| {
                         let mut entry = entry.clone();
                         let name = entry.get("name").and_then(Value::as_str).ok_or_else(|| {
                             ToolError::Failed("filesystem.list entry name is absent".into())
                         })?;
-                        entry["path"] =
-                            Value::String(workspace_relative(&self.workspace, &path.join(name))?);
+                        entry["path"] = Value::String(display_resource_path(
+                            &self.workspace,
+                            &path.join(name),
+                            ambient,
+                        )?);
                         Ok(entry)
                     })
                     .collect::<Result<Vec<_>, ToolError>>()?;
                 serde_json::to_string(&json!({
-                    "root": workspace_relative(&self.workspace, &path)?,
+                    "root": display_resource_path(&self.workspace, &path, ambient)?,
                     "entries": entries,
                 }))
                 .map_err(|error| ToolError::Failed(error.to_string()))?
             }
             "filesystem.read" => {
-                let path =
-                    model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
+                let ambient = self.danger_full_access(&context);
+                let path = model_resource_path(
+                    &self.workspace,
+                    required_tool_string(&call, "path")?,
+                    ambient,
+                )?;
                 let mut request = effect_request(
                     model_actor(&call, &context),
                     "filesystem.read",
@@ -83,7 +92,8 @@ impl ToolExecutor for GatewayToolExecutor {
             }
             "filesystem.search" => {
                 let input = optional_tool_string(&call, "path")?.unwrap_or(".");
-                let path = model_workspace_path(&self.workspace, input)?;
+                let ambient = self.danger_full_access(&context);
+                let path = model_resource_path(&self.workspace, input, ambient)?;
                 let content = json!({
                     "pattern": required_tool_string(&call, "pattern")?,
                     "glob": optional_tool_string(&call, "glob")?,
@@ -117,16 +127,23 @@ impl ToolExecutor for GatewayToolExecutor {
                         .get("path")
                         .and_then(Value::as_str)
                         .ok_or_else(|| ToolError::Failed("search match path is absent".into()))?;
-                    matched["path"] =
-                        Value::String(workspace_relative(&self.workspace, &path.join(relative))?);
+                    matched["path"] = Value::String(display_resource_path(
+                        &self.workspace,
+                        &path.join(relative),
+                        ambient,
+                    )?);
                 }
                 serde_json::to_string(&value)
                     .map_err(|error| ToolError::Failed(error.to_string()))?
             }
             "filesystem.write" => {
-                let path =
-                    model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
-                let display_path = workspace_relative(&self.workspace, &path)?;
+                let ambient = self.danger_full_access(&context);
+                let path = model_resource_path(
+                    &self.workspace,
+                    required_tool_string(&call, "path")?,
+                    ambient,
+                )?;
+                let display_path = display_resource_path(&self.workspace, &path, ambient)?;
                 self.execute_filesystem_mutation(
                     &call,
                     context,
@@ -141,9 +158,13 @@ impl ToolExecutor for GatewayToolExecutor {
                 .await?
             }
             "filesystem.replace" => {
-                let path =
-                    model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
-                let display_path = workspace_relative(&self.workspace, &path)?;
+                let ambient = self.danger_full_access(&context);
+                let path = model_resource_path(
+                    &self.workspace,
+                    required_tool_string(&call, "path")?,
+                    ambient,
+                )?;
+                let display_path = display_resource_path(&self.workspace, &path, ambient)?;
                 self.execute_filesystem_mutation(
                     &call,
                     context,

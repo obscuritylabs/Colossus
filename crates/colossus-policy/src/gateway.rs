@@ -501,6 +501,7 @@ impl EffectGateway {
                 "outcome": decision.outcome,
                 "reason": decision.reason,
                 "audit_labels": decision.obligations.audit_labels,
+                "resource_authority": decision.obligations.resource_authority,
             }),
         )?;
         Ok(decision)
@@ -734,6 +735,7 @@ impl EffectGateway {
                 "decision_id": decision.decision_id,
                 "permit_nonce": permit.nonce,
                 "permit_expires_at_unix_ms": permit.expires_at_unix_ms,
+                "resource_authority": decision.obligations.resource_authority,
             }),
         )?;
 
@@ -884,6 +886,7 @@ impl EffectGateway {
                 "decision_id": decision.decision_id,
                 "content_hash": sha256_hex(&result.bytes),
                 "size": result.bytes.len(),
+                "resource_authority": decision.obligations.resource_authority,
             }),
         )?;
         Ok(ReleasedEffectResult {

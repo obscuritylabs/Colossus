@@ -15,11 +15,11 @@ and output bounds.
 | Family | Tools | Boundary |
 | --- | --- | --- |
 | Utility | `echo`, `user.ask`, `tool.search`, `trace.show` | Pure; `user.ask` requires an interactive interface |
-| Filesystem | `filesystem.list`, `filesystem.read`, `filesystem.search`, `filesystem.write`, `filesystem.replace` | Canonical roots; reads quarantined; writes atomic |
-| Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Normally an exact executable, workspace cwd, isolated environment, and resource limits; acknowledged `danger_full_access` uses ambient process resources while retaining limits and audit |
-| Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write |
-| Trace export | `trace.export` | Bounded metadata-only workspace write |
-| Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined reads |
+| Filesystem | `filesystem.list`, `filesystem.read`, `filesystem.search`, `filesystem.write`, `filesystem.replace` | Declared canonical roots under isolation; exact host paths under ambient authority; reads quarantined and writes atomic |
+| Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Normally an exact executable, workspace cwd, isolated environment, and enforced resource limits; acknowledged `danger_full_access` uses ambient host resources with supervised timeout/output and best-effort Unix detached-descendant cleanup/accounting |
+| Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write; declared roots or ambient host paths |
+| Trace export | `trace.export` | Bounded metadata-only write; workspace-confined under isolation and host-wide under ambient authority |
+| Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined under isolation; absolute and traversing host paths accepted under ambient authority |
 | Tasks | `task.create`, `task.update`, `task.list` | Canonical session work |
 | Decisions | `decision.create`, `decision.update`, `decision.list`, `decision.archive`, `decision.supersede` | Binding canonical decisions |
 | Plans | `plan.create`, `plan.update`, `plan.show`, `plan.approve_request` | Session-scoped, revision-aware lifecycle; the update target is bound by the runtime |
@@ -28,7 +28,7 @@ and output bounds.
 | Memories | `memory.create`, `memory.update`, `memory.list`, `memory.search`, `memory.archive`, `memory.supersede` | Canonical lifecycle; retrieval post-gated |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Skills | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.install`, `skill.resource.list`, `skill.resource.read` | Data-only authoring/resources |
-| Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Explicit route or exact origin; quarantined output |
+| Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.tools`, `mcp.call` | Configured stdio servers and exact tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
 
@@ -82,10 +82,13 @@ grant and invokes it without startup profiles. `argv` preserves exact execution 
 requires its first entry to resolve to one configured or derived executable. Shell
 wrappers used in `argv` cannot request login, interactive, or startup-profile behavior.
 
-The `cwd` remains inside the canonical workspace. Colossus supplies an isolated
-`HOME`/temp directory and sanitized absolute `PATH`; model arguments cannot override
-those names or proxy variables. Output and a maximum of 64 allowed proxy
-`observed_origins` are quarantined before release.
+Under a configured isolating boundary, `cwd` remains inside the canonical workspace.
+Colossus supplies an isolated `HOME`/temp directory and sanitized absolute `PATH`;
+model arguments cannot override those names or proxy variables. Under acknowledged
+danger full access, the working directory may be any existing host directory,
+executables resolve through ambient `PATH`, and the child receives ambient environment
+and networking. Output and a maximum of 64 observed proxy origins are quarantined
+before release.
 
 Under `development`, execution remains approval-required. `workspace-development`
 supplies resources but never changes that action decision.
@@ -148,9 +151,10 @@ these operational classes:
 | Administration and recovery | Export reset, recovery transitions | Approval-required |
 
 An action decision never supplies a resource grant. `allow_all` still requires a trusted
-registered action, valid explicit or profile-derived obligations, and permit-bound
-execution. Public `*` network egress is still HTTP(S)-only and excludes non-public
-destinations unless their origins are listed exactly.
+registered action, valid explicit, profile-derived, or ambient obligations, and
+permit-bound execution. Configured `*` remains public HTTP(S)-only. Ambient authority
+is a separate acknowledged mode and permits exact private, loopback, link-local, and
+metadata HTTP(S) origins.
 
 ## Call and recovery contract
 

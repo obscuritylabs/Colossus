@@ -17,6 +17,10 @@ pub struct RuntimeOpenOptions {
     /// This is disabled only by trusted native composition for a dedicated internal
     /// diagnostic probe; public run requests cannot change it.
     pub(super) automatic_agent_instructions: bool,
+    /// Whether configured network destinations may activate general model-visible fetch tools.
+    /// Provider, authentication, search, MCP, and integration adapters remain independently
+    /// configured when this is false.
+    pub(super) model_network_tools: bool,
     pub(super) expected_workspace_identity: Option<WorkspaceIdentityToken>,
 }
 
@@ -28,6 +32,7 @@ impl RuntimeOpenOptions {
             colossus_home: None,
             colossus_home_root: None,
             automatic_agent_instructions: true,
+            model_network_tools: true,
             expected_workspace_identity: None,
         }
         .canonicalized()
@@ -53,6 +58,18 @@ impl RuntimeOpenOptions {
     pub fn without_automatic_agent_instructions_for_diagnostics(mut self) -> Self {
         self.automatic_agent_instructions = false;
         self
+    }
+
+    /// Prevent configured provider/authentication origins from activating general model fetch tools.
+    #[must_use]
+    pub fn without_model_network_tools(mut self) -> Self {
+        self.model_network_tools = false;
+        self
+    }
+
+    /// Whether trusted composition allows general model-visible network tools.
+    pub const fn model_network_tools_enabled(&self) -> bool {
+        self.model_network_tools
     }
 
     /// Attach the absolute Colossus home resolved by a trusted interface adapter.

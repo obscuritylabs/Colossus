@@ -315,9 +315,10 @@ impl IntegrationExecutor {
         let port = url
             .port_or_known_default()
             .ok_or_else(|| execution("integration URL has no port"))?;
-        let allow_non_public = matched == NetworkDestinationMatch::Exact
-            && (host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let allow_non_public = matched == NetworkDestinationMatch::Ambient
+            || (matched == NetworkDestinationMatch::Exact
+                && (host.eq_ignore_ascii_case("localhost")
+                    || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
         let addresses = resolve_integration_addresses(host, port, allow_non_public).await?;
         let client = self
             .tls_roots

@@ -7,29 +7,35 @@ type: concept
 
 # State and recovery
 
-The journal is authoritative. Application aggregates reconstruct from immutable,
-encrypted events. Projections, indexes, and exported evidence can improve discovery or
-operations, but they never replace canonical history.
+The journal is authoritative. Application aggregates reconstruct from immutable
+events. Protected storage encrypts event payloads; keyless storage keeps canonical
+plaintext while retaining payload hashes and the record chain. Projections, indexes,
+and exported evidence can improve discovery or operations, but they never replace
+canonical history.
 
 ## Canonical append
 
-Each event has stream identity/version, global sequence, actor and lineage, encrypted
-payload metadata, plaintext hash, previous chain hash, and current chain hash. Appends
+Each event has stream identity/version, global sequence, actor and lineage, payload
+protection metadata, plaintext hash, previous chain hash, and current chain hash. Appends
 optimistically validate stream versions. redb commits events, chain head, outbox work,
 and local metadata atomically. PostgreSQL locks a singleton chain-head row and commits
 the equivalent records in one transaction.
 
-Journal payloads use authenticated encryption. Signed checkpoints and a separately
-protected secure anchor detect record mutation and consistent tail truncation. Startup
-defaults to incremental verification: a version-two anchor attests a previously
+Protected journals use authenticated encryption, signed checkpoints, and a separately
+protected secure anchor to detect record mutation and consistent tail truncation.
+Keyless journals store plaintext payloads and disable signed checkpoints and the secure
+anchor while retaining payload and record-chain verification. With protected storage,
+startup defaults to incremental verification: a version-two anchor attests a previously
 verified prefix, startup authenticates the checkpoint boundary, and then verifies only
 the contiguous tail. A legacy, absent, quarantined, or incompatible anchor triggers one
-complete bootstrap replay before a new attestation is trusted. Full startup mode and
-`audit verify` replay every event. Anchored-prefix corruption is detected when that
-record is decrypted and by every explicit full audit; deterministic failures
-quarantine the anchor and make the runtime read-only. Startup repairs only narrowly
-defined interrupted checkpoint metadata when the complete journal still proves the
-advanced anchor safe.
+complete bootstrap replay before a new attestation is trusted. Keyless incremental
+startup instead checks bounded local head, hash, index, outbox, and projection
+relationships without replaying historical payloads. Full startup mode and
+`audit verify` replay every event. Corruption in a protected journal's anchored prefix is
+detected when that record is decoded and verified and by every explicit full audit;
+deterministic failures quarantine the anchor and make the runtime read-only. Startup
+repairs only narrowly defined interrupted checkpoint metadata when the complete journal
+still proves the advanced anchor safe.
 
 ## Derived state
 

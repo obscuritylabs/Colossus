@@ -360,6 +360,45 @@ pub(super) fn model_workspace_path(workspace: &Path, input: &str) -> Result<Path
     Ok(workspace.join(model_workspace_relative(workspace, input)?))
 }
 
+/// Resolve a model path according to the acknowledged resource authority.
+///
+/// Ambient paths remain absolute but intentionally are not canonicalized here: the
+/// permit-bound filesystem adapter must still observe and reject a symbolic-link leaf,
+/// and it owns missing-leaf write resolution.
+pub(super) fn model_resource_path(
+    workspace: &Path,
+    input: &str,
+    ambient: bool,
+) -> Result<PathBuf, ToolError> {
+    if !ambient {
+        return model_workspace_path(workspace, input);
+    }
+    if input.is_empty() || input.contains('\0') {
+        return Err(ToolError::InvalidArguments {
+            tool: "filesystem".into(),
+            message: "path must name a host resource".into(),
+        });
+    }
+    let input = Path::new(input);
+    Ok(if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        workspace.join(input)
+    })
+}
+
+pub(super) fn display_resource_path(
+    workspace: &Path,
+    path: &Path,
+    ambient: bool,
+) -> Result<String, ToolError> {
+    if ambient {
+        Ok(path.display().to_string())
+    } else {
+        workspace_relative(workspace, path)
+    }
+}
+
 pub(super) fn unrestricted_process_cwd(
     workspace: &Path,
     input: &str,

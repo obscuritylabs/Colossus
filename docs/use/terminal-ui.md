@@ -28,8 +28,9 @@ colossus -w /absolute/path/to/repository
 
 The explicit form is `colossus -w /absolute/path/to/repository tui`. Configuration is
 selected from an explicit path, the repository, then the Colossus home without merging.
-`-w` chooses the repository/tool boundary, not the state directory. Resume the most
-recent session with:
+`-w` chooses repository context, the relative-path anchor, and the state partition—not
+the state directory itself. In acknowledged danger full access it is not a maximum
+tool boundary. Resume the most recent session with:
 
 ```bash
 colossus -w /absolute/path/to/repository tui --resume
@@ -76,6 +77,12 @@ it enables process effects only for the active session in this runtime process a
 records audit evidence. Cancelling or submitting a blank response keeps process effects
 blocked. This boundary acknowledgement is separate from approval mode; every normal
 policy and approval obligation still applies.
+
+The sparse schema-version-2 default already acknowledges `danger_full_access`, so its
+warning is a persistent startup card and footer badge rather than a blocking prompt.
+It means authorized process, structured filesystem, and HTTP tools can use ambient host
+resources; choose an isolating execution boundary in configuration when that is not
+acceptable.
 
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never

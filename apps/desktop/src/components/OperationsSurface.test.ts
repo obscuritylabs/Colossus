@@ -56,6 +56,7 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
     },
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
+    executionBoundary: "full_access",
     approvalMode: "ask",
     terminalEnabled: false,
     additionalCaBundle: {
@@ -166,6 +167,23 @@ describe("OperationsSurface runtime targets", () => {
 
     expect(markup).toContain("<h3>Lab fleet</h3>");
     expect(markup).not.toContain("<h3>Connected</h3>");
+  });
+
+  it("persistently labels Full access as unsafe and distinct from approval mode", () => {
+    const markup = renderSurface("settings");
+
+    expect(markup).toContain("Unsafe: full access");
+    expect(markup).toContain(
+      "Full access disables Colossus filesystem and network isolation.",
+    );
+    expect(markup).toContain("Approval mode remains a separate setting.");
+
+    const isolated = renderSurface(
+      "settings",
+      desktop({ executionBoundary: "workspace_isolated" }),
+    );
+    expect(isolated).toContain("workspace isolated");
+    expect(isolated).not.toContain("Unsafe: full access");
   });
 
   it("lists external targets without exposing native connection material", () => {

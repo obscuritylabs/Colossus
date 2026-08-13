@@ -10,15 +10,17 @@ replacement:
 
 Rust 0.10.7 is the active repository-root stable core release line. The latest published
 Desktop proof remains the separate 0.10.2-preview.10 Developer Preview. The Rust runtime
-uses Rust 1.96, edition 2024, strict schema-version-2 YAML configuration, and encrypted
-redb state. It never imports Python configuration or SQLite state. Python 0.5 remains
+uses Rust 1.96, edition 2024, strict schema-version-2 YAML configuration, and
+hash-chained redb state with optional platform- or environment-backed encryption. It
+never imports Python configuration or SQLite state. Python 0.5 remains
 frozen at `python-v0.5.0` and on the `python-legacy` branch.
 
 ## Implemented Baseline
 
-- The encrypted, hash-chained event journal is authoritative. It provides optimistic
-  streams, projections, signed checkpoints, protected anchors, recovery mode, unknown
-  effect recovery, audit views, and durable export work.
+- The hash-chained event journal is authoritative. Explicit platform or environment keys
+  add encryption and signed checkpoints; keyless state remains plaintext and emits a
+  posture warning. The journal provides optimistic streams, projections, protected
+  anchors, recovery mode, unknown-effect recovery, audit views, and durable export work.
 - Every external or sensitive effect crosses the safety kernel and built-in or OPA
   policy before a one-use permit reaches a private adapter. File, process, HTTP,
   provider, MCP, integration, memory-index, workflow, and extension results remain

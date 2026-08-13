@@ -43,6 +43,13 @@ path or `network.caBundlePath`. The disclosure acknowledgements are explicit bec
 OPA receives bounded logical request content after hard-secret replacement. With OPA,
 all built-in access action override lists must be empty.
 
+OPA returns the complete `PolicyDecision`, including
+`obligations.resource_authority`. Omitting that field selects `declared`; returning
+`ambient` requests ambient resources for that exact effect and is accepted only when
+the runtime boundary is acknowledged `danger_full_access`. The runtime never changes a
+returned declared obligation into ambient authority merely because its configured
+boundary is permissive.
+
 ## Audit exporters
 
 `audit.exporter.kind` is `disabled` by default. A directory exporter uses:
@@ -64,8 +71,10 @@ audit:
     credentialReference: env:COLOSSUS_AUDIT_TOKEN
 ```
 
-A WORM endpoint is credential-free, HTTPS, and ends with `/`. Its exact origin must
-appear in `sandbox.networkDestinations`. A credential reference also requires the
-variable name in `sandbox.environment`.
+A WORM endpoint is credential-free, HTTPS, and ends with `/`. Under an isolating
+boundary its exact origin must appear in `sandbox.networkDestinations`; acknowledged
+full access supplies destination authority but does not relax this retention-evidence
+transport invariant to plaintext HTTP. A credential reference still requires its
+configured credential mechanism; full access never invents a secret.
 
 Return to the [configuration overview](../configuration.md).

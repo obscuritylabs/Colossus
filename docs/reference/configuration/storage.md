@@ -49,19 +49,19 @@ the other adapter's journal.
 
 ## Keyless plaintext default
 
-Generated CLI and development configurations use this explicit shape:
+The sparse configuration created by `colossus config init` contains only the storage
+placement that differs by scope:
 
 ```yaml
 storage:
   location: home_workspace
   path: state.redb
-  adapter: redb
-  startupVerification: incremental
-  keys:
-    kind: none
 ```
 
-Omitting `storage.keys` also selects `none`; generated YAML keeps it explicit. Payload
+Omitted `adapter`, `startupVerification`, and `keys` resolve to `redb`, `incremental`,
+and `none`. Use `config show` to inspect that complete resolved shape, or pass
+`--storage-keys none|platform|environment` to pin a protection choice in the authored
+file. Payload
 descriptors use `plaintext-json-v1`, `key_id: none`, an empty nonce, and hex-encoded
 canonical JSON. Colossus still checks each payload hash and JSON shape when it is read,
 maintains the record-hash chain, stream indexes, outbox, and projections, and performs a

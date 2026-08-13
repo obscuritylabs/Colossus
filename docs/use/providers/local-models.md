@@ -35,7 +35,7 @@ loopback address and port you intend to grant. The example below uses
 ### 2. Configure the loopback route
 
 Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
-keep its other required fields. Apply this validated
+keep its required `storage` block and any intended custom settings. Apply this validated
 overlay, then replace `local-model` and its limits with the exact selected catalog entry.
 
 <!-- provider-guide-config:start -->
@@ -118,8 +118,8 @@ then explicitly resubmit the smoke test.
   catalog, Chat Completions token parameter, tool-call, and streaming compatibility.
   Correct `chatCompletionsOutputTokenParameter`, disable unsupported capability flags,
   and rerun `models doctor local`.
-- **The sandbox denies loopback:** grant the exact scheme, address, and port shown in
-  `baseUrl`, without its `/v1` path.
+- **The sandbox denies loopback under isolation:** grant the exact scheme, address, and
+  port shown in `baseUrl`, without its `/v1` path.
 
 ## Next step
 

@@ -16,7 +16,7 @@ const MAX_RESOURCE_ATTRIBUTE_BYTES: usize = 256;
 
 /// Strict opt-in live observability configuration.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservabilityConfig {
     /// Master switch. Environment settings cannot enable a disabled configuration.
     #[serde(default)]
@@ -57,7 +57,7 @@ impl Default for ObservabilityConfig {
 
 /// Trace export and sampling settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct TraceSignalConfig {
     /// Export spans over OTLP.
     #[serde(default)]
@@ -78,7 +78,7 @@ impl Default for TraceSignalConfig {
 
 /// Metric export settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct MetricSignalConfig {
     /// Export metrics over OTLP.
     #[serde(default)]
@@ -130,7 +130,7 @@ pub enum JournalPayloadMode {
 
 /// Shared OpenTelemetry Protocol exporter settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct OtlpConfig {
     /// Optional collector endpoint. Standard signal-specific environment variables win.
     pub endpoint: Option<String>,

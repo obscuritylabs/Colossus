@@ -123,6 +123,7 @@ pub(super) fn validate_credential_disclosure(
 pub(super) fn normalize_endpoint(
     kind: SearchKind,
     raw: &str,
+    resource_authority: ResourceAuthority,
 ) -> Result<String, SearchAdapterError> {
     let url = Url::parse(raw)?;
     if !matches!(url.scheme(), "http" | "https")
@@ -142,7 +143,7 @@ pub(super) fn normalize_endpoint(
                 .parse::<IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     });
-    if url.scheme() != "https" && !loopback {
+    if resource_authority != ResourceAuthority::Ambient && url.scheme() != "https" && !loopback {
         return Err(SearchAdapterError::Configuration(
             "non-loopback search endpoints require HTTPS".into(),
         ));

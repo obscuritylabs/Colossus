@@ -10,7 +10,7 @@ type: concept
 Colossus has two deliberately separate observability planes:
 
 - `colossus-telemetry` derives bounded historical analytics from the authoritative
-  encrypted journal.
+  journal regardless of its configured payload-protection mode.
 - `colossus-observability` emits best-effort live OpenTelemetry signals and decorates
   successful journal appends. It never replays the journal after restart.
 

@@ -642,6 +642,9 @@ pub struct PolicyObligations {
     pub sandbox_backend: String,
     /// Required sandbox profile.
     pub sandbox_profile: String,
+    /// Whether resources require declared grants or use acknowledged ambient authority.
+    #[serde(default)]
+    pub resource_authority: ResourceAuthority,
     /// Canonical filesystem roots and access modes.
     pub filesystem: Vec<FilesystemGrant>,
     /// Canonical paths that writable process sandboxes must keep inaccessible.

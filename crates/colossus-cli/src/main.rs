@@ -16,6 +16,8 @@ use colossus_contracts::{
     SecurityPostureReport, SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest,
     UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
+#[cfg(test)]
+use colossus_contracts::{SecurityPostureFinding, SecurityPostureSeverity};
 use colossus_home::{
     ColossusHome, ConfinedRoot, HomeError, HomeSurface, detect_workspace_identity,
 };

@@ -21,7 +21,28 @@ impl ChromaProfile {
         credential_reference: Option<String>,
         timeout_ms: u64,
     ) -> Result<Self, StoreError> {
-        let base_url = normalize_base_url(&base_url.into(), false)?;
+        Self::new_with_resource_authority(
+            base_url,
+            tenant,
+            database,
+            collection,
+            credential_reference,
+            timeout_ms,
+            ResourceAuthority::Declared,
+        )
+    }
+
+    /// Validate a Chroma profile under an explicit runtime resource authority.
+    pub fn new_with_resource_authority(
+        base_url: impl Into<String>,
+        tenant: impl Into<String>,
+        database: impl Into<String>,
+        collection: impl Into<String>,
+        credential_reference: Option<String>,
+        timeout_ms: u64,
+        resource_authority: ResourceAuthority,
+    ) -> Result<Self, StoreError> {
+        let base_url = normalize_base_url(&base_url.into(), false, resource_authority)?;
         let tenant = tenant.into();
         let database = database.into();
         let collection = collection.into();

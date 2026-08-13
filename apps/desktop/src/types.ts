@@ -160,7 +160,8 @@ export interface DesktopStatus {
   provider: ProviderSummary;
   codexAuth: CodexAuthStatus;
   managedModelConfiguration: ManagedConfiguration;
-  accessProfile: "minimal" | "development";
+  accessProfile: AccessProfile;
+  executionBoundary: ExecutionBoundary;
   approvalMode: ApprovalMode;
   terminalEnabled: boolean;
   additionalCaBundle: CaBundleStatus;
@@ -168,6 +169,9 @@ export interface DesktopStatus {
 }
 
 export type ApprovalMode = "deny" | "ask" | "risk_auto" | "full_access";
+export type AccessProfile = "minimal" | "development" | "allow_all";
+export type ExecutionBoundary =
+  "full_access" | "workspace_isolated" | "offline_isolated";
 
 export interface CaBundleStatus {
   configured: boolean;
@@ -192,7 +196,8 @@ export interface ConfigureManagedRuntimeRequest {
   workspaceId: string;
   providerKind: ProviderKind;
   model: string;
-  accessProfile: "minimal" | "development";
+  accessProfile: AccessProfile;
+  executionBoundary: ExecutionBoundary;
   replaceCredential: boolean;
 }
 
@@ -211,7 +216,8 @@ export interface ApplyManagedModelConfigurationRequest {
   providers: ManagedProviderConfigurationInput[];
   models: ManagedModelConfiguration[];
   roles: Record<string, string>;
-  accessProfile: "minimal" | "development";
+  accessProfile: AccessProfile;
+  executionBoundary: ExecutionBoundary;
 }
 
 export type TerminalKind = "colossus_tui" | "shell";

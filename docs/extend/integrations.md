@@ -16,7 +16,8 @@ only after connection, and invoke an operation through the effect gateway.
 
 - A supported GitHub, SearXNG, or OpenSearch endpoint, or a JSON OpenAPI 3 document.
 - A least-privilege credential supplied through an environment reference.
-- The exact service origin in `sandbox.networkDestinations`.
+- Under an isolating boundary, the exact service origin in
+  `sandbox.networkDestinations`.
 - An access profile and policy decision for the intended integration actions.
 
 ## Steps
@@ -52,9 +53,10 @@ colossus --config .colossus/config.yaml --approval-mode ask \
   --credential-reference env:GITHUB_TOKEN
 ```
 
-The native GitHub connector uses `https://api.github.com`; grant that exact origin in
-the sandbox. A connection remains hidden from model tools until its canonical connect
-event is active.
+The native GitHub connector uses `https://api.github.com`; grant that exact origin under
+an isolating boundary. Acknowledged full access supplies ambient destination authority
+but still requires the connection and credential. A connection remains hidden from
+model tools until its canonical connect event is active.
 
 ### 3. Inspect the released surface
 
@@ -96,7 +98,7 @@ absent.
   exact tool prerequisite.
 - **Credential unavailable:** check the environment of the Colossus process without
   printing the value.
-- **Origin mismatch:** grant the exact scheme, host, and effective port.
+- **Origin mismatch under isolation:** grant the exact scheme, host, and effective port.
 - **OpenAPI import is rejected:** external references, embedded origins, unsupported
   schemas, and unknown arguments fail closed.
 - **Outcome is unknown:** reconcile the external service before repeating a mutation.

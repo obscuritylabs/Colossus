@@ -2,13 +2,15 @@ use super::{
     AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, NetworkDestinationMatch, QuarantinedEffectObserver, ReleasedEffectObserver,
     ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, StreamingEffectExecutor,
-    effect_request, network_destination_match, system_actor, with_sandbox_boundary_acknowledgement,
+    effect_request, http_transport_authority_match, network_authority_match,
+    network_destination_match, system_actor, with_sandbox_boundary_acknowledgement,
 };
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, ApprovalReviewNotice, AutomaticApprovalNotice, DecisionOutcome,
-    ExecutionContext, QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation,
-    RiskReviewFailure, RiskReviewFallbackNotice, RiskStatus, SandboxBoundaryMode,
+    ExecutionContext, QuarantinedEffectResult, ResourceAuthority, RiskAssessment, RiskLevel,
+    RiskRecommendation, RiskReviewFailure, RiskReviewFallbackNotice, RiskStatus,
+    SandboxBoundaryMode,
 };
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
@@ -247,9 +249,11 @@ fn mcp_call_request(
 }
 
 #[tokio::test]
-async fn action_restrictions_remove_undeclared_global_network_and_environment_grants() {
+async fn action_restrictions_remove_ambient_and_undeclared_global_resources() {
     let policy = BuiltInPolicy::offline_default()
         .with_action("pack.tool.demo.fixed", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "offline-default", false)
+        .with_resource_authority(ResourceAuthority::Ambient)
         .with_network_destination("https://example.com")
         .with_environment("GLOBAL_SECRET")
         .with_action_restrictions(
@@ -274,6 +278,16 @@ async fn action_restrictions_remove_undeclared_global_network_and_environment_gr
     assert!(decision.obligations.network_destinations.is_empty());
     assert!(decision.obligations.allowed_environment.is_empty());
     assert_eq!(decision.obligations.filesystem.len(), 1);
+    assert_eq!(
+        decision.obligations.resource_authority,
+        ResourceAuthority::Declared
+    );
+    assert!(
+        !decision
+            .obligations
+            .audit_labels
+            .contains_key("resource_authority")
+    );
     assert!(decision.obligations.require_post_effect);
 }
 
@@ -670,10 +684,13 @@ async fn direct_process_backends_require_the_exact_session_acknowledgement() {
     ] {
         const INTERACTIVE_CAPABILITY: &str =
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let policy = BuiltInPolicy::offline_default()
+        let mut policy = BuiltInPolicy::offline_default()
             .with_action("process.spawn", DecisionOutcome::Allow)
             .with_sandbox(mode.as_backend(), "test", false)
             .with_filesystem_root(executable.display().to_string(), "execute");
+        if mode == SandboxBoundaryMode::DangerFullAccess {
+            policy = policy.with_resource_authority(ResourceAuthority::Ambient);
+        }
         let gate = Arc::new(SandboxBoundaryGate::new(Some(mode), false));
         let gateway = EffectGateway::new(
             Arc::new(InMemoryEventJournal::default()),
@@ -808,9 +825,12 @@ async fn danger_full_access_drops_process_executable_and_environment_grants_only
         (SandboxBoundaryMode::External, false),
         (SandboxBoundaryMode::DangerFullAccess, true),
     ] {
-        let policy = BuiltInPolicy::offline_default()
+        let mut policy = BuiltInPolicy::offline_default()
             .with_action("process.spawn", DecisionOutcome::Allow)
             .with_sandbox(mode.as_backend(), "test", false);
+        if mode == SandboxBoundaryMode::DangerFullAccess {
+            policy = policy.with_resource_authority(ResourceAuthority::Ambient);
+        }
         let gateway = EffectGateway::new(
             Arc::new(InMemoryEventJournal::default()),
             Arc::new(policy),
@@ -841,6 +861,59 @@ async fn danger_full_access_drops_process_executable_and_environment_grants_only
         assert_eq!(result.is_ok(), allowed, "mode: {}", mode.as_backend());
         assert_eq!(executor.calls.load(Ordering::Acquire), usize::from(allowed));
     }
+}
+
+#[tokio::test]
+async fn danger_process_decision_fails_closed_without_explicit_ambient_authority() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("executable")
+        .canonicalize()
+        .expect("canonical executable");
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("process.spawn", DecisionOutcome::Allow)
+        .with_sandbox(
+            SandboxBoundaryMode::DangerFullAccess.as_backend(),
+            "external-policy",
+            false,
+        );
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(AllowApproval {
+            approved_by: "user".into(),
+        }),
+        SafetyKernel::new(["process.spawn".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [9_u8; 32],
+    );
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let mut request = effect_request(
+        system_actor("test"),
+        "process.spawn",
+        executable.display().to_string(),
+        serde_json::json!({
+            "cwd": directory.path(),
+            "args": [],
+            "environment": {},
+            "stdin_base64": null,
+        }),
+    );
+    request.capabilities = vec!["process.spawn".into()];
+
+    let error = gateway
+        .execute(request, &executor)
+        .await
+        .expect_err("declared authority must not become ambient from the backend alone");
+    assert!(
+        error
+            .to_string()
+            .contains("requires explicit ambient resource authority")
+    );
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
 }
 
 #[tokio::test]
@@ -1875,6 +1948,180 @@ fn public_network_wildcard_excludes_non_public_and_metadata_origins() {
         )
         .expect("exact loopback"),
         Some(NetworkDestinationMatch::Exact)
+    );
+}
+
+#[test]
+fn ambient_network_authority_accepts_any_canonical_http_origin_only() {
+    let mut obligations = super::default_obligations();
+    obligations.resource_authority = ResourceAuthority::Ambient;
+    for allowed in [
+        "https://example.com/path",
+        "http://127.0.0.1:8888/search",
+        "http://10.0.0.1/",
+        "http://169.254.169.254/latest/meta-data",
+        "http://metadata.google.internal/",
+    ] {
+        assert_eq!(
+            network_authority_match(&obligations, allowed).expect("canonical HTTP(S) URL"),
+            Some(NetworkDestinationMatch::Ambient),
+            "{allowed}"
+        );
+    }
+    assert!(network_authority_match(&obligations, "ftp://example.com/file").is_err());
+    assert!(network_authority_match(&obligations, "https://user@example.com/").is_err());
+}
+
+#[test]
+fn plaintext_http_transport_requires_ambient_authority_outside_loopback() {
+    let origin = "http://192.0.2.1:8080/path";
+    let mut obligations = super::default_obligations();
+    obligations.network_destinations = vec!["http://192.0.2.1:8080".into()];
+    let error = http_transport_authority_match(&obligations, origin)
+        .expect_err("an exact declaration must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+
+    obligations.resource_authority = ResourceAuthority::Ambient;
+    assert_eq!(
+        http_transport_authority_match(&obligations, origin).expect("ambient transport"),
+        Some(NetworkDestinationMatch::Ambient)
+    );
+
+    obligations.resource_authority = ResourceAuthority::Declared;
+    obligations.network_destinations = vec!["http://127.0.0.1:8080".into()];
+    assert_eq!(
+        http_transport_authority_match(&obligations, "http://127.0.0.1:8080/path")
+            .expect("declared loopback transport"),
+        Some(NetworkDestinationMatch::Exact)
+    );
+}
+
+#[tokio::test]
+async fn ambient_resource_authority_requires_danger_acknowledgement_for_every_lineage() {
+    let directory = tempfile::tempdir().expect("directory");
+    let file = directory.path().join("ambient.txt");
+    std::fs::write(&file, b"ambient").expect("file");
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("filesystem.read", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
+    let gate = Arc::new(SandboxBoundaryGate::new(
+        Some(SandboxBoundaryMode::DangerFullAccess),
+        false,
+    ));
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(AllowApproval {
+            approved_by: "user".into(),
+        }),
+        SafetyKernel::new(["filesystem.read".into()]).with_sandbox_boundary_gate(Arc::clone(&gate)),
+        [9_u8; 32],
+    );
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let request = |workflow: bool| {
+        let mut request = effect_request(
+            system_actor("ambient-test"),
+            "filesystem.read",
+            file.display().to_string(),
+            serde_json::json!({}),
+        );
+        request.capabilities = vec!["filesystem.read".into()];
+        request.context.session_id = Some("ambient-session".into());
+        if workflow {
+            request.context.workflow_id = Some("workflow-1".into());
+            request.context.workflow_hash = Some("sha256:workflow".into());
+        }
+        request
+    };
+
+    let error = gateway
+        .execute(request(false), &executor)
+        .await
+        .expect_err("ambient filesystem authority requires acknowledgement");
+    assert!(error.to_string().contains("not acknowledged"));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+
+    gate.acknowledge_session("ambient-session", SandboxBoundaryMode::DangerFullAccess)
+        .expect("session acknowledgement");
+    gateway
+        .execute(request(false), &executor)
+        .await
+        .expect("top-level ambient effect");
+    gateway
+        .execute(request(true), &executor)
+        .await
+        .expect("workflow-lineage ambient effect");
+    assert_eq!(executor.calls.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn ambient_resource_authority_is_invalid_for_confined_backends() {
+    let directory = tempfile::tempdir().expect("directory");
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("filesystem.read", DecisionOutcome::Allow)
+        .with_sandbox("native", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(AllowApproval {
+            approved_by: "user".into(),
+        }),
+        SafetyKernel::new(["filesystem.read".into()]),
+        [9_u8; 32],
+    );
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let mut request = effect_request(
+        system_actor("ambient-invalid"),
+        "filesystem.read",
+        directory.path().display().to_string(),
+        serde_json::json!({}),
+    );
+    request.capabilities = vec!["filesystem.read".into()];
+    let error = gateway
+        .execute(request, &executor)
+        .await
+        .expect_err("confined backend cannot claim ambient authority");
+    assert!(
+        error
+            .to_string()
+            .contains("ambient resource authority requires")
+    );
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn built_in_ambient_authority_is_exposed_in_obligations_and_audit_labels() {
+    let decision = BuiltInPolicy::offline_default()
+        .with_resource_authority(ResourceAuthority::Ambient)
+        .decide(&effect_request(
+            system_actor("ambient-diagnostics"),
+            "provider.echo",
+            "echo",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("decision");
+    assert_eq!(
+        decision.obligations.resource_authority,
+        ResourceAuthority::Ambient
+    );
+    assert_eq!(
+        decision
+            .obligations
+            .audit_labels
+            .get("resource_authority")
+            .map(String::as_str),
+        Some("ambient")
     );
 }
 

@@ -15,12 +15,12 @@ use colossus_contracts::{
     ModelMessageRole, ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent,
     ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic,
     ProviderStreamItem, ProviderTurn, ProviderUsage, QuarantinedEffectResult, ReasoningEffort,
-    validate_model_transcript,
+    ResourceAuthority, validate_model_transcript,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
-    QuarantinedEffectObserver, StreamingEffectExecutor, network_destination_match,
+    QuarantinedEffectObserver, StreamingEffectExecutor, http_transport_authority_match,
     non_public_network_address,
 };
 use futures::StreamExt as _;

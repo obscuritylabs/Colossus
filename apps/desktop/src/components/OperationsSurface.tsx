@@ -391,6 +391,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
               displayPath: desktop.workspace.displayPath,
             },
       accessProfile: desktop.accessProfile,
+      executionBoundary: desktop.executionBoundary,
       terminalEnabled: desktop.terminalEnabled,
       additionalCaBundle: desktop.additionalCaBundle,
       providers: configuration.providers.map((provider) => ({
@@ -569,7 +570,18 @@ function SettingsView({
               <span>{desktop.provider.kind ?? "No provider"}</span>
               <span>{desktop.provider.model || "No model"}</span>
               <span>{desktop.accessProfile.replace("_", " ")}</span>
+              <span>
+                {desktop.executionBoundary === "full_access"
+                  ? "Unsafe: full access"
+                  : desktop.executionBoundary.replaceAll("_", " ")}
+              </span>
             </div>
+            {desktop.executionBoundary === "full_access" ? (
+              <p className="unsafe-settings-label" role="alert">
+                Full access disables Colossus filesystem and network isolation.
+                Approval mode remains a separate setting.
+              </p>
+            ) : null}
           </div>
           <div className="settings-actions">
             <button

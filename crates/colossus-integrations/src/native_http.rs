@@ -618,7 +618,7 @@ pub(super) fn require_origin(
     url: &Url,
     permit: &ExecutionPermit,
 ) -> Result<NetworkDestinationMatch, ExecutionError> {
-    network_destination_match(&permit.obligations().network_destinations, url.as_str())
+    http_transport_authority_match(permit.obligations(), url.as_str())
         .map_err(execution)?
         .ok_or_else(|| {
             execution(format!(

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 
 #[test]
 fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
@@ -193,6 +194,33 @@ fn structured_output_is_human_for_terminals_and_json_for_automation() {
 }
 
 #[test]
+fn danger_full_access_warning_is_not_suppressed_for_non_terminal_invocations() {
+    let report = SecurityPostureReport {
+        findings: vec![SecurityPostureFinding {
+            code: "sandbox.danger_full_access".into(),
+            severity: SecurityPostureSeverity::Warning,
+            summary: "full access".into(),
+            remediation: "select isolation".into(),
+        }],
+    };
+    assert!(should_emit_security_posture_warning(&report, false));
+
+    let plaintext_only = SecurityPostureReport {
+        findings: vec![SecurityPostureFinding {
+            code: "storage.plaintext".into(),
+            severity: SecurityPostureSeverity::Warning,
+            summary: "plaintext".into(),
+            remediation: "enable encryption".into(),
+        }],
+    };
+    assert!(!should_emit_security_posture_warning(
+        &plaintext_only,
+        false
+    ));
+    assert!(should_emit_security_posture_warning(&plaintext_only, true));
+}
+
+#[test]
 fn run_output_is_response_only_for_humans_and_structured_for_automation() {
     let value = json!({
         "run_id": "run-private-metadata",
@@ -294,15 +322,8 @@ fn development_config_init_clones_settings_and_isolates_storage() {
     )
     .expect("source configuration");
 
-    init_config(
-        &destination,
-        true,
-        Some(&source),
-        AccessProfile::Development,
-        None,
-        StorageKeys::None,
-    )
-    .expect("development configuration");
+    init_config(&destination, true, Some(&source), None, None, None)
+        .expect("development configuration");
     let development = RuntimeConfig::from_path(&destination).expect("strict development config");
     assert_eq!(development.agent.max_turns, 7);
     assert_eq!(
@@ -318,17 +339,217 @@ fn development_config_init_clones_settings_and_isolates_storage() {
         development.storage.keys,
         colossus_runtime::KeyConfig::None
     ));
-    assert!(
-        init_config(
-            &destination,
-            true,
-            Some(&source),
-            AccessProfile::Development,
-            None,
-            StorageKeys::None,
-        )
-        .is_err()
+    assert!(init_config(&destination, true, Some(&source), None, None, None,).is_err());
+}
+
+#[test]
+fn development_init_preserves_sparse_source_origin_and_applies_only_explicit_overrides() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source = directory.path().join("source.yaml");
+    fs::write(
+        &source,
+        r#"schemaVersion: 2
+storage:
+  path: source.redb
+access:
+  profile: minimal
+  tools:
+    exclude:
+      - echo
+context:
+  preserveRecentMessages: 3
+sandbox:
+  backend: danger_full_access
+  profile: custom-safe
+  acknowledgeDangerFullAccess: true
+  helperPath: /tmp/source-helper
+  filesystem:
+    - root: /tmp/source-root
+      mode: write
+  executables:
+    - /tmp/source-tool
+  environment:
+    - SOURCE_TOKEN
+  networkDestinations:
+    - https://source.example
+  timeoutMs: 45000
+"#,
+    )
+    .expect("sparse source configuration");
+
+    let preserved_path = directory.path().join("preserved.yaml");
+    init_config(&preserved_path, true, Some(&source), None, None, None)
+        .expect("preserved sparse development configuration");
+    let preserved_source: Value =
+        serde_saphyr::from_str(&fs::read_to_string(&preserved_path).expect("preserved YAML"))
+            .expect("preserved source document");
+    assert_eq!(preserved_source["access"]["profile"], "minimal");
+    assert_eq!(preserved_source["access"]["tools"]["exclude"][0], "echo");
+    assert_eq!(preserved_source["context"]["preserveRecentMessages"], 3);
+    assert_eq!(preserved_source["sandbox"]["backend"], "danger_full_access");
+    assert_eq!(preserved_source["sandbox"]["profile"], "custom-safe");
+    assert!(preserved_source.get("policy").is_none());
+    assert_eq!(
+        preserved_source["storage"]["path"],
+        directory
+            .path()
+            .join("state.dev.redb")
+            .display()
+            .to_string()
     );
+
+    let overridden_path = directory.path().join("overridden.yaml");
+    init_config(
+        &overridden_path,
+        true,
+        Some(&source),
+        Some(AccessProfile::Development),
+        Some(SandboxProfile::WorkspaceDevelopment),
+        Some(StorageKeys::None),
+    )
+    .expect("explicitly overridden development configuration");
+    let overridden_source: Value =
+        serde_saphyr::from_str(&fs::read_to_string(&overridden_path).expect("overridden YAML"))
+            .expect("overridden source document");
+    assert_eq!(overridden_source["access"]["profile"], "development");
+    assert_eq!(overridden_source["access"]["tools"]["exclude"][0], "echo");
+    assert_eq!(
+        overridden_source["sandbox"]["backend"],
+        colossus_runtime::SandboxConfig::platform_isolating().backend
+    );
+    assert_eq!(
+        overridden_source["sandbox"]["profile"],
+        "workspace-development"
+    );
+    assert!(
+        overridden_source["sandbox"]
+            .get("acknowledgeDangerFullAccess")
+            .is_none()
+    );
+    assert_eq!(
+        overridden_source["sandbox"]
+            .as_object()
+            .expect("sandbox mapping")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["backend", "profile"])
+    );
+    let overridden = RuntimeConfig::from_path(&overridden_path).expect("overridden config");
+    let mut expected = colossus_runtime::SandboxConfig::platform_isolating();
+    expected.profile = "workspace-development".into();
+    assert_eq!(overridden.sandbox.backend, expected.backend);
+    assert_eq!(overridden.sandbox.profile, expected.profile);
+    assert_eq!(overridden.sandbox.helper_path, expected.helper_path);
+    assert_eq!(overridden.sandbox.filesystem, expected.filesystem);
+    assert_eq!(overridden.sandbox.executables, expected.executables);
+    assert_eq!(overridden.sandbox.environment, expected.environment);
+    assert_eq!(
+        overridden.sandbox.network_destinations,
+        expected.network_destinations
+    );
+    assert_eq!(overridden.sandbox.timeout_ms, expected.timeout_ms);
+    assert_eq!(overridden_source["storage"]["keys"]["kind"], "none");
+}
+
+#[test]
+fn development_init_preserves_encrypted_protection_with_fresh_storage_identity() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+
+    let platform_source = directory.path().join("platform-source.yaml");
+    fs::write(
+        &platform_source,
+        r#"schemaVersion: 2
+storage:
+  path: source.redb
+  keys:
+    kind: platform
+    service: example.service
+    journal_key_id: source-journal
+    signing_key_id: source-signing
+"#,
+    )
+    .expect("platform source");
+    let platform_destination = directory.path().join("platform-development.yaml");
+    init_config(
+        &platform_destination,
+        true,
+        Some(&platform_source),
+        None,
+        None,
+        None,
+    )
+    .expect("platform development configuration");
+    let platform = RuntimeConfig::from_path(&platform_destination).expect("platform config");
+    match platform.storage.keys {
+        colossus_runtime::KeyConfig::Platform {
+            service,
+            journal_key_id,
+            signing_key_id,
+        } => {
+            assert_eq!(service, "example.service");
+            assert_ne!(journal_key_id, "source-journal");
+            assert_ne!(signing_key_id, "source-signing");
+        }
+        other => panic!("expected platform storage keys, got {other:?}"),
+    }
+
+    let environment_source = directory.path().join("environment-source.yaml");
+    fs::write(
+        &environment_source,
+        r#"schemaVersion: 2
+storage:
+  path: source.redb
+  keys:
+    kind: environment
+    journal_variable: SOURCE_JOURNAL_KEY
+    journal_key_id: source-journal
+    signing_variable: SOURCE_SIGNING_KEY
+    anchor_path: source-anchor.json
+"#,
+    )
+    .expect("environment source");
+    let environment_destination = directory.path().join("environment-development.yaml");
+    init_config(
+        &environment_destination,
+        true,
+        Some(&environment_source),
+        None,
+        None,
+        None,
+    )
+    .expect("environment development configuration");
+    let environment =
+        RuntimeConfig::from_path(&environment_destination).expect("environment config");
+    match environment.storage.keys {
+        colossus_runtime::KeyConfig::Environment {
+            journal_variable,
+            journal_key_id,
+            signing_variable,
+            anchor_path,
+        } => {
+            assert_eq!(journal_variable, "SOURCE_JOURNAL_KEY");
+            assert_eq!(signing_variable, "SOURCE_SIGNING_KEY");
+            assert_ne!(journal_key_id, "source-journal");
+            assert_eq!(anchor_path, directory.path().join("secure-anchor.dev.json"));
+        }
+        other => panic!("expected environment storage keys, got {other:?}"),
+    }
+
+    fs::write(directory.path().join("secure-anchor.dev.json"), "occupied")
+        .expect("orphan target anchor");
+    let rejected_destination = directory.path().join("environment-collision.yaml");
+    let error = init_config(
+        &rejected_destination,
+        true,
+        Some(&environment_source),
+        None,
+        None,
+        None,
+    )
+    .expect_err("inherited environment protection must reject an orphan target anchor");
+    assert!(error.to_string().contains("state or anchor already exists"));
+    assert!(!rejected_destination.exists());
 }
 
 #[test]
@@ -476,16 +697,29 @@ fn default_and_local_config_init_select_the_expected_storage_locations() {
         .expect("home workspace");
 
     let global_target = config_init_target(None, false, &workspace, &home, &home_workspace, false);
-    init_config_at(
-        &global_target,
-        false,
-        None,
-        AccessProfile::Development,
-        None,
-        StorageKeys::None,
+    init_config_at(&global_target, false, None, None, None, None).expect("global init");
+    let global_source: Value = serde_saphyr::from_str(
+        &fs::read_to_string(home.config_path()).expect("global source YAML"),
     )
-    .expect("global init");
+    .expect("global source document");
+    assert_eq!(
+        fs::read_to_string(home.config_path()).expect("global source text"),
+        "schemaVersion: 2\nstorage:\n  location: home_workspace\n  path: state.redb\n"
+    );
+    let global_root = global_source.as_object().expect("global source mapping");
+    assert_eq!(
+        global_root
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["schemaVersion", "storage"])
+    );
+    assert_eq!(global_source["storage"]["location"], "home_workspace");
+    assert_eq!(global_source["storage"]["path"], "state.redb");
     let global = RuntimeConfig::from_path(home.config_path()).expect("global config");
+    assert_eq!(global.access.profile, AccessProfile::AllowAll);
+    assert_eq!(global.sandbox.backend, "danger_full_access");
+    assert!(global.sandbox.acknowledge_danger_full_access);
     assert_eq!(global.storage.location, StorageLocation::HomeWorkspace);
     assert_eq!(global.storage.path, Path::new("state.redb"));
     let resolved = global
@@ -494,15 +728,25 @@ fn default_and_local_config_init_select_the_expected_storage_locations() {
     assert_eq!(resolved.storage.path, home_workspace.join("state.redb"));
 
     let local_target = config_init_target(None, true, &workspace, &home, &home_workspace, false);
-    init_config_at(
-        &local_target,
-        false,
-        None,
-        AccessProfile::Development,
-        None,
-        StorageKeys::None,
+    init_config_at(&local_target, false, None, None, None, None).expect("local init");
+    let local_source: Value = serde_saphyr::from_str(
+        &fs::read_to_string(workspace.join(".colossus/config.yaml")).expect("local source YAML"),
     )
-    .expect("local init");
+    .expect("local source document");
+    assert_eq!(
+        fs::read_to_string(workspace.join(".colossus/config.yaml")).expect("local source text"),
+        "schemaVersion: 2\nstorage:\n  location: workspace\n  path: .colossus/state.redb\n"
+    );
+    let local_root = local_source.as_object().expect("local source mapping");
+    assert_eq!(
+        local_root
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["schemaVersion", "storage"])
+    );
+    assert_eq!(local_source["storage"]["location"], "workspace");
+    assert_eq!(local_source["storage"]["path"], ".colossus/state.redb");
     let local =
         RuntimeConfig::from_path(workspace.join(".colossus/config.yaml")).expect("local config");
     assert_eq!(local.storage.location, StorageLocation::Workspace);
@@ -530,15 +774,8 @@ fn global_development_init_replaces_source_storage_with_partition_relative_state
     fs::write(&source_path, source.to_yaml().expect("source YAML")).expect("source config");
 
     let target = config_init_target(None, false, &workspace, &home, &home_workspace, true);
-    init_config_at(
-        &target,
-        true,
-        Some(&source_path),
-        AccessProfile::Development,
-        None,
-        StorageKeys::None,
-    )
-    .expect("global development init");
+    init_config_at(&target, true, Some(&source_path), None, None, None)
+        .expect("global development init");
     let generated = RuntimeConfig::from_path(home.config_path()).expect("global config");
     assert_eq!(generated.agent.max_turns, 7);
     assert_eq!(generated.storage.location, StorageLocation::HomeWorkspace);
@@ -579,17 +816,55 @@ fn development_config_init_refuses_orphaned_state() {
     fs::write(directory.path().join("state.dev.redb"), b"orphaned state")
         .expect("orphaned development state");
 
-    let error = init_config(
-        &destination,
-        true,
-        None,
-        AccessProfile::Development,
-        None,
-        StorageKeys::None,
-    )
-    .expect_err("orphaned state must fail closed");
+    let error = init_config(&destination, true, None, None, None, None)
+        .expect_err("orphaned state must fail closed");
     assert!(error.to_string().contains("restore the matching config"));
     assert!(!destination.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn development_config_init_rejects_dangling_state_and_anchor_entries() {
+    use std::os::unix::fs::symlink;
+
+    let state_directory = tempfile::tempdir().expect("state directory");
+    let state_destination = state_directory.path().join("config.dev.yaml");
+    symlink(
+        state_directory.path().join("missing-state-target"),
+        state_directory.path().join("state.dev.redb"),
+    )
+    .expect("dangling state link");
+    let error = init_config(&state_destination, true, None, None, None, None)
+        .expect_err("dangling state entry must fail closed");
+    assert!(error.to_string().contains("restore the matching config"));
+    assert!(!state_destination.exists());
+
+    let anchor_directory = tempfile::tempdir().expect("anchor directory");
+    let source = anchor_directory.path().join("source.yaml");
+    fs::write(
+        &source,
+        r#"schemaVersion: 2
+storage:
+  path: source.redb
+  keys:
+    kind: environment
+    journal_variable: JOURNAL_KEY
+    journal_key_id: source-journal
+    signing_variable: SIGNING_KEY
+    anchor_path: source-anchor.json
+"#,
+    )
+    .expect("environment source");
+    symlink(
+        anchor_directory.path().join("missing-anchor-target"),
+        anchor_directory.path().join("secure-anchor.dev.tmp"),
+    )
+    .expect("dangling anchor staging link");
+    let anchor_destination = anchor_directory.path().join("config.dev.yaml");
+    let error = init_config(&anchor_destination, true, Some(&source), None, None, None)
+        .expect_err("dangling anchor staging entry must fail closed");
+    assert!(error.to_string().contains("restore the matching config"));
+    assert!(!anchor_destination.exists());
 }
 
 #[test]
@@ -607,7 +882,7 @@ fn config_cli_does_not_offer_a_migration_command() {
 }
 
 #[test]
-fn config_cli_defaults_to_development_and_accepts_allow_all_spelling() {
+fn config_cli_leaves_default_profiles_implicit_and_accepts_allow_all_spelling() {
     let default =
         Cli::try_parse_from(["colossus", "config", "init"]).expect("default init command");
     let Command::Config(ConfigCommand {
@@ -621,8 +896,8 @@ fn config_cli_defaults_to_development_and_accepts_allow_all_spelling() {
     else {
         panic!("expected config init");
     };
-    assert_eq!(access_profile, AccessProfile::Development);
-    assert_eq!(storage_keys, StorageKeys::None);
+    assert_eq!(access_profile, None);
+    assert_eq!(storage_keys, None);
 
     let permissive = Cli::try_parse_from([
         "colossus",
@@ -638,7 +913,7 @@ fn config_cli_defaults_to_development_and_accepts_allow_all_spelling() {
     else {
         panic!("expected config init");
     };
-    assert_eq!(access_profile, AccessProfile::AllowAll);
+    assert_eq!(access_profile, Some(AccessProfile::AllowAll));
 }
 
 #[test]
@@ -656,15 +931,7 @@ fn config_init_generates_each_storage_key_mode_without_secret_values() {
             "environment" => StorageKeys::Environment,
             _ => unreachable!(),
         };
-        init_config(
-            &destination,
-            false,
-            None,
-            AccessProfile::Development,
-            None,
-            mode,
-        )
-        .expect("generated config");
+        init_config(&destination, false, None, None, None, Some(mode)).expect("generated config");
         let generated = RuntimeConfig::from_path(&destination).expect("strict config");
         assert_eq!(
             generated.storage.keys.protection_label(),
@@ -689,15 +956,7 @@ fn config_init_generates_each_storage_key_mode_without_secret_values() {
 fn config_init_omits_default_runtime_limits() {
     let directory = tempfile::tempdir().expect("directory");
     let destination = directory.path().join("config.yaml");
-    init_config(
-        &destination,
-        false,
-        None,
-        AccessProfile::Development,
-        None,
-        StorageKeys::None,
-    )
-    .expect("generated config");
+    init_config(&destination, false, None, None, None, None).expect("generated config");
 
     let yaml = fs::read_to_string(&destination).expect("configuration YAML");
     let document: Value = serde_saphyr::from_str(&yaml).expect("configuration value");
@@ -720,18 +979,12 @@ fn config_init_generates_all_four_access_profiles() {
     ] {
         let directory = tempfile::tempdir().expect("temporary directory");
         let destination = directory.path().join("config.yaml");
-        init_config(&destination, false, None, profile, None, StorageKeys::None)
+        init_config(&destination, false, None, Some(profile), None, None)
             .expect("generated config");
         let generated = RuntimeConfig::from_path(&destination).expect("strict config");
         assert_eq!(generated.access.profile, profile);
-        assert_eq!(
-            generated.sandbox.profile,
-            if profile == AccessProfile::Development {
-                "workspace-development"
-            } else {
-                "offline-default"
-            }
-        );
+        assert_eq!(generated.sandbox.profile, "offline-default");
+        assert_eq!(generated.sandbox.backend, "danger_full_access");
     }
 }
 
@@ -761,13 +1014,18 @@ fn config_init_accepts_an_explicit_sandbox_profile_override() {
         &destination,
         false,
         None,
-        AccessProfile::Development,
+        None,
         Some(SandboxProfile::OfflineDefault),
-        StorageKeys::None,
+        None,
     )
     .expect("generated config");
     let generated = RuntimeConfig::from_path(destination).expect("strict config");
     assert_eq!(generated.sandbox.profile, "offline-default");
+    assert_eq!(
+        generated.sandbox.backend,
+        colossus_runtime::SandboxConfig::platform_isolating().backend
+    );
+    assert!(!generated.sandbox.acknowledge_danger_full_access);
 }
 
 #[test]

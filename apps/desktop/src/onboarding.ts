@@ -8,6 +8,7 @@ export interface ManagedProviderDraft {
   providerKind: ConfigureManagedRuntimeRequest["providerKind"];
   model: string;
   accessProfile: ConfigureManagedRuntimeRequest["accessProfile"];
+  executionBoundary: ConfigureManagedRuntimeRequest["executionBoundary"];
   replaceCredential: boolean;
 }
 
@@ -65,6 +66,7 @@ export function buildManagedRuntimeRequest(
     providerKind: draft.providerKind,
     model,
     accessProfile: draft.accessProfile,
+    executionBoundary: draft.executionBoundary,
     replaceCredential: draft.replaceCredential,
   };
 }

@@ -89,6 +89,15 @@ pub(super) fn compile_active_pack_extensions(
     let mut restrictions = Vec::new();
     let allowed_environment = sandbox.environment.iter().collect::<BTreeSet<_>>();
     for installation in installations {
+        if sandbox.backend == SandboxBoundaryMode::DangerFullAccess.as_backend()
+            && (!installation.manifest.tools.is_empty()
+                || !installation.manifest.mcp_servers.is_empty())
+        {
+            return Err(RuntimeError::Config(format!(
+                "enabled pack {} declares executable tools or MCP servers whose permission ceilings cannot be enforced by danger_full_access; select an isolating sandbox boundary",
+                installation.manifest.name
+            )));
+        }
         let root = fs::canonicalize(&installation.installed_path)?;
         filesystem.push(FilesystemGrant {
             root: root.display().to_string(),
@@ -247,4 +256,163 @@ pub(super) fn compile_active_pack_extensions(
         actions,
         restrictions,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use colossus_contracts::{
+        PackManifest, PackMcpServerDeclaration, PackStatus, PackToolDeclaration,
+    };
+    use tempfile::TempDir;
+
+    fn pack_installation(include_tool: bool, include_mcp: bool) -> (TempDir, PackInstallation) {
+        let root = tempfile::tempdir().expect("pack root");
+        let binary = root.path().join("pack-binary");
+        fs::write(&binary, b"verified pack binary").expect("pack binary");
+        let environment = BTreeMap::from([("PACK_TOKEN".into(), "env:HOST_PACK_TOKEN".into())]);
+        let manifest = PackManifest {
+            format_version: 1,
+            name: "ambient-pack".into(),
+            version: "1.0.0".into(),
+            description: "Pack environment authority regression fixture.".into(),
+            publisher: "colossus-tests".into(),
+            license: "Apache-2.0".into(),
+            homepage: String::new(),
+            capabilities: Vec::new(),
+            permissions: vec!["process".into(), "credentials".into()],
+            files: Vec::new(),
+            integrations: Vec::new(),
+            skills: Vec::new(),
+            tools: include_tool
+                .then(|| PackToolDeclaration {
+                    name: "pack.echo".into(),
+                    command: "pack-binary".into(),
+                    args: vec!["--tool".into()],
+                    env_refs: environment.clone(),
+                    permissions: vec!["process".into(), "credentials".into()],
+                })
+                .into_iter()
+                .collect(),
+            mcp_servers: include_mcp
+                .then(|| PackMcpServerDeclaration {
+                    name: "pack-mcp".into(),
+                    command: "pack-binary".into(),
+                    args: vec!["--mcp".into()],
+                    env_refs: environment,
+                    allowed_tools: vec!["lookup".into()],
+                    permissions: vec!["process".into(), "credentials".into()],
+                })
+                .into_iter()
+                .collect(),
+            binaries: vec!["pack-binary".into()],
+            docker: Vec::new(),
+            docs: Vec::new(),
+            tests: Vec::new(),
+            dependencies: Vec::new(),
+            signatures: Vec::new(),
+        };
+        let installation = PackInstallation {
+            manifest,
+            status: PackStatus::Enabled,
+            source: "verified-test-fixture".into(),
+            installed_path: root.path().display().to_string(),
+            manifest_sha256: "a".repeat(64),
+            trust_key_id: Some("b".repeat(64)),
+            installed_at: "2026-08-12T00:00:00Z".into(),
+            updated_at: "2026-08-12T00:00:00Z".into(),
+        };
+        (root, installation)
+    }
+
+    #[test]
+    fn danger_full_access_rejects_executable_pack_permission_ceilings() {
+        for (include_tool, include_mcp) in [(true, false), (false, true)] {
+            let (_root, installation) = pack_installation(include_tool, include_mcp);
+            let error = match compile_active_pack_extensions(
+                &[installation],
+                &McpConfig::default(),
+                &SandboxConfig::default(),
+            ) {
+                Ok(_) => panic!("danger full access must reject executable pack extensions"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("permission ceilings cannot be enforced by danger_full_access")
+            );
+        }
+    }
+
+    #[test]
+    fn danger_full_access_still_accepts_data_only_pack_content() {
+        let (_root, installation) = pack_installation(false, false);
+
+        let extensions = compile_active_pack_extensions(
+            &[installation],
+            &McpConfig::default(),
+            &SandboxConfig::default(),
+        )
+        .expect("data-only pack content");
+
+        assert!(extensions.process_declarations.is_empty());
+        assert!(extensions.tool_specs.is_empty());
+        assert!(extensions.mcp.servers.is_empty());
+        assert!(extensions.actions.is_empty());
+        assert!(extensions.restrictions.is_empty());
+    }
+
+    #[test]
+    fn isolating_backend_accepts_declared_pack_environment_references() {
+        let (_root, installation) = pack_installation(true, true);
+        let mut sandbox = SandboxConfig::platform_isolating();
+        sandbox.environment.push("PACK_TOKEN".into());
+
+        let extensions =
+            compile_active_pack_extensions(&[installation], &McpConfig::default(), &sandbox)
+                .expect("declared pack extensions");
+
+        assert_eq!(
+            extensions.process_declarations["pack.echo"].environment,
+            BTreeMap::from([("PACK_TOKEN".into(), "env:HOST_PACK_TOKEN".into())])
+        );
+        assert_eq!(
+            extensions.mcp.servers["pack-mcp"].environment,
+            BTreeMap::from([("PACK_TOKEN".into(), "env:HOST_PACK_TOKEN".into())])
+        );
+    }
+
+    #[test]
+    fn declared_authority_still_requires_pack_environment_grants() {
+        let sandbox = SandboxConfig::platform_isolating();
+
+        let (_tool_root, tool_installation) = pack_installation(true, false);
+        let tool_error = match compile_active_pack_extensions(
+            &[tool_installation],
+            &McpConfig::default(),
+            &sandbox,
+        ) {
+            Ok(_) => panic!("declared pack tool environment must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            tool_error.to_string().contains(
+                "enabled pack tool pack.echo requires sandbox environment name PACK_TOKEN"
+            )
+        );
+
+        let (_mcp_root, mcp_installation) = pack_installation(false, true);
+        let mcp_error = match compile_active_pack_extensions(
+            &[mcp_installation],
+            &McpConfig::default(),
+            &sandbox,
+        ) {
+            Ok(_) => panic!("declared pack MCP environment must fail"),
+            Err(error) => error,
+        };
+        assert!(mcp_error.to_string().contains(
+            "enabled pack MCP server pack-mcp requires sandbox environment name PACK_TOKEN"
+        ));
+    }
 }

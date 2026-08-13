@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, ActorType, ApprovalProof, AutomaticApprovalNotice, DecisionOutcome, EffectPhase,
     EffectRequest, EventClassification, NewEvent, PolicyDecision, PolicyObligations,
-    QuarantinedEffectResult, RiskLevel, RiskRecommendation, RiskReviewFailure,
+    QuarantinedEffectResult, ResourceAuthority, RiskLevel, RiskRecommendation, RiskReviewFailure,
     RiskReviewFallbackNotice, RiskStatus, SandboxBoundaryMode,
 };
 use colossus_network::AdditionalRootCertificates;

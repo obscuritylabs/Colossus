@@ -1356,6 +1356,29 @@ fn embedded_application_identity_is_strictly_bounded() {
 }
 
 #[cfg(feature = "embedded")]
+#[test]
+fn embedded_execution_boundary_defaults_to_full_access_with_explicit_safe_builders() {
+    let options = test_embedded_options();
+    assert_eq!(
+        options.execution_boundary(),
+        ManagedExecutionBoundary::FullAccess
+    );
+    assert_eq!(
+        options
+            .clone()
+            .with_execution_boundary(ManagedExecutionBoundary::WorkspaceIsolated)
+            .execution_boundary(),
+        ManagedExecutionBoundary::WorkspaceIsolated
+    );
+    assert_eq!(
+        options
+            .with_execution_boundary(ManagedExecutionBoundary::OfflineIsolated)
+            .execution_boundary(),
+        ManagedExecutionBoundary::OfflineIsolated
+    );
+}
+
+#[cfg(feature = "embedded")]
 #[tokio::test]
 async fn embedded_rejects_a_backend_with_wrong_lifecycle_semantics() {
     let backend = Arc::new(TestBackend::new(BackendKind::Daemon));

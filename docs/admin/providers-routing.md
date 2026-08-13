@@ -23,7 +23,9 @@ operator workflow for routing, deployment policy, and diagnostics.
 - The credential environment variable, when the endpoint requires one.
 - For a Codex subscription, the official Codex CLI and a completed
   `colossus codex login` flow instead of an API key.
-- An exact canonical origin grant in `sandbox.networkDestinations`.
+- An exact canonical HTTPS origin grant (or loopback HTTP origin for local development)
+  in `sandbox.networkDestinations` under an isolating execution boundary;
+  acknowledged full access supplies ambient HTTP(S) authority.
 
 ## Steps
 
@@ -75,6 +77,9 @@ operator workflow for routing, deployment policy, and diagnostics.
     Run `colossus codex login` before provider diagnostics. Do not configure a
     `baseUrl`: Colossus fixes the service origin so subscription credentials cannot be
     sent to a different host. The auth origin is separately required for token refresh.
+    The shown sandbox destinations are exact grants for an isolating execution
+    boundary. Under acknowledged full access they are unnecessary and do not narrow
+    ambient HTTP(S) authority.
 
     When the endpoint uses a private CA, configure the shared PEM bundle once:
 
@@ -190,10 +195,11 @@ sandbox:
     - http://127.0.0.1:8888
 ```
 
-The endpoint includes the search path; the sandbox entry is only its canonical origin.
-Use separate named profiles when agent and research traffic need different backends,
-credentials, or limits. Diagnose without resolving credentials, then make one
-explicitly approved query:
+The endpoint includes the search path. Under isolation, the sandbox entry is only its
+canonical origin; under acknowledged full access it is unnecessary and does not narrow
+ambient authority. Use separate named profiles when agent and research traffic need
+different backends, credentials, or limits. Diagnose without resolving credentials,
+then make one explicitly approved query:
 
 ```bash
 colossus --config .colossus/config.yaml search profiles
@@ -217,11 +223,13 @@ colossus --config .colossus/config.yaml run \
 ## Failure path
 
 For models, check in order: role mapping, credential variable presence, access decision,
-exact origin grant, TLS trust, model identifier, and provider response shape. For
-search, also confirm that the logical `agent` or `research` role names an existing
-profile. Origins match by scheme, host, and effective port; URL paths belong in
-`baseUrl` or a search `endpoint`, not the sandbox origin. Loopback HTTP is allowed for a
-deliberately local endpoint. Remote endpoints require HTTPS.
+declared or ambient resource authority, TLS trust, model identifier, and provider
+response shape. For search, also confirm that the logical `agent` or `research` role
+names an existing profile. Declared origins match by scheme, host, and effective port;
+URL paths belong in `baseUrl` or a search `endpoint`, not the sandbox origin. Isolation
+allows loopback HTTP but requires HTTPS remotely. Acknowledged full access also accepts
+canonical remote plaintext HTTP, which has no TLS confidentiality or server
+authentication.
 
 ## Next step
 

@@ -10,10 +10,12 @@ use super::{
 use super::{native_helper_diagnostics, native_target_pid};
 use base64::Engine as _;
 use colossus_contracts::{
-    DecisionOutcome, EffectPhase, EffectRequest, FilesystemGrant, PolicyDecision, PolicyObligations,
+    DecisionOutcome, EffectPhase, EffectRequest, FilesystemGrant, PolicyDecision,
+    PolicyObligations, ResourceAuthority, SandboxBoundaryMode,
 };
 use colossus_policy::{
-    BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request, system_actor,
+    BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, SandboxBoundaryGate, effect_request,
+    system_actor,
 };
 use colossus_ports::{EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
@@ -1119,6 +1121,106 @@ async fn brokered_http_is_exact_origin_bounded_and_post_authorized() {
             .any(|event| event.event_type == "effect.release_requested.v1")
     );
     server.await.expect("server");
+}
+
+#[tokio::test]
+async fn ambient_http_accepts_loopback_without_a_destination_grant() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).await.expect("read");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nambient")
+            .await
+            .expect("write");
+    });
+    let url = format!("http://{address}/ambient");
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("network.http", DecisionOutcome::Allow)
+        .with_sandbox("danger_full_access", "test", false)
+        .with_resource_authority(ResourceAuthority::Ambient);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["network.http".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [5_u8; 32],
+    );
+    let mut request = effect_request(
+        system_actor("ambient-http"),
+        "network.http",
+        &url,
+        json!({"method": "GET", "headers": {}}),
+    );
+    request.capabilities = vec!["network.http".into()];
+    let result = gateway
+        .execute(request, &HttpExecutor::new())
+        .await
+        .expect("ambient loopback request");
+    assert_eq!(result.bytes, b"ambient");
+    server.await.expect("server");
+}
+
+#[tokio::test]
+async fn remote_plaintext_http_requires_ambient_authority_in_the_permit() {
+    let endpoint = "http://192.0.2.1:9/plaintext";
+    let request = || {
+        let mut request = effect_request(
+            system_actor("plaintext-http"),
+            "network.http",
+            endpoint,
+            json!({"method": "GET", "headers": {}}),
+        );
+        request.capabilities = vec!["network.http".into()];
+        request
+    };
+
+    let declared = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("network.http", DecisionOutcome::Allow)
+                .with_network_destination("http://192.0.2.1:9"),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["network.http".into()]),
+        [69_u8; 32],
+    );
+    let error = declared
+        .execute(request(), &HttpExecutor::new())
+        .await
+        .expect_err("declared exact origin must not authorize remote plaintext HTTP");
+    assert!(
+        error
+            .to_string()
+            .contains("requires ambient resource authority")
+    );
+
+    let ambient = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("network.http", DecisionOutcome::Allow)
+                .with_sandbox("danger_full_access", "test", false)
+                .with_resource_authority(ResourceAuthority::Ambient)
+                .with_limits(25, 1024 * 1024, 1, 64 * 1024 * 1024, 1),
+        ),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["network.http".into()]).with_sandbox_boundary_gate(Arc::new(
+            SandboxBoundaryGate::new(Some(SandboxBoundaryMode::DangerFullAccess), true),
+        )),
+        [70_u8; 32],
+    );
+    let result = ambient.execute(request(), &HttpExecutor::new()).await;
+    assert!(result.as_ref().err().is_none_or(|error| {
+        !error
+            .to_string()
+            .contains("requires ambient resource authority")
+    }));
 }
 
 #[tokio::test]

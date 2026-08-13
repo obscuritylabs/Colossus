@@ -32,8 +32,16 @@ impl ToolExecutor for TraceToolExecutor {
             serde_json::to_string(&snapshot)
                 .map_err(|error| ToolError::Failed(error.to_string()))?
         } else {
-            let path = model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
-            let display_path = workspace_relative(&self.workspace, &path)?;
+            let ambient = self
+                .gateway
+                .acknowledged_sandbox_boundary_mode(context.session_id.as_deref())
+                == Some(SandboxBoundaryMode::DangerFullAccess);
+            let path = model_resource_path(
+                &self.workspace,
+                required_tool_string(&call, "path")?,
+                ambient,
+            )?;
+            let display_path = display_resource_path(&self.workspace, &path, ambient)?;
             let text = serde_json::to_string_pretty(&snapshot)
                 .map_err(|error| ToolError::Failed(error.to_string()))?;
             let mut request = effect_request(

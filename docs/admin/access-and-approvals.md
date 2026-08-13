@@ -38,8 +38,9 @@ OPA replaces the built-in decision branch only. The editable source is
 | `pinned` | Exact includes only | Denied except `provider.echo`; exact overrides opt in |
 
 Tool inclusion never grants its effect action. An action override never supplies a
-missing sandbox root, executable, origin, credential, extension trust decision, or
-post-effect release.
+missing configured resource, credential, extension trust decision, or post-effect
+release. A separate acknowledged full-access execution boundary can supply ambient
+resource authority after the action decision; it does not create a capability.
 
 ## Exact override rules
 
@@ -127,16 +128,24 @@ diagnostics and malformed model output are not released in the warning. A valid 
 or high-risk assessment proceeds directly to explicit approval because the review itself
 completed successfully.
 
-`full-access` satisfies approval requirements without a prompt; it is not a sandbox
-bypass. Prefer it only in bounded disposable environments.
+Approval-mode `full-access` satisfies approval requirements without a prompt; it is not
+the execution-boundary setting. The sparse configuration default separately uses
+`access.profile: allow_all` plus sandbox `danger_full_access`, which is why ordinary
+fresh configurations have few built-in approval prompts and ambient resources.
 
 ## Workflows and OPA
 
 Durable workflows, system actors, and agents carrying workflow lineage never inherit
-`workspace-development` resources or `risk-auto` proof. They need exact configured
-filesystem, executable, environment, and network grants.
+the `workspace-development` preset or `risk-auto` proof. With built-in policy they do
+receive ambient authority when the acknowledged full-access boundary is active. Under
+an isolating boundary they need exact configured filesystem, executable, environment,
+and network grants.
 
 OPA remains the sole action decision point when selected. Automatic
 `workspace-development` grants are rejected with OPA; the OPA decision must return the
-complete resource obligations, while local Safety Kernel, permit, quarantine, sandbox,
-and post-effect checks remain mandatory.
+complete resource obligations. Full access does not rewrite an OPA decision: return
+`obligations.resource_authority: ambient` when that exact effect should use the
+acknowledged danger boundary, or omit it/use `declared` to keep exact obligations. The
+Safety Kernel rejects `ambient` unless the runtime is configured for acknowledged
+`danger_full_access`. Permit, quarantine, sandbox, and post-effect checks remain
+mandatory in either mode.

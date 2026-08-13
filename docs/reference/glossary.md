@@ -14,7 +14,7 @@ type: reference
 | Actor | User, model, worker, or system identity responsible for a request |
 | Adapter | Implementation behind an application port, such as redb, PostgreSQL, a model provider, or sandbox |
 | Approval | Proof satisfying an existing policy obligation; it does not widen policy or sandbox authority |
-| Canonical state | Authoritative encrypted journal events from which application state is reconstructed |
+| Canonical state | Authoritative journal events from which application state is reconstructed |
 | Capability | Trusted metadata connecting a tool or operation to its action, effect identity, prerequisites, and source |
 | Collection | Signed inventory of immediate packs and data-only skills |
 | Decision | Either a policy authorization result or a durable user key decision, according to context |
@@ -22,7 +22,7 @@ type: reference
 | Effect gateway | Application boundary that validates, authorizes, permits, quarantines, and journals effects |
 | Goal | Bounded autonomous loop over ordinary audited agent runs |
 | Integration | Persisted connection exposing supported external operations as strict tools |
-| Journal | Encrypted, append-only, globally hash-chained canonical event store |
+| Journal | Hash-chained canonical event store; optional keys encrypt payloads and sign checkpoints |
 | MCP server | Explicitly configured stdio process with exact executable and tool allowlist |
 | Memory | Durable, non-instructional background record with canonical lifecycle |
 | Obligation | Resource and behavior constraint attached to an authorized effect |

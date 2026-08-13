@@ -1,6 +1,9 @@
 use super::*;
 
-pub(super) fn normalize_base_url(raw: &str) -> Result<String, ProviderError> {
+pub(super) fn normalize_base_url(
+    raw: &str,
+    resource_authority: ResourceAuthority,
+) -> Result<String, ProviderError> {
     let url = Url::parse(raw)?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -16,7 +19,7 @@ pub(super) fn normalize_base_url(raw: &str) -> Result<String, ProviderError> {
     let loopback = url.host_str().is_some_and(|host| {
         host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
     });
-    if url.scheme() != "https" && !loopback {
+    if resource_authority != ResourceAuthority::Ambient && url.scheme() != "https" && !loopback {
         return Err(ProviderError::Configuration(
             "non-loopback provider baseUrl requires HTTPS".into(),
         ));

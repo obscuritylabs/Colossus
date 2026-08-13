@@ -352,8 +352,9 @@ access resolution -> schema validation -> deterministic policy -> optional risk 
 -> approval decision -> brokered execution -> bounded result -> event and audit
 ```
 
-The required `access` block selects `minimal`, `development`, `allow_all`, or `pinned`.
-Profiles operate on the metadata above; an exact include changes visibility only. Run
+The optional `access` block selects `minimal`, `development`, `allow_all`, or `pinned`;
+omission selects `allow_all`. Profiles operate on the metadata above; an exact include
+changes visibility only. Run
 scopes such as Plan Mode, Goal Mode, interactive UI, and child-agent execution may narrow
 the resolved catalog but never broaden it. An unclassified built-in or untrusted
 extension fails closed.
@@ -407,8 +408,11 @@ or untrusted extensions remain absent.
 
 ### 10.4 Filesystem And Subprocess Rules
 
-- Generic file tools are confined to the selected workspace.
-- Control directories owned by Colossus are denied to generic workspace mutation tools.
+- Declared/isolation mode confines generic file, repository, patch, and trace paths to
+  the selected workspace and denies Colossus control directories. Acknowledged
+  `danger_full_access` deliberately permits canonical absolute and traversing host paths,
+  including control paths, while retaining permit, audit, no-follow, and atomic-write
+  checks.
 - Text reads and writes are bounded and reject unsafe file types where applicable.
 - Mutating file and patch results include a diff and changed line ranges.
 - `shell.run` accepts exactly one of a non-interactive `command` interpreted by a
@@ -419,11 +423,16 @@ or untrusted extensions remain absent.
   workspace, trusted shell, read-only command roots, isolated home/temp, and sanitized
   path only for terminal users and agents outside workflow lineage. Colossus control
   state remains protected by the selected native, Windows, or OCI backend.
-- Timeouts, output caps, working directory, environment allowlists, process trees, and
-  post-effect release are enforced by the sandbox.
-- Network destination `*` means public HTTP(S) only. Private, loopback, link-local, and
-  metadata origins require exact entries; all adapters and process proxies share the
-  same matcher, DNS/TLS pinning, and bounded observed-origin evidence.
+- Output caps and post-effect release remain enforced in every mode. Isolating backends
+  enforce their configured working-directory, environment, process-tree, timeout, and
+  resource boundaries. Direct Unix full-access supervision is best effort for process
+  trees and resources: a deliberately detached descendant can outlive the recorded
+  effect, so strict containment requires native/OCI host isolation.
+- Under declared authority, network destination `*` means public HTTP(S) only and
+  private, loopback, link-local, and metadata origins require exact entries. Remote
+  plaintext HTTP requires acknowledged ambient authority in the active permit. Ambient
+  authority needs no duplicate destination entry; URL validation, DNS pinning, TLS for
+  HTTPS, response bounds, permits, and audit remain.
 
 ## 11. Policy, Risk, Approval, And Audit
 
@@ -495,7 +504,9 @@ it to the requester. Denied content MUST never reach the model, workflow, or use
 ### 11.3 Audit
 
 The event journal is the authoritative source for reconstructing product state. Audit
-records MUST be immutable, encrypted by default, append-only, and hash-chained. Every
+records MUST be immutable, append-only, and hash-chained. Encryption is enabled by an
+explicit platform or environment key provider; the keyless default is plaintext and
+emits a security-posture warning. Every
 aggregate append uses optimistic concurrency through an expected stream version. Each
 envelope carries schema/event versions, a UUIDv7 identifier, global and stream sequence,
 classification, actor, correlation and causation context, UTC timestamp, encrypted
@@ -513,9 +524,10 @@ Records cover at least:
 - credential-reference use, skill activity, packs, and bundles.
 
 Audit payloads MUST be bounded and redacted. Raw credentials, private keys, full skill
-bodies, unbounded command output, and hidden reasoning are prohibited. Sensitive event
-payloads use authenticated encryption with keys from an explicit platform or environment
-key provider; there is no plaintext downgrade.
+bodies, unbounded command output, and hidden reasoning are prohibited. When configured,
+sensitive event payloads use authenticated encryption with keys from an explicit
+platform or environment key provider. An established journal never silently changes its
+protection mode; operators must create fresh storage to change it.
 
 The chain is signed at least every 100 events or 60 seconds and at clean shutdown. The
 latest secure anchor is stored separately and may also be exported to remote or WORM
@@ -939,7 +951,8 @@ reference, HTTP environment-trust toggle, and shell completion.
 - `goal`: bounded autonomous goal loop.
 - `research`: deep research with persisted cited output.
 - `tui`: interactive session and non-TTY line runner; the former `repl` alias is removed.
-- `config`: initialize, migrate, show, and explain effective strict configuration.
+- `config`: initialize, show, and explain effective strict configuration; there is no
+  automatic migration command.
 - `skills`: list, create, validate, and install.
 - `tools`: list the active catalog.
 - `provider` and `models`: diagnostics, catalogs, and routing.
@@ -979,11 +992,13 @@ clears selection without discarding the old plan; `/plan off` retains selection.
 `/plan use` accepts only same-session Draft or Approved plans. Prompts refine only a
 selected Draft; an Approved plan cannot be refined.
 
-Submitted input history MUST be encrypted in the authoritative journal and persisted
-through the normal policy/permit/audit boundary. Rust MUST NOT silently create or reuse a
-plaintext history sidecar. Embedded and authenticated-worker REPLs MUST hydrate the same
-bounded newest entries, suppress consecutive duplicates, and keep history persistence
-failure from blocking the requested command.
+Submitted input history MUST be persisted in the authoritative journal through the
+normal policy/permit/audit boundary. It MUST use the configured protection mode:
+authenticated encryption with platform or environment keys, or hash-chained canonical
+plaintext in keyless mode. Rust MUST NOT silently create or reuse a separate plaintext
+history sidecar. Embedded and authenticated-worker REPLs MUST hydrate the same bounded
+newest entries, suppress consecutive duplicates, and keep history persistence failure
+from blocking the requested command.
 
 Rust custom themes MUST be configuration-only JSON or TOML with strict bounded schemas.
 Loading MUST reject symlinks, oversized/count-excess libraries, invalid colors, unknown
@@ -1078,8 +1093,10 @@ operation is not replayed automatically.
 
 ## 19. Configuration And Local Storage
 
-Configuration is strict: unknown fields fail validation. It includes the required access
-profile and exact overrides, provider defaults, named model profiles and roles,
+Configuration is strict: unknown fields fail validation. Only `schemaVersion` and
+`storage` are required at the top level; omitted `access` defaults to `allow_all`, and
+ordinary fields within optional blocks default recursively. It includes access profile
+and exact overrides, provider defaults, named model profiles and roles,
 provider-neutral search profiles and agent/research routes, context budgets, agent turn
 limits, subagent concurrency, memory index, global HTTP transport, research
 limits/sources/MCP, and skill override policy.
@@ -1090,9 +1107,10 @@ not be written back when configuration is shown.
 
 The global workspace defaults to the current directory and anchors relative
 configuration, state, workflow, skill, and pack paths. Workers publish the canonical
-workspace and reject mismatched clients. Fresh development configuration selects the
-`workspace-development` sandbox profile unless explicitly overridden; other access
-profiles default to `offline-default`.
+workspace and reject mismatched clients. Fresh initialization keeps access and sandbox
+implicit, resolving to `allow_all` plus acknowledged `danger_full_access`. Passing an
+explicit `--sandbox-profile` selects a complete platform-isolating preset instead;
+`--from` preserves source settings except for the deliberately fresh storage identity.
 
 `schemaVersion: 2` remains active, but removed exact tool/action lists are rejected.
 Before 1.0, configuration changes are applied by directly updating the strict YAML or
@@ -1134,8 +1152,10 @@ to local or air-gapped operation.
 - No shell-string execution in brokered subprocess paths.
 - No raw secret in model-visible schemas, prompts, transcripts, telemetry, or audit.
 - No mutation before schema validation, policy, and approval.
-- No default network use except documented, bounded, credential-free stable release
-  discovery; every other network path requires explicit configuration and permission.
+- No hidden background network use except documented, bounded, credential-free stable
+  release discovery. Acknowledged full access also exposes model-requested generic
+  HTTP(S) effects without destination entries; configured providers, search, MCP,
+  integrations, packs, credentials, and trust are never invented.
 - No hidden reasoning in default persisted or rendered data.
 - Path containment is verified after canonicalization and across symlinks.
 

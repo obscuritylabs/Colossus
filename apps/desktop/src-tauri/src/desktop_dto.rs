@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, MAX_MANAGED_MODELS, MAX_MANAGED_PROVIDERS,
-        ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        ReasoningEffortSetting, WorkspaceSetting, provider_base_url,
+        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, MAX_MANAGED_MODELS,
+        MAX_MANAGED_PROVIDERS, ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting,
+        ProviderSetting, ReasoningEffortSetting, WorkspaceSetting, provider_base_url,
     },
     dto::{CommandErrorDto, ConnectionStatusDto},
 };
@@ -189,6 +189,7 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) codex_auth: crate::codex_auth::CodexAuthStatusDto,
     pub(crate) managed_model_configuration: ManagedModelConfigurationDto,
     pub(crate) access_profile: AccessProfileSetting,
+    pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) approval_mode: DesktopApprovalModeDto,
     pub(crate) terminal_enabled: bool,
     pub(crate) additional_ca_bundle: CaBundleStatusDto,
@@ -352,6 +353,7 @@ pub(crate) struct ApplyManagedModelConfigurationInput {
     pub(crate) models: Vec<ManagedModelInput>,
     pub(crate) roles: BTreeMap<String, String>,
     pub(crate) access_profile: AccessProfileSetting,
+    pub(crate) execution_boundary: ExecutionBoundarySetting,
 }
 
 impl ApplyManagedModelConfigurationInput {
@@ -372,13 +374,6 @@ impl ApplyManagedModelConfigurationInput {
                 "Managed Local requires 1–16 providers and 1–64 models.",
             ));
         }
-        if self.access_profile == AccessProfileSetting::LegacyAllowAll {
-            return Err(CommandErrorDto::invalid(
-                "accessProfile",
-                "Managed Local accepts only the Minimal or Development access profile.",
-            ));
-        }
-
         let mut providers = BTreeSet::new();
         for provider in &self.providers {
             let provider_connection_valid = if provider.provider_kind == ProviderKindSetting::Codex
@@ -481,6 +476,7 @@ pub(crate) struct ConfigureManagedRuntimeInput {
     pub(crate) provider_kind: ProviderKindSetting,
     pub(crate) model: String,
     pub(crate) access_profile: AccessProfileSetting,
+    pub(crate) execution_boundary: ExecutionBoundarySetting,
     #[serde(default)]
     pub(crate) replace_credential: bool,
 }
@@ -500,12 +496,6 @@ impl ConfigureManagedRuntimeInput {
             return Err(CommandErrorDto::invalid(
                 "model",
                 "The provider model is invalid.",
-            ));
-        }
-        if self.access_profile == AccessProfileSetting::LegacyAllowAll {
-            return Err(CommandErrorDto::invalid(
-                "accessProfile",
-                "Managed Local accepts only the Minimal or Development access profile.",
             ));
         }
         if self.provider_kind == ProviderKindSetting::Codex && self.replace_credential {
@@ -528,6 +518,7 @@ mod tests {
             provider_kind: ProviderKindSetting::Compatible,
             model: "test-model".into(),
             access_profile: AccessProfileSetting::Development,
+            execution_boundary: ExecutionBoundarySetting::WorkspaceIsolated,
             replace_credential: false,
         }
     }
@@ -559,6 +550,7 @@ mod tests {
                 ("context_summarizer".into(), "primary".into()),
             ]),
             access_profile: AccessProfileSetting::Minimal,
+            execution_boundary: ExecutionBoundarySetting::OfflineIsolated,
         }
     }
 
@@ -634,6 +626,7 @@ mod tests {
                 "providerKind": wire,
                 "model": "test-model",
                 "accessProfile": "development",
+                "executionBoundary": "workspace_isolated",
                 "replaceCredential": false
             }))
             .expect("renderer request");
@@ -644,10 +637,10 @@ mod tests {
     }
 
     #[test]
-    fn allow_all_is_not_a_desktop_managed_profile() {
+    fn allow_all_is_a_desktop_managed_profile() {
         let mut input = input();
-        input.access_profile = AccessProfileSetting::LegacyAllowAll;
-        assert!(input.validate().is_err());
+        input.access_profile = AccessProfileSetting::AllowAll;
+        assert!(input.validate().is_ok());
     }
 
     #[test]

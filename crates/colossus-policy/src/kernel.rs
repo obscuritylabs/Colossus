@@ -576,6 +576,22 @@ impl SafetyKernel {
                 obligations.sandbox_backend
             )));
         }
+        if obligations.resource_authority == ResourceAuthority::Ambient
+            && obligations.sandbox_backend != SandboxBoundaryMode::DangerFullAccess.as_backend()
+        {
+            return Err(GatewayError::Safety(
+                "ambient resource authority requires the danger_full_access sandbox backend".into(),
+            ));
+        }
+        if is_process_effect(request)
+            && obligations.sandbox_backend == SandboxBoundaryMode::DangerFullAccess.as_backend()
+            && obligations.resource_authority != ResourceAuthority::Ambient
+        {
+            return Err(GatewayError::Safety(
+                "danger_full_access process execution requires explicit ambient resource authority"
+                    .into(),
+            ));
+        }
         if obligations.sandbox_backend == "broker"
             && is_process_effect(request)
             && !obligations.allow_sandbox_downgrade
@@ -585,20 +601,25 @@ impl SafetyKernel {
                     .into(),
             ));
         }
-        if request.phase == EffectPhase::PreEffect
-            && decision.outcome != DecisionOutcome::Deny
-            && is_process_effect(request)
-            && let Some(mode) = SandboxBoundaryMode::from_backend(&obligations.sandbox_backend)
-        {
-            self.sandbox_boundary_gate
-                .as_ref()
-                .ok_or_else(|| {
-                    GatewayError::Safety(format!(
-                        "{} process execution requires a runtime acknowledgement gate",
-                        mode.as_backend()
-                    ))
-                })?
-                .validate(request, mode)?;
+        if request.phase == EffectPhase::PreEffect && decision.outcome != DecisionOutcome::Deny {
+            let boundary_mode = if obligations.resource_authority == ResourceAuthority::Ambient {
+                Some(SandboxBoundaryMode::DangerFullAccess)
+            } else if is_process_effect(request) {
+                SandboxBoundaryMode::from_backend(&obligations.sandbox_backend)
+            } else {
+                None
+            };
+            if let Some(mode) = boundary_mode {
+                self.sandbox_boundary_gate
+                    .as_ref()
+                    .ok_or_else(|| {
+                        GatewayError::Safety(format!(
+                            "{} execution requires a runtime acknowledgement gate",
+                            mode.as_backend()
+                        ))
+                    })?
+                    .validate(request, mode)?;
+            }
         }
         if obligations.sandbox_backend == "windows_job"
             && is_process_effect(request)
@@ -724,7 +745,7 @@ impl SafetyKernel {
             ) || is_streamable_http_mcp(request))
         {
             let origin = canonical_network_origin(&request.resource)?;
-            if network_destination_match(&obligations.network_destinations, &origin)?.is_none() {
+            if http_transport_authority_match(obligations, &origin)?.is_none() {
                 return Err(GatewayError::Safety(format!(
                     "network destination {origin} is not allowed"
                 )));
@@ -778,6 +799,8 @@ pub(super) fn is_filesystem_action(action: &str) -> bool {
 /// How one configured network grant authorized a canonical origin.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkDestinationMatch {
+    /// Acknowledged ambient authority accepted the canonical HTTP(S) origin.
+    Ambient,
     /// The canonical origin was configured exactly.
     Exact,
     /// The public HTTP(S) wildcard matched; DNS must still resolve only public addresses.
@@ -831,6 +854,47 @@ pub fn network_destination_match(
         return Ok(None);
     }
     Ok(Some(NetworkDestinationMatch::PublicWildcard))
+}
+
+/// Match a canonical HTTP(S) resource under a decision's resource authority.
+pub fn network_authority_match(
+    obligations: &PolicyObligations,
+    resource: &str,
+) -> Result<Option<NetworkDestinationMatch>, GatewayError> {
+    canonical_network_origin(resource)?;
+    if obligations.resource_authority == ResourceAuthority::Ambient {
+        return Ok(Some(NetworkDestinationMatch::Ambient));
+    }
+    network_destination_match(&obligations.network_destinations, resource)
+}
+
+/// Match one permit-bound HTTP(S) transport, including the plaintext transport gate.
+///
+/// An exact configured origin does not authorize plaintext HTTP outside loopback. That
+/// transport is available only when the execution permit carries acknowledged ambient
+/// resource authority. Configuration may be validated before a session acknowledgement
+/// exists, so effect adapters must apply this check from the permit they actually receive.
+pub fn http_transport_authority_match(
+    obligations: &PolicyObligations,
+    resource: &str,
+) -> Result<Option<NetworkDestinationMatch>, GatewayError> {
+    let url = Url::parse(resource)
+        .map_err(|error| GatewayError::Safety(format!("invalid network URL: {error}")))?;
+    canonical_network_origin(resource)?;
+    let loopback = url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || colossus_network::parse_host_ip(host).is_some_and(|address| address.is_loopback())
+    });
+    if url.scheme() == "http"
+        && !loopback
+        && obligations.resource_authority != ResourceAuthority::Ambient
+    {
+        return Err(GatewayError::Safety(
+            "non-loopback plaintext HTTP requires ambient resource authority in the execution permit"
+                .into(),
+        ));
+    }
+    network_authority_match(obligations, resource)
 }
 
 /// Return whether an address is outside public Internet routing.
@@ -926,6 +990,9 @@ pub(super) fn validate_filesystem_containment(
         "read"
     };
     let target = canonical_effect_path(&request.resource, requested_mode == "write")?;
+    if obligations.resource_authority == ResourceAuthority::Ambient {
+        return Ok(());
+    }
     let allowed = obligations.filesystem.iter().any(|grant| {
         let mode_allowed = grant.mode == "write"
             || grant.mode == requested_mode

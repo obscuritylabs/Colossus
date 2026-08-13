@@ -15,7 +15,7 @@ colossus [OPTIONS] <COMMAND>
 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `-w`, `--workspace PATH` | Existing directory | Current directory | Select and canonicalize the repository and maximum tool-access boundary |
+| `-w`, `--workspace PATH` | Existing directory | Current directory | Select and canonicalize repository context, relative-path anchor, and state identity; not a maximum boundary under full access |
 | `--config PATH` | YAML path | See below | Select one explicit configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
@@ -160,7 +160,7 @@ positional:
 | `update [--version vX.Y.Z]` | Replace only a validated direct installation through the embedded reviewed bootstrap; refuse unknown ownership and downgrades |
 | `audit show` | `--from 1`, `--limit 100` |
 | `audit export` | `--from 1`, `--limit 1000` |
-| `config init` | Global home config with `storage.location: home_workspace`; `--local` selects the repository replacement; `--access-profile development`; `--storage-keys none`; sandbox defaults from access |
+| `config init` | Sparse global home config with `storage.location: home_workspace`; `--local` selects the repository replacement; omitted access defaults `allow_all`; omitted sandbox defaults acknowledged full access; explicit `--sandbox-profile` selects platform isolation |
 | `process run` | Exact executable; `--cwd .`; `--env KEY=VALUE` repeats; arguments after `--` are literal |
 | `workflow run` | `--inputs {}`; foreground unless `--queued` |
 | `workflow schedule create` | cadence required in `60..=2678400`; `--misfire fire-once`; enabled by default |
@@ -177,6 +177,16 @@ positional:
 | `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 policy-read files within a 1 MiB aggregate UTF-8 input bound |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |
+
+`config init --development --from PATH` validates and preserves the explicitly supplied
+source document, then replaces storage with fresh isolated development state. Only
+flags explicitly supplied to that invocation override their corresponding access,
+sandbox, or storage-protection choice. An inherited encrypted choice receives fresh
+development key identifiers, and environment-backed protection receives a fresh target
+anchor path, so the development journal cannot alias the source journal's identity.
+`--sandbox-profile` selects the complete
+platform-isolating preset; omitting it retains the source selection, or uses full access
+when no source is supplied.
 
 ## Worker public API flags
 
@@ -260,8 +270,11 @@ colossus COMMAND SUBCOMMAND --help
 ## JSON output contracts
 
 With `--output json`, one JSON value is written to stdout; diagnostics and optional
-streamed text stay on stderr. Lists are arrays unless the command returns a named page
-or status contract. Important roots are:
+streamed text stay on stderr. The acknowledged danger-full-access posture warning is
+emitted on stderr even when stdout is redirected or JSON output is selected. It never
+contaminates the one-value JSON stdout contract. Lists are arrays unless the command
+returns a named page or status
+contract. Important roots are:
 
 | Commands | Root fields |
 | --- | --- |
@@ -273,6 +286,7 @@ or status contract. Important roots are:
 | `research show` | `id`, `session_id`, question/depth/source lanes, `status`, queries, progress, limitations, report/error, timestamps |
 | `telemetry metrics` | Aggregated run/tool/provider/context counters and duration totals |
 | `tools list` | Active schemas plus source/risk metadata, canonical workspace, sandbox profile, action decision, and bounds |
+| `config init` | `created: true` and the created `config_path` |
 | `config effective` | Active/hidden tools and actions plus explicit/derived grants, resolved shell, protected paths, wildcard meaning, and unmet prerequisites |
 | `worker --enroll-application` | Non-secret application ID, new credential ID, stable instance ID and certificate SHA-256 trust anchor, exact scopes/role/tool ceilings, destination keyring identifiers, replacement flag, and nullable revoked prior credential ID |
 | `worker --revoke-credential` | Non-secret credential ID and durable revocation result |

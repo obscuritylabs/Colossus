@@ -395,18 +395,29 @@ impl GatewayToolExecutor {
         operation: RepositoryOperation,
     ) -> Result<String, ToolError> {
         let action = operation.action().to_owned();
-        let relative = model_workspace_relative(&self.workspace, operation.resource())?;
-        let relative = relative
-            .to_str()
-            .ok_or_else(|| ToolError::Denied("repository paths must be valid UTF-8".into()))?;
-        let relative = if relative.is_empty() { "." } else { relative };
-        let resource = fs::canonicalize(self.workspace.join(relative))
+        let ambient = self.danger_full_access(&context);
+        let operation_resource = if ambient {
+            operation.resource().to_owned()
+        } else {
+            let relative = model_workspace_relative(&self.workspace, operation.resource())?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| ToolError::Denied("repository paths must be valid UTF-8".into()))?;
+            if relative.is_empty() {
+                ".".into()
+            } else {
+                relative.into()
+            }
+        };
+        let raw_repository = Arc::new(RepositoryEffectExecutor {
+            workspace: self.workspace.clone(),
+        });
+        let resource = raw_repository
+            .resolve(&operation_resource, ambient)
             .map_err(|error| ToolError::Failed(error.to_string()))?
             .display()
             .to_string();
-        // The executor rejects absolute operation paths, so dispatch the normalized
-        // workspace-relative spelling rather than the raw model input.
-        let operation = operation.with_resource(relative.to_owned());
+        let operation = operation.with_resource(operation_resource);
         let mut request = effect_request(
             model_actor(call, &context),
             &action,
@@ -416,9 +427,6 @@ impl GatewayToolExecutor {
         );
         request.capabilities = vec![action];
         request.context = context;
-        let raw_repository = Arc::new(RepositoryEffectExecutor {
-            workspace: self.workspace.clone(),
-        });
         let repository: Arc<dyn EffectExecutor> = self.bound_effects.as_ref().map_or_else(
             || Arc::clone(&raw_repository) as Arc<dyn EffectExecutor>,
             |effects| {
@@ -472,8 +480,13 @@ impl GatewayToolExecutor {
         call: &ToolCall,
         context: ExecutionContext,
     ) -> Result<String, ToolError> {
-        let path = model_workspace_path(&self.workspace, required_tool_string(call, "path")?)?;
-        let display_path = workspace_relative(&self.workspace, &path)?;
+        let ambient = self.danger_full_access(&context);
+        let path = model_resource_path(
+            &self.workspace,
+            required_tool_string(call, "path")?,
+            ambient,
+        )?;
+        let display_path = display_resource_path(&self.workspace, &path, ambient)?;
         let (old, new) = if call.name == "patch.reverse" {
             (
                 required_tool_string(call, "new")?,

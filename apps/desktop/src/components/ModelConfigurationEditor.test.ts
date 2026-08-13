@@ -59,6 +59,7 @@ const desktop: DesktopStatus = {
     roles: { primary: "primary" },
   },
   accessProfile: "minimal",
+  executionBoundary: "full_access",
   approvalMode: "ask",
   terminalEnabled: false,
   additionalCaBundle: {
@@ -100,6 +101,8 @@ describe("ModelConfigurationEditor", () => {
     expect(markup).toContain("ChatGPT subscription (Codex)");
     expect(markup).toContain("Reasoning effort");
     expect(markup).toContain("Provider default");
+    expect(markup).toContain("Unsafe: Full access.");
+    expect(markup).toContain("Approval mode is configured separately.");
     expect(markup).not.toContain("Custom timeout (ms)");
     for (const role of [
       "primary",
@@ -191,6 +194,7 @@ describe("ModelConfigurationEditor", () => {
         changed.models,
         { primary: "primary" },
         "minimal",
+        "offline_isolated",
         apply,
       ),
     ).resolves.toBe(false);

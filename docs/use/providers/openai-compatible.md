@@ -38,7 +38,7 @@ trust roots already validate the endpoint.
 ### 2. Configure the compatible route
 
 Run `colossus -w . config effective`, edit the reported `resolution.configPath`, and
-keep its other required fields. Apply this validated
+keep its required `storage` block and any intended custom settings. Apply this validated
 overlay, replacing the example host, model ID, limits, and CA path with exact deployment
 values.
 
@@ -73,7 +73,9 @@ sandbox:
 <!-- provider-guide-config:end -->
 
 Colossus appends `/models` and `/chat/completions` to `baseUrl`. Include the API prefix
-but not either operation path. The sandbox destination is the exact origin only. When
+but not either operation path. Under an isolating boundary, the sandbox destination is
+the exact origin only; acknowledged full access needs no duplicate grant and an origin
+entry does not narrow ambient authority. When
 `timeoutMs` is omitted, catalog and generation requests use 5 minutes for remote hosts
 and 15 minutes for `localhost`, IPv4 loopback, or IPv6 loopback. Set a positive
 `timeoutMs` only when the connection needs an explicit override.
@@ -112,9 +114,9 @@ configured trust and timeout, and the smoke test returns `connected`.
 
 ## Verification
 
-Run `colossus -w . config effective` and confirm the provider
-origin is granted exactly once. Confirm `config show` contains only the credential
-reference and CA bundle path, never the token or certificate private keys.
+Run `colossus -w . config effective` and confirm the provider uses the intended exact
+declared origin or ambient network authority. Confirm `config show` contains only the
+credential reference and CA bundle path, never the token or certificate private keys.
 
 ## Failure path
 
@@ -128,8 +130,8 @@ reference and CA bundle path, never the token or certificate private keys.
   timeout, response format, `chatCompletionsOutputTokenParameter`, tool-call support,
   and streaming support. Correct the profile and capability fields, then rerun
   `models doctor compatible`.
-- **The origin is denied:** grant the exact scheme, host, and effective port without the
-  API path.
+- **The origin is denied under isolation:** grant the exact scheme, host, and effective
+  port without the API path.
 
 ## Next step
 

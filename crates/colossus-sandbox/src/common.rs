@@ -89,6 +89,12 @@ pub struct SandboxDoctorReport {
     /// Whether a direct-execution mode was acknowledged globally for headless callers.
     #[serde(default)]
     pub direct_execution_globally_acknowledged: bool,
+    /// Effective resource-authority mode for permit-bearing adapters.
+    #[serde(default)]
+    pub resource_authority: ResourceAuthority,
+    /// Credential-free authority matrix for operator diagnostics.
+    #[serde(default)]
+    pub resource_matrix: BTreeMap<String, String>,
     /// Whether native kernel isolation is available.
     pub native_supported: bool,
     /// Native backend details without secrets.
@@ -182,6 +188,8 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
         selected_backend: String::new(),
         colossus_process_isolation: false,
         direct_execution_globally_acknowledged: false,
+        resource_authority: ResourceAuthority::Declared,
+        resource_matrix: BTreeMap::new(),
         native_supported,
         native_details,
         helper_executable: config.helper_executable.clone(),
