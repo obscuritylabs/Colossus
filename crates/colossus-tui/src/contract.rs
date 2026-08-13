@@ -726,12 +726,19 @@ pub trait InteractiveHost: Send + Sync {
     ) -> Result<HostPlanExecutionResult, String>;
 
     /// Persist one submitted input through the encrypted presentation repository.
-    async fn append_history(&self, entry: String) -> Result<(), String>;
+    async fn append_history(
+        &self,
+        session_id: &str,
+        entry: String,
+        events: mpsc::Sender<HostEvent>,
+    ) -> Result<(), String>;
 
     /// Persist one exact terminal preference snapshot.
     async fn save_preferences(
         &self,
+        session_id: &str,
         preferences: TerminalPreferences,
+        events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String>;
 
     /// Load the next older bounded transcript page.

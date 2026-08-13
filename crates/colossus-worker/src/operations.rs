@@ -125,7 +125,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v11 interactive duplex channel.
+/// One operation carried by the authenticated protocol-v12 interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -160,6 +160,20 @@ pub enum InteractiveWorkerRequest {
         /// Include bounded provider evidence on a failed turn for a trusted local client.
         #[serde(default, skip_serializing_if = "is_false")]
         include_provider_response_diagnostics: bool,
+    },
+    /// Persist one terminal-history entry under the attached session acknowledgement.
+    PresentationHistoryAppend {
+        /// Exact durable session displayed by the attached client.
+        session_id: String,
+        /// Exact submitted entry.
+        entry: String,
+    },
+    /// Persist terminal preferences under the attached session acknowledgement.
+    PresentationSave {
+        /// Exact durable session displayed by the attached client.
+        session_id: String,
+        /// Strict complete replacement profile.
+        preferences: TerminalPreferences,
     },
     /// Approve one exact optimistic Plan revision.
     PlanApprove {
@@ -341,7 +355,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v11 interactive operation with authenticated duplex control.
+    /// Execute any protocol-v12 interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,

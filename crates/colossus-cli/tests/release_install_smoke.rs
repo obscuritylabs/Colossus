@@ -14,6 +14,15 @@ use tempfile::tempdir;
 const JOURNAL_KEY: &str = "7171717171717171717171717171717171717171717171717171717171717171";
 const SIGNING_KEY: &str = "8282828282828282828282828282828282828282828282828282828282828282";
 
+#[cfg(unix)]
+fn create_private_directory(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fs::create_dir_all(path).expect("private test directory");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .expect("private test directory permissions");
+}
+
 fn release_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "aarch64-apple-darwin",
@@ -134,11 +143,17 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let root = fs::canonicalize(directory.path()).expect("canonical test root");
+    #[cfg(unix)]
+    create_private_directory(&root);
     let package = root.join("package");
     let prefix = root.join("prefix");
     let smoke = root.join("smoke");
     fs::create_dir_all(&package).expect("package directory");
     fs::create_dir_all(smoke.join("workflows")).expect("smoke workflows");
+    #[cfg(unix)]
+    for path in [&prefix, &prefix.join("home"), &prefix.join("bin")] {
+        create_private_directory(path);
+    }
     let installer = prepare_package(source_binary, &package);
 
     let mut installation_stdout = Vec::new();
@@ -203,10 +218,13 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
             &std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
         ));
         let deferred_home = root.join("privileged-home/.colossus");
+        let deferred_prefix = root.join("privileged-prefix");
+        create_private_directory(&deferred_prefix);
+        create_private_directory(&deferred_prefix.join("bin"));
         let deferred = Command::new("/bin/sh")
             .arg(&installer)
             .arg("--prefix")
-            .arg(root.join("privileged-prefix"))
+            .arg(&deferred_prefix)
             .env(
                 "PATH",
                 std::env::join_paths(search_path).expect("test PATH"),
@@ -396,14 +414,16 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
 
         let linked_prefix = root.join("linked-prefix");
         let actual_bin = root.join("actual-bin");
-        fs::create_dir(&linked_prefix).expect("linked prefix");
+        create_private_directory(&linked_prefix);
+        create_private_directory(&linked_prefix.join("home"));
         fs::create_dir(&actual_bin).expect("actual bin");
         symlink(&actual_bin, linked_prefix.join("bin")).expect("linked bin directory");
         let rejected = install(&installer, &linked_prefix);
         assert!(!rejected.status.success());
+        let rejected_stderr = String::from_utf8_lossy(&rejected.stderr);
         assert!(
-            String::from_utf8_lossy(&rejected.stderr)
-                .contains("refusing to install through linked path component")
+            rejected_stderr.contains("refusing to install through linked path component"),
+            "{rejected_stderr}"
         );
 
         let real_binary = package.join("colossus.real");

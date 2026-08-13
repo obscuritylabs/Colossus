@@ -37,6 +37,12 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
                 "run_interactive.sandbox_boundary_acknowledge"
             }
             InteractiveWorkerRequest::Run { .. } => "run_interactive.run",
+            InteractiveWorkerRequest::PresentationHistoryAppend { .. } => {
+                "run_interactive.presentation_history_append"
+            }
+            InteractiveWorkerRequest::PresentationSave { .. } => {
+                "run_interactive.presentation_save"
+            }
             InteractiveWorkerRequest::PlanApprove { .. } => "run_interactive.plan_approve",
             InteractiveWorkerRequest::PlanDiscard { .. } => "run_interactive.plan_discard",
             InteractiveWorkerRequest::PlanExecute { .. } => "run_interactive.plan_execute",

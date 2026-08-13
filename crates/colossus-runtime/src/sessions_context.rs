@@ -11,6 +11,25 @@ impl Runtime {
         &self,
         preferences: TerminalPreferences,
     ) -> Result<TerminalPreferences, RuntimeError> {
+        self.save_presentation_preferences_with_session(preferences, None)
+            .await
+    }
+
+    /// Persist a terminal preference snapshot for one acknowledged interactive session.
+    pub async fn save_presentation_preferences_for_session(
+        &self,
+        session_id: &str,
+        preferences: TerminalPreferences,
+    ) -> Result<TerminalPreferences, RuntimeError> {
+        self.save_presentation_preferences_with_session(preferences, Some(session_id))
+            .await
+    }
+
+    async fn save_presentation_preferences_with_session(
+        &self,
+        preferences: TerminalPreferences,
+        session_id: Option<&str>,
+    ) -> Result<TerminalPreferences, RuntimeError> {
         let operation = PresentationOperation::Save { preferences };
         let action = operation.action();
         let mut request = effect_request(
@@ -21,6 +40,7 @@ impl Runtime {
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
         request.capabilities = vec![action.into()];
+        request.context.session_id = session_id.map(str::to_owned);
         let result = self
             .gateway
             .execute(request, self.presentation_executor.as_ref())
@@ -36,6 +56,24 @@ impl Runtime {
 
     /// Append one terminal-history entry through policy, permit, and audit boundaries.
     pub async fn append_terminal_history(&self, entry: &str) -> Result<String, RuntimeError> {
+        self.append_terminal_history_with_session(entry, None).await
+    }
+
+    /// Append one terminal-history entry for one acknowledged interactive session.
+    pub async fn append_terminal_history_for_session(
+        &self,
+        session_id: &str,
+        entry: &str,
+    ) -> Result<String, RuntimeError> {
+        self.append_terminal_history_with_session(entry, Some(session_id))
+            .await
+    }
+
+    async fn append_terminal_history_with_session(
+        &self,
+        entry: &str,
+        session_id: Option<&str>,
+    ) -> Result<String, RuntimeError> {
         let operation = PresentationOperation::AppendHistory {
             entry: entry.into(),
         };
@@ -49,6 +87,7 @@ impl Runtime {
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
         request.capabilities = vec![action.into()];
+        request.context.session_id = session_id.map(str::to_owned);
         let result = self
             .gateway
             .execute(request, self.presentation_executor.as_ref())

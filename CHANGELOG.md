@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-08-13
+
 ### Added
 
 - Added recursively sparse schema-version-2 configuration: only `schemaVersion` and
@@ -25,6 +27,9 @@ include breaking changes while the public API is still settling.
 
 ### Changed
 
+- Generated configuration now omits default agent and subagent runtime-limit blocks,
+  while `config show` reports the resolved turn and concurrency bounds that remain
+  enforced at runtime.
 - Sparse schema-version-2 configurations now default to `access.profile: allow_all`
   and acknowledged `sandbox.backend: danger_full_access`. This intentionally unsafe
   pre-1.0 default applies across CLI, TUI, Desktop Managed Local, embedded SDK hosts,
@@ -62,6 +67,12 @@ include breaking changes while the public API is still settling.
 - Codex CLI account commands now report completion only after Colossus verifies their
   runtime credential postcondition; unsafe stores are rejected before the official CLI
   is invoked, and logout must leave no usable credential behind.
+
+### Fixed
+
+- Kept TUI history and preference persistence inside the accepted per-session
+  direct-execution boundary, avoiding a misleading non-fatal persistence error after
+  the operator acknowledges full access.
 
 ### Security
 
