@@ -268,20 +268,25 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
         "type -a podman || true",
-        "/usr/bin/podman --version",
-        "/usr/bin/podman pull",
-        "/usr/bin/podman build",
-        "proxy=$(/usr/bin/podman image inspect",
+        "sudo apt-get install --yes musl-tools slirp4netns",
+        "/usr/local/bin/podman --version",
+        "{{.Host.OCIRuntime.Path}}",
+        "/usr/local/bin/crun",
+        "{{.Host.Conmon.Path}}",
+        "/usr/local/bin/conmon",
+        "/usr/local/bin/podman pull",
+        "/usr/local/bin/podman build",
+        "proxy=$(/usr/local/bin/podman image inspect",
         "for readiness_attempt in 1 2 3",
         "timeout --kill-after=10s 90s",
-        "env -i PATH=/usr/bin /usr/bin/podman run",
+        "env -i PATH=/usr/bin /usr/local/bin/podman run",
         "--name \"$readiness_name\"",
-        "/usr/bin/podman container exists \"$readiness_name\"",
-        "/usr/bin/podman container rm --force --time 0 \"$readiness_name\"",
+        "/usr/local/bin/podman container exists \"$readiness_name\"",
+        "/usr/local/bin/podman container rm --force --time 0 \"$readiness_name\"",
         "124|137) ;;",
         "test \"$readiness\" = true",
         "::error::rootless Podman readiness exhausted its retry budget",
-        "/usr/bin/podman info",
+        "/usr/local/bin/podman info",
         "printf ready > podman-readiness.txt && cat podman-readiness.txt",
         "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
@@ -310,19 +315,19 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     .as_str()
     .expect("Podman image preparation must be a script");
     for required in [
-        "/usr/bin/podman pull",
-        "/usr/bin/podman build",
-        "proxy=$(/usr/bin/podman image inspect",
+        "/usr/local/bin/podman pull",
+        "/usr/local/bin/podman build",
+        "proxy=$(/usr/local/bin/podman image inspect",
         "for readiness_attempt in 1 2 3",
         "timeout --kill-after=10s 90s",
-        "env -i PATH=/usr/bin /usr/bin/podman run",
+        "env -i PATH=/usr/bin /usr/local/bin/podman run",
         "--name \"$readiness_name\"",
-        "/usr/bin/podman container exists \"$readiness_name\"",
-        "/usr/bin/podman container rm --force --time 0 \"$readiness_name\"",
+        "/usr/local/bin/podman container exists \"$readiness_name\"",
+        "/usr/local/bin/podman container rm --force --time 0 \"$readiness_name\"",
         "124|137) ;;",
         "test \"$readiness\" = true",
         "::error::rootless Podman readiness exhausted its retry budget",
-        "/usr/bin/podman info",
+        "/usr/local/bin/podman info",
         "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
         assert!(
@@ -331,6 +336,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         );
     }
     assert!(!podman_readiness.contains("timeout --foreground"));
+    assert!(!source.contains("/usr/bin/podman"));
+    assert!(!source.contains("musl-tools podman slirp4netns"));
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
     let native_source =

@@ -465,18 +465,18 @@ jobs:
       - name: Install static proxy and Podman prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes musl-tools podman slirp4netns
+          sudo apt-get install --yes musl-tools slirp4netns
           rustup target add x86_64-unknown-linux-musl
-          # Runner images now ship a standalone Podman 5.x under /usr/local/bin, which
-          # precedes /usr/bin on PATH, while acceptance pins the distribution Podman at
-          # /usr/bin/podman for the sandbox runtime. Every Podman invocation in this job
-          # therefore uses that absolute path: a bare `podman` would build the rootless
-          # image store with one version and start containers with the other, and the
-          # first `--userns=keep-id` start then has to reinterpret foreign layer state
-          # instead of reusing it. Record the resolution so a future image change that
-          # reintroduces a split is visible in the log.
+          # GitHub's runner image ships a self-consistent Podman bundle under
+          # /usr/local/bin. Installing Ubuntu's distro Podman adds a second, older stack
+          # whose conmon lacks the journald support required by the runner configuration.
+          # Pin the bundled binary and assert its bundled OCI runtime before acceptance.
           type -a podman || true
-          /usr/bin/podman --version
+          /usr/local/bin/podman --version
+          test "$(/usr/local/bin/podman info --format '{{.Host.OCIRuntime.Path}}')" = \
+            /usr/local/bin/crun
+          test "$(/usr/local/bin/podman info --format '{{.Host.Conmon.Path}}')" = \
+            /usr/local/bin/conmon
       - name: Build immutable OCI allowlist proxy
         id: build-proxy
         run: |
@@ -499,12 +499,12 @@ jobs:
         run: |
           # Use the same absolute binary the readiness warmup and the live suite use so a
           # single Podman version owns the rootless image store.
-          /usr/bin/podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
-          /usr/bin/podman build --file oci-proxy.Dockerfile \
+          /usr/local/bin/podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          /usr/local/bin/podman build --file oci-proxy.Dockerfile \
             --ignorefile oci-proxy.Dockerfile.dockerignore \
             --build-arg TARGET_TRIPLE=x86_64-unknown-linux-musl \
             --tag colossus-oci-proxy:acceptance .
-          proxy=$(/usr/bin/podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
+          proxy=$(/usr/local/bin/podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
           case "$proxy" in sha256:*) ;; *) proxy="sha256:$proxy" ;; esac
           echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
           # Pay the one-time rootless Podman setup under a separate bounded readiness
@@ -521,7 +521,7 @@ jobs:
             readiness_name="colossus-podman-readiness-$readiness_attempt"
             rm -f "$warmup/podman-readiness.txt"
             if timeout --kill-after=10s 90s \
-              env -i PATH=/usr/bin /usr/bin/podman run --rm --pull=never \
+              env -i PATH=/usr/bin /usr/local/bin/podman run --rm --pull=never \
               --userns=keep-id --user "$(id -u):$(id -g)" --network=none --read-only \
               --cap-drop=ALL --security-opt=no-new-privileges \
               --name "$readiness_name" \
@@ -536,9 +536,9 @@ jobs:
               readiness_status=$?
             fi
             if timeout --kill-after=5s 30s \
-              /usr/bin/podman container exists "$readiness_name"; then
+              /usr/local/bin/podman container exists "$readiness_name"; then
               timeout --kill-after=5s 30s \
-                /usr/bin/podman container rm --force --time 0 "$readiness_name"
+                /usr/local/bin/podman container rm --force --time 0 "$readiness_name"
             else
               exists_status=$?
               test "$exists_status" -eq 1
@@ -550,8 +550,8 @@ jobs:
           done
           if ! test "$readiness" = true; then
             echo "::error::rootless Podman readiness exhausted its retry budget"
-            /usr/bin/podman --version || true
-            /usr/bin/podman info \
+            /usr/local/bin/podman --version || true
+            /usr/local/bin/podman info \
               --format 'driver={{.Store.GraphDriverName}} root={{.Store.GraphRoot}} runtime={{.Host.OCIRuntime.Name}}' || true
             exit 1
           fi
@@ -560,7 +560,7 @@ jobs:
           rmdir "$warmup"
       - name: Run live Podman OCI escape and recovery suite
         env:
-          COLOSSUS_OCI_RUNTIME: /usr/bin/podman
+          COLOSSUS_OCI_RUNTIME: /usr/local/bin/podman
           COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
           COLOSSUS_OCI_PROXY_IMAGE: ${{ steps.podman-images.outputs.proxy }}
         run: cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
