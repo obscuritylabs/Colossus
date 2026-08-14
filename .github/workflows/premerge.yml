@@ -496,20 +496,25 @@ jobs:
           case "$proxy" in sha256:*) ;; *) proxy="sha256:$proxy" ;; esac
           echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
           # Pay rootless Podman's one-time container bootstrap here instead of inside the
-          # first sandboxed process, whose runtime budget is enforced by the suite. The
-          # sandbox always runs workloads as `--userns=keep-id --user <uid>:<gid>`, and the
-          # first such container materializes an id-mapped copy of the workload image in
-          # Podman's store, so mirror those flags to keep that cost outside the budget too.
-          # Mirror the sandbox's resource limits, capability drop, and bind mount as well so
-          # the cgroup and id-mapped mount setup they trigger is also charged to this step.
+          # first sandboxed process, whose runtime budget is enforced by the suite. Match
+          # the sandbox helper's scrubbed runtime environment and command shape as well as
+          # its user namespace, resource limits, capability drop, and bind mount. Otherwise
+          # an ambient-environment warmup can succeed while Podman's first env-cleared run
+          # materializes separate rootless state and consumes the complete effect budget.
           warmup="$(mktemp --directory)"
-          podman run --rm --pull=never --network=none --read-only \
+          timeout --signal=KILL --kill-after=10s 300s \
+            env -i PATH=/usr/bin /usr/bin/podman run --rm --pull=never \
+            --network=none --read-only --name colossus-podman-warmup \
             --userns=keep-id --user "$(id -u):$(id -g)" \
             --cap-drop=ALL --security-opt=no-new-privileges \
             --pids-limit=16 --memory=134217728 \
             --mount "type=bind,source=$warmup,target=$warmup" \
-            --workdir "$warmup" --entrypoint /bin/true \
-            python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+            --workdir "$warmup" --entrypoint /bin/sh \
+            python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a \
+            -c 'exec /usr/bin/env -i -- "$@"' colossus-bootstrap \
+            /bin/sh -c 'printf ok > result.txt && cat result.txt'
+          test "$(cat "$warmup/result.txt")" = ok
+          rm "$warmup/result.txt"
           rmdir "$warmup"
       - name: Run live Podman OCI escape and recovery suite
         env:
