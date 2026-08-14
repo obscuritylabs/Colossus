@@ -267,6 +267,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "for attempt in 1 2 3",
         "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
+        "timeout --foreground --kill-after=10s 300s",
+        "env -i PATH=/usr/bin /usr/bin/podman run",
+        "--name colossus-podman-readiness",
+        "printf ready > podman-readiness.txt && cat podman-readiness.txt",
+        "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
         assert!(
             source.contains(required),

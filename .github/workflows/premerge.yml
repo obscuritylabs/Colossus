@@ -495,21 +495,24 @@ jobs:
           proxy=$(podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
           case "$proxy" in sha256:*) ;; *) proxy="sha256:$proxy" ;; esac
           echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
-          # Pay rootless Podman's one-time container bootstrap here instead of inside the
-          # first sandboxed process, whose runtime budget is enforced by the suite. The
-          # sandbox always runs workloads as `--userns=keep-id --user <uid>:<gid>`, and the
-          # first such container materializes an id-mapped copy of the workload image in
-          # Podman's store, so mirror those flags to keep that cost outside the budget too.
-          # Mirror the sandbox's resource limits, capability drop, and bind mount as well so
-          # the cgroup and id-mapped mount setup they trigger is also charged to this step.
+          # Pay the one-time rootless Podman setup under a separate bounded readiness
+          # budget. Mirror the sandbox's cleared environment, runtime path, workload,
+          # user namespace, resource limits, bind mount, working directory, and shell
+          # write so the later 90-second success budget measures an already-ready runtime.
+          # The live suite retains its separate 12-second enforcement budget.
           warmup="$(mktemp --directory)"
-          podman run --rm --pull=never --network=none --read-only \
-            --userns=keep-id --user "$(id -u):$(id -g)" \
+          timeout --foreground --kill-after=10s 300s \
+            env -i PATH=/usr/bin /usr/bin/podman run --rm --pull=never \
+            --userns=keep-id --user "$(id -u):$(id -g)" --network=none --read-only \
             --cap-drop=ALL --security-opt=no-new-privileges \
+            --name colossus-podman-readiness \
             --pids-limit=16 --memory=134217728 \
             --mount "type=bind,source=$warmup,target=$warmup" \
-            --workdir "$warmup" --entrypoint /bin/true \
-            python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+            --workdir "$warmup" \
+            python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a \
+            /bin/sh -c 'printf ready > podman-readiness.txt && cat podman-readiness.txt'
+          test "$(cat "$warmup/podman-readiness.txt")" = ready
+          rm "$warmup/podman-readiness.txt"
           rmdir "$warmup"
       - name: Run live Podman OCI escape and recovery suite
         env:
