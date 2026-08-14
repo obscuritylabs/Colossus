@@ -267,6 +267,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "for attempt in 1 2 3",
         "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
+        "timeout --foreground --kill-after=10s 300s",
+        "env -i PATH=/usr/bin /usr/bin/podman run",
+        "--name colossus-podman-readiness",
+        "printf ready > podman-readiness.txt && cat podman-readiness.txt",
+        "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
         assert!(
             source.contains(required),
@@ -283,7 +288,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         field(job(jobs, "live-security"), "runs-on").as_str(),
         Some("ubuntu-latest-m")
     );
-    let podman_warmup = field(
+    let podman_readiness = field(
         named_step(
             job(jobs, "live-security"),
             "Build immutable Podman acceptance images",
@@ -293,15 +298,14 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     .as_str()
     .expect("Podman image preparation must be a script");
     for required in [
-        "timeout --signal=KILL --kill-after=10s 300s",
+        "timeout --foreground --kill-after=10s 300s",
         "env -i PATH=/usr/bin /usr/bin/podman run",
-        "--name colossus-podman-warmup",
-        "-c 'exec /usr/bin/env -i -- \"$@\"' colossus-bootstrap",
-        "test \"$(cat \"$warmup/result.txt\")\" = ok",
+        "--name colossus-podman-readiness",
+        "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
         assert!(
-            podman_warmup.contains(required),
-            "Podman warmup is missing the sandbox launch contract {required}"
+            podman_readiness.contains(required),
+            "Podman readiness is missing the sandbox launch contract {required}"
         );
     }
     assert!(!source.contains(">/dev/null 2>&1 || true"));
