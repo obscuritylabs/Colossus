@@ -36,10 +36,19 @@ tool boundary. Resume the most recent session with:
 colossus -w /absolute/path/to/repository tui --resume
 ```
 
+A new empty session opens with a responsive launch rail showing the canonical workspace,
+provider route, sandbox profile, approval mode, and readiness state. The rail is process-local:
+it is not written to the durable transcript, and it recedes as soon as the first command or
+prompt is submitted. Resumed sessions open directly on their retained transcript. At narrow or
+short terminal sizes, the same startup context collapses into a compact briefing. Inline startup
+moves the existing terminal view into native scrollback and begins from a clean visible viewport;
+it does not purge earlier shell history.
+
 Use `--session SESSION_ID` for an exact session. The default inline viewport writes
 finalized output into native terminal scrollback immediately for ordinary selection,
 copy, search, and wheel navigation. It grows while output is streaming, then returns to
-the sticky composer and status when the output completes. Global `--alt-screen` selects
+the sticky composer and status when the output completes, without leaving cleared live
+rows between the preceding transcript and final response. Global `--alt-screen` selects
 the application-owned full-screen viewport; `--no-alt-screen` remains a compatibility
 alias for the default.
 
@@ -82,7 +91,10 @@ The sparse schema-version-2 default already acknowledges `danger_full_access`, s
 warning is a persistent startup card and footer badge rather than a blocking prompt.
 It means authorized process, structured filesystem, and HTTP tools can use ambient host
 resources; choose an isolating execution boundary in configuration when that is not
-acceptable.
+acceptable. Startup findings use one primary risk line with a dim, concise recommendation;
+the canonical diagnostic remains unchanged. The composer is separated from this guidance by a
+quiet row, and the footer uses a full-width contrasting status surface with a distinct warning
+segment so operational state does not blend into transcript content.
 
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never

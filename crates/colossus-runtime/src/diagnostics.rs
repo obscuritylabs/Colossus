@@ -75,6 +75,11 @@ impl Runtime {
         &self.workspace
     }
 
+    /// Effective named sandbox profile used for bounded tool authority.
+    pub fn sandbox_profile(&self) -> &str {
+        &self.sandbox_profile
+    }
+
     /// Credential- and content-free hashes for currently discoverable AGENTS.md inputs.
     pub fn instruction_source_diagnostics(&self) -> Result<Value, RuntimeError> {
         self._workspace_lease.identity().revalidate()?;

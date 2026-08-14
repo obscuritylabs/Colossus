@@ -1244,6 +1244,7 @@ impl WorkerInteractiveHost {
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
+        let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session: SessionSummary = if let Some(session_id) = request.session_id {
             let value = self
                 .value(WorkerOperation::SessionGet { session_id })
@@ -1308,8 +1309,21 @@ impl InteractiveHost for WorkerInteractiveHost {
                 .ok_or_else(|| "worker status has no security posture".to_string())?,
         )
         .map_err(|error| error.to_string())?;
+        let workspace = status
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or("workspace")
+            .to_owned();
+        let sandbox_profile = status
+            .get("sandbox_profile")
+            .and_then(Value::as_str)
+            .unwrap_or("configured")
+            .to_owned();
         Ok(InteractiveSnapshot {
             session_id: session.id.clone(),
+            fresh_session,
+            workspace,
+            sandbox_profile,
             transcript,
             preferences,
             history,

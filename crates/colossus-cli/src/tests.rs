@@ -89,15 +89,15 @@ fn update_defaults_to_apply_and_accepts_one_exact_version() {
         })
     ));
     let exact =
-        Cli::try_parse_from(["colossus", "update", "--version", "v0.10.8"]).expect("exact update");
+        Cli::try_parse_from(["colossus", "update", "--version", "v0.10.9"]).expect("exact update");
     assert!(matches!(
         exact.command,
         Command::Update(UpdateCommand {
             command: None,
             version: Some(ref version),
-        }) if version == "v0.10.8"
+        }) if version == "v0.10.9"
     ));
-    assert!(Cli::try_parse_from(["colossus", "update", "check", "--version", "v0.10.8"]).is_err());
+    assert!(Cli::try_parse_from(["colossus", "update", "check", "--version", "v0.10.9"]).is_err());
 }
 
 #[test]

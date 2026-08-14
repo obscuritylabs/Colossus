@@ -432,6 +432,9 @@ fn repository_context_tools_are_strict_and_effect_identified() {
     for spec in registry.list_specs() {
         assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
         assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        if spec.name == "repo.file_summary" {
+            assert_eq!(spec.max_output_bytes, 64 * 1024);
+        }
     }
     assert!(
         registry

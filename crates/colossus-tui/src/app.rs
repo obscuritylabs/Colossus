@@ -838,6 +838,7 @@ pub(super) fn submit_line(
     if line.is_empty() {
         return;
     }
+    state.dismiss_welcome();
     state.remember_history(&line);
     let history_host = Arc::clone(&host);
     let history_tx = event_tx.clone();
@@ -1664,6 +1665,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
     if result.clear_transcript {
         state.transcript.clear();
         state.transcript_sources.clear();
+        state.security_posture_entry = None;
         state.transcript_epoch = state.transcript_epoch.wrapping_add(1);
         state.native_history_pages_loaded = 0;
         state.older_page_failed = false;
@@ -1690,6 +1692,8 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         state.older_page_failed = false;
         state.before_sequence = page.before_sequence;
         state.has_more = page.has_more;
+        state.welcome_visible = false;
+        state.security_posture_entry = None;
         state.end();
     }
     if let Some(preferences) = result.preferences {

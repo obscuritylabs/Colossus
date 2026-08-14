@@ -1,5 +1,7 @@
 use super::*;
-use colossus_contracts::{ModelCapabilities, ModelLimits, ProviderRoute, ProviderTurn};
+use colossus_contracts::{
+    ModelCapabilities, ModelLimits, ModelToolCall, ProviderRoute, ProviderTurn,
+};
 use colossus_ports::ModelProviderError;
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -219,6 +221,64 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
     assert_eq!(snapshots.list("session-1").expect("snapshots").len(), 1);
     assert_eq!(provider.calls.load(Ordering::Acquire), 1);
     assert_eq!(prepared.strategy.as_deref(), Some("deterministic"));
+}
+
+#[tokio::test]
+async fn bounded_recent_tool_result_allows_automatic_compaction() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        compact_at_percent: 70,
+        target_percent: 45,
+        preserve_recent_messages: 2,
+        ..ContextConfig::default()
+    };
+    let (_journal, sessions, snapshots, service) =
+        fixture(config, provider.clone() as Arc<dyn ModelProvider>);
+    let mut tool_call = message(ModelMessageRole::Assistant, "");
+    tool_call.tool_calls.push(ModelToolCall {
+        call_id: "call-summary".into(),
+        name: "repo.file_summary".into(),
+        arguments: json!({"path": "generated.rs", "max_lines": 500}),
+    });
+    let tool_result = ModelMessage {
+        role: ModelMessageRole::Tool,
+        content: "x".repeat(64 * 1024),
+        tool_call_id: Some("call-summary".into()),
+        tool_calls: Vec::new(),
+    };
+    let messages = vec![
+        message(
+            ModelMessageRole::User,
+            format!("old request {}", "x".repeat(300_000)),
+        ),
+        message(ModelMessageRole::Assistant, "old response"),
+        message(ModelMessageRole::User, "summarize generated.rs"),
+        tool_call,
+        tool_result.clone(),
+    ];
+    for value in &messages {
+        sessions
+            .append_message("session-1", "run-1", value.clone(), user_actor())
+            .expect("message");
+    }
+    let mut request = preparation_request(messages, false);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 128_000,
+        max_output_tokens: 16_000,
+        safety_margin_tokens: 12_800,
+        input_budget_tokens: 99_200,
+    };
+
+    let prepared = service.prepare(request).await.expect("prepared");
+
+    assert!(prepared.compacted);
+    assert!(prepared.snapshot_created);
+    assert!(prepared.token_estimate <= prepared.input_budget_tokens);
+    assert_eq!(prepared.messages.last(), Some(&tool_result));
+    assert_eq!(snapshots.list("session-1").expect("snapshots").len(), 1);
 }
 
 #[tokio::test]

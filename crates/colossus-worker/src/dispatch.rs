@@ -15,6 +15,7 @@ pub(super) async fn dispatch(
             "protocol_version": PROTOCOL_VERSION,
             "pid": std::process::id(),
             "workspace": runtime.workspace(),
+            "sandbox_profile": runtime.sandbox_profile(),
             "approval_mode": approval_mode.get(),
             "security_posture": runtime.security_posture(),
         })),

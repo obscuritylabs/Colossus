@@ -288,7 +288,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
             ),
             effect_action: Some("repo.file_summary".into()),
             capability: Some("repo.file_summary".into()),
-            max_output_bytes: 1024 * 1024,
+            max_output_bytes: 64 * 1024,
         },
         ToolSpec {
             name: "patch.preview".into(),

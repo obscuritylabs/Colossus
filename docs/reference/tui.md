@@ -11,8 +11,17 @@ Start with `colossus` or `colossus tui`. The default inline viewport commits eve
 finalized transcript entry to native terminal scrollback immediately, so ordinary mouse
 selection, copy, search, and wheel scrolling keep working. The viewport expands while
 output is streaming, then collapses back to the sticky composer and status as soon as
-that output completes. Use `--alt-screen` for the application-owned full-screen
+that output completes without inserting cleared live rows between transcript entries.
+Use `--alt-screen` for the application-owned full-screen
 transcript viewport; `--no-alt-screen` remains a compatibility alias for the default.
+
+Fresh empty sessions initially use that live viewport for the **Launch Rail**: a responsive,
+non-durable welcome surface with the selected workspace, provider route, sandbox profile,
+approval mode, and readiness state plus shortcuts for `/plan`, `/resume`, and `/tools`. It is
+never committed to native scrollback or canonical session history. The first submitted command
+or prompt dismisses it before normal output is rendered; restored sessions skip it entirely.
+Inline startup first moves the prior visible terminal into native scrollback, then draws from a
+clean viewport without purging the terminal's earlier history.
 
 The current directory or `-w, --workspace` selects repository context, relative-path
 anchoring, and state identity. It is also the resource boundary under workspace
@@ -32,9 +41,12 @@ cards contain only a sanitized failure category, action, resource, and manual-fa
 explanation.
 
 Security posture findings appear at startup as a non-durable **Security posture**
-warning card and remain visible as a warning count in the footer. This includes an
-explicit `danger_full_access` sandbox backend even when its boundary acknowledgement is
-already configured.
+warning card and remain visible as a warning count in the footer. Each finding is a primary
+risk line followed by a dim, concise recommendation. This includes an explicit
+`danger_full_access` sandbox backend even when its boundary acknowledgement is already
+configured. A quiet row separates startup guidance from the composer. The footer is a
+full-width contrasting status surface; an active security count is a distinct warning-colored
+lead segment.
 
 Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
 current transcript visible and the composer draft preserved. **Summary** presents the

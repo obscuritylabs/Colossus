@@ -1133,6 +1133,7 @@ impl EmbeddedInteractiveHost {
 #[async_trait]
 impl InteractiveHost for EmbeddedInteractiveHost {
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
+        let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session = if let Some(session_id) = request.session_id {
             self.runtime
                 .get_session(&session_id)
@@ -1168,6 +1169,9 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .collect::<Vec<_>>();
         Ok(InteractiveSnapshot {
             session_id: session.id.clone(),
+            fresh_session,
+            workspace: self.runtime.workspace().display().to_string(),
+            sandbox_profile: self.runtime.sandbox_profile().to_owned(),
             transcript,
             preferences,
             history,

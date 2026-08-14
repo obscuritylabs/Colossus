@@ -45,6 +45,13 @@ pub struct FooterState {
 pub struct InteractiveSnapshot {
     /// Exact active durable session.
     pub session_id: String,
+    /// Whether this process created the session during this bootstrap.
+    pub fresh_session: bool,
+    /// Canonical workspace selected for this terminal process.
+    pub workspace: String,
+    /// Effective sandbox profile shown as startup sandbox context. This is the
+    /// profile only; it does not describe the effective execution backend.
+    pub sandbox_profile: String,
     /// Newest bounded canonical transcript page.
     pub transcript: SessionMessagePage,
     /// Persisted rendering and editing preferences.
