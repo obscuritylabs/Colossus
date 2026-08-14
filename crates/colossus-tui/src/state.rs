@@ -170,6 +170,10 @@ pub(super) enum OperationKind {
 pub struct TuiState {
     /// Exact active durable session.
     pub session_id: String,
+    /// Canonical workspace selected for this terminal process.
+    pub(super) workspace: String,
+    /// Effective sandbox profile shown as startup boundary context.
+    pub(super) sandbox_profile: String,
     /// Retained visible transcript; system messages are never inserted.
     pub transcript: Vec<TranscriptEntry>,
     pub(super) transcript_sources: Vec<Option<TranscriptRenderSource>>,
@@ -213,22 +217,29 @@ pub struct TuiState {
     pub(super) older_page_failed: bool,
     pub(super) native_history_pages_loaded: usize,
     pub(super) transcript_epoch: u64,
+    pub(super) welcome_visible: bool,
+    pub(super) security_posture_entry: Option<usize>,
     pub(super) should_exit: bool,
 }
 
 impl TuiState {
     /// Build reducer state from one bounded host snapshot.
     pub fn from_snapshot(snapshot: InteractiveSnapshot) -> Self {
+        let welcome_visible = snapshot.fresh_session
+            && !snapshot.transcript.has_more
+            && snapshot.transcript.messages.is_empty()
+            && snapshot.footer.message_count == 0;
         let (mut transcript, mut transcript_sources) =
             transcript_from_messages(snapshot.transcript.messages, &snapshot.preferences);
-        if !snapshot.security_posture.is_hardened() {
-            let mut body = Vec::new();
-            for finding in &snapshot.security_posture.findings {
-                body.push(PresentationBlock::Markdown(format!(
-                    "**{}**\n\n{}",
-                    finding.summary, finding.remediation
-                )));
-            }
+        let security_posture_entry = if !snapshot.security_posture.is_hardened() {
+            let findings = snapshot
+                .security_posture
+                .findings
+                .iter()
+                .map(|finding| format!("- {}\n  - {}", finding.summary, finding.remediation))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let entry_index = transcript.len();
             transcript.push(TranscriptEntry {
                 sequence: None,
                 kind: TranscriptKind::Command,
@@ -243,14 +254,19 @@ impl TuiState {
                         }
                     ),
                     tone: PresentationTone::Warning,
-                    body,
+                    body: vec![PresentationBlock::Markdown(findings)],
                 }),
-                temporary: false,
+                temporary: welcome_visible,
             });
             transcript_sources.push(None);
-        }
+            Some(entry_index)
+        } else {
+            None
+        };
         Self {
             session_id: snapshot.session_id,
+            workspace: snapshot.workspace,
+            sandbox_profile: snapshot.sandbox_profile,
             transcript,
             transcript_sources,
             has_more: snapshot.transcript.has_more,
@@ -287,7 +303,18 @@ impl TuiState {
             older_page_failed: false,
             native_history_pages_loaded: 0,
             transcript_epoch: 0,
+            welcome_visible,
+            security_posture_entry,
             should_exit: false,
+        }
+    }
+
+    pub(super) fn dismiss_welcome(&mut self) {
+        self.welcome_visible = false;
+        if let Some(index) = self.security_posture_entry
+            && let Some(entry) = self.transcript.get_mut(index)
+        {
+            entry.temporary = false;
         }
     }
 
@@ -421,6 +448,9 @@ impl TuiState {
     pub fn prepend_page(&mut self, page: SessionMessagePage) {
         let (mut older, mut older_sources) =
             transcript_from_messages(page.messages, &self.preferences);
+        if let Some(index) = self.security_posture_entry.as_mut() {
+            *index = index.saturating_add(older.len());
+        }
         older.append(&mut self.transcript);
         older_sources.append(&mut self.transcript_sources);
         self.transcript = older;

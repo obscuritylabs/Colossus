@@ -10,6 +10,9 @@ use ratatui::{Terminal, backend::TestBackend};
 fn snapshot() -> InteractiveSnapshot {
     InteractiveSnapshot {
         session_id: "019f-test".into(),
+        fresh_session: false,
+        workspace: "/workspace/Colossus".into(),
+        sandbox_profile: "workspace-development".into(),
         transcript: SessionMessagePage {
             messages: vec![SessionMessage {
                 session_id: "019f-test".into(),
@@ -42,17 +45,212 @@ fn snapshot() -> InteractiveSnapshot {
     }
 }
 
-#[test]
-fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badge() {
+fn empty_snapshot() -> InteractiveSnapshot {
     let mut source = snapshot();
+    source.fresh_session = true;
+    source.transcript = SessionMessagePage {
+        messages: Vec::new(),
+        before_sequence: None,
+        has_more: false,
+    };
+    source.footer.context = Some((0, 32_768));
+    source.footer.message_count = 0;
+    source
+}
+
+#[test]
+fn empty_session_opens_with_the_responsive_launch_rail() {
+    for (width, height) in [(40, 12), (80, 24), (120, 32)] {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut state = TuiState::from_snapshot(empty_snapshot());
+        terminal
+            .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+            .expect("draw launch rail");
+        let rendered = terminal.backend().to_string();
+        assert!(
+            rendered.contains("COLOSSUS"),
+            "{width}x{height}: {rendered}"
+        );
+        assert!(rendered.contains("READY"), "{width}x{height}: {rendered}");
+        assert!(
+            rendered.contains("What are we moving today?"),
+            "{width}x{height}: {rendered}"
+        );
+        assert!(
+            rendered.contains("Build or change something"),
+            "{width}x{height}: {rendered}"
+        );
+        assert!(rendered.contains("/plan"), "{width}x{height}: {rendered}");
+        assert!(
+            rendered.contains("Implement {feature}"),
+            "{width}x{height}: {rendered}"
+        );
+        assert!(
+            rendered.contains("Execute · Enter sends"),
+            "{width}x{height}: {rendered}"
+        );
+        assert!(
+            !rendered.contains("durable row marker"),
+            "{width}x{height}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn launch_rail_is_process_local_and_only_shown_for_an_empty_session() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut restored = TuiState::from_snapshot(snapshot());
+    assert!(!restored.welcome_visible);
+    terminal
+        .draw(|frame| render(frame, &mut restored, 0, ScreenMode::Alternate))
+        .expect("draw restored session");
+    let rendered = terminal.backend().to_string();
+    assert!(
+        !rendered.contains("What are we moving today?"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("durable row marker"), "{rendered}");
+
+    let mut resumed_empty = empty_snapshot();
+    resumed_empty.fresh_session = false;
+    let resumed_empty = TuiState::from_snapshot(resumed_empty);
+    assert!(!resumed_empty.welcome_visible);
+
+    let mut fresh = TuiState::from_snapshot(empty_snapshot());
+    assert!(fresh.welcome_visible);
+    assert!(fresh.transcript.is_empty());
+    fresh.dismiss_welcome();
+    assert!(!fresh.welcome_visible);
+    assert!(fresh.transcript.is_empty());
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut fresh, 0, ScreenMode::Alternate))
+        .expect("draw dismissed launch rail");
+    let rendered = terminal.backend().to_string();
+    assert!(
+        !rendered.contains("What are we moving today?"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Implement {feature}"), "{rendered}");
+    assert!(rendered.contains("Message · Enter sends"), "{rendered}");
+}
+
+#[test]
+fn launch_rail_sanitizes_runtime_supplied_context() {
+    let mut source = empty_snapshot();
+    source.workspace = "/workspace/Colossus\u{1b}]8;;evil\u{7}".into();
+    source.sandbox_profile = "workspace\nwrite\u{200d}".into();
+    source.footer.route = "model\u{1b}[31m@profile".into();
+    source.footer.status = "ready\rnow".into();
+    let state = TuiState::from_snapshot(source);
+    let rendered = welcome_lines(&state, 120, 32)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!rendered.contains('\u{1b}'), "{rendered}");
+    assert!(!rendered.contains('\u{7}'), "{rendered}");
+    assert!(!rendered.contains('\u{200d}'), "{rendered}");
+    assert!(rendered.contains("workspace write"), "{rendered}");
+    assert!(rendered.contains("READY NOW"), "{rendered}");
+}
+
+#[test]
+fn fresh_launch_rail_stays_live_after_security_posture_enters_inline_history() {
+    let mut source = empty_snapshot();
     source.security_posture = SecurityPostureReport {
         findings: vec![SecurityPostureFinding {
             code: "sandbox.danger_full_access".into(),
             severity: SecurityPostureSeverity::Warning,
-            summary: "Danger full access is enabled: process execution has ambient runtime access."
-                .into(),
+            summary: "Danger full access is enabled.".into(),
             remediation: "Use an isolating sandbox backend.".into(),
         }],
+    };
+    let mut state = TuiState::from_snapshot(source);
+    let committed = committable_transcript_end(&state.transcript, 0);
+    assert_eq!(committed, 0);
+    assert!(state.welcome_visible);
+    assert!(
+        desired_inline_viewport_height(&state, 120, 32, committed) > MINIMUM_INLINE_VIEWPORT_HEIGHT
+    );
+
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, committed, ScreenMode::Inline))
+        .expect("draw fresh warning session");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("What are we moving today?"), "{rendered}");
+    assert!(rendered.contains("1 security warning"), "{rendered}");
+    assert_eq!(
+        rendered.matches("Execute · Enter sends").count(),
+        1,
+        "{rendered}"
+    );
+    let rail = rendered
+        .find("What are we moving today?")
+        .expect("launch rail");
+    let warning = rendered
+        .find("Danger full access is enabled.")
+        .expect("security warning");
+    assert!(
+        rail < warning,
+        "the security posture should follow the launch rail: {rendered}"
+    );
+    let rows = (0..32)
+        .map(|y| {
+            (0..120)
+                .filter_map(|x| terminal.backend().buffer().cell((x, y)))
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let recommendation_row = rows
+        .iter()
+        .position(|row| row.contains("Recommendation:"))
+        .expect("recommendation row");
+    let composer_row = rows
+        .iter()
+        .position(|row| row.contains("Execute · Enter sends"))
+        .expect("composer row");
+    assert!(
+        composer_row >= recommendation_row + 2,
+        "at least one quiet row should separate startup guidance from the composer: {rows:?}"
+    );
+    assert!(
+        rows[recommendation_row + 1..composer_row]
+            .iter()
+            .all(|row| row.trim().is_empty()),
+        "only quiet space should sit between startup guidance and the composer: {rows:?}"
+    );
+    state.dismiss_welcome();
+    assert_eq!(committable_transcript_end(&state.transcript, 0), 1);
+}
+
+#[test]
+fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badge() {
+    let mut source = snapshot();
+    source.security_posture = SecurityPostureReport {
+        findings: vec![
+            SecurityPostureFinding {
+                code: "storage.plaintext".into(),
+                severity: SecurityPostureSeverity::Warning,
+                summary: "Journal payloads are stored as plaintext canonical JSON.".into(),
+                remediation: "Use platform or environment storage keys.".into(),
+            },
+            SecurityPostureFinding {
+                code: "sandbox.danger_full_access".into(),
+                severity: SecurityPostureSeverity::Warning,
+                summary:
+                    "Danger full access is enabled: process execution has ambient runtime access."
+                        .into(),
+                remediation: "Use an isolating native, windows_job, or oci execution boundary, or use external only when a trusted host enforces the required filesystem and network isolation. Full access can expose host files, environment secrets, Colossus control state, private services, and metadata endpoints; on Unix, deliberately detached descendants can outlive the recorded process effect and its best-effort direct-mode limits.".into(),
+            },
+        ],
     };
     let state = TuiState::from_snapshot(source);
     let card = state.transcript.last().expect("security card");
@@ -64,17 +262,43 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
             ..
         })
     ));
-    let rendered = StyledDocumentRenderer::new(state.preferences.clone(), 80)
-        .render(&card.document)
-        .into_iter()
-        .map(|line| line.plain_text())
+    let PresentationBlock::Card { body, .. } = &card.document.blocks[0] else {
+        panic!("expected security posture card");
+    };
+    assert!(matches!(
+        body.as_slice(),
+        [PresentationBlock::Markdown(findings)] if !findings.contains("\n\n")
+    ));
+
+    let rendered_lines = security_posture_lines(&state, 120);
+    let rendered = rendered_lines
+        .iter()
+        .map(Line::to_string)
         .collect::<Vec<_>>()
         .join("\n");
+    assert_eq!(rendered_lines.len(), 5, "{rendered}");
+    assert!(
+        rendered.contains("Security posture · 2 warnings"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("Danger full access is enabled"),
         "{rendered}"
     );
-    assert!(rendered.contains("isolating sandbox backend"), "{rendered}");
+    assert!(rendered.contains("Recommendation:"), "{rendered}");
+    assert!(
+        rendered.contains("Use an isolating native, windows_job, or oci boundary."),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("detached descendants"), "{rendered}");
+    assert!(
+        rendered_lines
+            .iter()
+            .filter(|line| line.to_string().contains("Recommendation:"))
+            .flat_map(|line| line.spans.iter())
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+        "recommendations should recede in the metadata color: {rendered}"
+    );
 
     let backend = TestBackend::new(80, 1);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -85,7 +309,61 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(footer.contains("Security: 1"));
+    assert!(footer.contains("Security: 2"));
+    assert_ne!(
+        terminal
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .expect("footer surface cell")
+            .bg,
+        Color::Reset,
+        "the footer surface should fill the available status row"
+    );
+    assert_ne!(
+        terminal
+            .backend()
+            .buffer()
+            .cell((4, 0))
+            .expect("security badge cell")
+            .bg,
+        terminal
+            .backend()
+            .buffer()
+            .cell((79, 0))
+            .expect("footer surface cell")
+            .bg,
+        "the warning badge should read as a distinct shell-style segment"
+    );
+}
+
+#[test]
+fn inline_startup_clears_the_view_but_retains_prior_shell_rows_in_scrollback() {
+    let mut backend = TestBackend::with_lines([
+        "prior-shell-row-1",
+        "prior-shell-row-2",
+        "prior-shell-row-3",
+    ]);
+    prepare_inline_startup(&mut backend).expect("prepare inline startup");
+
+    assert_eq!(backend.cursor_position(), Position::ORIGIN);
+    assert!(
+        backend
+            .buffer()
+            .content()
+            .iter()
+            .all(|cell| cell.symbol() == " "),
+        "visible viewport should be blank: {:?}",
+        backend.buffer()
+    );
+    let scrollback = backend
+        .scrollback()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(scrollback.contains("prior-shell-row-1"), "{scrollback}");
+    assert!(scrollback.contains("prior-shell-row-3"), "{scrollback}");
 }
 
 #[test]

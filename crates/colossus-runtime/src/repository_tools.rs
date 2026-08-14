@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) const MAX_FILE_SUMMARY_OUTPUT_BYTES: usize = 64 * 1024;
+const MAX_FILE_SUMMARY_PATH_JSON_BYTES: usize = 8 * 1024;
+const MAX_FILE_SUMMARY_PREVIEW_JSON_BYTES: usize = 24 * 1024;
+const MAX_FILE_SUMMARY_COLLECTION_JSON_BYTES: usize = 8 * 1024;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum RepositoryOperation {
@@ -334,40 +339,51 @@ impl RepositoryEffectExecutor {
             ExecutionError::Failed("repo.file_summary requires bounded UTF-8 text".into())
         })?;
         let line_count = content.lines().count();
-        let preview = content
+        let selected_line_count = max_lines.clamp(1, 500);
+        let preview_source = content
             .lines()
-            .take(max_lines.clamp(1, 500))
+            .take(selected_line_count)
             .collect::<Vec<_>>()
             .join("\n");
-        let symbols = content
-            .lines()
-            .filter_map(structural_symbol)
-            .take(200)
-            .collect::<Vec<_>>();
-        let imports = content
-            .lines()
-            .map(str::trim)
-            .filter(|line| {
-                line.starts_with("import ")
-                    || line.starts_with("from ")
-                    || line.starts_with("use ")
-                    || line.starts_with("mod ")
-                    || line.starts_with("const ")
-                    || line.starts_with("let ")
-                    || line.starts_with("var ")
-            })
-            .take(100)
-            .map(|line| bounded_tool_text(line, 500))
-            .collect::<Vec<_>>();
-        let headings = content
-            .lines()
-            .map(str::trim)
-            .filter(|line| line.starts_with('#'))
-            .take(100)
-            .map(|line| bounded_tool_text(line, 500))
-            .collect::<Vec<_>>();
-        Ok(json!({
-            "path": self.relative(&file, ambient)?,
+        let (preview, preview_bytes_truncated) =
+            bounded_json_string(&preview_source, MAX_FILE_SUMMARY_PREVIEW_JSON_BYTES);
+        let symbols = bounded_json_collection(
+            content.lines().filter_map(structural_symbol),
+            200,
+            MAX_FILE_SUMMARY_COLLECTION_JSON_BYTES,
+        );
+        let imports = bounded_json_collection(
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| {
+                    line.starts_with("import ")
+                        || line.starts_with("from ")
+                        || line.starts_with("use ")
+                        || line.starts_with("mod ")
+                        || line.starts_with("const ")
+                        || line.starts_with("let ")
+                        || line.starts_with("var ")
+                })
+                .map(|line| Value::String(bounded_tool_text(line, 500))),
+            100,
+            MAX_FILE_SUMMARY_COLLECTION_JSON_BYTES,
+        );
+        let headings = bounded_json_collection(
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.starts_with('#'))
+                .map(|line| Value::String(bounded_tool_text(line, 500))),
+            100,
+            MAX_FILE_SUMMARY_COLLECTION_JSON_BYTES,
+        );
+        let relative = self.relative(&file, ambient)?;
+        let (path, path_truncated) =
+            bounded_json_string(&relative, MAX_FILE_SUMMARY_PATH_JSON_BYTES);
+        let summary = json!({
+            "path": path,
+            "path_truncated": path_truncated,
             "bytes": content.len(),
             "line_count": line_count,
             "extension": file.extension().and_then(|value| value.to_str()),
@@ -375,9 +391,68 @@ impl RepositoryEffectExecutor {
             "headings": headings,
             "symbols": symbols,
             "preview": preview,
-            "preview_truncated": line_count > max_lines.clamp(1, 500),
-        }))
+            "preview_truncated": line_count > selected_line_count || preview_bytes_truncated,
+        });
+        let output_bytes = serde_json::to_vec(&summary)
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?
+            .len();
+        if output_bytes > MAX_FILE_SUMMARY_OUTPUT_BYTES {
+            return Err(ExecutionError::Failed(
+                "repo.file_summary exceeded its internal output bound".into(),
+            ));
+        }
+        Ok(summary)
     }
+}
+
+fn bounded_json_string(text: &str, max_encoded_bytes: usize) -> (String, bool) {
+    if serde_json::to_vec(text).is_ok_and(|encoded| encoded.len() <= max_encoded_bytes) {
+        return (text.into(), false);
+    }
+
+    let mut boundaries = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    boundaries.push(text.len());
+    let mut low = 0;
+    let mut high = boundaries.len().saturating_sub(1);
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        let end = boundaries[middle];
+        if serde_json::to_vec(&text[..end]).is_ok_and(|encoded| encoded.len() <= max_encoded_bytes)
+        {
+            low = middle;
+        } else {
+            high = middle.saturating_sub(1);
+        }
+    }
+    let end = boundaries[low];
+    (text[..end].into(), end < text.len())
+}
+
+fn bounded_json_collection(
+    values: impl IntoIterator<Item = Value>,
+    max_items: usize,
+    max_encoded_bytes: usize,
+) -> Vec<Value> {
+    let mut output = Vec::new();
+    let mut encoded_bytes = 2_usize;
+    for value in values.into_iter().take(max_items) {
+        let Ok(encoded) = serde_json::to_vec(&value) else {
+            break;
+        };
+        let separator = usize::from(!output.is_empty());
+        let next_bytes = encoded_bytes
+            .saturating_add(separator)
+            .saturating_add(encoded.len());
+        if next_bytes > max_encoded_bytes {
+            break;
+        }
+        output.push(value);
+        encoded_bytes = next_bytes;
+    }
+    output
 }
 
 #[async_trait]

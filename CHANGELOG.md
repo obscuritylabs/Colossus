@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-08-13
+
 ### Added
 
 - Added `storage.adapter: ephemeral` for one-shot process-local runs. It uses redb's
@@ -17,6 +19,25 @@ include breaking changes while the public API is still settling.
   Because the journal is process-local, `colossus worker` modes that serve or attach to
   another process are rejected under this adapter; `worker --once` still drains the
   running process.
+- Added a responsive TUI launch rail for empty sessions with workspace, branch, model,
+  execution-boundary, approval, durability, and security-posture context.
+- Added repeated submitted-input history traversal in terminal sessions.
+
+### Changed
+
+- Fresh inline TUI sessions now clear the visible terminal viewport while retaining
+  earlier shell rows in native scrollback.
+- Security-posture guidance is now compact, visually separated from the composer, and
+  paired with a higher-contrast persistent status rail.
+- Repository file summaries now enforce a 64 KiB serialized result ceiling in addition
+  to their line bound, including byte-safe truncation for previews and extracted lists.
+
+### Fixed
+
+- Collapsed finalized streaming output into native scrollback without leaving a large
+  blank inline viewport behind.
+- Prevented an oversized recent `repo.file_summary` result from making automatic context
+  compaction fail even after older history was summarized.
 
 ## [0.10.8] - 2026-08-13
 

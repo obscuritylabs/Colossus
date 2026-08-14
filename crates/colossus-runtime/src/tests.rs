@@ -3,17 +3,17 @@ use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
     InstructionSnapshotStore, InteractiveToolExecutor, JournalExternalWorkQueue,
-    LOOPBACK_PROVIDER_TIMEOUT_MS, MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation,
-    ModelCapabilities, ModelProfileConfig, PackProcessDeclaration, PackProcessExecutor,
-    PackToolEffectInput, PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
-    REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, ResearchSearchConfig, Runtime, RuntimeConfig,
-    RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig, SemanticMemoryConfig,
-    SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter, TraceToolExecutor,
-    WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
-    goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
-    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
-    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
-    terminal_actor,
+    LOOPBACK_PROVIDER_TIMEOUT_MS, MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor,
+    MemoryEmbeddingConfig, MemoryOperation, ModelCapabilities, ModelProfileConfig,
+    PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor,
+    PresentationOperation, ProviderProfileConfig, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort,
+    ResearchSearchConfig, Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig,
+    SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
+    SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
+    configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
+    model_resource_path, model_workspace_path, provider_profile, recover_interrupted_subagents,
+    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
+    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -5928,6 +5928,35 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
             .as_array()
             .is_some_and(|items| items.len() == 3)
     );
+
+    fs::write(
+        workspace.path().join("src/generated.rs"),
+        format!(
+            "const GENERATED: &str = \"{}\";\n",
+            "\\\"".repeat(256 * 1024)
+        ),
+    )
+    .expect("generated source");
+    let bounded_summary = executor
+        .execute(
+            invoke(
+                "repo.file_summary",
+                json!({"path": "src/generated.rs", "max_lines": 500}),
+            ),
+            ExecutionContext::default(),
+        )
+        .await
+        .expect("bounded file summary");
+    assert!(
+        bounded_summary.output.len() <= MAX_FILE_SUMMARY_OUTPUT_BYTES,
+        "file summary output was {} bytes",
+        bounded_summary.output.len()
+    );
+    let bounded_summary: Value =
+        serde_json::from_str(&bounded_summary.output).expect("bounded summary JSON");
+    assert_eq!(bounded_summary["line_count"], 1);
+    assert_eq!(bounded_summary["preview_truncated"], true);
+    assert_eq!(bounded_summary["path_truncated"], false);
 
     let absolute_summary = executor
         .execute(

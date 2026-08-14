@@ -3,7 +3,8 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunOutcome, AgentRunResult, ModelMessage, ModelMessageRole, ProviderEvent, RunEvent,
-    RunEventEnvelope, SandboxBoundaryMode, SessionMessage, SessionMessagePage, SessionSummary,
+    RunEventEnvelope, SandboxBoundaryMode, SecurityPostureFinding, SecurityPostureReport,
+    SecurityPostureSeverity, SessionMessage, SessionMessagePage, SessionSummary,
     TerminalPreferences, ToolCall, ToolResult,
 };
 use colossus_ports::RunControl;
@@ -30,34 +31,42 @@ struct FixtureHost;
 impl InteractiveHost for FixtureHost {
     async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let inline = std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline");
+        let empty = std::env::var_os("COLOSSUS_TUI_EMPTY").is_some();
         let first_sequence = if inline { 2 } else { 1 };
         let last_sequence = if std::env::var_os("COLOSSUS_TUI_LONG_HISTORY").is_some() {
             30
         } else {
             5
         };
-        let messages = (first_sequence..=last_sequence)
-            .map(|sequence| SessionMessage {
-                session_id: "019f-pty".into(),
-                run_id: "run-pty".into(),
-                sequence,
-                message: ModelMessage {
-                    role: ModelMessageRole::Assistant,
-                    content: format!("durable-row-{sequence:02}"),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                created_at: "2026-07-15T00:00:00Z".into(),
-            })
-            .collect();
+        let messages = if empty {
+            Vec::new()
+        } else {
+            (first_sequence..=last_sequence)
+                .map(|sequence| SessionMessage {
+                    session_id: "019f-pty".into(),
+                    run_id: "run-pty".into(),
+                    sequence,
+                    message: ModelMessage {
+                        role: ModelMessageRole::Assistant,
+                        content: format!("durable-row-{sequence:02}"),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    created_at: "2026-07-15T00:00:00Z".into(),
+                })
+                .collect()
+        };
         let history_navigation_fixture =
             std::env::var_os("COLOSSUS_TUI_HISTORY_NAVIGATION_FIXTURE").is_some();
         Ok(InteractiveSnapshot {
             session_id: "019f-pty".into(),
+            fresh_session: empty,
+            workspace: "/workspace/Colossus".into(),
+            sandbox_profile: "workspace-development".into(),
             transcript: SessionMessagePage {
                 messages,
-                before_sequence: inline.then_some(2),
-                has_more: inline,
+                before_sequence: (inline && !empty).then_some(2),
+                has_more: inline && !empty,
             },
             preferences: TerminalPreferences::default(),
             history: if history_navigation_fixture {
@@ -77,13 +86,33 @@ impl InteractiveHost for FixtureHost {
             footer: FooterState {
                 role: "primary".into(),
                 route: "fixture@local".into(),
-                context: Some((5, 32_768)),
-                message_count: 5,
+                context: Some((u64::from(!empty) * 5, 32_768)),
+                message_count: u64::from(!empty) * 5,
                 status: "ready".into(),
                 approval_mode: "ask".into(),
             },
             pending_sandbox_boundary_acknowledgement: None,
-            security_posture: Default::default(),
+            security_posture: if std::env::var_os("COLOSSUS_TUI_SECURITY_WARNINGS").is_some() {
+                SecurityPostureReport {
+                    findings: vec![
+                        SecurityPostureFinding {
+                            code: "storage.plaintext".into(),
+                            severity: SecurityPostureSeverity::Warning,
+                            summary: "Journal payloads are stored as plaintext canonical JSON."
+                                .into(),
+                            remediation: "Use platform or environment storage keys.".into(),
+                        },
+                        SecurityPostureFinding {
+                            code: "sandbox.danger_full_access".into(),
+                            severity: SecurityPostureSeverity::Warning,
+                            summary: "Danger full access is enabled.".into(),
+                            remediation: "Use an isolating execution boundary.".into(),
+                        },
+                    ],
+                }
+            } else {
+                Default::default()
+            },
         })
     }
 
@@ -361,6 +390,123 @@ impl InteractiveHost for FixtureHost {
     }
 }
 
+#[test]
+fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 32,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "inline");
+    command.env("COLOSSUS_TUI_EMPTY", "1");
+    command.env("COLOSSUS_TUI_SECURITY_WARNINGS", "1");
+    command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_raw(&output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
+
+    let welcome_ready = screen_contains_within(
+        &output,
+        32,
+        120,
+        "What are we moving today?",
+        Duration::from_secs(10),
+    );
+    let welcome = screen_contents(&output, 32, 120);
+
+    writer.write_all(b"go\r").expect("submit first turn");
+    writer.flush().expect("flush first turn");
+    let output_ready = screen_contains_within(
+        &output,
+        32,
+        120,
+        "stream-final-row-30",
+        Duration::from_secs(10),
+    );
+    let composer_ready = screen_contains_within(
+        &output,
+        32,
+        120,
+        "Message · Enter sends",
+        Duration::from_secs(10),
+    );
+    let after_turn = screen_contents(&output, 32, 120);
+
+    writer.write_all(&[3, 3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    drop(writer);
+    reader_thread.join().expect("reader thread");
+
+    assert!(welcome_ready, "{welcome}");
+    assert!(welcome.contains("Build or change something"), "{welcome}");
+    assert!(welcome.contains("Implement {feature}"), "{welcome}");
+    assert!(welcome.contains("workspace-development"), "{welcome}");
+    assert!(welcome.contains("2 security warnings"), "{welcome}");
+    let rail = welcome
+        .find("What are we moving today?")
+        .expect("launch rail");
+    let warning = welcome
+        .find("Journal payloads are stored as plaintext canonical JSON.")
+        .expect("security warning");
+    assert!(
+        rail < warning,
+        "the detailed security posture must follow the launch rail: {welcome}"
+    );
+    assert_eq!(
+        welcome.matches("Execute · Enter sends").count(),
+        1,
+        "the inline composer must render exactly once: {welcome}"
+    );
+    assert!(
+        scrollback_contains(
+            &output,
+            32,
+            120,
+            "Journal payloads are stored as plaintext canonical JSON."
+        ),
+        "the detailed security posture must remain available in native history"
+    );
+    assert!(output_ready, "{after_turn}");
+    assert!(composer_ready, "{after_turn}");
+    assert!(
+        !after_turn.contains("What are we moving today?"),
+        "{after_turn}"
+    );
+    assert!(!after_turn.contains("Implement {feature}"), "{after_turn}");
+    assert!(status.success());
+}
+
 fn fixture_session_browser_entry(
     id: &str,
     title: &str,
@@ -388,6 +534,10 @@ fn fixture_session_browser_entry(
 fn fixture_process() {
     if std::env::var_os("COLOSSUS_TUI_PTY_FIXTURE").is_none() {
         return;
+    }
+    if std::env::var_os("COLOSSUS_TUI_STARTUP_SENTINEL").is_some() {
+        println!("prior-shell-row");
+        std::io::stdout().flush().expect("flush startup sentinel");
     }
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let screen_mode = if std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline") {
@@ -424,6 +574,7 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
     command.arg("--nocapture");
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "inline");
+    command.env("COLOSSUS_TUI_STARTUP_SENTINEL", "1");
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
     drop(pair.slave);
 
@@ -450,6 +601,14 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
     writer.flush().expect("flush cursor-position answer");
     wait_for_screen(&output, 24, 80, "durable-row-05");
     wait_for_screen(&output, 24, 80, "fixture@local");
+    assert!(
+        !screen_contents(&output, 24, 80).contains("prior-shell-row"),
+        "inline startup should begin on a clean visible viewport"
+    );
+    assert!(
+        scrollback_contains(&output, 24, 80, "prior-shell-row"),
+        "inline startup should preserve the prior view in native scrollback"
+    );
     let rows = screen_rows(&output, 24, 80);
     let latest_row = rows
         .iter()
@@ -679,6 +838,24 @@ fn completed_streaming_output_moves_immediately_into_native_scrollback() {
     assert!(
         scrollback_contains(&output, 24, 80, "Completed filesystem.search"),
         "completed tool activity should be present in native terminal scrollback"
+    );
+    let history = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let completed_tool_row = history
+        .iter()
+        .position(|row| row.contains("Completed filesystem.search"))
+        .expect("completed tool row");
+    let final_output_row = history
+        .iter()
+        .position(|row| row.contains("stream-final-row-01"))
+        .expect("first final output row");
+    let largest_blank_run = history[completed_tool_row + 1..final_output_row]
+        .split(|row| !row.trim().is_empty())
+        .map(<[String]>::len)
+        .max()
+        .unwrap_or_default();
+    assert!(
+        largest_blank_run <= 2,
+        "finalizing streamed output must not commit cleared viewport rows into native history; blank run was {largest_blank_run}: {history:?}"
     );
 
     writer.write_all(&[4]).expect("exit");
@@ -1333,17 +1510,30 @@ fn wait_for_raw_count(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8], expected: usi
 }
 
 fn wait_for_screen(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16, needle: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if screen_contents(output, rows, cols).contains(needle) {
-            return;
-        }
-        thread::sleep(Duration::from_millis(25));
+    if screen_contains_within(output, rows, cols, needle, Duration::from_secs(10)) {
+        return;
     }
     panic!(
         "screen never contained {needle}: {}",
         screen_contents(output, rows, cols)
     );
+}
+
+fn screen_contains_within(
+    output: &Arc<Mutex<Vec<u8>>>,
+    rows: u16,
+    cols: u16,
+    needle: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if screen_contents(output, rows, cols).contains(needle) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    false
 }
 
 fn wait_for_resized_screen(

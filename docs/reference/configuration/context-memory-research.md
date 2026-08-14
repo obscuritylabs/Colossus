@@ -101,7 +101,10 @@ preserves the newest configured messages.
 Compaction tries to reach `targetPercent`, but preservation and binding context take
 precedence. If the newest logical turn, instructions, tool definitions, decisions, or
 preserved messages cannot fit in the effective input budget, Colossus fails explicitly
-instead of discarding them.
+instead of discarding them. This means compaction may have triggered even when the turn
+ends with a preservation error: the protected tail alone was too large to summarize.
+Built-in repository file summaries are byte-bounded as well as line-bounded so one
+generated or minified preview cannot create that condition by itself.
 
 Setting `autoCompaction: false` disables threshold-triggered snapshots. Manual compaction
 remains available, and omitted context fields keep their defaults. The materialized

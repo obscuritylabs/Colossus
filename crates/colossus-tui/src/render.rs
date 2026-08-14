@@ -104,13 +104,19 @@ pub(super) fn render_transcript(
         );
     }
     let width = usize::from(transcript_area.width).max(20);
-    let lines = transcript_lines_range(
+    let mut lines = if state.welcome_visible {
+        welcome_lines(state, width, usize::from(transcript_area.height))
+    } else {
+        Vec::new()
+    };
+    let mut transcript = transcript_lines_range(
         state,
         width,
         transcript_start.min(state.transcript.len()),
         state.transcript.len(),
-        false,
+        !lines.is_empty(),
     );
+    lines.append(&mut transcript);
     let visible = usize::from(transcript_area.height);
     let live_top = lines.len().saturating_sub(visible);
     let top = live_top.saturating_sub(state.scroll_from_bottom);
@@ -145,21 +151,215 @@ pub(super) fn desired_inline_viewport_height(
         .saturating_add(completion_height)
         .saturating_add(composer_height)
         .saturating_add(1);
-    let transcript_height = u16::try_from(
-        transcript_lines_range(
-            state,
-            usize::from(width).max(20),
-            transcript_start.min(state.transcript.len()),
-            state.transcript.len(),
-            false,
-        )
-        .len(),
+    let mut transcript_line_count = transcript_lines_range(
+        state,
+        usize::from(width).max(20),
+        transcript_start.min(state.transcript.len()),
+        state.transcript.len(),
+        false,
     )
-    .unwrap_or(u16::MAX);
+    .len();
+    if state.welcome_visible {
+        if transcript_line_count > 0
+            && state.preferences.transcript_density
+                == colossus_contracts::TranscriptDensity::Comfortable
+        {
+            transcript_line_count = transcript_line_count.saturating_add(1);
+        }
+        transcript_line_count = transcript_line_count.saturating_add(
+            welcome_lines(
+                state,
+                usize::from(width).max(20),
+                usize::from(screen_height),
+            )
+            .len(),
+        );
+    }
+    let transcript_height = u16::try_from(transcript_line_count).unwrap_or(u16::MAX);
 
     chrome_height
         .saturating_add(transcript_height)
         .min(screen_height)
+}
+
+pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Vec<Line<'static>> {
+    let palette = TerminalPalette::for_preferences(&state.preferences);
+    let accent = ratatui_style(palette.assistant_style()).add_modifier(Modifier::BOLD);
+    let primary = ratatui_style(palette.user_style()).add_modifier(Modifier::BOLD);
+    let secondary = ratatui_style(palette.meta_style());
+    let muted = ratatui_style(palette.meta_style()).add_modifier(Modifier::DIM);
+    let ready =
+        ratatui_style(palette.tone_style(PresentationTone::Success)).add_modifier(Modifier::BOLD);
+    let warning = ratatui_style(palette.warning_style()).add_modifier(Modifier::BOLD);
+    let status_style = if state.security_posture.is_hardened() {
+        ready
+    } else {
+        warning
+    };
+    let status_text = if state.security_posture.is_hardened() {
+        "Durable session ready".to_owned()
+    } else {
+        format!(
+            "Durable session ready · {} security warning{}",
+            state.security_posture.finding_count(),
+            if state.security_posture.finding_count() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        )
+    };
+    let workspace = welcome_workspace(&state.workspace);
+    let route = sanitize_approval_field(
+        &state
+            .footer
+            .route
+            .replace(" via ", " · ")
+            .replace('@', " · "),
+    );
+    let sandbox_profile = sanitize_approval_field(&state.sandbox_profile);
+    let approval_mode = sanitize_approval_field(&state.footer.approval_mode);
+    let readiness = sanitize_approval_field(&state.footer.status).to_uppercase();
+
+    if width < 64 || height < 14 {
+        return vec![
+            Line::from(vec![
+                Span::styled(" C ", accent),
+                Span::styled("COLOSSUS", primary),
+                Span::styled("  ● ", status_style),
+                Span::styled(readiness.clone(), status_style),
+            ]),
+            Line::from(Span::styled(
+                truncate_width("─".repeat(width).as_str(), width),
+                ratatui_style(palette.assistant_style()),
+            )),
+            Line::from(Span::styled("What are we moving today?", primary)),
+            Line::from(Span::styled(truncate_width(&workspace, width), secondary)),
+            Line::from(vec![
+                Span::styled("› ", accent),
+                Span::styled("Build or change something", accent),
+            ]),
+            Line::from(Span::styled("  /plan · /resume · /tools", secondary)),
+            Line::from(Span::styled(
+                truncate_width(
+                    &format!(
+                        "{} · {} · approval {}",
+                        route, sandbox_profile, approval_mode
+                    ),
+                    width,
+                ),
+                muted,
+            )),
+            Line::from(Span::styled(
+                truncate_width(&status_text, width),
+                status_style,
+            )),
+        ];
+    }
+
+    let label_style = accent;
+    let value_style = ratatui_style(palette.user_style());
+    let divider_width = width.min(112);
+    let shortcut_gap = if width >= 96 {
+        "                         "
+    } else {
+        "     "
+    };
+    let operational = format!(
+        "MODEL  {route}   │   BOUNDARY  {}   │   APPROVAL  {}",
+        sandbox_profile, approval_mode
+    );
+    vec![
+        Line::from(vec![
+            Span::styled(" C ", accent),
+            Span::styled("│  COLOSSUS", primary),
+            Span::styled("    ● ", status_style),
+            Span::styled(readiness, status_style),
+        ]),
+        Line::from(Span::styled(
+            "─".repeat(divider_width),
+            ratatui_style(palette.assistant_style()),
+        )),
+        Line::default(),
+        Line::from(Span::styled("  What are we moving today?", primary)),
+        Line::from(vec![
+            Span::styled("  ", secondary),
+            Span::styled(
+                truncate_width(&workspace, width.saturating_sub(2)),
+                secondary,
+            ),
+        ]),
+        Line::default(),
+        Line::from(vec![
+            Span::styled("  ›  ", accent),
+            Span::styled("Build or change something", accent),
+        ]),
+        Line::from(vec![
+            Span::styled("     Plan it first", secondary),
+            Span::raw(shortcut_gap),
+            Span::styled("/plan", label_style),
+        ]),
+        Line::from(vec![
+            Span::styled("     Resume recent work", secondary),
+            Span::raw(if width >= 96 {
+                "                    "
+            } else {
+                " "
+            }),
+            Span::styled("/resume", label_style),
+        ]),
+        Line::from(vec![
+            Span::styled("     Inspect capabilities", secondary),
+            Span::raw(if width >= 96 {
+                "                  "
+            } else {
+                " "
+            }),
+            Span::styled("/tools", label_style),
+        ]),
+        Line::default(),
+        Line::from(Span::styled("─".repeat(divider_width), muted)),
+        operational_line(&operational, width, label_style, value_style),
+        Line::from(vec![
+            Span::styled("  ●  ", status_style),
+            Span::styled(
+                truncate_width(&status_text, width.saturating_sub(5)),
+                status_style,
+            ),
+        ]),
+    ]
+}
+
+fn operational_line(
+    text: &str,
+    width: usize,
+    label_style: Style,
+    value_style: Style,
+) -> Line<'static> {
+    let text = truncate_width(text, width.saturating_sub(2));
+    let mut spans = vec![Span::raw("  ")];
+    for (index, segment) in text.split_inclusive("  ").enumerate() {
+        spans.push(Span::styled(
+            segment.to_owned(),
+            if index % 2 == 0 {
+                label_style
+            } else {
+                value_style
+            },
+        ));
+    }
+    Line::from(spans)
+}
+
+fn welcome_workspace(workspace: &str) -> String {
+    let user_home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok();
+    let display = user_home
+        .as_deref()
+        .and_then(|user_home| workspace.strip_prefix(user_home))
+        .map_or_else(|| workspace.to_owned(), |relative| format!("~{relative}"));
+    format!("{} · new session", sanitize_approval_field(&display))
 }
 
 pub(super) fn transcript_lines<'a>(state: &'a TuiState, width: usize) -> Vec<Line<'a>> {
@@ -176,9 +376,10 @@ pub(super) fn transcript_lines_range<'a>(
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let mut lines = Vec::new();
     let mut visible_entries = 0_usize;
-    for entry in
-        &state.transcript[start.min(state.transcript.len())..end.min(state.transcript.len())]
-    {
+    let start = start.min(state.transcript.len());
+    let end = end.min(state.transcript.len());
+    for (offset, entry) in state.transcript[start..end].iter().enumerate() {
+        let entry_index = start.saturating_add(offset);
         if entry.document.is_empty() {
             continue;
         }
@@ -228,26 +429,109 @@ pub(super) fn transcript_lines_range<'a>(
             ]));
         }
         let content_width = width.saturating_sub(if show_label { 2 } else { 0 }).max(1);
-        let rendered =
+        let rendered = if state.security_posture_entry == Some(entry_index) {
+            security_posture_lines(state, content_width)
+        } else {
             StyledDocumentRenderer::for_transcript(state.preferences.clone(), content_width)
-                .render(&entry.document);
+                .render(&entry.document)
+                .into_iter()
+                .map(|line| {
+                    Line::from(
+                        line.spans
+                            .into_iter()
+                            .map(|span| Span::styled(span.content, ratatui_style(span.style)))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect()
+        };
         lines.extend(rendered.into_iter().map(|mut line| {
             if show_label && !line.spans.is_empty() {
-                line.spans.insert(
-                    0,
-                    colossus_presentation::StyledSpan {
-                        content: "  ".into(),
-                        style: palette.meta_style(),
-                    },
-                );
-            }
-            Line::from(
                 line.spans
-                    .into_iter()
-                    .map(|span| Span::styled(span.content, ratatui_style(span.style)))
-                    .collect::<Vec<_>>(),
-            )
+                    .insert(0, Span::styled("  ", ratatui_style(palette.meta_style())));
+            }
+            line
         }));
+    }
+    lines
+}
+
+pub(super) fn security_posture_lines(state: &TuiState, width: usize) -> Vec<Line<'static>> {
+    let palette = TerminalPalette::for_preferences(&state.preferences);
+    let warning = ratatui_style(palette.warning_style()).add_modifier(Modifier::BOLD);
+    let mut primary_style = palette.assistant_style();
+    primary_style.bold = true;
+    primary_style.dim = false;
+    let primary = ratatui_style(primary_style);
+    let mut recommendation_style = palette.meta_style();
+    recommendation_style.dim = true;
+    let recommendation = ratatui_style(recommendation_style);
+    let count = state.security_posture.finding_count();
+    let mut lines = vec![Line::from(vec![
+        Span::styled("! ", warning),
+        Span::styled(
+            format!(
+                "Security posture · {count} warning{}",
+                if count == 1 { "" } else { "s" }
+            ),
+            warning,
+        ),
+    ])];
+
+    for finding in &state.security_posture.findings {
+        let summary = sanitize_approval_field(&finding.summary);
+        let summary_prefix = "  • ";
+        let summary_continuation = "    ";
+        let summary_width = width
+            .saturating_sub(UnicodeWidthStr::width(summary_prefix))
+            .max(1);
+        for (index, segment) in wrap_approval_value(&summary, summary_width)
+            .into_iter()
+            .enumerate()
+        {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if index == 0 {
+                        summary_prefix
+                    } else {
+                        summary_continuation
+                    },
+                    warning,
+                ),
+                Span::styled(segment, primary),
+            ]));
+        }
+
+        let remediation = sanitize_approval_field(match finding.code.as_str() {
+            "sandbox.danger_full_access" => {
+                "Use an isolating native, windows_job, or oci boundary."
+            }
+            _ => &finding.remediation,
+        });
+        let recommendation_prefix = "    Recommendation: ";
+        let recommendation_continuation = "                    ";
+        let recommendation_width = width
+            .saturating_sub(UnicodeWidthStr::width(recommendation_prefix))
+            .max(1);
+        for (index, segment) in wrap_approval_value(&remediation, recommendation_width)
+            .into_iter()
+            .enumerate()
+        {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if index == 0 {
+                        recommendation_prefix
+                    } else {
+                        recommendation_continuation
+                    },
+                    recommendation,
+                ),
+                Span::styled(segment, recommendation),
+            ]));
+        }
+    }
+    if state.welcome_visible {
+        lines.push(Line::default());
     }
     lines
 }
@@ -394,7 +678,11 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let inner_width = usize::from(area.width.saturating_sub(4)).max(1);
     let (before, after) = state.composer.draft.split_at(state.composer.cursor);
-    let ghost = state.ghost_text().unwrap_or("");
+    let ghost = if state.welcome_visible && state.composer.draft.is_empty() {
+        "Implement {feature}"
+    } else {
+        state.ghost_text().unwrap_or("")
+    };
     let mut text = Vec::new();
     let logical_lines = format!("{before}{after}{ghost}")
         .split('\n')
@@ -431,6 +719,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
         format!(" Message · paused for {decision} · draft preserved ")
     } else {
         match state.mode {
+            InteractiveMode::Execute if state.welcome_visible => {
+                format!(" Execute · {action} ")
+            }
             InteractiveMode::Execute => format!(" Message · {action} "),
             InteractiveMode::Research => format!(" Research · sourced question · {action} "),
             InteractiveMode::Plan if state.selected_plan.is_none() => {
@@ -483,7 +774,11 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
     let width = usize::from(area.width);
     let short_session = state.session_id.chars().take(8).collect::<String>();
     let mut segments = vec![format!(" Colossus {short_session}")];
-    segments.push(format!("mode={}", state.mode.as_str()));
+    if state.welcome_visible {
+        segments.push(state.mode.as_str().into());
+    } else {
+        segments.push(format!("mode={}", state.mode.as_str()));
+    }
     if width >= 72
         && let Some(plan) = state.selected_plan.as_ref()
     {
@@ -512,9 +807,11 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
         footer = truncate_width(&footer, width);
     }
     let palette = TerminalPalette::for_preferences(&state.preferences);
+    let surface = filled_approval_control_style(palette.meta_style(), false);
     if state.security_posture.is_hardened() {
         frame.render_widget(
-            Paragraph::new(Span::styled(footer, ratatui_style(palette.meta_style()))),
+            Paragraph::new(Span::styled(footer, ratatui_style(palette.meta_style())))
+                .style(surface),
             area,
         );
     } else {
@@ -523,9 +820,13 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
         let footer = truncate_width(&footer, remaining);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(badge, ratatui_style(palette.warning_style())),
+                Span::styled(
+                    badge,
+                    filled_approval_control_style(palette.warning_style(), true),
+                ),
                 Span::styled(footer, ratatui_style(palette.meta_style())),
-            ])),
+            ]))
+            .style(surface),
             area,
         );
     }

@@ -19,6 +19,7 @@ impl OwnedTerminal {
         let (terminal, inline_area, inline_screen_size) = match mode {
             ScreenMode::Alternate => (Terminal::new(backend)?, None, None),
             ScreenMode::Inline => {
+                prepare_inline_startup(&mut backend)?;
                 let (area, screen_size) =
                     initial_inline_area(&mut backend, MINIMUM_INLINE_VIEWPORT_HEIGHT)?;
                 let terminal = Terminal::with_options(
@@ -69,7 +70,11 @@ impl OwnedTerminal {
             screen_size.height,
             transcript_start,
         );
-        self.resize_inline_viewport(screen_size, viewport_height)?;
+        let committing_after_live_shrink = transcript_start > self.committed_entries
+            && self
+                .inline_area
+                .is_some_and(|area| viewport_height < area.height);
+        self.resize_inline_viewport(screen_size, viewport_height, committing_after_live_shrink)?;
         self.commit_native_history(state, transcript_start)?;
         self.terminal
             .draw(|frame| render(frame, state, transcript_start, ScreenMode::Inline))?;
@@ -127,10 +132,22 @@ impl OwnedTerminal {
         }
     }
 
-    fn resize_inline_viewport(&mut self, screen_size: Size, height: u16) -> Result<(), io::Error> {
+    fn resize_inline_viewport(
+        &mut self,
+        screen_size: Size,
+        height: u16,
+        preserve_top_for_commit: bool,
+    ) -> Result<(), io::Error> {
         let current = self.inline_area.expect("inline viewport area");
         let previous_screen = self.inline_screen_size.expect("inline terminal size");
-        let (next, scroll_up) = next_inline_area(current, previous_screen, screen_size, height);
+        let (mut next, mut scroll_up) =
+            next_inline_area(current, previous_screen, screen_size, height);
+        if preserve_top_for_commit && height < current.height {
+            next.y = current
+                .y
+                .min(screen_size.height.saturating_sub(next.height));
+            scroll_up = current.y.saturating_sub(next.y);
+        }
         if next == current && screen_size == previous_screen {
             return Ok(());
         }
@@ -181,6 +198,16 @@ impl OwnedTerminal {
         self.has_native_history |= !lines.is_empty();
         Ok(())
     }
+}
+
+pub(super) fn prepare_inline_startup<B: Backend>(backend: &mut B) -> Result<(), B::Error> {
+    let screen_size = backend.size()?;
+    // Move the existing viewport into native history before clearing it so a new
+    // inline session starts clean without purging recoverable shell scrollback.
+    scroll_screen_up(backend, screen_size.height, screen_size.height)?;
+    backend.clear_region(ClearType::All)?;
+    backend.set_cursor_position(Position::ORIGIN)?;
+    backend.flush()
 }
 
 fn initial_inline_area<B: Backend<Error = io::Error>>(

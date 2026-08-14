@@ -37,6 +37,12 @@ The access profile and exact overrides decide visibility and the built-in decisi
 policy, approval, trust, the Safety Kernel, permits, sandbox obligations, quarantine, and
 post-effect release remain independent.
 
+`repo.file_summary` applies both the requested line ceiling and a 64 KiB serialized
+result ceiling. Its preview and structural-hint collections are byte-bounded before
+they enter durable tool history; `preview_truncated` is true when either the line or
+encoded-byte ceiling was reached. This keeps generated or minified long lines from
+consuming an entire model input budget.
+
 ## Plan Mode catalog and lifecycle actions
 
 Plan Mode narrows the already-resolved tool catalog; it never widens access. A Create
