@@ -469,13 +469,15 @@ jobs:
           rustup target add x86_64-unknown-linux-musl
           # Hosted runner images can expose different preinstalled Podman layouts during
           # a staged image rollout. Install and pin Ubuntu's distro binary, then avoid its
-          # conmon build's unavailable journald path with a job-scoped final override.
-          # The live sandbox still exercises the real rootless runtime and all boundaries.
+          # conmon build's unavailable journald path with an ephemeral system drop-in.
+          # Colossus deliberately clears ambient environment before effects, so the
+          # runtime configuration must not depend on an inherited override variable.
           containers_conf="$RUNNER_TEMP/colossus-containers-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.conf"
-          export CONTAINERS_CONF_OVERRIDE="$containers_conf"
           printf '[containers]\nlog_driver="k8s-file"\n\n[engine]\nevents_logger="file"\n' \
-            > "$CONTAINERS_CONF_OVERRIDE"
-          printf 'CONTAINERS_CONF_OVERRIDE=%s\n' "$containers_conf" >> "$GITHUB_ENV"
+            > "$containers_conf"
+          sudo install -d -o root -g root -m 0755 /etc/containers/containers.conf.d
+          sudo install -o root -g root -m 0644 "$containers_conf" \
+            /etc/containers/containers.conf.d/99-colossus-ci.conf
           type -a podman || true
           /usr/bin/podman --version
           test "$(/usr/bin/podman info --format '{{.Host.LogDriver}}')" = k8s-file
@@ -524,8 +526,7 @@ jobs:
             readiness_name="colossus-podman-readiness-$readiness_attempt"
             rm -f "$warmup/podman-readiness.txt"
             if timeout --kill-after=10s 90s \
-              env -i PATH=/usr/bin CONTAINERS_CONF_OVERRIDE="$CONTAINERS_CONF_OVERRIDE" \
-              /usr/bin/podman run --rm --pull=never \
+              env -i PATH=/usr/bin /usr/bin/podman run --rm --pull=never \
               --userns=keep-id --user "$(id -u):$(id -g)" --network=none --read-only \
               --cap-drop=ALL --security-opt=no-new-privileges \
               --name "$readiness_name" \

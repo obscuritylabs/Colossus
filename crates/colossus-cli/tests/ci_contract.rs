@@ -270,8 +270,9 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "type -a podman || true",
         "sudo apt-get install --yes musl-tools podman slirp4netns",
         "containers_conf=\"$RUNNER_TEMP/colossus-containers-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.conf\"",
-        "export CONTAINERS_CONF_OVERRIDE=\"$containers_conf\"",
-        "printf 'CONTAINERS_CONF_OVERRIDE=%s\\n'",
+        "sudo install -d -o root -g root -m 0755 /etc/containers/containers.conf.d",
+        "sudo install -o root -g root -m 0644 \"$containers_conf\"",
+        "/etc/containers/containers.conf.d/99-colossus-ci.conf",
         "log_driver=\"k8s-file\"",
         "events_logger=\"file\"",
         "/usr/bin/podman --version",
@@ -282,8 +283,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "proxy=$(/usr/bin/podman image inspect",
         "for readiness_attempt in 1 2 3",
         "timeout --kill-after=10s 90s",
-        "env -i PATH=/usr/bin CONTAINERS_CONF_OVERRIDE=\"$CONTAINERS_CONF_OVERRIDE\"",
-        "/usr/bin/podman run",
+        "env -i PATH=/usr/bin /usr/bin/podman run",
         "--name \"$readiness_name\"",
         "/usr/bin/podman container exists \"$readiness_name\"",
         "/usr/bin/podman container rm --force --time 0 \"$readiness_name\"",
@@ -324,8 +324,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "proxy=$(/usr/bin/podman image inspect",
         "for readiness_attempt in 1 2 3",
         "timeout --kill-after=10s 90s",
-        "env -i PATH=/usr/bin CONTAINERS_CONF_OVERRIDE=\"$CONTAINERS_CONF_OVERRIDE\"",
-        "/usr/bin/podman run",
+        "env -i PATH=/usr/bin /usr/bin/podman run",
         "--name \"$readiness_name\"",
         "/usr/bin/podman container exists \"$readiness_name\"",
         "/usr/bin/podman container rm --force --time 0 \"$readiness_name\"",
@@ -341,6 +340,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         );
     }
     assert!(!podman_readiness.contains("timeout --foreground"));
+    assert!(!source.contains("CONTAINERS_CONF"));
     assert!(!source.contains("/usr/local/bin/podman"));
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
