@@ -82,6 +82,14 @@ fn plaintext_journal(path: &std::path::Path) -> RedbEventJournal {
     .expect("open plaintext journal")
 }
 
+fn ephemeral_journal() -> RedbEventJournal {
+    RedbEventJournal::open_in_memory(
+        Arc::new(PlaintextKeyProvider),
+        Arc::new(DisabledCheckpointSigner),
+    )
+    .expect("open ephemeral journal")
+}
+
 #[test]
 fn established_schema_uses_read_only_fast_path() {
     let directory = tempdir().expect("tempdir");
@@ -623,10 +631,36 @@ fn shared_journal_conformance_suite_passes() {
 }
 
 #[test]
+fn ephemeral_redb_passes_shared_journal_conformance_suite() {
+    let journal = ephemeral_journal();
+    assert_journal_conformance(
+        &journal,
+        event("ephemeral-conformance", 0, 1),
+        event("ephemeral-conformance", 0, 2),
+    );
+}
+
+#[test]
+fn ephemeral_redb_rejects_protected_keys() {
+    let result = RedbEventJournal::open_in_memory(
+        Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32])),
+        Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
+    );
+    assert!(
+        matches!(result, Err(StoreError::Adapter(ref message)) if message.contains("plaintext payload protection"))
+    );
+}
+
+#[test]
 fn shared_projection_store_conformance_suite_passes() {
     let directory = tempdir().expect("tempdir");
     let journal = journal(&directory.path().join("state.redb"));
     assert_projection_store_conformance(&journal);
+}
+
+#[test]
+fn ephemeral_redb_passes_shared_projection_store_conformance_suite() {
+    assert_projection_store_conformance(&ephemeral_journal());
 }
 
 #[test]

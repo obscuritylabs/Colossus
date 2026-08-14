@@ -137,6 +137,17 @@ impl McpExecutor {
         self
     }
 
+    /// Retain OAuth records only for the lifetime of this process.
+    pub fn with_ephemeral_oauth_storage(
+        mut self,
+        repository_id: impl Into<String>,
+    ) -> Result<Self, McpError> {
+        self.oauth_store = Some(
+            OAuthStoreFactory::ephemeral_state(repository_id.into()).map_err(safe_oauth_error)?,
+        );
+        Ok(self)
+    }
+
     /// Persist OAuth records in a dedicated encrypted redb sidecar.
     pub fn with_encrypted_oauth_storage(
         mut self,

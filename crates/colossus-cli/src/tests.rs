@@ -1301,6 +1301,55 @@ fn desktop_worker_required_flag_is_hidden_and_tui_only() {
 }
 
 #[test]
+fn ephemeral_storage_refuses_worker_modes_that_need_a_separate_process() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut ephemeral =
+        RuntimeConfig::offline_template(directory.path().join("ephemeral-instance"));
+    ephemeral.storage.adapter = colossus_runtime::StorageAdapter::Ephemeral;
+
+    for arguments in [
+        vec!["colossus", "worker"],
+        vec!["colossus", "worker", "--status"],
+        vec!["colossus", "worker", "--shutdown"],
+        vec![
+            "colossus",
+            "worker",
+            "--public-api-dir",
+            "/tmp/colossus-public-api",
+        ],
+    ] {
+        let command = Cli::try_parse_from(arguments.clone())
+            .expect("worker command")
+            .command;
+        let error = reject_ephemeral_worker_attachment(&ephemeral, &command)
+            .expect_err("ephemeral storage cannot host or reach a worker");
+        assert!(
+            error.to_string().contains("cannot host or reach a worker"),
+            "unexpected rejection for {arguments:?}: {error}"
+        );
+    }
+
+    for arguments in [
+        vec!["colossus", "worker", "--once"],
+        vec!["colossus", "sessions", "list"],
+    ] {
+        let command = Cli::try_parse_from(arguments.clone())
+            .expect("process-local command")
+            .command;
+        reject_ephemeral_worker_attachment(&ephemeral, &command)
+            .unwrap_or_else(|error| panic!("process-local {arguments:?} must stay valid: {error}"));
+    }
+
+    let mut redb = ephemeral;
+    redb.storage.adapter = colossus_runtime::StorageAdapter::Redb;
+    let served = Cli::try_parse_from(["colossus", "worker"])
+        .expect("worker command")
+        .command;
+    reject_ephemeral_worker_attachment(&redb, &served)
+        .expect("file-backed redb keeps serving workers");
+}
+
+#[test]
 fn worker_public_api_cli_preserves_legacy_modes_and_requires_explicit_enrollment_bounds() {
     let legacy = Cli::try_parse_from(["colossus", "worker", "--once"]).expect("legacy once");
     assert!(matches!(

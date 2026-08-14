@@ -14,6 +14,35 @@ pub struct RedbEventJournal {
 }
 
 impl RedbEventJournal {
+    /// Open a fresh process-local journal backed only by memory.
+    pub fn open_in_memory(
+        keys: Arc<dyn KeyProvider>,
+        signer: Arc<dyn CheckpointSigner>,
+    ) -> Result<Self, StoreError> {
+        Self::open_in_memory_with_startup_verification(
+            keys,
+            signer,
+            StartupVerificationMode::Incremental,
+        )
+    }
+
+    /// Open a fresh process-local journal with one explicit startup verification policy.
+    pub fn open_in_memory_with_startup_verification(
+        keys: Arc<dyn KeyProvider>,
+        signer: Arc<dyn CheckpointSigner>,
+        mode: StartupVerificationMode,
+    ) -> Result<Self, StoreError> {
+        if keys.payload_protection() != JournalPayloadProtection::Plaintext {
+            return Err(StoreError::Adapter(
+                "an in-memory redb journal requires plaintext payload protection".into(),
+            ));
+        }
+        let database = Database::builder()
+            .create_with_backend(redb::backends::InMemoryBackend::new())
+            .map_err(adapter_error)?;
+        Self::open_database(database, keys, signer, mode)
+    }
+
     /// Open or create a journal, then verify it before enabling writes.
     pub fn open(
         path: impl AsRef<Path>,

@@ -288,6 +288,26 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         field(job(jobs, "live-security"), "runs-on").as_str(),
         Some("ubuntu-latest-m")
     );
+    let podman_readiness = field(
+        named_step(
+            job(jobs, "live-security"),
+            "Build immutable Podman acceptance images",
+        ),
+        "run",
+    )
+    .as_str()
+    .expect("Podman image preparation must be a script");
+    for required in [
+        "timeout --foreground --kill-after=10s 300s",
+        "env -i PATH=/usr/bin /usr/bin/podman run",
+        "--name colossus-podman-readiness",
+        "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
+    ] {
+        assert!(
+            podman_readiness.contains(required),
+            "Podman readiness is missing the sandbox launch contract {required}"
+        );
+    }
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
     let native_source =

@@ -135,6 +135,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         &workspace_partition_id,
         &config.storage.path,
     );
+    reject_ephemeral_worker_attachment(&config, &cli.command)?;
     match &cli.command {
         Command::Worker(worker)
             if !worker.once

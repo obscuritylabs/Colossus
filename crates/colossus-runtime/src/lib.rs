@@ -54,7 +54,7 @@ use colossus_mcp::{
 };
 use colossus_memory::{
     EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
-    UnavailableMemoryIndex,
+    TantivyMemoryIndex, UnavailableMemoryIndex,
 };
 use colossus_memory_chroma::{
     ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,

@@ -833,6 +833,28 @@ async fn plaintext_oauth_store_round_trips_in_owner_private_state() {
     assert!(store.load().await.expect("load after clear").is_none());
 }
 
+#[tokio::test]
+async fn ephemeral_oauth_store_round_trips_without_a_state_path() {
+    use rmcp::transport::auth::{CredentialStore as _, StoredCredentials};
+
+    let factory =
+        OAuthStoreFactory::ephemeral_state("repository-1".into()).expect("ephemeral store");
+    let store = factory.store("splunk", "https://splunk.example.com/services/mcp");
+    let credentials: StoredCredentials = serde_json::from_value(json!({
+        "client_id": "ephemeral-client-id",
+        "token_response": null,
+        "granted_scopes": ["openid"],
+        "token_received_at": 1
+    }))
+    .expect("credentials");
+    store.save(credentials.clone()).await.expect("save");
+    let loaded = store.load().await.expect("load").expect("credentials");
+    assert_eq!(
+        serde_json::to_value(loaded).expect("loaded JSON"),
+        serde_json::to_value(credentials).expect("expected JSON")
+    );
+}
+
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Option<Value>) {
     use tokio::io::AsyncReadExt as _;
 

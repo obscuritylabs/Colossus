@@ -64,6 +64,12 @@ async fn tantivy_index_passes_shared_conformance() {
     assert_memory_index_conformance(&index).await;
 }
 
+#[tokio::test]
+async fn in_memory_tantivy_index_passes_shared_conformance() {
+    let index = TantivyMemoryIndex::in_memory().expect("in-memory index");
+    assert_memory_index_conformance(&index).await;
+}
+
 #[test]
 fn lazy_tantivy_index_defers_filesystem_initialization() {
     let directory = tempdir().expect("tempdir");

@@ -1568,6 +1568,22 @@ fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
 }
 
 #[test]
+fn security_posture_reports_process_local_ephemeral_storage() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.use_ephemeral_storage();
+    let report = config.security_posture();
+    assert_eq!(
+        report
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        ["storage.ephemeral", "storage.plaintext"]
+    );
+    assert!(report.findings[0].summary.contains("only for this process"));
+}
+
+#[test]
 fn security_posture_reports_danger_full_access_even_when_acknowledged() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.use_platform_storage();
@@ -1922,6 +1938,50 @@ fn storage_adapter_requires_exact_postgres_configuration_pairing() {
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
     config.storage.adapter = StorageAdapter::Redb;
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config.storage.adapter = StorageAdapter::Ephemeral;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config.storage.postgres = None;
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+    config.use_platform_storage();
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn ephemeral_runtime_uses_fresh_process_local_state_without_storage_files() {
+    let workspace = private_tempdir();
+    let state = workspace.path().join("absent/state.redb");
+    let mut config = RuntimeConfig::offline_template(&state);
+    config.use_ephemeral_storage();
+
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("ephemeral runtime");
+    assert!(!state.exists());
+    assert!(!state.with_extension("memory-index").exists());
+    assert!(!PathBuf::from(format!("{}.writer.lock", state.display())).exists());
+
+    runtime.create_session(Some("ephemeral")).expect("session");
+    assert!(runtime.journal().head().expect("head").0 > 0);
+    let doctor = runtime.state_doctor().expect("state doctor");
+    assert_eq!(doctor["storage"]["adapter"], "ephemeral");
+    assert!(doctor["storage"]["path"].is_null());
+    assert_eq!(doctor["storage"]["persistence"], "process");
+    assert_eq!(doctor["writer_lease"]["reason"], "process-local-ephemeral");
+    drop(runtime);
+
+    let reopened = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("fresh ephemeral runtime");
+    assert_eq!(reopened.journal().head().expect("fresh head").0, 0);
+    assert!(!workspace.path().join("absent").exists());
 }
 
 #[test]
