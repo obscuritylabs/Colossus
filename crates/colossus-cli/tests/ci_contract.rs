@@ -267,9 +267,21 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "for attempt in 1 2 3",
         "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
-        "timeout --foreground --kill-after=10s 300s",
+        "type -a podman || true",
+        "/usr/bin/podman --version",
+        "/usr/bin/podman pull",
+        "/usr/bin/podman build",
+        "proxy=$(/usr/bin/podman image inspect",
+        "for readiness_attempt in 1 2 3",
+        "timeout --kill-after=10s 90s",
         "env -i PATH=/usr/bin /usr/bin/podman run",
-        "--name colossus-podman-readiness",
+        "--name \"$readiness_name\"",
+        "/usr/bin/podman container exists \"$readiness_name\"",
+        "/usr/bin/podman container rm --force --time 0 \"$readiness_name\"",
+        "124|137) ;;",
+        "test \"$readiness\" = true",
+        "::error::rootless Podman readiness exhausted its retry budget",
+        "/usr/bin/podman info",
         "printf ready > podman-readiness.txt && cat podman-readiness.txt",
         "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
@@ -298,9 +310,19 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     .as_str()
     .expect("Podman image preparation must be a script");
     for required in [
-        "timeout --foreground --kill-after=10s 300s",
+        "/usr/bin/podman pull",
+        "/usr/bin/podman build",
+        "proxy=$(/usr/bin/podman image inspect",
+        "for readiness_attempt in 1 2 3",
+        "timeout --kill-after=10s 90s",
         "env -i PATH=/usr/bin /usr/bin/podman run",
-        "--name colossus-podman-readiness",
+        "--name \"$readiness_name\"",
+        "/usr/bin/podman container exists \"$readiness_name\"",
+        "/usr/bin/podman container rm --force --time 0 \"$readiness_name\"",
+        "124|137) ;;",
+        "test \"$readiness\" = true",
+        "::error::rootless Podman readiness exhausted its retry budget",
+        "/usr/bin/podman info",
         "test \"$(cat \"$warmup/podman-readiness.txt\")\" = ready",
     ] {
         assert!(
@@ -308,6 +330,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
             "Podman readiness is missing the sandbox launch contract {required}"
         );
     }
+    assert!(!podman_readiness.contains("timeout --foreground"));
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
     let native_source =
