@@ -49,7 +49,8 @@ pub struct InteractiveSnapshot {
     pub fresh_session: bool,
     /// Canonical workspace selected for this terminal process.
     pub workspace: String,
-    /// Effective sandbox profile shown as startup boundary context.
+    /// Effective sandbox profile shown as startup sandbox context. This is the
+    /// profile only; it does not describe the effective execution backend.
     pub sandbox_profile: String,
     /// Newest bounded canonical transcript page.
     pub transcript: SessionMessagePage,

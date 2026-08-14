@@ -140,6 +140,23 @@ fn launch_rail_is_process_local_and_only_shown_for_an_empty_session() {
 }
 
 #[test]
+fn launch_rail_labels_the_sandbox_profile_field_as_the_sandbox_profile() {
+    let mut source = empty_snapshot();
+    source.sandbox_profile = "offline-default".into();
+    let state = TuiState::from_snapshot(source);
+    let rendered = welcome_lines(&state, 120, 32)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("SANDBOX  offline-default"), "{rendered}");
+    assert!(
+        !rendered.contains("BOUNDARY"),
+        "the sandbox profile is not the effective execution boundary: {rendered}"
+    );
+}
+
+#[test]
 fn launch_rail_sanitizes_runtime_supplied_context() {
     let mut source = empty_snapshot();
     source.workspace = "/workspace/Colossus\u{1b}]8;;evil\u{7}".into();

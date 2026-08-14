@@ -266,7 +266,7 @@ pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Ve
         "     "
     };
     let operational = format!(
-        "MODEL  {route}   │   BOUNDARY  {}   │   APPROVAL  {}",
+        "MODEL  {route}   │   SANDBOX  {}   │   APPROVAL  {}",
         sandbox_profile, approval_mode
     );
     vec![
