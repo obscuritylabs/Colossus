@@ -123,6 +123,36 @@ impl Runtime {
             .map_err(Into::into)
     }
 
+    /// Materialize one caller-owned session whose identifier was durably allocated by
+    /// an authenticated application coordinator.
+    pub fn create_application_session(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        actor: Actor,
+    ) -> Result<SessionSummary, RuntimeError> {
+        self.sessions
+            .create_session(id, title, actor)
+            .map_err(Into::into)
+    }
+
+    /// Append one visible application-owned message to a canonical session.
+    ///
+    /// Application coordinators use this when a workflow, such as Research, owns
+    /// its orchestration outside the conversational agent loop but must preserve
+    /// the user's question for subsequent turns.
+    pub fn append_application_message(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        message: ModelMessage,
+        actor: Actor,
+    ) -> Result<SessionMessage, RuntimeError> {
+        self.sessions
+            .append_message(session_id, run_id, message, actor)
+            .map_err(Into::into)
+    }
+
     /// Reconstruct one exact session summary.
     pub fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, RuntimeError> {
         self.sessions.get_session(id).map_err(Into::into)
@@ -145,6 +175,129 @@ impl Runtime {
     /// Reconstruct append-only messages for an exact session.
     pub fn session_messages(&self, id: &str) -> Result<Vec<SessionMessage>, RuntimeError> {
         self.sessions.list_messages(id).map_err(Into::into)
+    }
+
+    /// Idempotently materialize an exact canonical session prefix as a separate branch.
+    pub fn ensure_session_branch(
+        &self,
+        source_session_id: &str,
+        source_message_count: u64,
+        context_mode: RunBranchContextMode,
+        branch_session_id: &str,
+        branch_run_id: &str,
+        actor: Actor,
+    ) -> Result<SessionSummary, RuntimeError> {
+        const MAX_BRANCH_MESSAGES: usize = 512;
+        const MAX_BRANCH_BYTES: usize = 2 * 1024 * 1024;
+
+        let source = self
+            .sessions
+            .get_session(source_session_id)?
+            .ok_or_else(|| StoreError::NotFound("branch source session".into()))?;
+        if source_message_count > source.message_count
+            || source_message_count > MAX_BRANCH_MESSAGES as u64
+        {
+            return Err(StoreError::Verification("invalid branch message boundary".into()).into());
+        }
+        let source_messages = self.sessions.list_messages(source_session_id)?;
+        let prefix = source_messages
+            .into_iter()
+            .take(source_message_count as usize)
+            .collect::<Vec<_>>();
+        let prefix = match context_mode {
+            RunBranchContextMode::Exact => prefix,
+            RunBranchContextMode::Conversation | RunBranchContextMode::SourceRunConversation => {
+                prefix
+                    .into_iter()
+                    .filter_map(|mut record| match record.message.role {
+                        ModelMessageRole::User => {
+                            record.message.tool_call_id = None;
+                            record.message.tool_calls.clear();
+                            Some(record)
+                        }
+                        ModelMessageRole::Assistant
+                            if !record.message.content.trim().is_empty() =>
+                        {
+                            record.message.tool_call_id = None;
+                            record.message.tool_calls.clear();
+                            Some(record)
+                        }
+                        ModelMessageRole::System
+                        | ModelMessageRole::Assistant
+                        | ModelMessageRole::Tool => None,
+                    })
+                    .collect()
+            }
+        };
+        let bytes = prefix.iter().try_fold(0_usize, |total, message| {
+            serde_json::to_vec(&message.message)
+                .map(|value| total.saturating_add(value.len()))
+                .map_err(|error| StoreError::Adapter(error.to_string()))
+        })?;
+        if bytes > MAX_BRANCH_BYTES {
+            return Err(StoreError::Verification("branch context is too large".into()).into());
+        }
+        validate_model_transcript(
+            &prefix
+                .iter()
+                .map(|message| message.message.clone())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| StoreError::Verification(error.to_string()))?;
+
+        if let Some(existing) = self.sessions.get_session(branch_session_id)? {
+            let existing_messages = self.sessions.list_messages(branch_session_id)?;
+            if existing_messages.is_empty() && !prefix.is_empty() {
+                self.sessions.append_messages(
+                    branch_session_id,
+                    branch_run_id,
+                    prefix
+                        .into_iter()
+                        .map(|message| SessionMessageAppend {
+                            message: message.message,
+                            actor: actor.clone(),
+                        })
+                        .collect(),
+                )?;
+                return self
+                    .sessions
+                    .get_session(branch_session_id)?
+                    .ok_or_else(|| StoreError::NotFound("branch session".into()).into());
+            }
+            let expected = prefix
+                .iter()
+                .map(|message| &message.message)
+                .collect::<Vec<_>>();
+            let actual = existing_messages
+                .iter()
+                .map(|message| &message.message)
+                .collect::<Vec<_>>();
+            if actual != expected {
+                return Err(
+                    StoreError::Verification("branch session context drifted".into()).into(),
+                );
+            }
+            return Ok(existing);
+        }
+
+        self.sessions
+            .create_session(branch_session_id, source.title.as_deref(), actor.clone())?;
+        if !prefix.is_empty() {
+            self.sessions.append_messages(
+                branch_session_id,
+                branch_run_id,
+                prefix
+                    .into_iter()
+                    .map(|message| SessionMessageAppend {
+                        message: message.message,
+                        actor: actor.clone(),
+                    })
+                    .collect(),
+            )?;
+        }
+        self.sessions
+            .get_session(branch_session_id)?
+            .ok_or_else(|| StoreError::NotFound("branch session".into()).into())
     }
 
     /// Reconstruct a bounded page of canonical session messages newest-first by cursor.

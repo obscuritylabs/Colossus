@@ -9,6 +9,7 @@ mod diagnostics;
 mod dto;
 mod managed_runtime;
 mod provider_enrollment;
+mod space_search;
 mod state;
 mod terminal;
 mod terminal_commands;
@@ -19,14 +20,15 @@ mod workspace_files;
 
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use commands::{
-    cancel_run, choose_run_attachment, create_run, get_run, list_runs, read_artifact_content,
-    respond_interaction, watch_run,
+    archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_asides, list_runs,
+    read_artifact_content, respond_interaction, restore_thread, watch_run,
 };
 use desktop_commands::{
-    add_external_target, apply_managed_model_configuration, choose_workspace,
-    configure_managed_runtime, connect_colossus, connection_status, desktop_release_channel,
-    desktop_status, import_ca_bundle, initialize_desktop, remove_ca_bundle, remove_external_target,
-    restart_managed_runtime, run_managed_self_test, select_target, set_approval_mode,
+    add_external_target, apply_managed_model_configuration, archive_space, choose_workspace,
+    configure_managed_runtime, connect_colossus, connection_status, create_space,
+    desktop_release_channel, desktop_status, import_ca_bundle, initialize_desktop, list_spaces,
+    remove_ca_bundle, remove_external_target, rename_space, restart_managed_runtime, restore_space,
+    run_managed_self_test, search_space_threads, select_space, select_target, set_approval_mode,
     set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
@@ -69,6 +71,13 @@ pub fn run() {
             add_external_target,
             remove_external_target,
             choose_workspace,
+            create_space,
+            list_spaces,
+            select_space,
+            rename_space,
+            archive_space,
+            restore_space,
+            search_space_threads,
             configure_managed_runtime,
             apply_managed_model_configuration,
             restart_managed_runtime,
@@ -83,8 +92,11 @@ pub fn run() {
             read_artifact_content,
             get_run,
             list_runs,
+            list_asides,
             watch_run,
             cancel_run,
+            archive_thread,
+            restore_thread,
             respond_interaction,
             list_workspace_directory,
             read_workspace_file,

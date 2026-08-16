@@ -17,13 +17,13 @@ use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
 
-#[cfg(not(windows))]
 use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 4;
+const SETTINGS_SCHEMA_VERSION: u16 = 5;
 const SETTINGS_FILE: &str = "settings.json";
+const THREAD_SEARCH_FILE: &str = "thread-search.redb";
 const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
 const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
@@ -40,10 +40,17 @@ const MAX_CONNECTION_VALUE_BYTES: usize = 256;
 pub(crate) const MAX_PENDING_PROVIDER_CLEANUPS: usize = 64;
 pub(crate) const MAX_MANAGED_PROVIDERS: usize = 16;
 pub(crate) const MAX_MANAGED_MODELS: usize = 64;
+pub(crate) const MAX_WORKSPACE_PROFILES: usize = 128;
+const MAX_WORKSPACE_PROFILE_NAME_BYTES: usize = 80;
 const PROVIDER_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.provider";
 pub(crate) const EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
 const WORKSPACE_PARTITION_DOMAIN: &[u8] = b"colossus-desktop-managed-workspace-v1\0";
 const WORKSPACE_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-managed-instance-v1\0";
+#[cfg(debug_assertions)]
+const DEVELOPMENT_PLAINTEXT_RUNTIME_DIRECTORY: &str = "development-plaintext";
+#[cfg(debug_assertions)]
+const DEVELOPMENT_PLAINTEXT_INSTANCE_DOMAIN: &[u8] =
+    b"colossus-desktop-managed-development-plaintext-v1\0";
 const MODEL_ROLES: [&str; 7] = [
     "primary",
     "risk_evaluator",
@@ -120,6 +127,29 @@ pub(crate) struct WorkspaceSetting {
     pub(crate) display_path: String,
 }
 
+/// Persisted folder-backed Desktop context. The renderer calls this a Space, while
+/// the neutral native name keeps a future product-label change migration-free.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WorkspaceProfile {
+    pub(crate) id: String,
+    pub(crate) display_name: String,
+    #[serde(default)]
+    pub(crate) archived: bool,
+    #[serde(default)]
+    pub(crate) last_opened_at_ms: u64,
+    pub(crate) workspace: WorkspaceSetting,
+    #[serde(default)]
+    pub(crate) providers: Vec<ProviderSetting>,
+    #[serde(default)]
+    pub(crate) models: Vec<ModelSetting>,
+    #[serde(default)]
+    pub(crate) model_roles: BTreeMap<String, String>,
+    pub(crate) access_profile: AccessProfileSetting,
+    pub(crate) execution_boundary: ExecutionBoundarySetting,
+    pub(crate) terminal_enabled: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProviderSetting {
@@ -193,6 +223,19 @@ pub(crate) struct CaBundleSetting {
     pub(crate) fingerprints_sha256: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AsideSetting {
+    pub(crate) space_id: String,
+    pub(crate) parent_session_id: String,
+    pub(crate) source_run_id: String,
+    pub(crate) session_id: String,
+    pub(crate) latest_run_id: String,
+    pub(crate) created_at: String,
+    #[serde(default)]
+    pub(crate) closed: bool,
+}
+
 const fn legacy_external_credential_binding() -> bool {
     true
 }
@@ -202,6 +245,17 @@ const fn legacy_external_credential_binding() -> bool {
 pub(crate) struct DesktopSettings {
     pub(crate) schema_version: u16,
     pub(crate) managed_instance_id: String,
+    /// Persisted folder-backed contexts. These are authoritative for Managed Local.
+    #[serde(default)]
+    pub(crate) spaces: Vec<WorkspaceProfile>,
+    #[serde(default)]
+    pub(crate) selected_space_id: Option<String>,
+    /// Bounded linkage metadata for Space-scoped side conversations. No prompt,
+    /// message, tool output, or selected text is persisted here.
+    #[serde(default)]
+    pub(crate) asides: Vec<AsideSetting>,
+    /// Selected-Space projection retained for narrow command paths. SettingsStore
+    /// synchronizes it into `spaces` before every write and refreshes it after load.
     pub(crate) workspace: Option<WorkspaceSetting>,
     #[serde(default)]
     pub(crate) providers: Vec<ProviderSetting>,
@@ -263,6 +317,9 @@ impl Default for DesktopSettings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             managed_instance_id: Uuid::now_v7().to_string(),
+            spaces: Vec::new(),
+            selected_space_id: None,
+            asides: Vec::new(),
             workspace: None,
             providers: Vec::new(),
             models: Vec::new(),
@@ -303,11 +360,161 @@ impl DesktopSettings {
     }
 
     pub(crate) fn provider_credential_ids(&self) -> BTreeSet<&str> {
-        self.providers
+        let selected = self
+            .providers
             .iter()
             .filter_map(|provider| provider.credential_id.as_deref())
-            .collect()
+            .collect::<BTreeSet<_>>();
+        self.spaces.iter().fold(selected, |mut ids, space| {
+            ids.extend(
+                space
+                    .providers
+                    .iter()
+                    .filter_map(|provider| provider.credential_id.as_deref()),
+            );
+            ids
+        })
     }
+
+    pub(crate) fn space(&self, space_id: &str) -> Option<&WorkspaceProfile> {
+        self.spaces.iter().find(|space| space.id == space_id)
+    }
+
+    pub(crate) fn space_for_workspace_identity(
+        &self,
+        identity: &WorkspaceIdentity,
+    ) -> Option<&WorkspaceProfile> {
+        self.spaces
+            .iter()
+            .find(|space| space.workspace.identity.as_ref() == Some(identity))
+    }
+
+    pub(crate) fn add_space(
+        &mut self,
+        workspace: WorkspaceSetting,
+    ) -> Result<String, CommandErrorDto> {
+        self.sync_selected_space_projection()?;
+        if self.spaces.len() >= MAX_WORKSPACE_PROFILES {
+            return Err(CommandErrorDto::busy(
+                "The Desktop Space limit has been reached. Archive an unused Space first.",
+            ));
+        }
+        let identity = workspace.identity.as_ref().ok_or_else(workspace_error)?;
+        if self.space_for_workspace_identity(identity).is_some() {
+            return Err(CommandErrorDto::invalid(
+                "workspace",
+                "That folder already belongs to a Space.",
+            ));
+        }
+        let id = workspace.id.clone();
+        self.spaces.push(WorkspaceProfile {
+            id: id.clone(),
+            display_name: workspace.display_name.clone(),
+            archived: false,
+            last_opened_at_ms: unix_time_millis(),
+            workspace,
+            providers: self.providers.clone(),
+            models: self.models.clone(),
+            model_roles: self.model_roles.clone(),
+            access_profile: self.access_profile,
+            execution_boundary: self.execution_boundary,
+            terminal_enabled: self.terminal_enabled,
+        });
+        self.activate_space(&id)?;
+        Ok(id)
+    }
+
+    pub(crate) fn activate_space(&mut self, space_id: &str) -> Result<(), CommandErrorDto> {
+        self.sync_selected_space_projection()?;
+        let Some(index) = self.spaces.iter().position(|space| space.id == space_id) else {
+            return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+        };
+        if self.spaces[index].archived {
+            return Err(CommandErrorDto::invalid(
+                "spaceId",
+                "Restore this Space before selecting it.",
+            ));
+        }
+        self.spaces[index].last_opened_at_ms = unix_time_millis();
+        self.selected_space_id = Some(space_id.to_owned());
+        self.project_selected_space();
+        self.selected_target_id = Some(space_id.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn sync_selected_space_projection(&mut self) -> Result<(), CommandErrorDto> {
+        let Some(space_id) = self.selected_space_id.clone() else {
+            return Ok(());
+        };
+        let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id) else {
+            return Err(storage_error());
+        };
+        if let Some(workspace) = &self.workspace {
+            space.workspace = workspace.clone();
+        }
+        space.providers.clone_from(&self.providers);
+        space.models.clone_from(&self.models);
+        space.model_roles.clone_from(&self.model_roles);
+        space.access_profile = self.access_profile;
+        space.execution_boundary = self.execution_boundary;
+        space.terminal_enabled = self.terminal_enabled;
+        Ok(())
+    }
+
+    pub(crate) fn project_selected_space(&mut self) {
+        let selected = self
+            .selected_space_id
+            .as_deref()
+            .and_then(|space_id| self.spaces.iter().find(|space| space.id == space_id))
+            .cloned();
+        let Some(space) = selected else {
+            // A provider may be configured before the first folder is selected.
+            // Preserve that staged projection so Add Space can inherit it and so
+            // legacy path-only migrations do not silently discard provider state.
+            return;
+        };
+        self.workspace = Some(space.workspace);
+        self.providers = space.providers;
+        self.models = space.models;
+        self.model_roles = space.model_roles;
+        self.access_profile = space.access_profile;
+        self.execution_boundary = space.execution_boundary;
+        self.terminal_enabled = space.terminal_enabled;
+    }
+
+    fn migrate_workspace_to_space(&mut self) -> bool {
+        if !self.spaces.is_empty() || self.workspace.is_none() {
+            return false;
+        }
+        let workspace = self.workspace.clone().expect("workspace checked above");
+        let id = workspace.id.clone();
+        self.spaces.push(WorkspaceProfile {
+            id: id.clone(),
+            display_name: workspace.display_name.clone(),
+            archived: false,
+            last_opened_at_ms: unix_time_millis(),
+            workspace,
+            providers: self.providers.clone(),
+            models: self.models.clone(),
+            model_roles: self.model_roles.clone(),
+            access_profile: self.access_profile,
+            execution_boundary: self.execution_boundary,
+            terminal_enabled: self.terminal_enabled,
+        });
+        self.selected_space_id = Some(id.clone());
+        if self.selected_target_id.as_deref() == Some("managed-local") {
+            self.selected_target_id = Some(id);
+        }
+        true
+    }
+}
+
+fn unix_time_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 #[derive(Clone, Debug)]
@@ -344,6 +551,50 @@ impl SettingsStore {
             .as_ref()
             .map(ColossusHome::root)
             .ok_or_else(storage_error)
+    }
+
+    pub(crate) fn thread_search_path(&self) -> Result<PathBuf, CommandErrorDto> {
+        ensure_private_directory(&self.root)?;
+        Ok(self.root.join(THREAD_SEARCH_FILE))
+    }
+
+    pub(crate) fn open_thread_search_file(&self) -> Result<File, CommandErrorDto> {
+        let path = self.thread_search_path()?;
+        if !path.exists() {
+            write_private_file(&path, &[])?;
+        }
+        #[cfg(unix)]
+        {
+            let file = rustix::fs::open(
+                &path,
+                rustix::fs::OFlags::RDWR
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(File::from)
+            .map_err(|_| storage_error())?;
+            let metadata = file.metadata().map_err(|_| storage_error())?;
+            if !metadata.is_file()
+                || metadata.uid() != rustix::process::getuid().as_raw()
+                || metadata.mode() & 0o077 != 0
+            {
+                return Err(storage_error());
+            }
+            return Ok(file);
+        }
+        #[cfg(windows)]
+        {
+            let binding = colossus_windows_native::BoundPath::open_file(&path)
+                .map_err(|_| storage_error())?;
+            binding
+                .validate_private_owner_dacl()
+                .and_then(|()| binding.revalidate())
+                .map_err(|_| storage_error())?;
+            return binding.try_clone_file().map_err(|_| storage_error());
+        }
+        #[allow(unreachable_code)]
+        Err(storage_error())
     }
 
     pub(crate) fn load(&self) -> Result<DesktopSettings, CommandErrorDto> {
@@ -396,18 +647,22 @@ impl SettingsStore {
             })
             .and_then(|value| u16::try_from(value).ok())
             .ok_or_else(storage_error)?;
-        let (mut settings, migrated_settings) = if schema_version == 1 {
+        let (mut settings, mut migrated_settings) = if schema_version == 1 {
             let legacy: LegacyDesktopSettingsV1 =
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?;
             (migrate_v1_settings(legacy)?, true)
         } else if matches!(schema_version, 2 | 3) {
             (migrate_legacy_settings(&bytes, schema_version)?, true)
+        } else if schema_version == 4 {
+            (migrate_v4_settings(&bytes)?, true)
         } else {
             (
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
                 false,
             )
         };
+        migrated_settings |= settings.migrate_workspace_to_space();
+        settings.project_selected_space();
         let legacy_workspace_requires_reselection =
             settings.workspace.as_ref().is_some_and(|workspace| {
                 workspace
@@ -424,7 +679,17 @@ impl SettingsStore {
             // after that explicit workspace authorization.
             settings.managed_instance_id = Uuid::now_v7().to_string();
             settings.workspace = None;
-            if settings.selected_target_id.as_deref() == Some("managed-local") {
+            if let Some(space_id) = settings.selected_space_id.take() {
+                settings.spaces.retain(|space| space.id != space_id);
+            }
+            if settings.selected_target_id.as_deref() == Some("managed-local")
+                || settings
+                    .selected_target_id
+                    .as_ref()
+                    .is_some_and(|target_id| {
+                        settings.spaces.iter().all(|space| &space.id != target_id)
+                    })
+            {
                 settings.selected_target_id = None;
             }
             migrated_legacy_workspace = true;
@@ -452,8 +717,10 @@ impl SettingsStore {
     }
 
     pub(crate) fn save(&self, settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
-        validate_settings(settings)?;
-        let bytes = serde_json::to_vec(settings).map_err(|_| storage_error())?;
+        let mut persisted = settings.clone();
+        persisted.sync_selected_space_projection()?;
+        validate_settings(&persisted)?;
+        let bytes = serde_json::to_vec(&persisted).map_err(|_| storage_error())?;
         if bytes.len() > usize::try_from(MAX_SETTINGS_BYTES).unwrap_or(usize::MAX) {
             return Err(storage_error());
         }
@@ -519,9 +786,17 @@ impl SettingsStore {
             ensure_private_directory(&directory)?;
             (directory, partition_id.into_bytes())
         };
+        #[cfg(debug_assertions)]
+        let directory = {
+            let directory = directory.join(DEVELOPMENT_PLAINTEXT_RUNTIME_DIRECTORY);
+            ensure_private_directory(&directory)?;
+            directory
+        };
 
         let mut instance_digest = Sha256::new();
         instance_digest.update(WORKSPACE_INSTANCE_DOMAIN);
+        #[cfg(debug_assertions)]
+        instance_digest.update(DEVELOPMENT_PLAINTEXT_INSTANCE_DOMAIN);
         instance_digest.update(seed.as_bytes());
         instance_digest.update(instance_partition);
         let digest = instance_digest.finalize();
@@ -706,6 +981,9 @@ fn migrate_v1_settings(
     Ok(DesktopSettings {
         schema_version: SETTINGS_SCHEMA_VERSION,
         managed_instance_id: legacy.managed_instance_id,
+        spaces: Vec::new(),
+        selected_space_id: None,
+        asides: Vec::new(),
         workspace: legacy.workspace,
         providers: Vec::new(),
         models: Vec::new(),
@@ -722,6 +1000,26 @@ fn migrate_v1_settings(
         external_targets: legacy.external_targets,
         legacy_connection_migrated: legacy.legacy_connection_migrated,
     })
+}
+
+fn migrate_v4_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    let object = value.as_object_mut().ok_or_else(storage_error)?;
+    if object
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(4)
+    {
+        return Err(storage_error());
+    }
+    object.insert(
+        "schemaVersion".into(),
+        serde_json::Value::from(SETTINGS_SCHEMA_VERSION),
+    );
+    object.insert("spaces".into(), serde_json::Value::Array(Vec::new()));
+    object.insert("selectedSpaceId".into(), serde_json::Value::Null);
+    serde_json::from_value(value).map_err(|_| storage_error())
 }
 
 fn migrate_legacy_settings(
@@ -786,6 +1084,8 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
         || settings.local_terminal_consent_version > LOCAL_TERMINAL_CONSENT_VERSION
         || !Uuid::parse_str(&settings.managed_instance_id).is_ok_and(|value| !value.is_nil())
         || settings.external_targets.len() > MAX_EXTERNAL_TARGETS
+        || settings.spaces.len() > MAX_WORKSPACE_PROFILES
+        || settings.asides.len() > 256
         || settings.pending_provider_cleanup_ids.len() > MAX_PENDING_PROVIDER_CLEANUPS
         || settings
             .additional_ca_bundle
@@ -794,16 +1094,34 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
     {
         return Err(storage_error());
     }
+    validate_workspace_profiles(settings)?;
+    let mut aside_sessions = HashSet::with_capacity(settings.asides.len());
+    if settings.asides.iter().any(|aside| {
+        !settings
+            .spaces
+            .iter()
+            .any(|space| space.id == aside.space_id)
+            || !valid_opaque_id(&aside.parent_session_id)
+            || !valid_opaque_id(&aside.source_run_id)
+            || !valid_opaque_id(&aside.session_id)
+            || !valid_opaque_id(&aside.latest_run_id)
+            || !aside_sessions.insert(aside.session_id.as_str())
+            || aside.created_at.is_empty()
+            || aside.created_at.len() > 64
+    }) {
+        return Err(storage_error());
+    }
     let target_ids = validate_external_targets(settings)?;
-    if settings
-        .selected_target_id
-        .as_deref()
-        .is_some_and(|value| value != "managed-local" && !target_ids.contains(value))
-        || settings.workspace.as_ref().is_some_and(invalid_workspace)
+    if settings.selected_target_id.as_deref().is_some_and(|value| {
+        value != "managed-local"
+            && settings.spaces.iter().all(|space| space.id != value)
+            && !target_ids.contains(value)
+    }) || settings.workspace.as_ref().is_some_and(invalid_workspace)
     {
         return Err(storage_error());
     }
-    let credential_ids = validate_managed_configuration(settings)?;
+    validate_managed_configuration(settings)?;
+    let credential_ids = settings.provider_credential_ids();
     let mut cleanup_ids = HashSet::new();
     if settings
         .pending_provider_cleanup_ids
@@ -814,6 +1132,41 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
                 || credential_ids.contains(credential_id.as_str())
         })
     {
+        return Err(storage_error());
+    }
+    Ok(())
+}
+
+fn validate_workspace_profiles(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
+    let mut profile_ids = HashSet::with_capacity(settings.spaces.len());
+    let mut workspace_identities = HashSet::with_capacity(settings.spaces.len());
+    for space in &settings.spaces {
+        let Some(identity) = space.workspace.identity.as_ref() else {
+            return Err(storage_error());
+        };
+        let identity_key = (identity.version, identity.sha256.as_str());
+        if !valid_opaque_id(&space.id)
+            || !profile_ids.insert(space.id.as_str())
+            || !workspace_identities.insert(identity_key)
+            || space.display_name.trim().is_empty()
+            || space.display_name.len() > MAX_WORKSPACE_PROFILE_NAME_BYTES
+            || space
+                .display_name
+                .chars()
+                .any(|character| character.is_control() || is_directional_control(character))
+            || invalid_workspace(&space.workspace)
+        {
+            return Err(storage_error());
+        }
+        validate_managed_runtime_fields(&space.providers, &space.models, &space.model_roles)?;
+    }
+    if settings.selected_space_id.as_ref().is_some_and(|selected| {
+        settings
+            .spaces
+            .iter()
+            .find(|space| &space.id == selected)
+            .is_none_or(|space| space.archived)
+    }) {
         return Err(storage_error());
     }
     Ok(())
@@ -862,14 +1215,7 @@ fn invalid_workspace(workspace: &WorkspaceSetting) -> bool {
 fn validate_managed_configuration(
     settings: &DesktopSettings,
 ) -> Result<BTreeSet<&str>, CommandErrorDto> {
-    if settings.providers.len() > MAX_MANAGED_PROVIDERS
-        || settings.models.len() > MAX_MANAGED_MODELS
-        || settings.providers.is_empty() != settings.models.is_empty()
-        || settings.models.is_empty() != settings.model_roles.is_empty()
-        || (!settings.models.is_empty() && !settings.model_roles.contains_key("primary"))
-    {
-        return Err(storage_error());
-    }
+    validate_managed_runtime_fields(&settings.providers, &settings.models, &settings.model_roles)?;
     let mut provider_profiles = BTreeSet::new();
     let mut credential_ids = BTreeSet::new();
     for provider in &settings.providers {
@@ -917,6 +1263,61 @@ fn validate_managed_configuration(
         return Err(storage_error());
     }
     Ok(credential_ids)
+}
+
+fn validate_managed_runtime_fields(
+    providers: &[ProviderSetting],
+    models: &[ModelSetting],
+    model_roles: &BTreeMap<String, String>,
+) -> Result<(), CommandErrorDto> {
+    if providers.len() > MAX_MANAGED_PROVIDERS
+        || models.len() > MAX_MANAGED_MODELS
+        || providers.is_empty() != models.is_empty()
+        || models.is_empty() != model_roles.is_empty()
+        || (!models.is_empty() && !model_roles.contains_key("primary"))
+    {
+        return Err(storage_error());
+    }
+    let mut provider_profiles = BTreeSet::new();
+    for provider in providers {
+        if !valid_profile_name(&provider.profile)
+            || !provider_profiles.insert(provider.profile.as_str())
+            || provider.timeout_ms == Some(0)
+            || validate_managed_provider_base_url(&provider.base_url).is_err()
+            || provider
+                .credential_id
+                .as_deref()
+                .is_some_and(|id| !valid_opaque_id(id))
+            || (provider.kind == ProviderKindSetting::Codex
+                && (provider.base_url != CODEX_BASE_URL || provider.credential_id.is_some()))
+        {
+            return Err(storage_error());
+        }
+    }
+    let mut model_profiles = BTreeSet::new();
+    for model in models {
+        let safety = model.context_window_tokens.div_ceil(10).max(512);
+        if !valid_profile_name(&model.profile)
+            || !model_profiles.insert(model.profile.as_str())
+            || !provider_profiles.contains(model.provider_profile.as_str())
+            || validate_managed_model_identifier(&model.model).is_err()
+            || model.context_window_tokens < 1_024
+            || model.max_output_tokens == 0
+            || model
+                .context_window_tokens
+                .checked_sub(model.max_output_tokens)
+                .and_then(|remaining| remaining.checked_sub(safety))
+                .is_none_or(|input| input == 0)
+        {
+            return Err(storage_error());
+        }
+    }
+    if model_roles.iter().any(|(role, profile)| {
+        !MODEL_ROLES.contains(&role.as_str()) || !model_profiles.contains(profile.as_str())
+    }) {
+        return Err(storage_error());
+    }
+    Ok(())
 }
 
 fn valid_profile_name(value: &str) -> bool {
@@ -1381,6 +1782,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn aside_settings_persist_only_bounded_linkage_metadata() {
+        let value = serde_json::to_value(AsideSetting {
+            space_id: "space-1".into(),
+            parent_session_id: "parent-session".into(),
+            source_run_id: "source-run".into(),
+            session_id: "aside-session".into(),
+            latest_run_id: "aside-run".into(),
+            created_at: "2026-08-15T00:00:00Z".into(),
+            closed: false,
+        })
+        .expect("Aside setting");
+        let object = value.as_object().expect("object");
+        assert_eq!(object.len(), 7);
+        assert!(!object.contains_key("prompt"));
+        assert!(!object.contains_key("quote"));
+        assert!(!object.contains_key("messages"));
+        assert!(!object.contains_key("toolOutput"));
+    }
+
+    #[test]
     fn legacy_tui_consent_cannot_silently_enable_local_shell_authority() {
         let mut settings = DesktopSettings {
             terminal_enabled: true,
@@ -1497,22 +1918,53 @@ mod tests {
                 workspace.identity.as_ref().expect("current identity"),
             )
             .expect("managed storage");
-        assert_eq!(
-            storage
-                .instance_dir
-                .file_name()
-                .and_then(|name| name.to_str()),
-            Some("desktop")
-        );
-        assert_eq!(
-            storage
-                .instance_dir
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str()),
-            Some("workspaces")
-        );
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(
+                storage
+                    .instance_dir
+                    .file_name()
+                    .and_then(|name| name.to_str()),
+                Some(DEVELOPMENT_PLAINTEXT_RUNTIME_DIRECTORY)
+            );
+            assert_eq!(
+                storage
+                    .instance_dir
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str()),
+                Some("desktop")
+            );
+            assert_eq!(
+                storage
+                    .instance_dir
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str()),
+                Some("workspaces")
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            assert_eq!(
+                storage
+                    .instance_dir
+                    .file_name()
+                    .and_then(|name| name.to_str()),
+                Some("desktop")
+            );
+            assert_eq!(
+                storage
+                    .instance_dir
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str()),
+                Some("workspaces")
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -1647,6 +2099,99 @@ mod tests {
         assert_eq!(store.load().expect("load"), settings);
         let bytes = fs::read(canonical_root.join(SETTINGS_FILE)).expect("settings");
         assert!(!String::from_utf8_lossy(&bytes).contains("provider-secret"));
+    }
+
+    #[test]
+    fn v4_workspace_migrates_to_the_first_folder_backed_space() {
+        let (_root_guard, canonical_root, store) = test_store();
+        let folder = tempfile::tempdir().expect("workspace");
+        let folder = fs::canonicalize(folder.path()).expect("canonical workspace");
+        let workspace = validate_workspace(&folder).expect("workspace identity");
+        let mut legacy = configured_settings(
+            ProviderKindSetting::Compatible,
+            OPENROUTER_BASE_URL,
+            Some(Uuid::now_v7().to_string()),
+        );
+        legacy.workspace = Some(workspace.clone());
+        legacy.selected_target_id = Some("managed-local".into());
+        let mut encoded = serde_json::to_value(legacy).expect("legacy settings");
+        encoded["schemaVersion"] = serde_json::Value::from(4);
+        encoded
+            .as_object_mut()
+            .expect("settings object")
+            .remove("spaces");
+        encoded
+            .as_object_mut()
+            .expect("settings object")
+            .remove("selectedSpaceId");
+        let path = canonical_root.join(SETTINGS_FILE);
+        fs::write(&path, serde_json::to_vec(&encoded).expect("v4 settings")).expect("settings");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
+
+        let migrated = store.load().expect("migrate v4 settings");
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated.spaces.len(), 1);
+        assert_eq!(migrated.spaces[0].workspace, workspace);
+        assert_eq!(migrated.spaces[0].display_name, workspace.display_name);
+        assert_eq!(
+            migrated.selected_space_id.as_deref(),
+            Some(workspace.id.as_str())
+        );
+        assert_eq!(migrated.selected_target_id, migrated.selected_space_id);
+        assert_eq!(migrated.spaces[0].providers, migrated.providers);
+        assert_eq!(store.load().expect("persisted migration"), migrated);
+    }
+
+    #[test]
+    fn spaces_reject_duplicate_folder_identity_and_archive_requires_restore() {
+        let folder = tempfile::tempdir().expect("workspace");
+        let folder = fs::canonicalize(folder.path()).expect("canonical workspace");
+        let workspace = validate_workspace(&folder).expect("workspace identity");
+        let mut settings = DesktopSettings::default();
+        let space_id = settings.add_space(workspace.clone()).expect("first Space");
+
+        let mut duplicate = workspace;
+        duplicate.id = Uuid::now_v7().to_string();
+        assert!(settings.add_space(duplicate).is_err());
+
+        settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == space_id)
+            .expect("Space")
+            .archived = true;
+        assert!(settings.activate_space(&space_id).is_err());
+    }
+
+    #[test]
+    fn spaces_share_credential_references_but_keep_independent_model_profiles() {
+        let credential_id = Uuid::now_v7().to_string();
+        let mut settings = configured_settings(
+            ProviderKindSetting::Compatible,
+            OPENROUTER_BASE_URL,
+            Some(credential_id.clone()),
+        );
+        let first_folder = tempfile::tempdir().expect("first workspace");
+        let second_folder = tempfile::tempdir().expect("second workspace");
+        let first =
+            validate_workspace(&fs::canonicalize(first_folder.path()).expect("first canonical"))
+                .expect("first identity");
+        let second =
+            validate_workspace(&fs::canonicalize(second_folder.path()).expect("second canonical"))
+                .expect("second identity");
+        let first_id = settings.add_space(first).expect("first Space");
+        let second_id = settings.add_space(second).expect("second Space");
+        settings.models[0].model = "space-two-model".into();
+
+        settings.activate_space(&first_id).expect("select first");
+        assert_eq!(settings.models[0].model, "test-model");
+        settings.activate_space(&second_id).expect("select second");
+        assert_eq!(settings.models[0].model, "space-two-model");
+        assert_eq!(
+            settings.provider_credential_ids(),
+            BTreeSet::from([credential_id.as_str()])
+        );
     }
 
     #[test]
@@ -1868,6 +2413,14 @@ mod tests {
         assert_eq!(first.instance_dir, first_again.instance_dir);
         assert_eq!(first.instance_id, first_again.instance_id);
         assert!(!second.instance_dir.join("queued-run-marker").exists());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            first
+                .instance_dir
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(DEVELOPMENT_PLAINTEXT_RUNTIME_DIRECTORY)
+        );
     }
 
     #[test]

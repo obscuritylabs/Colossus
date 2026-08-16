@@ -28,14 +28,15 @@ use colossus_contracts::{
     ProviderResponseDiagnostic, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
     QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
     ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority, RiskAssessment,
-    RunTelemetryDetail, RunTelemetrySummary, SandboxBoundaryMode, SearchProfileSummary,
-    SearchRequest, SearchResponse, SearchRoute, SecurityPostureFinding, SecurityPostureReport,
-    SecurityPostureSeverity, SessionMessage, SessionMessagePage, SessionSummary, SkillComposition,
-    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
-    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
-    SkillWriteResult, StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus,
-    TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
-    UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
+    RunBranchContextMode, RunTelemetryDetail, RunTelemetrySummary, SandboxBoundaryMode,
+    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SecurityPostureFinding,
+    SecurityPostureReport, SecurityPostureSeverity, SessionMessage, SessionMessageAppend,
+    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
+    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
+    WorkflowWebhookDispatch, validate_model_transcript,
 };
 use colossus_home::ConfinedRoot;
 use colossus_integrations::{

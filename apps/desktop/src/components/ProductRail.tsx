@@ -11,7 +11,7 @@ import colossusMark from "../assets/colossus-mark.svg";
 import type { ConnectionState, DesktopCapabilities } from "../types";
 
 export type WorkspaceSurface =
-  "work" | "fleet" | "library" | "activity" | "settings";
+  "work" | "fleet" | "library" | "activity" | "connections" | "settings";
 
 interface ProductRailProps {
   surface: WorkspaceSurface;

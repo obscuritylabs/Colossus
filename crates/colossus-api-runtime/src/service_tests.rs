@@ -8,12 +8,12 @@ use colossus_api::{
     ContentPart, CreateArtifactUploadRequest, CreateRunRequest, EventSourcedArtifactApi,
     EventSourcedRunRepository, GetRunRequest, IdempotencyKey, InteractionKind, InteractionResponse,
     NewRun, OutcomeCertainty, PlanRunAction, PlanStatus as PublicPlanStatus, RequestId,
-    RespondInteractionRequest, Run, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
-    WatchRunRequest, scopes,
+    RespondInteractionRequest, Run, RunBranch, RunBranchContextMode, RunMode, RunRepository,
+    RunResult, RunStatus, RunUpdateKind, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
-    DecisionOutcome, EventEnvelope, NewEvent, PlanStep, PolicyDecision, PolicyObligations,
-    ProjectionWorkItem, SignedCheckpoint, UserPromptRequest,
+    DecisionOutcome, EventEnvelope, ModelMessageRole, NewEvent, PlanStep, PolicyDecision,
+    PolicyObligations, ProjectionWorkItem, SignedCheckpoint, UserPromptRequest,
 };
 use colossus_policy::{DenyApproval, effect_request};
 use colossus_ports::{
@@ -321,8 +321,11 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
                 end_user_id: None,
                 role: Some("primary".into()),
                 mode: RunMode::Execute,
+                research_depth: None,
+                research_sources: Vec::new(),
                 skill_ids: Vec::new(),
                 plan_action: None,
+                branch: None,
                 max_turns: 1,
                 idempotency_key: IdempotencyKey::new("attachment-run").expect("run key"),
             },
@@ -344,8 +347,11 @@ fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
         end_user_id: None,
         role: Some("primary".into()),
         mode: RunMode::Execute,
+        research_depth: None,
+        research_sources: Vec::new(),
         skill_ids: Vec::new(),
         plan_action: None,
+        branch: None,
         max_turns: 1,
         idempotency_key: IdempotencyKey::new(idempotency_key).expect("idempotency key"),
     }
@@ -522,6 +528,65 @@ async fn plan_continuation_is_bound_to_owner_source_session_and_exact_revision(
     assert_eq!(accepted.run.session_id, session.session_id);
     assert_eq!(accepted.run.mode, RunMode::Plan);
     service.request_shutdown();
+}
+
+async fn source_run_conversation_branch_includes_the_visible_final_response(runtime: Arc<Runtime>) {
+    let service = service(Arc::clone(&runtime), RunAdmissionConfig::default());
+    let owner = caller(
+        &format!("app:aside-owner-{}", Uuid::now_v7().simple()),
+        "aside-owner",
+    );
+    let source = service
+        .create_run(
+            &owner,
+            request("aside-source", "Describe the visible workspace context."),
+        )
+        .await
+        .expect("create source run")
+        .run;
+    let source = wait_terminal(&service, &owner, &source.id).await;
+    let source_messages = runtime
+        .session_messages(&source.session_id)
+        .expect("source messages");
+    let expected_context = source_messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.message.role,
+                ModelMessageRole::User | ModelMessageRole::Assistant
+            ) && !message.message.content.trim().is_empty()
+        })
+        .map(|message| (message.message.role, message.message.content.clone()))
+        .collect::<Vec<_>>();
+    assert!(
+        expected_context
+            .iter()
+            .any(|(role, _)| *role == ModelMessageRole::Assistant),
+        "the source run must have a visible final assistant response"
+    );
+
+    let mut branch_request = request("aside-branch", "What happened immediately before this?");
+    branch_request.branch = Some(RunBranch {
+        source_run_id: source.id,
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    let branch = service
+        .create_run(&owner, branch_request)
+        .await
+        .expect("create Aside from canonical source-run boundary")
+        .run;
+    let branch = wait_terminal(&service, &owner, &branch.id).await;
+    let branch_messages = runtime
+        .session_messages(&branch.session_id)
+        .expect("Aside messages");
+    let actual_prefix = branch_messages
+        .iter()
+        .take(expected_context.len())
+        .map(|message| (message.message.role, message.message.content.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_prefix, expected_context);
+    wait_inactive(&service).await;
 }
 
 async fn concurrent_exact_create_key_executes_the_provider_once(runtime: Arc<Runtime>) {
@@ -1023,6 +1088,10 @@ fn runtime_service_conformance() {
             ))
             .await;
             plan_continuation_is_bound_to_owner_source_session_and_exact_revision(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            source_run_conversation_branch_includes_the_visible_final_response(Arc::clone(
                 &fixture.runtime,
             ))
             .await;

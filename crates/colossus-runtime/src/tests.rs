@@ -1,3 +1,4 @@
+use super::composition::research_run_timeout_ms;
 use super::extensions::extension_path;
 use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
@@ -18,11 +19,12 @@ use super::{
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
-    ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
-    PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
+    ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, PlanRecord,
+    PlanStatus, PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
     ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
-    ResourceAuthority, RiskLevel, RiskRecommendation, SandboxBoundaryMode, StartupVerificationMode,
-    SubagentStatus, TaskStatus, TerminalPreferences, ToolCall,
+    ResourceAuthority, RiskLevel, RiskRecommendation, RunBranchContextMode, SandboxBoundaryMode,
+    SessionMessageAppend, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
+    ToolCall,
 };
 use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
 use colossus_mcp::{
@@ -65,6 +67,12 @@ fn private_tempdir() -> tempfile::TempDir {
             .expect("private temporary root permissions");
     }
     temporary
+}
+
+#[test]
+fn research_outer_timeout_contains_every_bounded_nested_operation() {
+    assert_eq!(research_run_timeout_ms(300_000, 30_000, 20, 4), 6_750_000);
+    assert!(research_run_timeout_ms(300_000, 30_000, 20, 4) > 30_000);
 }
 
 fn external_work_queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
@@ -1982,6 +1990,203 @@ fn ephemeral_runtime_uses_fresh_process_local_state_without_storage_files() {
     .expect("fresh ephemeral runtime");
     assert_eq!(reopened.journal().head().expect("fresh head").0, 0);
     assert!(!workspace.path().join("absent").exists());
+}
+
+#[test]
+fn canonical_session_branch_is_bounded_idempotent_and_detects_drift() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime");
+    let actor = Actor {
+        actor_type: ActorType::Application,
+        id: "desktop-test".into(),
+    };
+    runtime
+        .sessions
+        .create_session("source-session", Some("Parent"), actor.clone())
+        .expect("source session");
+    runtime
+        .sessions
+        .append_messages(
+            "source-session",
+            "source-run",
+            vec![
+                SessionMessageAppend {
+                    message: ModelMessage {
+                        role: ModelMessageRole::User,
+                        content: "first".into(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    actor: actor.clone(),
+                },
+                SessionMessageAppend {
+                    message: ModelMessage {
+                        role: ModelMessageRole::Assistant,
+                        content: "second".into(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    actor: actor.clone(),
+                },
+            ],
+        )
+        .expect("source messages");
+
+    let first = runtime
+        .ensure_session_branch(
+            "source-session",
+            1,
+            RunBranchContextMode::Exact,
+            "branch-session",
+            "branch-run",
+            actor.clone(),
+        )
+        .expect("branch");
+    assert_eq!(first.message_count, 1);
+    let replay = runtime
+        .ensure_session_branch(
+            "source-session",
+            1,
+            RunBranchContextMode::Exact,
+            "branch-session",
+            "branch-run",
+            actor.clone(),
+        )
+        .expect("idempotent branch replay");
+    assert_eq!(replay.message_count, 1);
+    assert_eq!(
+        runtime
+            .session_messages("branch-session")
+            .expect("messages")
+            .len(),
+        1
+    );
+
+    assert!(
+        runtime
+            .ensure_session_branch(
+                "source-session",
+                2,
+                RunBranchContextMode::Exact,
+                "branch-session",
+                "branch-run",
+                actor,
+            )
+            .is_err(),
+        "an existing branch cannot silently widen its snapshot"
+    );
+}
+
+#[test]
+fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime");
+    let actor = Actor {
+        actor_type: ActorType::Application,
+        id: "desktop-test".into(),
+    };
+    runtime
+        .sessions
+        .create_session("conversation-source", Some("Parent"), actor.clone())
+        .expect("source session");
+    runtime
+        .sessions
+        .append_messages(
+            "conversation-source",
+            "source-run",
+            vec![
+                SessionMessageAppend {
+                    message: ModelMessage {
+                        role: ModelMessageRole::User,
+                        content: "Inspect the workspace.".into(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    actor: actor.clone(),
+                },
+                SessionMessageAppend {
+                    message: ModelMessage {
+                        role: ModelMessageRole::Assistant,
+                        content: String::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ModelToolCall {
+                            call_id: "call-1".into(),
+                            name: "filesystem.list".into(),
+                            arguments: json!({"path": "."}),
+                        }],
+                    },
+                    actor: actor.clone(),
+                },
+                SessionMessageAppend {
+                    message: ModelMessage {
+                        role: ModelMessageRole::Tool,
+                        content: "private tool payload".into(),
+                        tool_call_id: Some("call-1".into()),
+                        tool_calls: Vec::new(),
+                    },
+                    actor: actor.clone(),
+                },
+                SessionMessageAppend {
+                    message: ModelMessage {
+                        role: ModelMessageRole::Assistant,
+                        content: "The workspace contains one project.".into(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    actor: actor.clone(),
+                },
+            ],
+        )
+        .expect("source messages");
+
+    let branch = runtime
+        .ensure_session_branch(
+            "conversation-source",
+            4,
+            RunBranchContextMode::Conversation,
+            "conversation-branch",
+            "branch-run",
+            actor,
+        )
+        .expect("conversation branch");
+    assert_eq!(branch.message_count, 2);
+    let messages = runtime
+        .session_messages("conversation-branch")
+        .expect("branch messages")
+        .into_iter()
+        .map(|record| record.message)
+        .collect::<Vec<_>>();
+    assert_eq!(messages[0].role, ModelMessageRole::User);
+    assert_eq!(messages[0].content, "Inspect the workspace.");
+    assert_eq!(messages[1].role, ModelMessageRole::Assistant);
+    assert_eq!(messages[1].content, "The workspace contains one project.");
+    assert!(messages.iter().all(|message| message.tool_calls.is_empty()));
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.tool_call_id.is_none())
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.content.contains("private tool payload"))
+    );
 }
 
 #[test]

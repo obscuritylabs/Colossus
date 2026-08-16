@@ -103,7 +103,15 @@ only product-level Tauri commands:
 - `cancel_run`
 - `respond_interaction`
 
-Desktop’s composer exposes public Execute and Plan run modes. Public Plan Mode means
+Desktop’s composer exposes public Execute, Plan, and managed-local Research run modes.
+Research carries an explicit bounded depth and a unique non-empty set of repository,
+web, or MCP evidence lanes. It reuses the authenticated durable run, interaction,
+watch, queue, and cancellation contracts while delegating collection and cited
+synthesis to the runtime research service. The initiating question and released report
+remain ordinary canonical conversation messages; tool traffic and unrestricted paths
+do not cross the renderer boundary.
+
+Public Plan Mode means
 “create one new durable Draft”; the runtime constrains its tools and returns the
 canonical Plan identity, revision, and status in terminal result or cancellation
 evidence. The native bridge preserves those typed fields rather than attempting to

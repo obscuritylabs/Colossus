@@ -59,7 +59,8 @@ export type ChatAction =
   | { type: "watch_error"; runId: string; error: CommandError }
   | { type: "interaction_resolved"; interaction: Interaction }
   | { type: "replace_recent"; runs: Run[]; nextPageToken: string }
-  | { type: "append_recent"; runs: Run[]; nextPageToken: string };
+  | { type: "append_recent"; runs: Run[]; nextPageToken: string }
+  | { type: "remove_session"; sessionId: string };
 
 export const initialChatState: ChatState = {
   activeRunId: null,
@@ -366,6 +367,14 @@ function feedProjection(update: RunUpdate): RunUpdate | null {
             callId: boundedFeedText(update.update.activity.callId, 128),
             toolName: boundedFeedText(update.update.activity.toolName, 512),
             summary: boundedFeedText(update.update.activity.summary),
+            input:
+              update.update.activity.input == null
+                ? null
+                : boundedFeedText(update.update.activity.input),
+            preview:
+              update.update.activity.preview == null
+                ? null
+                : boundedFeedText(update.update.activity.preview),
           },
         },
       };
@@ -739,6 +748,27 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         recentRuns: mergeRuns(state.recentRuns, action.runs),
         nextPageToken: action.nextPageToken,
       };
+    case "remove_session": {
+      const views = new Map(state.views);
+      for (const [runId, view] of views) {
+        if (view.run.sessionId === action.sessionId) {
+          views.delete(runId);
+        }
+      }
+      const active =
+        state.activeRunId === null
+          ? undefined
+          : state.views.get(state.activeRunId);
+      return {
+        ...state,
+        activeRunId:
+          active?.run.sessionId === action.sessionId ? null : state.activeRunId,
+        views,
+        recentRuns: state.recentRuns.filter(
+          (run) => run.sessionId !== action.sessionId,
+        ),
+      };
+    }
   }
 }
 

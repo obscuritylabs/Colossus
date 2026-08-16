@@ -200,11 +200,12 @@ impl ResearchService {
         run.updated_at = now()?;
         self.repository.update_run(run.clone(), actor.clone())?;
 
+        let source_limit = source_budget(depth).min(self.limits.max_sources);
         let mut worker_count = 0_usize;
         for query in run.queries.clone() {
             for kind in run.source_kinds.clone() {
                 if worker_count >= self.limits.max_workers
-                    || self.repository.list_sources(&run.id)?.len() >= self.limits.max_sources
+                    || self.repository.list_sources(&run.id)?.len() >= source_limit
                 {
                     let message = "bounded research worker or source budget exhausted".to_owned();
                     run.limitations.push(format!("{kind:?}: {message}"));
@@ -227,10 +228,8 @@ impl ResearchService {
                     continue;
                 }
                 worker_count = worker_count.saturating_add(1);
-                let remaining = self
-                    .limits
-                    .max_sources
-                    .saturating_sub(self.repository.list_sources(&run.id)?.len());
+                let remaining =
+                    source_limit.saturating_sub(self.repository.list_sources(&run.id)?.len());
                 let collection = self.collector.collect(&run, kind, &query, remaining).await;
                 let mut saved = 0_usize;
                 if collection.status == ResearchLaneStatus::Completed {
@@ -360,11 +359,23 @@ impl ResearchService {
         let fallback_report = synthesize(&run, &sources, &claims);
         let (report, synthesis_status, synthesis_message) = match &self.model {
             Some(model) => match model.synthesize(&run, &sources, &claims).await {
-                Ok(report) if report_citations_valid(&report, &sources) => (
-                    report,
-                    ResearchProgressStatus::Completed,
-                    "Accepted model-synthesized cited report.".to_owned(),
-                ),
+                Ok(report) if report_citations_valid(&report, &sources) => {
+                    let report = canonicalize_sources_section(&report, &sources);
+                    if report.len() <= MAX_REPORT_BYTES {
+                        (
+                            report,
+                            ResearchProgressStatus::Completed,
+                            "Accepted model-synthesized cited report.".to_owned(),
+                        )
+                    } else {
+                        (
+                            fallback_report,
+                            ResearchProgressStatus::Fallback,
+                            "Used deterministic report because canonical sources exceeded the report bound."
+                                .into(),
+                        )
+                    }
+                }
                 Ok(_) => (
                     fallback_report,
                     ResearchProgressStatus::Fallback,
@@ -481,6 +492,14 @@ fn query_budget(depth: ResearchDepth) -> usize {
     }
 }
 
+fn source_budget(depth: ResearchDepth) -> usize {
+    match depth {
+        ResearchDepth::Quick => 4,
+        ResearchDepth::Standard => 10,
+        ResearchDepth::Deep => 20,
+    }
+}
+
 fn normalize_queries(queries: Vec<String>, limit: usize) -> Option<Vec<String>> {
     let mut unique = BTreeSet::new();
     let queries = queries
@@ -521,6 +540,37 @@ fn report_citations_valid(report: &str, sources: &[ResearchSource]) -> bool {
         .collect::<BTreeSet<_>>();
     let cited = citation_labels(report);
     cited.iter().all(|label| known.contains(label)) && (sources.is_empty() || !cited.is_empty())
+}
+
+fn canonicalize_sources_section(report: &str, sources: &[ResearchSource]) -> String {
+    let mut body = report
+        .lines()
+        .take_while(|line| !is_sources_heading(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    body.truncate(body.trim_end().len());
+    if sources.is_empty() {
+        return body;
+    }
+    body.push_str("\n\n## Sources\n\n");
+    for source in sources {
+        let title = source
+            .title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let uri = source.uri.split_whitespace().collect::<Vec<_>>().join(" ");
+        body.push_str(&format!("- [{}] {title} — {uri}\n", source.label));
+    }
+    body
+}
+
+fn is_sources_heading(line: &str) -> bool {
+    let line = line.trim();
+    let heading = line.trim_start_matches('#');
+    heading.len() != line.len()
+        && line.len().saturating_sub(heading.len()) <= 6
+        && heading.trim().eq_ignore_ascii_case("sources")
 }
 
 fn plan_queries(question: &str, depth: ResearchDepth) -> Vec<String> {

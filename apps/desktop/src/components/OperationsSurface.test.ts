@@ -43,6 +43,8 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
     },
     targets: [managedTarget, externalTarget],
     selectedTargetId: "external-lab",
+    spaces: [],
+    selectedSpaceId: null,
     managedState: "ready",
     workspace: managedTarget.workspace,
     provider: {
@@ -96,6 +98,8 @@ function renderSurface(
       artifacts: [],
       activity: [],
       demoParticipants: null,
+      workNavigationOpen: false,
+      onOpenWorkNavigation: vi.fn(),
       onConnect: vi.fn(),
       onOpenRun: vi.fn(),
       onSelectTarget: vi.fn(),
@@ -124,6 +128,13 @@ function openingButtonTag(markup: string, label: string): string {
 }
 
 describe("OperationsSurface runtime targets", () => {
+  it("keeps Space navigation reachable from every responsive operations view", () => {
+    const markup = renderSurface("fleet");
+
+    expect(markup).toContain('aria-label="Open Space navigation"');
+    expect(markup).toContain('aria-controls="work-navigation"');
+  });
+
   it("shows and marks the selected external target in fleet view", () => {
     const markup = renderSurface("fleet");
 

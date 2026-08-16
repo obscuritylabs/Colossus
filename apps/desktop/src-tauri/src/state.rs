@@ -8,8 +8,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(test)]
+use tokio::sync::RwLockWriteGuard;
 use tokio::sync::{
-    Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore, watch,
+    Mutex, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, OwnedSemaphorePermit, RwLock,
+    RwLockReadGuard, Semaphore, watch,
 };
 
 use crate::{
@@ -17,7 +20,9 @@ use crate::{
     terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
 
+#[cfg(test)]
 pub(crate) const MANAGED_TARGET_ID: &str = "managed-local";
+pub(crate) const MAX_LIVE_MANAGED_SPACES: usize = 4;
 const MAX_NATIVE_WATCHES_PER_TARGET: usize = 8;
 const MAX_NATIVE_UNARY_CALLS_PER_TARGET: usize = 16;
 const MAX_CONCURRENT_EXTERNAL_PROBES: usize = 4;
@@ -242,17 +247,24 @@ pub(crate) struct AppState {
     selection_epoch: AtomicU64,
     selection_updates: watch::Sender<u64>,
     run_targets: RwLock<HashMap<String, String>>,
+    #[cfg(test)]
     managed_health: RwLock<ManagedHealth>,
+    #[cfg(test)]
     managed_lifecycle_generation: AtomicU64,
+    #[cfg(test)]
     managed_lifecycle: StdMutex<Option<ManagedLifecycleObservation>>,
+    #[cfg(test)]
     managed_worker: RwLock<Option<WorkerControlClient>>,
+    #[cfg(test)]
     approval_mode: AtomicU8,
+    #[cfg(test)]
     approval_mode_synchronized: AtomicBool,
     external_health: RwLock<HashMap<String, ExternalHealth>>,
     external_health_generation: AtomicU64,
     external_probe_slots: Arc<Semaphore>,
     connect_guard: Mutex<()>,
-    approval_mode_run_guard: RwLock<()>,
+    approval_mode_run_guard: Arc<RwLock<()>>,
+    managed_spaces: RwLock<HashMap<String, Arc<ManagedSpaceRuntime>>>,
     approval_guard: Mutex<()>,
     terminal_context_guard: Mutex<()>,
     terminal_window_guard: Mutex<()>,
@@ -274,6 +286,99 @@ struct ManagedLifecycleObservation {
     status: watch::Receiver<NativeSidecarStatus>,
 }
 
+struct ManagedSpaceRuntime {
+    health: RwLock<ManagedHealth>,
+    lifecycle_generation: AtomicU64,
+    lifecycle: StdMutex<Option<ManagedLifecycleObservation>>,
+    worker: RwLock<Option<WorkerControlClient>>,
+    approval_mode: AtomicU8,
+    approval_mode_synchronized: AtomicBool,
+    approval_mode_run_guard: Arc<RwLock<()>>,
+    last_used_at_ms: AtomicU64,
+    terminal_workspace: RwLock<Option<TerminalWorkspace>>,
+    terminal_enabled: AtomicBool,
+}
+
+impl Default for ManagedSpaceRuntime {
+    fn default() -> Self {
+        Self {
+            health: RwLock::new(ManagedHealth::default()),
+            lifecycle_generation: AtomicU64::new(0),
+            lifecycle: StdMutex::new(None),
+            worker: RwLock::new(None),
+            approval_mode: AtomicU8::new(DesktopApprovalModeDto::Ask as u8),
+            approval_mode_synchronized: AtomicBool::new(false),
+            approval_mode_run_guard: Arc::new(RwLock::new(())),
+            last_used_at_ms: AtomicU64::new(monotonic_millis()),
+            terminal_workspace: RwLock::new(None),
+            terminal_enabled: AtomicBool::new(false),
+        }
+    }
+}
+
+fn monotonic_millis() -> u64 {
+    use std::sync::OnceLock;
+
+    static START: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn approval_mode_from_atomic(value: &AtomicU8) -> DesktopApprovalModeDto {
+    match value.load(Ordering::Acquire) {
+        0 => DesktopApprovalModeDto::Deny,
+        2 => DesktopApprovalModeDto::RiskAuto,
+        3 => DesktopApprovalModeDto::FullAccess,
+        _ => DesktopApprovalModeDto::Ask,
+    }
+}
+
+fn reset_space_approval_mode(runtime: &ManagedSpaceRuntime) {
+    runtime
+        .approval_mode
+        .store(DesktopApprovalModeDto::Ask as u8, Ordering::Release);
+    runtime
+        .approval_mode_synchronized
+        .store(false, Ordering::Release);
+}
+
+fn managed_health_from_sidecar_status(status: NativeSidecarStatus) -> ManagedHealth {
+    match status {
+        NativeSidecarStatus::Starting => ManagedHealth {
+            state: ManagedRuntimeStateDto::Starting,
+            message: "Starting this Space’s managed runtime…".into(),
+            failure_code: None,
+        },
+        NativeSidecarStatus::Ready => ManagedHealth {
+            state: ManagedRuntimeStateDto::Ready,
+            message: "This Space is ready.".into(),
+            failure_code: None,
+        },
+        NativeSidecarStatus::Restarting => ManagedHealth {
+            state: ManagedRuntimeStateDto::Restarting,
+            message: "This Space’s runtime exited unexpectedly and is restarting safely…".into(),
+            failure_code: None,
+        },
+        NativeSidecarStatus::Stopping => ManagedHealth {
+            state: ManagedRuntimeStateDto::Stopping,
+            message: "Stopping this Space safely…".into(),
+            failure_code: None,
+        },
+        NativeSidecarStatus::Failed(NativeSidecarFailure::WorkspaceIdentityChanged) => {
+            ManagedHealth {
+                state: ManagedRuntimeStateDto::Failed,
+                message: "This Space’s folder identity changed. Select the folder again.".into(),
+                failure_code: Some(RuntimeFailureCodeDto::Permission),
+            }
+        }
+        NativeSidecarStatus::Failed(NativeSidecarFailure::SupervisionFailed) => ManagedHealth {
+            state: ManagedRuntimeStateDto::Failed,
+            message: "This Space stopped after repeated restart failures. Restart it to continue."
+                .into(),
+            failure_code: Some(RuntimeFailureCodeDto::CrashLoop),
+        },
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         let (selection_updates, _) = watch::channel(0);
@@ -283,17 +388,24 @@ impl Default for AppState {
             selection_epoch: AtomicU64::new(0),
             selection_updates,
             run_targets: RwLock::new(HashMap::new()),
+            #[cfg(test)]
             managed_health: RwLock::new(ManagedHealth::default()),
+            #[cfg(test)]
             managed_lifecycle_generation: AtomicU64::new(0),
+            #[cfg(test)]
             managed_lifecycle: StdMutex::new(None),
+            #[cfg(test)]
             managed_worker: RwLock::new(None),
+            #[cfg(test)]
             approval_mode: AtomicU8::new(DesktopApprovalModeDto::Ask as u8),
+            #[cfg(test)]
             approval_mode_synchronized: AtomicBool::new(false),
             external_health: RwLock::new(HashMap::new()),
             external_health_generation: AtomicU64::new(0),
             external_probe_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXTERNAL_PROBES)),
             connect_guard: Mutex::new(()),
-            approval_mode_run_guard: RwLock::new(()),
+            approval_mode_run_guard: Arc::new(RwLock::new(())),
+            managed_spaces: RwLock::new(HashMap::new()),
             approval_guard: Mutex::new(()),
             terminal_context_guard: Mutex::new(()),
             terminal_window_guard: Mutex::new(()),
@@ -449,14 +561,315 @@ impl AppState {
         self.terminal_manager.close_owner("terminal");
     }
 
+    async fn managed_space_runtime(&self, space_id: &str) -> Arc<ManagedSpaceRuntime> {
+        if let Some(runtime) = self.managed_spaces.read().await.get(space_id).cloned() {
+            return runtime;
+        }
+        self.managed_spaces
+            .write()
+            .await
+            .entry(space_id.to_owned())
+            .or_insert_with(|| Arc::new(ManagedSpaceRuntime::default()))
+            .clone()
+    }
+
+    async fn existing_managed_space_runtime(
+        &self,
+        space_id: &str,
+    ) -> Option<Arc<ManagedSpaceRuntime>> {
+        self.managed_spaces.read().await.get(space_id).cloned()
+    }
+
+    pub(crate) async fn live_managed_target_ids(&self) -> Vec<String> {
+        self.targets
+            .read()
+            .await
+            .iter()
+            .filter_map(|(target_id, target)| {
+                matches!(target.consent, TargetConsentContext::ManagedLocal)
+                    .then(|| target_id.clone())
+            })
+            .collect()
+    }
+
+    pub(crate) async fn touch_managed_space(&self, space_id: &str) {
+        self.managed_space_runtime(space_id)
+            .await
+            .last_used_at_ms
+            .store(monotonic_millis(), Ordering::Release);
+    }
+
+    pub(crate) async fn managed_space_last_used(&self, space_id: &str) -> Option<u64> {
+        Some(
+            self.existing_managed_space_runtime(space_id)
+                .await?
+                .last_used_at_ms
+                .load(Ordering::Acquire),
+        )
+    }
+
+    pub(crate) async fn remove_managed_space_runtime(&self, space_id: &str) {
+        self.managed_spaces.write().await.remove(space_id);
+    }
+
+    pub(crate) async fn managed_health_for(&self, space_id: &str) -> ManagedHealth {
+        self.managed_space_runtime(space_id)
+            .await
+            .health
+            .read()
+            .await
+            .clone()
+    }
+
+    pub(crate) async fn set_managed_health_for(&self, space_id: &str, health: ManagedHealth) {
+        *self
+            .managed_space_runtime(space_id)
+            .await
+            .health
+            .write()
+            .await = health;
+    }
+
+    pub(crate) async fn begin_managed_lifecycle_for(&self, space_id: &str) -> u64 {
+        let runtime = self.managed_space_runtime(space_id).await;
+        reset_space_approval_mode(&runtime);
+        let generation = runtime
+            .lifecycle_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        runtime
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        generation
+    }
+
+    pub(crate) async fn observe_managed_lifecycle_for(
+        &self,
+        space_id: &str,
+        generation: u64,
+        status: watch::Receiver<NativeSidecarStatus>,
+    ) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        if runtime.lifecycle_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        runtime
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(ManagedLifecycleObservation { generation, status });
+    }
+
+    pub(crate) async fn clear_managed_lifecycle_for(&self, space_id: &str, generation: u64) {
+        let Some(runtime) = self.existing_managed_space_runtime(space_id).await else {
+            return;
+        };
+        if runtime.lifecycle_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        let mut observed = runtime
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if observed
+            .as_ref()
+            .is_some_and(|observation| observation.generation == generation)
+        {
+            observed.take();
+        }
+    }
+
+    pub(crate) async fn sync_managed_lifecycle_health_for(&self, space_id: &str) {
+        let Some(runtime) = self.existing_managed_space_runtime(space_id).await else {
+            return;
+        };
+        let observed = runtime
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|observation| (observation.generation, *observation.status.borrow()));
+        let Some((generation, status)) = observed else {
+            return;
+        };
+        if runtime.lifecycle_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        *runtime.health.write().await = managed_health_from_sidecar_status(status);
+    }
+
+    pub(crate) async fn managed_lifecycle_ready_for(&self, space_id: &str) -> bool {
+        let Some(runtime) = self.existing_managed_space_runtime(space_id).await else {
+            return false;
+        };
+        let current_generation = runtime.lifecycle_generation.load(Ordering::Acquire);
+        runtime
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|observation| {
+                observation.generation == current_generation
+                    && *observation.status.borrow() == NativeSidecarStatus::Ready
+            })
+    }
+
+    pub(crate) async fn configure_managed_worker_for(
+        &self,
+        space_id: &str,
+        client: WorkerControlClient,
+    ) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        runtime.worker.write().await.replace(client);
+        reset_space_approval_mode(&runtime);
+    }
+
+    pub(crate) async fn clear_managed_worker_for(&self, space_id: &str) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        runtime.worker.write().await.take();
+        reset_space_approval_mode(&runtime);
+    }
+
+    pub(crate) async fn managed_worker_for(&self, space_id: &str) -> Option<WorkerControlClient> {
+        self.existing_managed_space_runtime(space_id)
+            .await?
+            .worker
+            .read()
+            .await
+            .clone()
+    }
+
+    pub(crate) async fn approval_mode_for(&self, space_id: &str) -> DesktopApprovalModeDto {
+        self.existing_managed_space_runtime(space_id)
+            .await
+            .map_or(DesktopApprovalModeDto::Ask, |runtime| {
+                approval_mode_from_atomic(&runtime.approval_mode)
+            })
+    }
+
+    pub(crate) async fn set_approval_mode_for(&self, space_id: &str, mode: DesktopApprovalModeDto) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        runtime.approval_mode.store(mode as u8, Ordering::Release);
+        runtime
+            .approval_mode_synchronized
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) async fn refresh_approval_mode_for(&self, space_id: &str) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        let Some(worker) = runtime.worker.read().await.clone() else {
+            reset_space_approval_mode(&runtime);
+            return;
+        };
+        let Ok(mode) = worker.approval_mode().await else {
+            return;
+        };
+        match mode {
+            Some(mode) => {
+                runtime.approval_mode.store(
+                    DesktopApprovalModeDto::from_worker_mode(mode) as u8,
+                    Ordering::Release,
+                );
+                runtime
+                    .approval_mode_synchronized
+                    .store(true, Ordering::Release);
+            }
+            None => runtime
+                .approval_mode_synchronized
+                .store(true, Ordering::Release),
+        }
+    }
+
+    pub(crate) async fn ensure_approval_mode_synchronized_for(&self, space_id: &str) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        if runtime.approval_mode_synchronized.load(Ordering::Acquire) {
+            return;
+        }
+        self.refresh_approval_mode_for(space_id).await;
+    }
+
+    pub(crate) async fn run_creation_guard_for(&self, space_id: &str) -> OwnedRwLockReadGuard<()> {
+        Arc::clone(
+            &self
+                .managed_space_runtime(space_id)
+                .await
+                .approval_mode_run_guard,
+        )
+        .read_owned()
+        .await
+    }
+
+    pub(crate) async fn approval_mode_change_guard_for(
+        &self,
+        space_id: &str,
+    ) -> OwnedRwLockWriteGuard<()> {
+        Arc::clone(
+            &self
+                .managed_space_runtime(space_id)
+                .await
+                .approval_mode_run_guard,
+        )
+        .write_owned()
+        .await
+    }
+
+    pub(crate) async fn selected_target_is_managed(&self) -> bool {
+        let Some(selected) = self.selected_target_id().await else {
+            return false;
+        };
+        #[cfg(test)]
+        if self.managed_spaces.read().await.contains_key(&selected) {
+            return true;
+        }
+        self.targets
+            .read()
+            .await
+            .get(&selected)
+            .is_some_and(|target| matches!(target.consent, TargetConsentContext::ManagedLocal))
+    }
+
+    pub(crate) async fn selected_managed_space_ready(&self) -> bool {
+        let Some(selected) = self.selected_target_id().await else {
+            return false;
+        };
+        self.selected_target_is_managed().await && self.managed_lifecycle_ready_for(&selected).await
+    }
+
+    pub(crate) async fn configure_managed_terminal_for(
+        &self,
+        space_id: &str,
+        workspace: TerminalWorkspace,
+        enabled: bool,
+    ) {
+        let runtime = self.managed_space_runtime(space_id).await;
+        runtime.terminal_workspace.write().await.replace(workspace);
+        runtime.terminal_enabled.store(enabled, Ordering::Release);
+    }
+
+    pub(crate) async fn activate_managed_terminal_for(&self, space_id: &str) {
+        let Some(runtime) = self.existing_managed_space_runtime(space_id).await else {
+            self.clear_terminal_workspace().await;
+            self.set_terminal_enabled(false).await;
+            return;
+        };
+        let workspace = runtime.terminal_workspace.read().await.clone();
+        let enabled = runtime.terminal_enabled.load(Ordering::Acquire);
+        if let Some(workspace) = workspace {
+            self.configure_terminal_workspace(workspace).await;
+        } else {
+            self.clear_terminal_workspace().await;
+        }
+        self.set_terminal_enabled(enabled).await;
+    }
+
+    #[cfg(test)]
     pub(crate) async fn managed_health(&self) -> ManagedHealth {
         self.managed_health.read().await.clone()
     }
 
-    pub(crate) async fn set_managed_health(&self, health: ManagedHealth) {
-        *self.managed_health.write().await = health;
-    }
-
+    #[cfg(test)]
     pub(crate) fn begin_managed_lifecycle(&self) -> u64 {
         self.reset_approval_mode();
         let generation = self
@@ -470,6 +883,7 @@ impl AppState {
         generation
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_managed_lifecycle(
         &self,
         generation: u64,
@@ -484,22 +898,7 @@ impl AppState {
             .replace(ManagedLifecycleObservation { generation, status });
     }
 
-    pub(crate) fn clear_managed_lifecycle(&self, generation: u64) {
-        if self.managed_lifecycle_generation.load(Ordering::Acquire) != generation {
-            return;
-        }
-        let mut observed = self
-            .managed_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if observed
-            .as_ref()
-            .is_some_and(|observation| observation.generation == generation)
-        {
-            observed.take();
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) async fn sync_managed_lifecycle_health(&self) {
         let observed = self
             .managed_lifecycle
@@ -552,32 +951,12 @@ impl AppState {
         *self.managed_health.write().await = health;
     }
 
-    pub(crate) fn managed_lifecycle_ready(&self) -> bool {
-        let current_generation = self.managed_lifecycle_generation.load(Ordering::Acquire);
-        self.managed_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .is_some_and(|observation| {
-                observation.generation == current_generation
-                    && *observation.status.borrow() == NativeSidecarStatus::Ready
-            })
-    }
-
-    pub(crate) async fn configure_managed_worker(&self, client: WorkerControlClient) {
-        self.managed_worker.write().await.replace(client);
-        self.reset_approval_mode();
-    }
-
-    pub(crate) async fn clear_managed_worker(&self) {
-        self.managed_worker.write().await.take();
-        self.reset_approval_mode();
-    }
-
+    #[cfg(test)]
     pub(crate) async fn managed_worker(&self) -> Option<WorkerControlClient> {
         self.managed_worker.read().await.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn approval_mode(&self) -> DesktopApprovalModeDto {
         match self.approval_mode.load(Ordering::Acquire) {
             0 => DesktopApprovalModeDto::Deny,
@@ -587,12 +966,14 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn set_approval_mode(&self, mode: DesktopApprovalModeDto) {
         self.approval_mode.store(mode as u8, Ordering::Release);
         self.approval_mode_synchronized
             .store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     fn reset_approval_mode(&self) {
         self.approval_mode
             .store(DesktopApprovalModeDto::Ask as u8, Ordering::Release);
@@ -600,6 +981,7 @@ impl AppState {
             .store(false, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) async fn refresh_approval_mode(&self) {
         let Some(worker) = self.managed_worker().await else {
             self.reset_approval_mode();
@@ -618,6 +1000,7 @@ impl AppState {
 
     /// Probe the worker only until the runtime-local mode is known, so idle
     /// status polling does not append an authenticated worker audit event.
+    #[cfg(test)]
     pub(crate) async fn ensure_approval_mode_synchronized(&self) {
         if self.approval_mode_synchronized.load(Ordering::Acquire) {
             return;
@@ -731,6 +1114,7 @@ impl AppState {
         self.approval_mode_run_guard.read().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn approval_mode_change_guard(&self) -> RwLockWriteGuard<'_, ()> {
         self.approval_mode_run_guard.write().await
     }
@@ -760,13 +1144,22 @@ impl AppState {
             self.terminal_manager.close_owner("terminal");
             self.advance_terminal_context();
         }
-        self.set_managed_health(ManagedHealth {
-            state: ManagedRuntimeStateDto::Stopping,
-            message: "Stopping Managed Local safely…".into(),
-            failure_code: None,
-        })
-        .await;
-        self.clear_managed_worker().await;
+        let runtimes = self
+            .managed_spaces
+            .write()
+            .await
+            .drain()
+            .map(|(_, runtime)| runtime)
+            .collect::<Vec<_>>();
+        for runtime in runtimes {
+            *runtime.health.write().await = ManagedHealth {
+                state: ManagedRuntimeStateDto::Stopping,
+                message: "Stopping this Space safely…".into(),
+                failure_code: None,
+            };
+            runtime.worker.write().await.take();
+            reset_space_approval_mode(&runtime);
+        }
         let clients = self
             .targets
             .write()
@@ -781,6 +1174,12 @@ impl AppState {
 
     pub(crate) fn terminal_manager(&self) -> TerminalManager {
         self.terminal_manager.clone()
+    }
+
+    pub(crate) fn terminal_session_active(&self) -> bool {
+        self.terminal_manager
+            .has_owner_sessions("terminal")
+            .unwrap_or(true)
     }
 
     pub(crate) async fn configure_terminal_workspace(&self, workspace: TerminalWorkspace) {
@@ -806,7 +1205,7 @@ impl AppState {
         context_generation: u64,
     ) -> Option<TerminalWorkspace> {
         if self.terminal_context_generation.load(Ordering::Acquire) != context_generation
-            || !self.managed_lifecycle_ready()
+            || !self.selected_managed_space_ready().await
         {
             return None;
         }
@@ -823,8 +1222,7 @@ impl AppState {
     ) -> (u64, Option<TerminalWorkspace>, bool) {
         loop {
             let before = self.terminal_context_generation.load(Ordering::Acquire);
-            let selected_managed =
-                self.selected_target_id.read().await.as_deref() == Some(MANAGED_TARGET_ID);
+            let selected_managed = self.selected_target_is_managed().await;
             let workspace = self.terminal_workspace.read().await.clone();
             let after = self.terminal_context_generation.load(Ordering::Acquire);
             if before == after {
@@ -1216,6 +1614,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_health_and_approval_modes_are_isolated_per_space() {
+        let state = AppState::default();
+        state
+            .set_managed_health_for(
+                "space-one",
+                ManagedHealth {
+                    state: ManagedRuntimeStateDto::Ready,
+                    message: "Space one is ready.".into(),
+                    failure_code: None,
+                },
+            )
+            .await;
+        state
+            .set_managed_health_for(
+                "space-two",
+                ManagedHealth {
+                    state: ManagedRuntimeStateDto::Failed,
+                    message: "Space two failed.".into(),
+                    failure_code: Some(RuntimeFailureCodeDto::Transport),
+                },
+            )
+            .await;
+        state
+            .set_approval_mode_for("space-one", DesktopApprovalModeDto::FullAccess)
+            .await;
+        state
+            .set_approval_mode_for("space-two", DesktopApprovalModeDto::RiskAuto)
+            .await;
+
+        assert_eq!(
+            state.managed_health_for("space-one").await.state,
+            ManagedRuntimeStateDto::Ready
+        );
+        assert_eq!(
+            state.managed_health_for("space-two").await.failure_code,
+            Some(RuntimeFailureCodeDto::Transport)
+        );
+        assert_eq!(
+            state.approval_mode_for("space-one").await,
+            DesktopApprovalModeDto::FullAccess
+        );
+        assert_eq!(
+            state.approval_mode_for("space-two").await,
+            DesktopApprovalModeDto::RiskAuto
+        );
+
+        state.begin_managed_lifecycle_for("space-one").await;
+        assert_eq!(
+            state.approval_mode_for("space-one").await,
+            DesktopApprovalModeDto::Ask
+        );
+        assert_eq!(
+            state.approval_mode_for("space-two").await,
+            DesktopApprovalModeDto::RiskAuto
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_clears_every_managed_space_runtime() {
+        let state = AppState::default();
+        state.begin_managed_lifecycle_for("space-one").await;
+        state.begin_managed_lifecycle_for("space-two").await;
+        assert!(state.managed_space_last_used("space-one").await.is_some());
+        assert!(state.managed_space_last_used("space-two").await.is_some());
+
+        state.close_all().await;
+
+        assert!(state.managed_space_last_used("space-one").await.is_none());
+        assert!(state.managed_space_last_used("space-two").await.is_none());
+    }
+
+    #[tokio::test]
     async fn workspace_replacement_failure_is_sanitized_and_actionable() {
         let state = AppState::default();
         let generation = state.begin_managed_lifecycle();
@@ -1324,20 +1794,29 @@ mod tests {
     #[tokio::test]
     async fn terminal_workspace_lookup_is_opaque_and_exact() {
         let state = AppState::default();
-        let generation = state.begin_managed_lifecycle();
+        let space_id = "space-managed";
+        let generation = state.begin_managed_lifecycle_for(space_id).await;
         let (_status, ready) = watch::channel(NativeSidecarStatus::Ready);
-        state.observe_managed_lifecycle(generation, ready);
         state
-            .configure_terminal_workspace(TerminalWorkspace {
-                id: "workspace:managed".into(),
-                display_name: "Managed workspace".into(),
-                workspace: "/private/tmp/workspace".into(),
-                workspace_identity: test_workspace_identity(),
-                colossus_home: "/private/tmp/.colossus".into(),
-                config: Some("/private/tmp/config.yaml".into()),
-                worker_authentication: None,
-            })
+            .observe_managed_lifecycle_for(space_id, generation, ready)
             .await;
+        state
+            .configure_managed_terminal_for(
+                space_id,
+                TerminalWorkspace {
+                    id: "workspace:managed".into(),
+                    display_name: "Managed workspace".into(),
+                    workspace: "/private/tmp/workspace".into(),
+                    workspace_identity: test_workspace_identity(),
+                    colossus_home: "/private/tmp/.colossus".into(),
+                    config: Some("/private/tmp/config.yaml".into()),
+                    worker_authentication: None,
+                },
+                true,
+            )
+            .await;
+        state.select_target(Some(space_id.into())).await;
+        state.activate_managed_terminal_for(space_id).await;
         let (generation, workspace, _) = state.terminal_workspace_context().await;
         assert_eq!(workspace.expect("active workspace").id, "workspace:managed");
         assert!(
@@ -1354,16 +1833,21 @@ mod tests {
         );
 
         state
-            .configure_terminal_workspace(TerminalWorkspace {
-                id: "workspace:managed".into(),
-                display_name: "Managed workspace".into(),
-                workspace: "/private/tmp/workspace".into(),
-                workspace_identity: test_workspace_identity(),
-                colossus_home: "/private/tmp/.colossus".into(),
-                config: Some("/private/tmp/config-2.yaml".into()),
-                worker_authentication: None,
-            })
+            .configure_managed_terminal_for(
+                space_id,
+                TerminalWorkspace {
+                    id: "workspace:managed".into(),
+                    display_name: "Managed workspace".into(),
+                    workspace: "/private/tmp/workspace".into(),
+                    workspace_identity: test_workspace_identity(),
+                    colossus_home: "/private/tmp/.colossus".into(),
+                    config: Some("/private/tmp/config-2.yaml".into()),
+                    worker_authentication: None,
+                },
+                true,
+            )
             .await;
+        state.activate_managed_terminal_for(space_id).await;
         let restarted = state
             .workspace_for_terminal("workspace:managed", generation)
             .await
@@ -1383,7 +1867,8 @@ mod tests {
         let (enabled, _, _) = state.terminal_workspace_context().await;
         assert_ne!(enabled, initial);
 
-        state.select_target(Some(MANAGED_TARGET_ID.into())).await;
+        state.begin_managed_lifecycle_for("space-managed").await;
+        state.select_target(Some("space-managed".into())).await;
         let (managed_selected, _, selected_managed) = state.terminal_workspace_context().await;
         assert_ne!(managed_selected, enabled);
         assert!(selected_managed);

@@ -36,6 +36,11 @@ const COPY = {
     title: "Activity",
     description: "Bounded operational events without hidden runtime details.",
   },
+  connections: {
+    kicker: "Runtime routing",
+    title: "Connections",
+    description: "Managed Spaces and external daemon connections.",
+  },
   settings: {
     kicker: "Desktop runtime",
     title: "Settings",

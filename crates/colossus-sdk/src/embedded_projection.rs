@@ -4,9 +4,10 @@ use crate::{
     Interaction, InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus,
     ListRunsRequest, ListRunsResponse, MessageContentPart, MessageRole, OutcomeCertainty,
     PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice,
-    RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation, RunFailure,
-    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, SessionMessage,
-    TokenUsage, ToolActivity, ToolActivityState,
+    ResearchDepth, ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse, Run,
+    RunBranch, RunBranchContextMode, RunCancellation, RunFailure, RunMode, RunResult, RunStatus,
+    RunTerminal, RunUpdate, RunUpdateKind, SessionMessage, ThreadLifecycle, TokenUsage,
+    ToolActivity, ToolActivityState,
 };
 use colossus_api::{self as core, ApiError, ApiErrorReason, ApiResult, CallerContext};
 
@@ -28,7 +29,22 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
         mode: match value.mode {
             RunMode::Execute => core::RunMode::Execute,
             RunMode::Plan => core::RunMode::Plan,
+            RunMode::Research => core::RunMode::Research,
         },
+        research_depth: value.research_depth.map(|depth| match depth {
+            ResearchDepth::Quick => core::ResearchDepth::Quick,
+            ResearchDepth::Standard => core::ResearchDepth::Standard,
+            ResearchDepth::Deep => core::ResearchDepth::Deep,
+        }),
+        research_sources: value
+            .research_sources
+            .into_iter()
+            .map(|kind| match kind {
+                ResearchSourceKind::Repo => core::ResearchSourceKind::Repo,
+                ResearchSourceKind::Web => core::ResearchSourceKind::Web,
+                ResearchSourceKind::Mcp => core::ResearchSourceKind::Mcp,
+            })
+            .collect(),
         skill_ids: value.selected_skills,
         plan_action: value.plan_action.map(|action| match action {
             PlanRunAction::Revise {
@@ -51,6 +67,17 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
                         core::PlanExecutionStrategy::Goal { max_iterations }
                     }
                 },
+            },
+        }),
+        branch: value.branch.map(|branch| core::RunBranch {
+            source_run_id: branch.source_run_id,
+            source_message_count: branch.source_message_count,
+            context_mode: match branch.context_mode {
+                RunBranchContextMode::Exact => core::RunBranchContextMode::Exact,
+                RunBranchContextMode::Conversation => core::RunBranchContextMode::Conversation,
+                RunBranchContextMode::SourceRunConversation => {
+                    core::RunBranchContextMode::SourceRunConversation
+                }
             },
         }),
         max_turns: value.max_turns,
@@ -92,6 +119,7 @@ pub(super) fn list_request(value: ListRunsRequest) -> core::ListRunsRequest {
         statuses: value.statuses.into_iter().map(core_run_status).collect(),
         page_size,
         page_token,
+        include_archived: value.include_archived,
     }
 }
 
@@ -110,6 +138,13 @@ pub(super) fn list_response(value: core::ListRunsResponse) -> ApiResult<ListRuns
 
 pub(super) fn cancel_response(value: core::Run) -> ApiResult<CancelRunResponse> {
     Ok(CancelRunResponse { run: run(value)? })
+}
+
+pub(super) fn thread_lifecycle(value: core::ThreadLifecycle) -> ThreadLifecycle {
+    ThreadLifecycle {
+        session_id: value.session_id,
+        archived: value.archived,
+    }
 }
 
 pub(super) fn interaction_request(
@@ -176,10 +211,13 @@ pub(super) fn run_update(
                     core::ToolActivityState::WaitingApproval => ToolActivityState::WaitingApproval,
                     core::ToolActivityState::Started => ToolActivityState::Started,
                     core::ToolActivityState::Completed => ToolActivityState::Completed,
+                    core::ToolActivityState::Cancelled => ToolActivityState::Cancelled,
                     core::ToolActivityState::Failed => ToolActivityState::Failed,
                     core::ToolActivityState::OutcomeUnknown => ToolActivityState::OutcomeUnknown,
                 },
                 summary: activity.summary,
+                input: activity.input,
+                preview: activity.preview,
             })
         }
         core::RunUpdateKind::Usage { usage } => RunUpdateKind::Usage(TokenUsage {
@@ -257,6 +295,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
         mode: match value.mode {
             core::RunMode::Execute => RunMode::Execute,
             core::RunMode::Plan => RunMode::Plan,
+            core::RunMode::Research => RunMode::Research,
         },
         status: run_status(value.status),
         created_at: value.created_at,
@@ -268,6 +307,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
         terminal,
         etag: value.etag,
         selected_skills: value.skill_ids,
+        archived: value.archived,
     })
 }
 

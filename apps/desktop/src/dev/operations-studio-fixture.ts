@@ -62,6 +62,7 @@ function recentRun(
       : null,
     etag: `fixture-etag-${runId}`,
     selectedSkills: [],
+    archived: false,
   };
 }
 
@@ -264,6 +265,7 @@ export function buildOperationsStudioFixture(
     terminal: null,
     etag: "fixture-etag-desktop-release",
     selectedSkills: ["release-management", "security-review", "documents"],
+    archived: false,
   };
   const selectedView: RunView = {
     run: selectedRun,
@@ -298,7 +300,7 @@ The reviewed patch is ready and waiting for your approval.`,
       "fixture-run-sdk-contracts",
       "fixture-session-sdk-contracts",
       "draft-public-sdk-contracts",
-      "running",
+      "waiting",
       "2026-07-20T14:28:00Z",
       "2026-07-20T14:34:12Z",
       14,
@@ -385,6 +387,209 @@ The reviewed patch is ready and waiting for your approval.`,
   };
 }
 
+/**
+ * Builds one completed turn with released reasoning summaries between tool
+ * calls. The renderer uses this development-only fixture to compare the two
+ * activity presentations against identical canonical data.
+ */
+export function buildActivityComparisonFixture(): ChatState {
+  const state = buildOperationsStudioFixture();
+  const current = state.views.get(SELECTED_RUN_ID);
+  if (current === undefined) {
+    throw new Error("The activity comparison fixture requires a selected run.");
+  }
+
+  const usage: TokenUsage = {
+    inputTokens: 3_981,
+    outputTokens: 684,
+    totalTokens: 4_665,
+    cachedInputTokens: 1_024,
+    reasoningTokens: 312,
+  };
+  const updates: RunUpdate[] = [
+    update(1, "2026-08-15T14:42:00Z", {
+      type: "message",
+      message: {
+        sessionId: SESSION_ID,
+        runId: SELECTED_RUN_ID,
+        sequence: 1,
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Review this workspace and identify the safest high-impact next task",
+          },
+        ],
+        createdAt: "2026-08-15T14:42:00Z",
+      },
+    }),
+    update(2, "2026-08-15T14:42:01Z", {
+      type: "reasoning_summary",
+      summary: "Orienting to the workspace",
+    }),
+    update(3, "2026-08-15T14:42:01Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-map",
+        toolName: "repo.map_structure",
+        state: "requested",
+        summary: "Validated repository mapping request",
+        input: '{"depth":3,"include_hidden":false}',
+      },
+    }),
+    update(4, "2026-08-15T14:42:02Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-map",
+        toolName: "repo.map_structure",
+        state: "completed",
+        summary: "Mapped repository structure",
+        preview:
+          '{"root":".","top_level":["proposal","compliance","submission"],"file_count":42}',
+      },
+    }),
+    update(5, "2026-08-15T14:42:03Z", {
+      type: "reasoning_summary",
+      summary: "The proposal package is nearly complete",
+    }),
+    update(6, "2026-08-15T14:42:04Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-read",
+        toolName: "repo.read_many",
+        state: "requested",
+        summary: "Requested six proposal files",
+        input:
+          '{"paths":["README.md","proposal.md","compliance.md","submission/checklist.md","review/notes.md","CHANGELOG.md"]}',
+      },
+    }),
+    update(7, "2026-08-15T14:42:05Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-read",
+        toolName: "repo.read_many",
+        state: "completed",
+        summary: "Inspected 6 proposal files",
+        preview: '{"files_read":6,"required_sections":12,"missing_sections":0}',
+      },
+    }),
+    update(8, "2026-08-15T14:42:06Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-readiness",
+        toolName: "shell.run",
+        state: "requested",
+        summary: "Validated submission readiness command",
+        input: '{"command":"git status --short","cwd":"."}',
+      },
+    }),
+    update(9, "2026-08-15T14:42:07Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-readiness",
+        toolName: "shell.run",
+        state: "completed",
+        summary: "Checked submission readiness",
+        preview: "Working tree clean",
+      },
+    }),
+    update(10, "2026-08-15T14:42:07Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-policy",
+        toolName: "shell.run",
+        state: "requested",
+        summary: "Validated workspace policy command",
+        input: '{"command":"gh pr checks --required","cwd":".","network":true}',
+      },
+    }),
+    update(11, "2026-08-15T14:42:08Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-policy",
+        toolName: "shell.run",
+        state: "failed",
+        summary: "Command denied by workspace policy",
+      },
+    }),
+    update(12, "2026-08-15T14:42:09Z", {
+      type: "reasoning_summary",
+      summary: "Policy blocks shell access; will pivot to read-only analysis",
+    }),
+    update(13, "2026-08-15T14:42:09Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-status",
+        toolName: "repo.search",
+        state: "requested",
+        summary: "Requested released activity and CI summaries",
+        input: '{"query":"submission OR ci status","limit":20}',
+      },
+    }),
+    update(14, "2026-08-15T14:42:11Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-status",
+        toolName: "repo.search",
+        state: "completed",
+        summary: "Reviewed recent activity and CI status",
+        preview:
+          '{"submission_ready":true,"ci_status":"blocked","blocked_by":"ci:full label"}',
+      },
+    }),
+    update(15, "2026-08-15T14:42:12Z", { type: "usage", usage }),
+  ];
+
+  const run: Run = {
+    ...current.run,
+    title: "Review workspace readiness",
+    role: "primary",
+    status: "completed",
+    createdAt: "2026-08-15T14:42:00Z",
+    updatedAt: "2026-08-15T14:42:12Z",
+    startedAt: "2026-08-15T14:42:00Z",
+    finishedAt: "2026-08-15T14:42:12Z",
+    lastSequence: 15,
+    pendingInteractionCount: 0,
+    terminal: {
+      type: "result",
+      result: {
+        output: "Review complete.",
+        profile: "desktop",
+        modelProfile: "desktop",
+        providerProfile: "fixture-provider",
+        model: "fixture",
+        elapsedSeconds: 12,
+      },
+    },
+  };
+  const view: RunView = {
+    ...current,
+    run,
+    localPrompt: null,
+    output: `The workspace is well-prepared for submission, but one required CI check is blocked by repository policy.
+
+**Safest high-impact next task:** ask a repository writer to apply the required \`ci:full\` label, then validate the proposal package end-to-end without elevating shell access.`,
+    updates,
+    seenSequences: new Set(updates.map(({ sequence }) => sequence)),
+    lastSequence: 15,
+    pendingInteractions: [],
+    usage,
+    streamState: "complete",
+    streamError: null,
+  };
+
+  return {
+    ...state,
+    activeRunId: run.runId,
+    views: new Map([[run.runId, view]]),
+    recentRuns: [
+      run,
+      ...state.recentRuns.filter((candidate) => candidate.runId !== run.runId),
+    ],
+  };
+}
+
 /** Builds a completed Plan Mode turn for the in-chat lifecycle fixture. */
 export function buildPlanWorkflowFixture(): ChatState {
   if (!import.meta.env.DEV) {
@@ -424,6 +629,7 @@ export function buildPlanWorkflowFixture(): ChatState {
     },
     etag: "fixture-etag-plan-workflow",
     selectedSkills: [],
+    archived: false,
   };
   const updates: RunUpdate[] = [
     {

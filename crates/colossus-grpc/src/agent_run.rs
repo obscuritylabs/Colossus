@@ -1,25 +1,32 @@
 use crate::{status::api_status, system::caller_context};
 use colossus_api::{
-    AgentRunApi, ApiError, ApiErrorReason, ApprovalRisk as CoreApprovalRisk, CallerContext,
+    AgentRunApi, ApiError, ApiErrorReason, ApprovalRisk as CoreApprovalRisk,
+    ArchiveThreadRequest as CoreArchiveThreadRequest, CallerContext,
     CancelRunRequest as CoreCancelRunRequest, ContentPart as CoreContentPart,
     CreateRunRequest as CoreCreateRunRequest, GetRunRequest as CoreGetRunRequest, IdempotencyKey,
     Interaction as CoreInteraction, InteractionKind as CoreInteractionKind,
     InteractionResponse as CoreInteractionResponse, InteractionStatus as CoreInteractionStatus,
     ListRunsRequest as CoreListRunsRequest, OutcomeCertainty as CoreOutcomeCertainty,
     PlanExecutionStrategy as CorePlanExecutionStrategy, PlanRunAction as CorePlanRunAction,
-    PlanStatus as CorePlanStatus, RespondInteractionRequest as CoreRespondInteractionRequest,
-    Run as CoreRun, RunMode as CoreRunMode, RunStatus as CoreRunStatus, RunUpdate as CoreRunUpdate,
-    RunUpdateKind as CoreRunUpdateKind, ToolActivityState as CoreToolActivityState,
-    WatchRunRequest as CoreWatchRunRequest, validate_public_approval_display,
+    PlanStatus as CorePlanStatus, ResearchDepth as CoreResearchDepth,
+    ResearchSourceKind as CoreResearchSourceKind,
+    RespondInteractionRequest as CoreRespondInteractionRequest,
+    RestoreThreadRequest as CoreRestoreThreadRequest, Run as CoreRun, RunBranch as CoreRunBranch,
+    RunBranchContextMode as CoreRunBranchContextMode, RunMode as CoreRunMode,
+    RunStatus as CoreRunStatus, RunUpdate as CoreRunUpdate, RunUpdateKind as CoreRunUpdateKind,
+    ToolActivityState as CoreToolActivityState, WatchRunRequest as CoreWatchRunRequest,
+    validate_public_approval_display,
 };
 use colossus_api_proto::v1alpha1::{
-    ApprovalInteraction, ApprovalRisk, CancelRunRequest, CancelRunResponse, CreateRunRequest,
-    CreateRunResponse, GetRunRequest, GetRunResponse, Interaction, InteractionKind,
-    InteractionStatus, ListRunsRequest, ListRunsResponse, OutcomeCertainty, PageResponse,
-    PlanExecutionStrategy, PlanStatus, PromptChoice, ReasoningSummary, RespondInteractionRequest,
-    RespondInteractionResponse, Run, RunCancellation, RunFailed, RunFailure, RunMode, RunNotice,
-    RunResult, RunStateChanged, RunStatus, RunUpdate, TokenUsage, ToolActivity, ToolActivityState,
-    UserPromptInteraction, VisibleOutputDelta, WatchRunRequest, WatchRunResponse,
+    ApprovalInteraction, ApprovalRisk, ArchiveThreadRequest, ArchiveThreadResponse,
+    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, GetRunRequest,
+    GetRunResponse, Interaction, InteractionKind, InteractionStatus, ListRunsRequest,
+    ListRunsResponse, OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanStatus,
+    PromptChoice, ReasoningSummary, ResearchDepth, ResearchSourceKind, RespondInteractionRequest,
+    RespondInteractionResponse, RestoreThreadRequest, RestoreThreadResponse, Run, RunCancellation,
+    RunFailed, RunFailure, RunMode, RunNotice, RunResult, RunStateChanged, RunStatus, RunUpdate,
+    ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, UserPromptInteraction,
+    VisibleOutputDelta, WatchRunRequest, WatchRunResponse,
     agent_run_service_server::AgentRunService, content_part, interaction, plan_run_action,
     prompt_answer, respond_interaction_request, run, run_update,
 };
@@ -236,6 +243,7 @@ impl AgentRunService for AgentRunServiceAdapter {
                         statuses,
                         page_size,
                         page_token,
+                        include_archived: request.include_archived,
                     },
                 )
                 .await
@@ -347,6 +355,74 @@ impl AgentRunService for AgentRunServiceAdapter {
         result
     }
 
+    async fn archive_thread(
+        &self,
+        request: Request<ArchiveThreadRequest>,
+    ) -> Result<Response<ArchiveThreadResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let span = public_rpc_span(&request, &caller, "ArchiveThread");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "run_id", &request.run_id)?;
+            let idempotency_key = idempotency_key(&caller, request.idempotency_key)?;
+            let thread = self
+                .api
+                .archive_thread(
+                    &caller,
+                    CoreArchiveThreadRequest {
+                        run_id: request.run_id,
+                        idempotency_key,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            Ok(Response::new(ArchiveThreadResponse {
+                thread: Some(ThreadLifecycle {
+                    session_id: thread.session_id,
+                    archived: thread.archived,
+                }),
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
+    }
+
+    async fn restore_thread(
+        &self,
+        request: Request<RestoreThreadRequest>,
+    ) -> Result<Response<RestoreThreadResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let span = public_rpc_span(&request, &caller, "RestoreThread");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "run_id", &request.run_id)?;
+            let idempotency_key = idempotency_key(&caller, request.idempotency_key)?;
+            let thread = self
+                .api
+                .restore_thread(
+                    &caller,
+                    CoreRestoreThreadRequest {
+                        run_id: request.run_id,
+                        idempotency_key,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            Ok(Response::new(RestoreThreadResponse {
+                thread: Some(ThreadLifecycle {
+                    session_id: thread.session_id,
+                    archived: thread.archived,
+                }),
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
+    }
+
     async fn respond_interaction(
         &self,
         request: Request<RespondInteractionRequest>,
@@ -409,11 +485,12 @@ fn create_request(
     let mode = match RunMode::try_from(request.mode) {
         Ok(RunMode::Execute) => CoreRunMode::Execute,
         Ok(RunMode::Plan) => CoreRunMode::Plan,
+        Ok(RunMode::Research) => CoreRunMode::Research,
         Ok(RunMode::Unspecified) | Err(_) => {
             return Err(invalid(
                 caller,
                 "mode",
-                "mode must be RUN_MODE_EXECUTE or RUN_MODE_PLAN",
+                "mode must be RUN_MODE_EXECUTE, RUN_MODE_PLAN, or RUN_MODE_RESEARCH",
             ));
         }
     };
@@ -491,8 +568,59 @@ fn create_request(
         end_user_id: request.end_user_id,
         role: (!request.role.is_empty()).then_some(request.role),
         mode,
+        research_depth: match ResearchDepth::try_from(request.research_depth) {
+            Ok(ResearchDepth::Quick) => Some(CoreResearchDepth::Quick),
+            Ok(ResearchDepth::Standard) => Some(CoreResearchDepth::Standard),
+            Ok(ResearchDepth::Deep) => Some(CoreResearchDepth::Deep),
+            Ok(ResearchDepth::Unspecified) => None,
+            Err(_) => return Err(invalid(caller, "research_depth", "unknown Research depth")),
+        },
+        research_sources: request.research_sources.into_iter().map(|source| {
+            match ResearchSourceKind::try_from(source) {
+                Ok(ResearchSourceKind::Repo) => Ok(CoreResearchSourceKind::Repo),
+                Ok(ResearchSourceKind::Web) => Ok(CoreResearchSourceKind::Web),
+                Ok(ResearchSourceKind::Mcp) => Ok(CoreResearchSourceKind::Mcp),
+                Ok(ResearchSourceKind::Unspecified) | Err(_) => Err(invalid(
+                    caller,
+                    "research_sources",
+                    "Research evidence lanes must not be unspecified or unknown",
+                )),
+            }
+        }).collect::<Result<Vec<_>, _>>()?,
         skill_ids: request.selected_skills,
         plan_action,
+        branch: request
+            .branch
+            .map(|branch| {
+                let context_mode =
+                    match colossus_api_proto::v1alpha1::RunBranchContextMode::try_from(
+                        branch.context_mode,
+                    ) {
+                        Ok(
+                            colossus_api_proto::v1alpha1::RunBranchContextMode::Unspecified
+                            | colossus_api_proto::v1alpha1::RunBranchContextMode::Exact,
+                        ) => CoreRunBranchContextMode::Exact,
+                        Ok(colossus_api_proto::v1alpha1::RunBranchContextMode::Conversation) => {
+                            CoreRunBranchContextMode::Conversation
+                        }
+                        Ok(
+                            colossus_api_proto::v1alpha1::RunBranchContextMode::SourceRunConversation,
+                        ) => CoreRunBranchContextMode::SourceRunConversation,
+                        Err(_) => {
+                            return Err(invalid(
+                                caller,
+                                "branch.context_mode",
+                                "unknown branch context mode",
+                            ));
+                        }
+                    };
+                Ok(CoreRunBranch {
+                    source_run_id: branch.source_run_id,
+                    source_message_count: branch.source_message_count,
+                    context_mode,
+                })
+            })
+            .transpose()?,
         max_turns: request.max_turns,
         idempotency_key,
     };
@@ -567,6 +695,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
     let mode = match value.mode {
         CoreRunMode::Execute => RunMode::Execute,
         CoreRunMode::Plan => RunMode::Plan,
+        CoreRunMode::Research => RunMode::Research,
     };
     let status = proto_run_status(value.status);
     let terminal = match value.status {
@@ -624,6 +753,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
         etag: value.etag,
         terminal,
         selected_skills: value.skill_ids,
+        archived: value.archived,
     })
 }
 
@@ -844,6 +974,7 @@ async fn proto_update(
                 CoreToolActivityState::WaitingApproval => ToolActivityState::WaitingApproval,
                 CoreToolActivityState::Started => ToolActivityState::Started,
                 CoreToolActivityState::Completed => ToolActivityState::Completed,
+                CoreToolActivityState::Cancelled => ToolActivityState::Cancelled,
                 CoreToolActivityState::Failed => ToolActivityState::Failed,
                 CoreToolActivityState::OutcomeUnknown => ToolActivityState::OutcomeUnknown,
             };
@@ -852,6 +983,8 @@ async fn proto_update(
                 tool_name: activity.tool_name,
                 state: state as i32,
                 summary: activity.summary,
+                preview: activity.preview,
+                input: activity.input,
             })
         }
         CoreRunUpdateKind::Usage { usage } => run_update::Update::Usage(TokenUsage {
@@ -1114,6 +1247,22 @@ mod tests {
             panic!("unauthenticated transport must not invoke the API")
         }
 
+        async fn archive_thread(
+            &self,
+            _caller: &CallerContext,
+            _request: CoreArchiveThreadRequest,
+        ) -> ApiResult<colossus_api::ThreadLifecycle> {
+            panic!("unauthenticated transport must not invoke the API")
+        }
+
+        async fn restore_thread(
+            &self,
+            _caller: &CallerContext,
+            _request: CoreRestoreThreadRequest,
+        ) -> ApiResult<colossus_api::ThreadLifecycle> {
+            panic!("unauthenticated transport must not invoke the API")
+        }
+
         async fn respond_interaction(
             &self,
             _caller: &CallerContext,
@@ -1170,6 +1319,9 @@ mod tests {
                     mode,
                     selected_skills: Vec::new(),
                     plan_action: None,
+                    branch: None,
+                    research_depth: ResearchDepth::Unspecified as i32,
+                    research_sources: Vec::new(),
                     max_turns: 0,
                     idempotency_key: "key-1".into(),
                 },
@@ -1193,6 +1345,9 @@ mod tests {
                 mode: RunMode::Execute as i32,
                 selected_skills: Vec::new(),
                 plan_action: None,
+                branch: None,
+                research_depth: ResearchDepth::Unspecified as i32,
+                research_sources: Vec::new(),
                 max_turns: 1,
                 idempotency_key: "bounded-input".into(),
             },
@@ -1208,6 +1363,7 @@ mod tests {
             session_id: None,
             statuses: vec![RunStatus::Queued as i32; MAX_RUN_STATUS_FILTERS + 1],
             page: None,
+            include_archived: false,
         });
         request.extensions_mut().insert(caller());
         let error = AgentRunService::list_runs(&service, request)

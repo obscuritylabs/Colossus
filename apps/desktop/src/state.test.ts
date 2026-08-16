@@ -41,6 +41,7 @@ const baseRun: Run = {
   terminal: null,
   etag: "run-etag",
   selectedSkills: [],
+  archived: false,
 };
 
 function withRun() {
@@ -481,6 +482,31 @@ describe("chatReducer", () => {
         expect(summary.terminal.result.output).toBe("");
       }
     }
+  });
+
+  it("removes every cached run in an archived session and clears its selection", () => {
+    const first = { ...runFixture("archive-1"), sessionId: "session-archive" };
+    const second = {
+      ...runFixture("archive-2"),
+      sessionId: "session-archive",
+    };
+    const retained = runFixture("retained");
+    let state = chatReducer(initialChatState, {
+      type: "upsert_run",
+      run: first,
+    });
+    state = chatReducer(state, { type: "upsert_run", run: second });
+    state = chatReducer(state, { type: "upsert_run", run: retained });
+    state = chatReducer(state, { type: "select_run", runId: second.runId });
+
+    state = chatReducer(state, {
+      type: "remove_session",
+      sessionId: "session-archive",
+    });
+
+    expect(state.activeRunId).toBeNull();
+    expect([...state.views.keys()]).toEqual([retained.runId]);
+    expect(state.recentRuns.map((run) => run.runId)).toEqual([retained.runId]);
   });
 });
 

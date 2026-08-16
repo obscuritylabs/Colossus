@@ -162,8 +162,11 @@ fn create_request(key: &str, text: &str) -> CreateRunRequest {
         end_user_id: None,
         role: Some("assistant".into()),
         mode: RunMode::Execute,
+        research_depth: None,
+        research_sources: Vec::new(),
         skill_ids: Vec::new(),
         plan_action: None,
+        branch: None,
         max_turns: 24,
         idempotency_key: IdempotencyKey::new(key).expect("idempotency key"),
     }
@@ -485,6 +488,7 @@ fn concurrent_distinct_creates_serialize_into_one_complete_owner_index() {
                     statuses: Vec::new(),
                     page_size: 3,
                     page_token,
+                    include_archived: false,
                 },
             )
             .expect("indexed list");
@@ -584,6 +588,44 @@ fn create_request_rejects_more_than_the_bounded_number_of_input_parts() {
 }
 
 #[test]
+fn research_requests_require_explicit_unique_evidence_lanes() {
+    let mut request = create_request("research", "What changed?");
+    request.mode = RunMode::Research;
+
+    let error = request
+        .validate()
+        .expect_err("research depth and evidence lanes are required");
+    assert_eq!(error.violations[0].field, "research_depth");
+
+    request.research_depth = Some(ResearchDepth::Standard);
+    let error = request
+        .validate()
+        .expect_err("at least one evidence lane is required");
+    assert_eq!(error.violations[0].field, "research_sources");
+
+    request.research_sources = vec![ResearchSourceKind::Repo, ResearchSourceKind::Repo];
+    let error = request
+        .validate()
+        .expect_err("duplicate evidence lanes are ambiguous");
+    assert_eq!(error.violations[0].field, "research_sources");
+
+    request.research_sources = vec![ResearchSourceKind::Repo, ResearchSourceKind::Web];
+    request.validate().expect("bounded research request");
+}
+
+#[test]
+fn conversational_runs_reject_research_only_options() {
+    let mut request = create_request("execute-with-research", "Implement this");
+    request.research_depth = Some(ResearchDepth::Quick);
+    request.research_sources = vec![ResearchSourceKind::Repo];
+
+    let error = request
+        .validate()
+        .expect_err("execute mode must not silently accept research options");
+    assert_eq!(error.violations[0].field, "research_depth");
+}
+
+#[test]
 fn create_request_validates_end_user_id_and_binds_it_to_idempotency() {
     let legacy = serde_json::to_value(create_request("legacy-end-user", "hello"))
         .expect("serialize request without end-user correlation");
@@ -673,6 +715,57 @@ fn plan_continuation_requires_exact_session_mode_revision_and_goal_budget() {
         error.violations[0].field,
         "plan_action.strategy.max_iterations"
     );
+}
+
+#[test]
+fn branch_creation_accepts_only_a_bounded_separate_canonical_prefix() {
+    let mut request = create_request("aside-branch", "Explain this separately");
+    request.branch = Some(RunBranch {
+        source_run_id: "run-parent".into(),
+        source_message_count: 12,
+        context_mode: RunBranchContextMode::Exact,
+    });
+    request.validate().expect("bounded branch");
+
+    request.branch = Some(RunBranch {
+        source_run_id: "run-parent".into(),
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    request
+        .validate()
+        .expect("canonical source-run boundary requires no renderer count");
+    request
+        .branch
+        .as_mut()
+        .expect("source-run branch")
+        .source_message_count = 1;
+    let error = request
+        .validate()
+        .expect_err("a caller cannot guess a source-run boundary");
+    assert_eq!(error.violations[0].field, "branch.source_message_count");
+
+    request.branch = Some(RunBranch {
+        source_run_id: "run-parent".into(),
+        source_message_count: 12,
+        context_mode: RunBranchContextMode::Exact,
+    });
+    request.session_id = Some("session-parent".into());
+    let error = request
+        .validate()
+        .expect_err("a branch must create its own session");
+    assert_eq!(error.violations[0].field, "branch");
+
+    request.session_id = None;
+    request
+        .branch
+        .as_mut()
+        .expect("branch")
+        .source_message_count = 513;
+    let error = request
+        .validate()
+        .expect_err("branch history must remain bounded");
+    assert_eq!(error.violations[0].field, "branch.source_message_count");
 }
 
 #[test]
@@ -1327,6 +1420,7 @@ fn maximum_valid_cancellation_lifecycle_remains_listable() {
                 statuses: Vec::new(),
                 page_size: 1,
                 page_token: None,
+                include_archived: false,
             },
         )
         .expect("maximum valid stream remains listable");
@@ -1594,6 +1688,7 @@ fn run_ownership_isolated_by_application_but_survives_credential_rotation() {
                     statuses: Vec::new(),
                     page_size: 10,
                     page_token: None,
+                    include_archived: false,
                 },
             )
             .expect("foreign list")
@@ -1751,6 +1846,7 @@ fn repeated_status_filter_and_opaque_pagination_are_stable() {
                 statuses: vec![RunStatus::Queued],
                 page_size: 10,
                 page_token: None,
+                include_archived: false,
             },
         )
         .expect("list");
@@ -1765,6 +1861,7 @@ fn repeated_status_filter_and_opaque_pagination_are_stable() {
                 statuses: Vec::new(),
                 page_size: 1,
                 page_token: None,
+                include_archived: false,
             },
         )
         .expect("first page");
@@ -1777,11 +1874,167 @@ fn repeated_status_filter_and_opaque_pagination_are_stable() {
                 statuses: Vec::new(),
                 page_size: 1,
                 page_token: first_page.next_page_token,
+                include_archived: false,
             },
         )
         .expect("second page");
     assert_eq!(second_page.runs.len(), 1);
     assert_ne!(first_page.runs[0].id, second_page.runs[0].id);
+}
+
+#[test]
+fn terminal_threads_archive_restore_and_reject_new_work_while_hidden() {
+    let (_, repository, caller) = fixture();
+    let request = create_request("archive-create", "Archive this thread");
+    create_run(
+        &repository,
+        &caller,
+        &request,
+        "run-archive",
+        "session-archive",
+    );
+
+    let foreign = caller_context(
+        "app:other-ui",
+        "foreign-archive",
+        &[scopes::RUNS_READ, scopes::RUNS_CONTROL],
+    );
+    let foreign_error = repository
+        .archive_thread(
+            &foreign,
+            "run-archive",
+            &IdempotencyKey::new("foreign-archive").expect("idempotency key"),
+        )
+        .expect_err("another application cannot archive this thread");
+    assert_eq!(foreign_error.code, ApiErrorCode::NotFound);
+
+    let reader = caller_context("app:desktop-ui", "reader-archive", &[scopes::RUNS_READ]);
+    let scope_error = repository
+        .archive_thread(
+            &reader,
+            "run-archive",
+            &IdempotencyKey::new("reader-archive").expect("idempotency key"),
+        )
+        .expect_err("run read scope cannot archive");
+    assert_eq!(scope_error.code, ApiErrorCode::PermissionDenied);
+    assert_eq!(scope_error.reason, ApiErrorReason::ScopeDenied);
+
+    let active_error = repository
+        .archive_thread(
+            &caller,
+            "run-archive",
+            &IdempotencyKey::new("archive-active").expect("idempotency key"),
+        )
+        .expect_err("active thread must remain visible");
+    assert_eq!(active_error.code, ApiErrorCode::FailedPrecondition);
+    assert_eq!(active_error.reason, ApiErrorReason::InvalidRunTransition);
+
+    repository
+        .append_update(
+            &caller,
+            "run-archive",
+            1,
+            RunUpdateKind::State {
+                status: RunStatus::Running,
+            },
+        )
+        .expect("running");
+    repository
+        .append_update(
+            &caller,
+            "run-archive",
+            2,
+            RunUpdateKind::Result {
+                result: RunResult {
+                    output: "Done".into(),
+                    plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: None,
+                    profile: "default".into(),
+                    model_profile: "default".into(),
+                    provider_profile: "default-provider".into(),
+                    model: "model".into(),
+                    elapsed_seconds: 1.0,
+                },
+            },
+        )
+        .expect("complete");
+
+    let archive_key = IdempotencyKey::new("archive-terminal").expect("idempotency key");
+    let archived = repository
+        .archive_thread(&caller, "run-archive", &archive_key)
+        .expect("archive terminal thread");
+    assert_eq!(archived.session_id, "session-archive");
+    assert!(archived.archived);
+    assert_eq!(
+        repository
+            .archive_thread(&caller, "run-archive", &archive_key)
+            .expect("archive replay"),
+        archived
+    );
+    assert!(
+        repository
+            .list_runs(
+                &caller,
+                &ListRunsRequest {
+                    session_id: None,
+                    statuses: Vec::new(),
+                    page_size: 10,
+                    page_token: None,
+                    include_archived: false,
+                },
+            )
+            .expect("normal list")
+            .runs
+            .is_empty()
+    );
+    let archived_runs = repository
+        .list_runs(
+            &caller,
+            &ListRunsRequest {
+                session_id: None,
+                statuses: Vec::new(),
+                page_size: 10,
+                page_token: None,
+                include_archived: true,
+            },
+        )
+        .expect("archived list");
+    assert_eq!(archived_runs.runs.len(), 1);
+    assert!(archived_runs.runs[0].archived);
+
+    let continued = create_request("archive-continued", "Continue hidden thread");
+    let new_run = NewRun::from_request(
+        "run-archive-continued",
+        "session-archive",
+        "assistant",
+        &continued,
+    )
+    .expect("new run");
+    let create_error = repository
+        .create_run(&caller, &continued, &new_run)
+        .expect_err("archived thread must reject new work");
+    assert_eq!(create_error.code, ApiErrorCode::FailedPrecondition);
+
+    let restored = repository
+        .restore_thread(
+            &caller,
+            "run-archive",
+            &IdempotencyKey::new("restore-terminal").expect("idempotency key"),
+        )
+        .expect("restore thread");
+    assert!(!restored.archived);
+    assert!(
+        !repository
+            .get_run(&caller, "run-archive")
+            .expect("get restored")
+            .expect("run")
+            .archived
+    );
+    repository
+        .create_run(&caller, &continued, &new_run)
+        .expect("restored thread accepts new work");
 }
 
 #[test]
@@ -1833,6 +2086,7 @@ fn owner_index_listing_is_bounded_stable_and_independent_of_global_growth() {
         statuses: Vec::new(),
         page_size: 2,
         page_token: None,
+        include_archived: false,
     };
     let first = repository
         .list_runs(&caller, &request)
@@ -1848,8 +2102,8 @@ fn owner_index_listing_is_bounded_stable_and_independent_of_global_growth() {
     let token = first.next_page_token.expect("continuation");
     assert_eq!(journal.global_reads.load(Ordering::Acquire), 0);
     assert_eq!(journal.full_stream_reads.load(Ordering::Acquire), 0);
-    assert_eq!(journal.backwards_stream_reads.load(Ordering::Acquire), 1);
-    assert_eq!(journal.backwards_events_returned.load(Ordering::Acquire), 4);
+    assert_eq!(journal.backwards_stream_reads.load(Ordering::Acquire), 4);
+    assert_eq!(journal.backwards_events_returned.load(Ordering::Acquire), 7);
 
     let changed_filter = repository
         .list_runs(
@@ -1859,11 +2113,26 @@ fn owner_index_listing_is_bounded_stable_and_independent_of_global_growth() {
                 statuses: vec![RunStatus::Queued],
                 page_size: 2,
                 page_token: Some(token.clone()),
+                include_archived: false,
             },
         )
         .expect_err("cursor must remain bound to its original filters");
     assert_eq!(changed_filter.code, ApiErrorCode::InvalidArgument);
     assert_eq!(changed_filter.reason, ApiErrorReason::InvalidArgument);
+
+    let changed_archive_scope = repository
+        .list_runs(
+            &caller,
+            &ListRunsRequest {
+                session_id: None,
+                statuses: Vec::new(),
+                page_size: 2,
+                page_token: Some(token.clone()),
+                include_archived: true,
+            },
+        )
+        .expect_err("cursor must bind the archived-thread filter");
+    assert_eq!(changed_archive_scope.code, ApiErrorCode::InvalidArgument);
 
     let newest_request = create_request("indexed-create-new", "New snapshot run");
     create_run(

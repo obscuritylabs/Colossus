@@ -41,6 +41,68 @@ export interface WorkspaceSummary {
   displayPath: string;
 }
 
+export type SpaceRuntimeState = ManagedRuntimeState | "sleeping" | "archived";
+
+export interface SpaceSummary {
+  spaceId: string;
+  targetId: string;
+  displayName: string;
+  displayPath: string;
+  archived: boolean;
+  lastOpenedAtMs: number;
+  lastActivityAt: string | null;
+  state: SpaceRuntimeState;
+  message: string;
+  selected: boolean;
+  attentionCount: number;
+  providerConfigured: boolean;
+}
+
+export interface SpaceSearchResult {
+  spaceId: string;
+  spaceName: string;
+  targetId: string;
+  runId: string;
+  sessionId: string;
+  title: string;
+  mode: RunMode;
+  status: RunStatus;
+  updatedAt: string;
+  archived: boolean;
+  threadArchived: boolean;
+  attention: boolean;
+}
+
+export interface SpaceSearchPage {
+  results: SpaceSearchResult[];
+  nextCursor: string;
+}
+
+export interface SpaceAttentionEvent {
+  spaceId: string;
+  targetId: string;
+  attentionCount: number;
+}
+
+export interface SpaceStatusEvent {
+  spaceId: string;
+  targetId: string;
+  displayName: string;
+  archived: boolean;
+  state: SpaceRuntimeState;
+  selected: boolean;
+  attentionCount: number;
+  lastActivityAt: string | null;
+}
+
+export interface SearchSpaceThreadsRequest {
+  query: string;
+  spaceId?: string;
+  includeArchived?: boolean;
+  cursor?: string;
+  pageSize?: number;
+}
+
 export type WorkspaceEntryKind = "directory" | "file";
 
 export interface WorkspaceEntry {
@@ -72,6 +134,8 @@ export interface RuntimeTarget {
   label: string;
   state:
     | ManagedRuntimeState
+    | "sleeping"
+    | "archived"
     | "disconnected"
     | "checking"
     | "available"
@@ -155,6 +219,8 @@ export interface DesktopStatus {
   connection: ConnectionStatus;
   targets: RuntimeTarget[];
   selectedTargetId: string | null;
+  spaces: SpaceSummary[];
+  selectedSpaceId: string | null;
   managedState: ManagedRuntimeState;
   workspace: WorkspaceSummary | null;
   provider: ProviderSummary;
@@ -180,6 +246,7 @@ export interface CaBundleStatus {
 }
 
 export interface DesktopCapabilities {
+  research?: boolean;
   delegation: boolean;
   skills: boolean;
   tui: boolean;
@@ -278,7 +345,9 @@ export interface CommandError {
   violations: CommandViolation[];
 }
 
-export type RunMode = "execute" | "plan";
+export type RunMode = "execute" | "plan" | "research";
+export type ResearchDepth = "quick" | "standard" | "deep";
+export type ResearchSourceKind = "repo" | "web" | "mcp";
 
 export type RunStatus =
   | "queued"
@@ -363,6 +432,7 @@ export interface Run {
   terminal: RunTerminal | null;
   etag: string;
   selectedSkills: string[];
+  archived: boolean;
 }
 
 export interface PromptChoice {
@@ -410,6 +480,7 @@ export type ToolActivityState =
   | "waiting_approval"
   | "started"
   | "completed"
+  | "cancelled"
   | "failed"
   | "outcome_unknown";
 
@@ -418,6 +489,8 @@ export interface ToolActivity {
   toolName: string;
   state: ToolActivityState;
   summary: string;
+  input?: string | null;
+  preview?: string | null;
 }
 
 export interface TokenUsage {
@@ -498,10 +571,23 @@ export interface CreateRunRequest {
   sessionId?: string;
   role: string;
   mode: RunMode;
+  researchDepth?: ResearchDepth;
+  researchSources?: ResearchSourceKind[];
   planAction?: PlanRunAction;
+  branch?: {
+    sourceRunId: string;
+  };
   /** Positive override, or USE_CONFIGURED_MAX_TURNS for the server default. */
   maxTurns: number;
   idempotencyKey: string;
+}
+
+export interface Aside {
+  parentSessionId: string;
+  sourceRunId: string;
+  createdAt: string;
+  closed: boolean;
+  run: Run;
 }
 
 export interface ArtifactContent {
@@ -516,6 +602,7 @@ export interface GetRunRequest {
 export interface ListRunsRequest {
   sessionId?: string;
   pageToken: string;
+  includeArchived?: boolean;
 }
 
 export interface WatchRunRequest {
@@ -526,6 +613,16 @@ export interface WatchRunRequest {
 export interface CancelRunRequest {
   runId: string;
   idempotencyKey: string;
+}
+
+export interface ThreadLifecycleRequest {
+  runId: string;
+  idempotencyKey: string;
+}
+
+export interface ThreadLifecycle {
+  sessionId: string;
+  archived: boolean;
 }
 
 export type InteractionAnswer =

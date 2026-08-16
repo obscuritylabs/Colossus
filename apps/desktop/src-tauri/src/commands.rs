@@ -8,11 +8,14 @@ use tauri::{AppHandle, State, ipc::Channel};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
 use crate::{
+    desktop_settings::{AsideSetting, SettingsStore},
     dto::{
-        ArtifactContentDto, ArtifactReferenceDto, CancelRunInput, CommandErrorDto, CreateRunInput,
-        GetRunDto, GetRunInput, InteractionDto, ListRunsDto, ListRunsInput,
-        RespondInteractionInput, RunDto, WatchEventDto, WatchRunInput,
+        ArtifactContentDto, ArtifactReferenceDto, AsideDto, CancelRunInput, CommandErrorDto,
+        CreateRunInput, GetRunDto, GetRunInput, InteractionDto, ListAsidesInput, ListRunsDto,
+        ListRunsInput, RespondInteractionInput, RunDto, ThreadLifecycleDto, ThreadLifecycleInput,
+        WatchEventDto, WatchRunInput,
     },
+    space_search,
     state::{AppState, SelectedTargetLease, TargetConsentContext, TargetHandle},
 };
 
@@ -185,10 +188,40 @@ pub(crate) async fn create_run(
     target_id: String,
     request: CreateRunInput,
 ) -> Result<RunDto, CommandErrorDto> {
-    let _run_creation = state.run_creation_guard().await;
+    let branch = request.branch_link();
+    if branch.is_some() {
+        let settings = SettingsStore::open_application()?.load()?;
+        require_selected_space(&settings, &target_id)?;
+    }
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
+    let _managed_run_creation =
+        if matches!(target.target.consent, TargetConsentContext::ManagedLocal) {
+            Some(state.run_creation_guard_for(&target_id).await)
+        } else {
+            None
+        };
+    let _external_run_creation = if _managed_run_creation.is_none() {
+        Some(state.run_creation_guard().await)
+    } else {
+        None
+    };
     let _unary_slot = unary_slot(&target.target)?;
+    let source = if let Some(source_run_id) = branch.as_ref() {
+        Some(
+            target
+                .target
+                .client
+                .get_run(GetRunRequest {
+                    run_id: source_run_id.clone(),
+                })
+                .await
+                .map_err(CommandErrorDto::from_api)?
+                .run,
+        )
+    } else {
+        None
+    };
     let response = target
         .target
         .client
@@ -198,7 +231,10 @@ pub(crate) async fn create_run(
     state
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
-    Ok(response.run.into())
+    let run: RunDto = response.run.into();
+    register_or_advance_aside(&target_id, branch, source.as_ref(), &run)?;
+    index_released_runs(&target_id, std::slice::from_ref(&run));
+    Ok(run)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -219,8 +255,10 @@ pub(crate) async fn get_run(
     state
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
+    let run: RunDto = response.run.into();
+    index_released_runs(&target_id, std::slice::from_ref(&run));
     Ok(GetRunDto {
-        run: response.run.into(),
+        run,
         pending_interactions: response
             .pending_interactions
             .into_iter()
@@ -250,12 +288,167 @@ pub(crate) async fn list_runs(
             response.runs.iter().map(|run| run.run_id.clone()).collect(),
         )
         .await;
+    let aside_sessions = aside_session_ids(&target_id);
+    let runs = response
+        .runs
+        .into_iter()
+        .map(Into::into)
+        .filter(|run: &RunDto| !aside_sessions.contains(&run.session_id))
+        .collect::<Vec<_>>();
+    index_released_runs(&target_id, &runs);
     Ok(ListRunsDto {
-        runs: response.runs.into_iter().map(Into::into).collect(),
+        runs,
         next_page_token: response
             .page
             .map_or_else(String::new, |page| page.next_page_token),
     })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_asides(
+    state: State<'_, AppState>,
+    target_id: String,
+    request: ListAsidesInput,
+) -> Result<Vec<AsideDto>, CommandErrorDto> {
+    validate_aside_parent(&request.parent_session_id)?;
+    let target = target(&state, &target_id).await?;
+    let store = SettingsStore::open_application()?;
+    let settings = store.load()?;
+    require_selected_space(&settings, &target_id)?;
+    let records = settings
+        .asides
+        .iter()
+        .filter(|aside| {
+            aside.space_id == target_id && aside.parent_session_id == request.parent_session_id
+        })
+        .take(32)
+        .cloned()
+        .collect::<Vec<_>>();
+    let _unary_slot = unary_slot(&target.target)?;
+    let mut asides = Vec::with_capacity(records.len());
+    for record in records {
+        let response = target
+            .target
+            .client
+            .get_run(GetRunRequest {
+                run_id: record.latest_run_id,
+            })
+            .await
+            .map_err(CommandErrorDto::from_api)?;
+        state
+            .bind_runs(&target, vec![response.run.run_id.clone()])
+            .await;
+        asides.push(AsideDto {
+            parent_session_id: record.parent_session_id,
+            source_run_id: record.source_run_id,
+            created_at: record.created_at,
+            closed: record.closed,
+            run: response.run.into(),
+        });
+    }
+    asides.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(asides)
+}
+
+fn validate_aside_parent(parent_session_id: &str) -> Result<(), CommandErrorDto> {
+    if parent_session_id.is_empty() || parent_session_id.len() > 128 {
+        return Err(CommandErrorDto::invalid(
+            "parentSessionId",
+            "The parent thread is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn require_selected_space(
+    settings: &crate::desktop_settings::DesktopSettings,
+    target_id: &str,
+) -> Result<(), CommandErrorDto> {
+    if settings.selected_space_id.as_deref() == Some(target_id)
+        && settings
+            .spaces
+            .iter()
+            .any(|space| space.id == target_id && !space.archived)
+    {
+        Ok(())
+    } else {
+        Err(CommandErrorDto::local_sanitized(
+            "space_not_selected",
+            "Select this Space before using its Asides.",
+            true,
+        ))
+    }
+}
+
+fn aside_session_ids(target_id: &str) -> std::collections::HashSet<String> {
+    SettingsStore::open_application()
+        .and_then(|store| store.load())
+        .map(|settings| {
+            settings
+                .asides
+                .into_iter()
+                .filter(|aside| aside.space_id == target_id)
+                .map(|aside| aside.session_id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn register_or_advance_aside(
+    target_id: &str,
+    branch: Option<String>,
+    source: Option<&colossus_sdk::Run>,
+    run: &RunDto,
+) -> Result<bool, CommandErrorDto> {
+    let store = SettingsStore::open_application()?;
+    let mut settings = store.load()?;
+    if let Some(existing) = settings
+        .asides
+        .iter_mut()
+        .find(|aside| aside.space_id == target_id && aside.session_id == run.session_id)
+    {
+        existing.latest_run_id.clone_from(&run.run_id);
+        existing.closed = false;
+        store.save(&settings)?;
+        return Ok(true);
+    }
+    let Some(source_run_id) = branch else {
+        return Ok(false);
+    };
+    require_selected_space(&settings, target_id)?;
+    let source = source.ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "aside_source_unavailable",
+            "The parent thread is unavailable for this Aside.",
+            false,
+        )
+    })?;
+    if settings.asides.len() >= 256 {
+        return Err(CommandErrorDto::busy(
+            "This Desktop has reached the Aside history limit. Archive older work first.",
+        ));
+    }
+    settings.asides.push(AsideSetting {
+        space_id: target_id.into(),
+        parent_session_id: source.session_id.clone(),
+        source_run_id,
+        session_id: run.session_id.clone(),
+        latest_run_id: run.run_id.clone(),
+        created_at: run.created_at.clone(),
+        closed: false,
+    });
+    store.save(&settings)?;
+    Ok(true)
+}
+
+fn index_released_runs(target_id: &str, runs: &[RunDto]) {
+    let Ok(store) = SettingsStore::open_application() else {
+        return;
+    };
+    let Ok(settings) = store.load() else {
+        return;
+    };
+    let _ = space_search::index_runs(&settings, target_id, runs);
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -352,6 +545,80 @@ pub(crate) async fn cancel_run(
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
     Ok(response.run.into())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn archive_thread(
+    state: State<'_, AppState>,
+    target_id: String,
+    request: ThreadLifecycleInput,
+) -> Result<ThreadLifecycleDto, CommandErrorDto> {
+    let request = request.into_archive_sdk()?;
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let lifecycle = target
+        .target
+        .client
+        .archive_thread(request)
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    set_indexed_thread_archived(&target_id, &lifecycle.session_id, true);
+    set_aside_closed(&target_id, &lifecycle.session_id, true)?;
+    Ok(ThreadLifecycleDto {
+        session_id: lifecycle.session_id,
+        archived: lifecycle.archived,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn restore_thread(
+    state: State<'_, AppState>,
+    target_id: String,
+    request: ThreadLifecycleInput,
+) -> Result<ThreadLifecycleDto, CommandErrorDto> {
+    let request = request.into_restore_sdk()?;
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let lifecycle = target
+        .target
+        .client
+        .restore_thread(request)
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    set_indexed_thread_archived(&target_id, &lifecycle.session_id, false);
+    set_aside_closed(&target_id, &lifecycle.session_id, false)?;
+    Ok(ThreadLifecycleDto {
+        session_id: lifecycle.session_id,
+        archived: lifecycle.archived,
+    })
+}
+
+fn set_aside_closed(
+    target_id: &str,
+    session_id: &str,
+    closed: bool,
+) -> Result<(), CommandErrorDto> {
+    let store = SettingsStore::open_application()?;
+    let mut settings = store.load()?;
+    if let Some(aside) = settings
+        .asides
+        .iter_mut()
+        .find(|aside| aside.space_id == target_id && aside.session_id == session_id)
+    {
+        aside.closed = closed;
+        store.save(&settings)?;
+    }
+    Ok(())
+}
+
+fn set_indexed_thread_archived(target_id: &str, session_id: &str, archived: bool) {
+    let Ok(store) = SettingsStore::open_application() else {
+        return;
+    };
+    let Ok(settings) = store.load() else {
+        return;
+    };
+    let _ = space_search::set_thread_archived(&settings, target_id, session_id, archived);
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RunView, StreamState } from "../state";
 import type { Run, RunStatus, RunUpdate } from "../types";
+import type { ActivityPresentation } from "./RunTimeline";
 import { RunTimeline } from "./RunTimeline";
 
 function renderOutput(
@@ -13,6 +14,7 @@ function renderOutput(
   updates: RunUpdate[] = [],
   runOverrides: Partial<Run> = {},
   planContinuationAvailable = true,
+  activityPresentation: ActivityPresentation = "thread",
 ): string {
   const run: Run = {
     runId: "run-markdown-test",
@@ -30,6 +32,7 @@ function renderOutput(
     terminal: null,
     etag: "etag-markdown-test",
     selectedSkills: [],
+    archived: false,
     ...runOverrides,
   };
   const view: RunView = {
@@ -48,6 +51,8 @@ function renderOutput(
   return renderToStaticMarkup(
     createElement(RunTimeline, {
       view,
+      activityPresentation,
+      activityComparison: true,
       planContinuationAvailable,
       planWorkflowAvailable: true,
       onOpenPlanWorkflow: vi.fn(),
@@ -154,6 +159,22 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain('<h3 class="feed-entry-title">Colossus</h3>');
     expect(markup).toContain("<h4>Ready</h4>");
     expect(markup).toContain("<strong>security</strong>");
+  });
+
+  it("turns a Research report source list into drawer launch controls", () => {
+    const markup = renderOutput(
+      "# Finding\n\nEvidence.\n\n## Sources\n\n- [R1] Runtime docs — repo://docs/runtime.md\n- [R2] Web docs — https://example.test/docs",
+      "completed",
+      "complete",
+      [],
+      { mode: "research" },
+    );
+
+    expect(markup).toContain('class="inline-research-sources"');
+    expect(markup).toContain("View evidence");
+    expect(markup).toContain("Runtime docs");
+    expect(markup).toContain("Web docs");
+    expect(markup).not.toContain("repo://docs/runtime.md");
   });
 
   it("keeps active streamed output plain until the response is complete", () => {
@@ -265,8 +286,10 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain("Partial response");
     expect(markup).toContain("provider.temporarily_unavailable");
     expect(markup).toContain("HTTP 503");
-    expect(markup).toContain("1000 ms");
-    expect(markup).toContain("<dd>Yes</dd>");
+    expect(markup).toContain("Retry after 1000 ms");
+    expect(markup).toContain("<dd>Recoverable</dd>");
+    expect(markup).toContain('class="failure-title"');
+    expect(markup).toContain('aria-label="Failure details"');
   });
 
   it("coalesces tool transitions into one expandable compact row", () => {
@@ -279,7 +302,7 @@ describe("RunTimeline assistant output", () => {
           type: "tool_activity",
           activity: {
             callId: "call-1",
-            toolName: "shell.run",
+            toolName: "repo.map",
             state: "requested",
             summary: "validated tool call requested",
           },
@@ -293,7 +316,7 @@ describe("RunTimeline assistant output", () => {
           type: "tool_activity",
           activity: {
             callId: "call-1",
-            toolName: "shell.run",
+            toolName: "repo.map",
             state: "started",
             summary: "tool execution started at turn 1",
           },
@@ -307,9 +330,11 @@ describe("RunTimeline assistant output", () => {
           type: "tool_activity",
           activity: {
             callId: "call-1",
-            toolName: "shell.run",
+            toolName: "repo.map",
             state: "completed",
             summary: "tool execution completed at turn 1",
+            preview:
+              '{"root":".","files":[{"path":"src/main.rs","bytes":42}],"file_count":1}',
           },
         },
       },
@@ -318,12 +343,295 @@ describe("RunTimeline assistant output", () => {
     const markup = renderOutput("Done", "completed", "complete", updates);
 
     expect(
-      markup.match(/<details class="compact-tool-activity">/g),
+      markup.match(
+        /<details class="compact-tool-activity activity-tool-thread activity-state-completed">/g,
+      ),
     ).toHaveLength(1);
-    expect(markup).toContain("shell.run");
+    expect(markup).toContain("repo.map");
     expect(markup).toContain("requested");
     expect(markup).toContain("started");
     expect(markup).toContain("completed");
     expect(markup).toContain("tool execution completed at turn 1");
+    expect(markup).toContain('class="tool-activity-preview"');
+    expect(markup).toContain("<pre>");
+    expect(markup).toContain("src/main.rs");
+    expect(markup).toContain("file_count");
+    expect(markup).not.toContain(
+      "The tool completed, but this activity feed does not include an output preview.",
+    );
+  });
+
+  it("interleaves released reasoning summaries with tool actions in the working thread", () => {
+    const updates: RunUpdate[] = [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "reasoning_summary",
+          summary: "Checking the workspace boundary",
+        },
+      },
+      {
+        runId: "run-markdown-test",
+        sequence: 2,
+        createdAt: "2026-07-21T12:00:01Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-map",
+            toolName: "repo.map",
+            state: "completed",
+            summary: "Mapped repository structure",
+          },
+        },
+      },
+      {
+        runId: "run-markdown-test",
+        sequence: 3,
+        createdAt: "2026-07-21T12:00:02Z",
+        update: {
+          type: "reasoning_summary",
+          summary: "The package is nearly complete",
+        },
+      },
+    ];
+
+    const markup = renderOutput(
+      "Done",
+      "completed",
+      "complete",
+      updates,
+      {},
+      true,
+      "thread",
+    );
+
+    expect(markup).toContain("run-activity-thread");
+    expect(markup).toContain("run-state-completed");
+    expect(markup).toContain("activity-state-completed");
+    expect(markup).toContain("2 notes");
+    expect(markup.indexOf("Checking the workspace boundary")).toBeLessThan(
+      markup.indexOf("Mapped repository structure"),
+    );
+    expect(markup.indexOf("Mapped repository structure")).toBeLessThan(
+      markup.indexOf("The package is nearly complete"),
+    );
+  });
+
+  it("exposes active run and tool states for timeline color treatment", () => {
+    const markup = renderOutput(
+      "",
+      "running",
+      "watching",
+      [
+        {
+          runId: "run-markdown-test",
+          sequence: 1,
+          createdAt: "2026-07-21T12:00:00Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-map",
+              toolName: "repo.map",
+              state: "started",
+              summary: "Mapping repository structure",
+            },
+          },
+        },
+      ],
+      {},
+      true,
+      "thread",
+    );
+
+    expect(markup).toContain("run-state-running");
+    expect(markup).toContain("activity-state-started");
+  });
+
+  it("renders the same canonical activity as a single run capsule", () => {
+    const updates: RunUpdate[] = [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "reasoning_summary",
+          summary: "Inspecting released context",
+        },
+      },
+      {
+        runId: "run-markdown-test",
+        sequence: 2,
+        createdAt: "2026-07-21T12:00:01Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-shell",
+            toolName: "shell.run",
+            state: "failed",
+            summary: "Command denied by workspace policy",
+            input: '{"command":"ps"}',
+          },
+        },
+      },
+    ];
+
+    const markup = renderOutput(
+      "Done",
+      "completed",
+      "complete",
+      updates,
+      {},
+      true,
+      "capsule",
+    );
+
+    expect(markup).toContain("run-activity-capsule");
+    expect(markup).toContain("1 action");
+    expect(markup).toContain("1 note");
+    expect(markup).toContain("Command denied by workspace policy");
+    expect(markup).toContain("ps");
+    expect(markup).toContain("run-activity-exceptions");
+  });
+
+  it("does not create thinking rows when the runtime released none", () => {
+    const markup = renderOutput("Done", "completed", "complete", [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-map",
+            toolName: "repo.map",
+            state: "completed",
+            summary: "Mapped repository structure",
+          },
+        },
+      },
+    ]);
+
+    expect(markup).not.toContain("activity-thought");
+    expect(markup).not.toContain("note</small>");
+  });
+
+  it("labels an unstarted tool as cancelled instead of failed", () => {
+    const updates: RunUpdate[] = [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-cancelled",
+            toolName: "filesystem.list",
+            state: "cancelled",
+            summary: "tool execution was cancelled before start at turn 1",
+          },
+        },
+      },
+    ];
+
+    const markup = renderOutput("", "failed", "complete", updates);
+
+    expect(markup).toContain("filesystem.list");
+    expect(markup).toContain("tool-state-cancelled");
+    expect(markup).toContain(">cancelled<");
+    expect(markup).not.toContain("tool-state-failed");
+    expect(markup).toContain('class="tool-activity-preview"');
+    expect(markup).toContain("Preview");
+    expect(markup).toContain(
+      "No preview was generated because the tool was cancelled before it started.",
+    );
+  });
+
+  it("shows the validated shell command while execution is running", () => {
+    const updates: RunUpdate[] = [
+      {
+        runId: "run-shell-input",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-shell",
+            toolName: "shell.run",
+            state: "requested",
+            summary: "validated tool call requested",
+          },
+        },
+      },
+      {
+        runId: "run-shell-input",
+        sequence: 2,
+        createdAt: "2026-07-21T12:00:01Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-shell",
+            toolName: "shell.run",
+            state: "started",
+            summary: "tool execution started at turn 1",
+            input: '{"command":"git status --short","cwd":"."}',
+          },
+        },
+      },
+    ];
+
+    const markup = renderOutput("", "running", "watching", updates);
+
+    expect(markup).toContain('aria-label="Tool input"');
+    expect(markup).toContain("Input");
+    expect(markup).toContain("git status --short");
+    expect(markup).toContain(
+      "No preview is available while the tool is still running.",
+    );
+  });
+
+  it("counts Research progress as steps and uses its canonical duration", () => {
+    const updates: RunUpdate[] = [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:01Z",
+        update: {
+          type: "notice",
+          reason: "research.planning.completed",
+          message: "Accepted model-generated research queries.",
+        },
+      },
+      {
+        runId: "run-markdown-test",
+        sequence: 2,
+        createdAt: "2026-07-21T12:00:40Z",
+        update: {
+          type: "notice",
+          reason: "research.synthesis.completed",
+          message: "Accepted model-synthesized cited report.",
+        },
+      },
+    ];
+    const markup = renderOutput("Report", "completed", "complete", updates, {
+      mode: "research",
+      terminal: {
+        type: "result",
+        result: {
+          output: "Report",
+          profile: "research",
+          modelProfile: "research",
+          providerProfile: "research",
+          model: "research",
+          elapsedSeconds: 42.25,
+        },
+      },
+    });
+
+    expect(markup).toContain("2 steps");
+    expect(markup).toContain("42s");
+    expect(markup).not.toContain("0 actions");
+    expect(markup).not.toContain("<small>0 steps · 0s</small>");
   });
 });

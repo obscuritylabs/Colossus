@@ -136,16 +136,16 @@ export function OnboardingSurface({
               : "Start Colossus in this app"}
           </h1>
           <p>
-            Pick a workspace, provider, and execution boundary. The app
-            supervises a local runtime while credentials remain behind native
-            storage boundaries.
+            Add a folder-backed Space, then choose its provider and execution
+            boundary. The app supervises a local runtime while credentials
+            remain behind native storage boundaries.
           </p>
         </div>
 
         <ol className="onboarding-steps" aria-label="Setup progress">
           <li className={desktop.workspace === null ? "is-active" : "is-done"}>
             <span>1</span>
-            Workspace
+            Space
           </li>
           <li className={desktop.workspace === null ? "" : "is-active"}>
             <span>2</span>
@@ -164,7 +164,7 @@ export function OnboardingSurface({
                 <IconFolder size={25} stroke={1.5} />
               </span>
               <div>
-                <h2>Choose a folder</h2>
+                <h2>Add your first Space</h2>
                 <p>
                   This folder is the repository context and relative-path
                   anchor. Full access can reach beyond it; choose an isolated
@@ -179,7 +179,7 @@ export function OnboardingSurface({
                 disabled={busy}
                 onClick={() => void onChooseWorkspace()}
               >
-                Choose workspace
+                Add Space from folder
                 <IconArrowRight size={16} stroke={1.8} aria-hidden="true" />
               </button>
             </div>
@@ -215,7 +215,7 @@ export function OnboardingSurface({
                 disabled={busy}
                 onClick={() => void onChooseWorkspace()}
               >
-                Change
+                Add another Space
               </button>
             </div>
 

@@ -24,6 +24,9 @@ function renderComposer(
       maxTurns: 8,
       maxTurnsLimit: 64,
       mode: "plan",
+      researchDepth: "standard",
+      researchSources: ["repo", "web", "mcp"],
+      researchAvailable: true,
       approvalMode: "ask",
       approvalModeVisible: true,
       approvalModeAvailable: true,
@@ -33,8 +36,11 @@ function renderComposer(
       submitting: false,
       continuation: false,
       planRevision: null,
+      queueing: false,
       activeWorkRunning: false,
       activeWorkNeedsInput: false,
+      activeWorkRedirectable: false,
+      queuedMessages: [],
       attachmentsAvailable,
       attachments: [],
       attachmentBusy: false,
@@ -43,10 +49,16 @@ function renderComposer(
       onRoleChange: vi.fn(),
       onMaxTurnsChange: vi.fn(),
       onModeChange: vi.fn(),
+      onResearchDepthChange: vi.fn(),
+      onResearchSourcesChange: vi.fn(),
       onApprovalModeChange: vi.fn(),
       onCancelPlanRevision: vi.fn(),
       onChooseAttachment: vi.fn(),
       onRemoveAttachment: vi.fn(),
+      onEditQueuedMessage: vi.fn(),
+      onDeleteQueuedMessage: vi.fn(),
+      onRetryQueuedMessage: vi.fn(),
+      onRedirect: vi.fn(),
       onSubmit: vi.fn(),
       ...overrides,
     }),
@@ -61,6 +73,40 @@ function renderRevisionComposer(): string {
 }
 
 describe("WorkComposer capabilities", () => {
+  it("renders the dedicated Research composer controls", () => {
+    const markup = renderComposer(false, {
+      mode: "research",
+      researchDepth: "standard",
+      researchSources: ["repo", "web", "mcp"],
+    });
+
+    expect(markup).toContain("Ask a source-backed question");
+    expect(markup).toContain("Research depth");
+    expect(markup).toContain("This Space");
+    expect(markup).toContain("Connections");
+    expect(markup).toContain("Sources: This Space, Web, Connections");
+    expect(markup).toContain(
+      'aria-label="Research controls, sources This Space, Web, Connections"',
+    );
+  });
+
+  it("requires at least one Research evidence source", () => {
+    const markup = renderComposer(false, {
+      mode: "research",
+      researchSources: [],
+      prompt: "What changed?",
+      promptBytes: 13,
+    });
+
+    expect(markup).toContain(
+      "Select at least one evidence source before starting Research.",
+    );
+    const sendStart = markup.indexOf('aria-label="Send prompt"');
+    expect(markup.slice(sendStart, markup.indexOf(">", sendStart))).toContain(
+      "disabled",
+    );
+  });
+
   it("leaves the turn override blank when the server default is selected", () => {
     const markup = renderComposer(false, {
       maxTurns: USE_CONFIGURED_MAX_TURNS,
@@ -109,6 +155,8 @@ describe("WorkComposer permission mode", () => {
   it("shows every native permission choice and selects the current mode", () => {
     const markup = renderComposer(false, {
       mode: "execute",
+      researchDepth: "standard",
+      researchSources: ["repo", "web", "mcp"],
       approvalMode: "risk_auto",
     });
 
@@ -137,5 +185,54 @@ describe("WorkComposer permission mode", () => {
     expect(renderComposer(false, { approvalModeVisible: false })).not.toContain(
       'aria-label="Permission mode"',
     );
+  });
+});
+
+describe("WorkComposer follow-ups", () => {
+  it("keeps the composer available and names queue and redirect actions while work runs", () => {
+    const markup = renderComposer(false, {
+      mode: "execute",
+      queueing: true,
+      activeWorkRunning: true,
+      activeWorkRedirectable: true,
+      prompt: "Check the Windows path too",
+      promptBytes: 26,
+    });
+
+    expect(markup).toContain("Add a follow-up while Colossus keeps working");
+    expect(markup).toContain('aria-label="Add message to Next up"');
+    expect(markup).toContain('aria-label="Redirect current response"');
+    expect(markup).toContain("Enter adds to Next up");
+  });
+
+  it("renders editable and deletable queued messages", () => {
+    const markup = renderComposer(false, {
+      activeWorkRunning: true,
+      queueing: true,
+      activeWorkRedirectable: true,
+      queuedMessages: [
+        {
+          id: "queued-1",
+          idempotencyKey: "key-1",
+          targetId: "target-1",
+          sessionId: "session-1",
+          prompt: "Also inspect the Windows path",
+          role: "primary",
+          mode: "execute",
+          researchDepth: "standard",
+          researchSources: ["repo", "web", "mcp"],
+          maxTurns: 0,
+          attachments: [],
+          createdAt: "2026-08-14T12:00:00Z",
+          state: "pending",
+          error: null,
+        },
+      ],
+    });
+
+    expect(markup).toContain('aria-label="Next up"');
+    expect(markup).toContain("Also inspect the Windows path");
+    expect(markup).toContain('aria-label="Edit queued message"');
+    expect(markup).toContain('aria-label="Delete queued message"');
   });
 });

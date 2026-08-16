@@ -1,0 +1,42 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: codex-parallel-review
+  version: 1.1.0
+  description: Ask three Codex agents for independent production-readiness reviews
+inputs:
+  type: object
+  additionalProperties: false
+outputs:
+  type: object
+capabilities:
+  - agent.run
+  - filesystem.list
+  - filesystem.read
+maxConcurrency: 3
+stepBudget: 10
+steps:
+  - id: specialist-reviews
+    type: parallel
+    max_concurrency: 3
+    branches:
+      -
+        - id: architecture-review
+          type: agent
+          prompt: Review the current workspace architecture for production-readiness risks. Return the five most important findings with concrete evidence and do not modify files.
+          idempotency: null
+      -
+        - id: security-review
+          type: agent
+          prompt: Review the current workspace security boundaries, approval handling, and secret exposure risks. Return prioritized findings with concrete evidence and do not modify files.
+          idempotency: null
+      -
+        - id: test-review
+          type: agent
+          prompt: Review the current workspace test and release coverage. Identify the highest-risk missing tests and release gates with concrete evidence and do not modify files.
+          idempotency: null
+  - id: review-result
+    type: emit
+    value:
+      workflow: codex-parallel-review
+      status: specialist_reviews_collected

@@ -18,6 +18,7 @@ colossus-ports.workspace = true
 colossus-runtime.workspace = true
 futures.workspace = true
 getrandom.workspace = true
+serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -26,7 +27,6 @@ url.workspace = true
 
 [dev-dependencies]
 colossus-testkit.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 

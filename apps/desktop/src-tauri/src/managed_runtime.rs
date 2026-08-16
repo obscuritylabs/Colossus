@@ -1,13 +1,14 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
-    IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
-    ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
-    ManagedReasoningEffort, ManagedRuntimeConfig, NativeSidecarLifecycle, RunMode, RunStatus,
-    SdkError, Secret, SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
-    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
+    IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
+    ManagedExecutionBoundary, ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig,
+    ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig,
+    NativeSidecarLifecycle, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
+    WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
-use std::{path::Path, str::FromStr as _};
+use std::{collections::BTreeMap, path::Path, str::FromStr as _};
 
 use crate::{
     bundle::VerifiedBundle,
@@ -17,13 +18,15 @@ use crate::{
         ReasoningEffortSetting, SettingsStore, load_provider_secret, revalidate_workspace,
     },
     dto::CommandErrorDto,
-    state::{AppState, MANAGED_TARGET_ID, ManagedHealth},
+    state::{AppState, MAX_LIVE_MANAGED_SPACES, ManagedHealth},
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
 };
 
 const APPLICATION_ID: &str = "app:colossus-desktop-managed";
 const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
 const SELF_TEST_INSTANCE_ID: &str = "00000000-0000-7000-8000-000000000001";
+const LOCAL_DEV_SEARCH_PROFILE: &str = "local-dev-searxng";
+const LOCAL_DEV_SEARCH_ENDPOINT: &str = "http://127.0.0.1:8888/search";
 const PRIMARY_SCOPES: [&str; 6] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
@@ -105,19 +108,30 @@ pub(crate) async fn start(
     settings: &DesktopSettings,
     restarting: bool,
 ) -> Result<(), CommandErrorDto> {
-    let lifecycle_generation = state.begin_managed_lifecycle();
-    let restore_selection = state.selected_target_id().await.as_deref() == Some(MANAGED_TARGET_ID);
+    let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
+        CommandErrorDto::invalid("spaceId", "Select a Space before starting Managed Local.")
+    })?;
+    let lifecycle_generation = state.begin_managed_lifecycle_for(space_id).await;
+    let restore_selection = state.selected_target_id().await.as_deref() == Some(space_id);
     if restore_selection {
         // The selection writer waits for native run operations to release their
         // read leases before the managed transport is closed. No request is replayed.
         state.select_target(None).await;
     }
-    let result =
-        start_after_operation_drain(state, store, settings, restarting, lifecycle_generation).await;
+    let result = start_after_operation_drain(
+        state,
+        store,
+        settings,
+        space_id,
+        restarting,
+        lifecycle_generation,
+    )
+    .await;
     if restore_selection {
-        state
-            .select_target(Some(MANAGED_TARGET_ID.to_owned()))
-            .await;
+        state.select_target(Some(space_id.to_owned())).await;
+        if result.is_ok() {
+            state.activate_managed_terminal_for(space_id).await;
+        }
     }
     result
 }
@@ -126,6 +140,7 @@ async fn start_after_operation_drain(
     state: &AppState,
     store: &SettingsStore,
     settings: &DesktopSettings,
+    space_id: &str,
     restarting: bool,
     lifecycle_generation: u64,
 ) -> Result<(), CommandErrorDto> {
@@ -135,52 +150,133 @@ async fn start_after_operation_drain(
         ManagedRuntimeStateDto::Starting
     };
     state
-        .set_managed_health(ManagedHealth {
-            state: starting_state,
-            message: if restarting {
-                "Restarting the managed Colossus runtime…".into()
-            } else {
-                "Starting the managed Colossus runtime…".into()
+        .set_managed_health_for(
+            space_id,
+            ManagedHealth {
+                state: starting_state,
+                message: if restarting {
+                    "Restarting the managed Colossus runtime…".into()
+                } else {
+                    "Starting the managed Colossus runtime…".into()
+                },
+                failure_code: None,
             },
-            failure_code: None,
-        })
+        )
         .await;
 
     state.clear_terminal_workspace().await;
-    state.clear_managed_worker().await;
-    if let Some(previous) = state.remove_target(MANAGED_TARGET_ID).await
+    state.clear_managed_worker_for(space_id).await;
+    if let Some(previous) = state.remove_target(space_id).await
         && let Err(error) = previous.client.close().await
     {
         let (error, failure_code) = classify_sdk(error, RuntimeFailureCodeDto::Transport);
         state
-            .set_managed_health(ManagedHealth {
-                state: ManagedRuntimeStateDto::Failed,
-                message: error.message.clone(),
-                failure_code: Some(failure_code),
-            })
+            .set_managed_health_for(
+                space_id,
+                ManagedHealth {
+                    state: ManagedRuntimeStateDto::Failed,
+                    message: error.message.clone(),
+                    failure_code: Some(failure_code),
+                },
+            )
             .await;
         return Err(error);
     }
 
-    let result = start_inner(state, store, settings, lifecycle_generation).await;
+    ensure_managed_capacity(state, space_id).await?;
+    let result = start_inner(state, store, settings, space_id, lifecycle_generation).await;
     match result {
         Ok(()) => {
-            state.sync_managed_lifecycle_health().await;
+            state.sync_managed_lifecycle_health_for(space_id).await;
             Ok(())
         }
         Err((error, failure_code)) => {
-            state.clear_managed_lifecycle(lifecycle_generation);
+            state
+                .clear_managed_lifecycle_for(space_id, lifecycle_generation)
+                .await;
             state.clear_terminal_workspace().await;
             state
-                .set_managed_health(ManagedHealth {
-                    state: ManagedRuntimeStateDto::Failed,
-                    message: error.message.clone(),
-                    failure_code: Some(failure_code),
-                })
+                .set_managed_health_for(
+                    space_id,
+                    ManagedHealth {
+                        state: ManagedRuntimeStateDto::Failed,
+                        message: error.message.clone(),
+                        failure_code: Some(failure_code),
+                    },
+                )
                 .await;
             Err(error)
         }
     }
+}
+
+async fn ensure_managed_capacity(
+    state: &AppState,
+    requested_space_id: &str,
+) -> Result<(), CommandErrorDto> {
+    let live = state.live_managed_target_ids().await;
+    if live.iter().any(|target_id| target_id == requested_space_id)
+        || live.len() < MAX_LIVE_MANAGED_SPACES
+    {
+        return Ok(());
+    }
+    let mut candidates = Vec::with_capacity(live.len());
+    for target_id in live {
+        let last_used = state.managed_space_last_used(&target_id).await.unwrap_or(0);
+        let Some(target) = state.target(&target_id).await else {
+            state.remove_managed_space_runtime(&target_id).await;
+            continue;
+        };
+        let active = target
+            .client
+            .list_runs(ListRunsRequest {
+                session_id: None,
+                statuses: vec![
+                    RunStatus::Queued,
+                    RunStatus::Running,
+                    RunStatus::Waiting,
+                    RunStatus::Cancelling,
+                ],
+                page: Some(colossus_sdk::PageRequest {
+                    page_size: 1,
+                    page_token: String::new(),
+                }),
+                include_archived: false,
+            })
+            .await
+            .map_err(CommandErrorDto::from_api)?;
+        candidates.push((last_used, target_id, !active.runs.is_empty()));
+    }
+    let Some(target_id) = idle_lru_candidate(&candidates)? else {
+        return Ok(());
+    };
+    if let Some(target) = state.remove_target(&target_id).await {
+        target
+            .client
+            .close()
+            .await
+            .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Transport).0)?;
+    }
+    state.remove_managed_space_runtime(&target_id).await;
+    Ok(())
+}
+
+fn idle_lru_candidate(
+    candidates: &[(u64, String, bool)],
+) -> Result<Option<String>, CommandErrorDto> {
+    if candidates.len() < MAX_LIVE_MANAGED_SPACES {
+        return Ok(None);
+    }
+    if let Some((_, target_id, _)) = candidates
+        .iter()
+        .filter(|(_, _, active)| !active)
+        .min_by_key(|(last_used, _, _)| *last_used)
+    {
+        return Ok(Some(target_id.clone()));
+    }
+    Err(CommandErrorDto::busy(
+        "Four Spaces are already running active work. Switch to one of them or finish a run before starting another Space.",
+    ))
 }
 
 pub(crate) async fn self_test(
@@ -253,8 +349,11 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
             end_user_id: None,
             role: "primary".into(),
             mode: RunMode::Plan,
+            research_depth: None,
+            research_sources: Vec::new(),
             selected_skills: Vec::new(),
             plan_action: None,
+            branch: None,
             max_turns: 1,
             idempotency_key,
         })
@@ -307,6 +406,7 @@ async fn start_inner(
     state: &AppState,
     store: &SettingsStore,
     settings: &DesktopSettings,
+    space_id: &str,
     lifecycle_generation: u64,
 ) -> Result<(), (CommandErrorDto, RuntimeFailureCodeDto)> {
     let workspace = settings.workspace.as_ref().ok_or_else(|| {
@@ -383,6 +483,7 @@ async fn start_inner(
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     install_managed_target(
         state,
+        space_id,
         lifecycle_generation,
         lifecycle,
         options,
@@ -483,6 +584,7 @@ fn managed_bootstrap(
     worker_authentication: &[u8],
     paths: &ManagedBootstrapPaths<'_>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
+    let (search_profiles, search_roles) = managed_search(settings.execution_boundary);
     let runtime = ManagedRuntimeConfig {
         access_profile: access_profile(settings.access_profile),
         execution_boundary: execution_boundary(settings.execution_boundary),
@@ -518,6 +620,8 @@ fn managed_bootstrap(
             })
             .collect(),
         roles: settings.model_roles.clone(),
+        search_profiles,
+        search_roles,
     };
     let bootstrap = SidecarBootstrapConfig::new(
         workspace,
@@ -529,6 +633,8 @@ fn managed_bootstrap(
     .with_approval_broker_grant(approval_broker_grant)?
     .with_host_credentials(host_credentials)?
     .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
+    #[cfg(debug_assertions)]
+    let bootstrap = bootstrap.with_plaintext_journal_for_development();
     let bootstrap = match paths.ca_bundle {
         Some(path) => bootstrap.with_additional_ca_bundle_path(path)?,
         None => bootstrap,
@@ -537,6 +643,33 @@ fn managed_bootstrap(
         Some(path) => bootstrap.with_codex_auth_path(path),
         None => Ok(bootstrap),
     }
+}
+
+#[cfg(debug_assertions)]
+fn managed_search(
+    boundary: ExecutionBoundarySetting,
+) -> (Vec<ManagedSearchConfig>, BTreeMap<String, String>) {
+    if boundary == ExecutionBoundarySetting::OfflineIsolated {
+        return (Vec::new(), BTreeMap::new());
+    }
+    (
+        vec![ManagedSearchConfig {
+            profile: LOCAL_DEV_SEARCH_PROFILE.into(),
+            endpoint: LOCAL_DEV_SEARCH_ENDPOINT.into(),
+            timeout_ms: 30_000,
+        }],
+        BTreeMap::from([
+            ("agent".into(), LOCAL_DEV_SEARCH_PROFILE.into()),
+            ("research".into(), LOCAL_DEV_SEARCH_PROFILE.into()),
+        ]),
+    )
+}
+
+#[cfg(not(debug_assertions))]
+fn managed_search(
+    _boundary: ExecutionBoundarySetting,
+) -> (Vec<ManagedSearchConfig>, BTreeMap<String, String>) {
+    (Vec::new(), BTreeMap::new())
 }
 
 fn codex_auth_path(
@@ -568,13 +701,16 @@ fn expected_workspace_identity(
 
 async fn install_managed_target(
     state: &AppState,
+    space_id: &str,
     lifecycle_generation: u64,
     lifecycle: NativeSidecarLifecycle,
     options: SidecarOptions,
     mut terminal_workspace: TerminalWorkspace,
     terminal_enabled: bool,
 ) -> Result<(), (CommandErrorDto, RuntimeFailureCodeDto)> {
-    state.observe_managed_lifecycle(lifecycle_generation, lifecycle.subscribe_status());
+    state
+        .observe_managed_lifecycle_for(space_id, lifecycle_generation, lifecycle.subscribe_status())
+        .await;
 
     let config_path = options.managed_config_path();
     let worker_endpoint = worker_ipc_endpoint(&options.instance_dir().as_path().join("state.redb"))
@@ -616,15 +752,20 @@ async fn install_managed_target(
         };
     let previous = state
         .replace_target(
-            MANAGED_TARGET_ID,
+            space_id,
             client,
             crate::state::TargetConsentContext::ManagedLocal,
         )
         .await;
     debug_assert!(previous.is_none());
-    state.configure_managed_worker(worker).await;
-    state.configure_terminal_workspace(terminal_workspace).await;
-    state.set_terminal_enabled(terminal_enabled).await;
+    state.configure_managed_worker_for(space_id, worker).await;
+    state
+        .configure_managed_terminal_for(space_id, terminal_workspace, terminal_enabled)
+        .await;
+    if state.selected_target_id().await.as_deref() == Some(space_id) {
+        state.activate_managed_terminal_for(space_id).await;
+    }
+    state.touch_managed_space(space_id).await;
     Ok(())
 }
 
@@ -791,6 +932,22 @@ mod tests {
         assert!(!debug.contains("shell.run"));
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_managed_search_is_loopback_only_and_disabled_offline() {
+        let (profiles, roles) = managed_search(ExecutionBoundarySetting::WorkspaceIsolated);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].endpoint, LOCAL_DEV_SEARCH_ENDPOINT);
+        assert_eq!(
+            roles.get("research").map(String::as_str),
+            Some(LOCAL_DEV_SEARCH_PROFILE)
+        );
+
+        let (profiles, roles) = managed_search(ExecutionBoundarySetting::OfflineIsolated);
+        assert!(profiles.is_empty());
+        assert!(roles.is_empty());
+    }
+
     #[test]
     fn minimal_grant_only_exposes_echo() {
         let grant = application_grant(AccessProfileSetting::Minimal).expect("grant");
@@ -840,5 +997,31 @@ mod tests {
             classify_sdk(SdkError::IdentityMismatch, RuntimeFailureCodeDto::Internal);
         assert_eq!(failure_code, RuntimeFailureCodeDto::Integrity);
         assert_eq!(integrity.code, "runtime_integrity");
+    }
+
+    #[test]
+    fn fifth_space_evicts_the_least_recently_used_idle_runtime() {
+        let candidates = vec![
+            (40, "busy-old".into(), true),
+            (30, "idle-newer".into(), false),
+            (10, "idle-oldest".into(), false),
+            (50, "busy-new".into(), true),
+        ];
+
+        assert_eq!(
+            idle_lru_candidate(&candidates).expect("capacity plan"),
+            Some("idle-oldest".into())
+        );
+    }
+
+    #[test]
+    fn fifth_space_is_refused_when_all_live_spaces_are_busy() {
+        let candidates = (0..MAX_LIVE_MANAGED_SPACES)
+            .map(|index| (index as u64, format!("space-{index}"), true))
+            .collect::<Vec<_>>();
+
+        let error = idle_lru_candidate(&candidates).expect_err("all busy");
+        assert_eq!(error.code, "busy");
+        assert!(error.message.contains("Four Spaces"));
     }
 }

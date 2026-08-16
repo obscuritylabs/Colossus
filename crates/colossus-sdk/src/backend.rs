@@ -8,10 +8,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    ApiResult, ArtifactReference, CancelRunRequest, CancelRunResponse, CreateRunRequest,
-    CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse, ListRunsRequest,
-    ListRunsResponse, RespondInteractionRequest, RespondInteractionResponse, RunUpdateStream,
-    SdkResult, ServerCapabilities, UploadArtifactRequest, WatchRunRequest,
+    ApiResult, ArchiveThreadRequest, ArtifactReference, CancelRunRequest, CancelRunResponse,
+    CreateRunRequest, CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse,
+    ListRunsRequest, ListRunsResponse, RespondInteractionRequest, RespondInteractionResponse,
+    RestoreThreadRequest, RunUpdateStream, SdkResult, ServerCapabilities, ThreadLifecycle,
+    UploadArtifactRequest, WatchRunRequest,
 };
 
 /// Runtime placement used by this client.
@@ -64,6 +65,22 @@ pub trait AgentRunClient: Send + Sync {
 
     /// Request idempotent cooperative cancellation.
     async fn cancel_run(&self, request: CancelRunRequest) -> ApiResult<CancelRunResponse>;
+
+    /// Hide one terminal thread from normal listings.
+    async fn archive_thread(&self, _request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support thread archiving",
+        ))
+    }
+
+    /// Return one archived thread to normal listings.
+    async fn restore_thread(&self, _request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support thread restoration",
+        ))
+    }
 
     /// Submit a one-use answer to a caller-bound interaction.
     async fn respond_interaction(
@@ -216,6 +233,34 @@ impl AgentRunClient for ContextBoundAgentRunClient {
             )
             .await?;
         crate::embedded_projection::cancel_response(run)
+    }
+
+    async fn archive_thread(&self, request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
+        let lifecycle = self
+            .api
+            .archive_thread(
+                &self.caller,
+                colossus_api::ArchiveThreadRequest {
+                    run_id: request.run_id,
+                    idempotency_key: request.idempotency_key,
+                },
+            )
+            .await?;
+        Ok(crate::embedded_projection::thread_lifecycle(lifecycle))
+    }
+
+    async fn restore_thread(&self, request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
+        let lifecycle = self
+            .api
+            .restore_thread(
+                &self.caller,
+                colossus_api::RestoreThreadRequest {
+                    run_id: request.run_id,
+                    idempotency_key: request.idempotency_key,
+                },
+            )
+            .await?;
+        Ok(crate::embedded_projection::thread_lifecycle(lifecycle))
     }
 
     async fn respond_interaction(

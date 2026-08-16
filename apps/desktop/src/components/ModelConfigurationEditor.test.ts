@@ -19,6 +19,8 @@ const desktop: DesktopStatus = {
   },
   targets: [],
   selectedTargetId: "managed-local",
+  spaces: [],
+  selectedSpaceId: null,
   managedState: "ready",
   workspace: {
     workspaceId: "workspace-1",

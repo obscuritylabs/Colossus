@@ -78,8 +78,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             end_user_id: None,
             role: "primary".to_owned(),
             mode: options.mode,
+            research_depth: None,
+            research_sources: Vec::new(),
             selected_skills: Vec::new(),
             plan_action: None,
+            branch: None,
             max_turns: 12,
             idempotency_key: next_idempotency_key("create")?,
         })

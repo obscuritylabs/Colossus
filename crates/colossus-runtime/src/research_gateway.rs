@@ -345,7 +345,8 @@ impl ResearchCollector for GatewayResearchCollector {
             };
         }
         let tokens = research_search_tokens(query);
-        let mut evidence = BTreeMap::<String, Vec<String>>::new();
+        let mut evidence = Vec::<(String, Vec<String>)>::new();
+        let mut evidence_indexes = BTreeMap::<String, usize>::new();
         for token in tokens {
             let mut request = effect_request(
                 Actor {
@@ -359,6 +360,8 @@ impl ResearchCollector for GatewayResearchCollector {
                     "regex": false,
                     "case_sensitive": false,
                     "max_matches": limit.clamp(1, 100).saturating_mul(4).min(1000),
+                    "context_lines": 3,
+                    "workspace_scoped": true,
                 }),
             );
             request.capabilities = vec!["filesystem.search".into()];
@@ -395,6 +398,7 @@ impl ResearchCollector for GatewayResearchCollector {
                     };
                 }
             };
+            let mut token_evidence = BTreeMap::<String, Vec<String>>::new();
             for matched in value
                 .get("matches")
                 .and_then(Value::as_array)
@@ -406,10 +410,18 @@ impl ResearchCollector for GatewayResearchCollector {
                 };
                 let line = matched.get("line").and_then(Value::as_u64).unwrap_or(0);
                 let text = matched.get("text").and_then(Value::as_str).unwrap_or("");
-                evidence
+                token_evidence
                     .entry(path.into())
                     .or_default()
                     .push(format!("{path}:{line}: {text}"));
+            }
+            for (path, lines) in token_evidence {
+                if let Some(index) = evidence_indexes.get(&path).copied() {
+                    evidence[index].1.extend(lines);
+                } else if evidence.len() < limit {
+                    evidence_indexes.insert(path.clone(), evidence.len());
+                    evidence.push((path, lines));
+                }
             }
             if evidence.len() >= limit {
                 break;
@@ -417,7 +429,6 @@ impl ResearchCollector for GatewayResearchCollector {
         }
         let sources = evidence
             .into_iter()
-            .take(limit)
             .map(|(path, lines)| ResearchSourceDraft {
                 kind,
                 title: path.clone(),

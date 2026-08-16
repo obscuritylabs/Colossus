@@ -125,6 +125,11 @@ impl SystemService for SystemServiceAdapter {
             detail: String::new(),
         })
         .chain(std::iter::once(Capability {
+            name: "research.create".into(),
+            enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE),
+            detail: String::new(),
+        }))
+        .chain(std::iter::once(Capability {
             name: "agent_runs.delegation".into(),
             enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE)
                 && caller.principal().allows_tool("agent.delegate"),

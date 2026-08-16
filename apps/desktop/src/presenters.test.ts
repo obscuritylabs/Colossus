@@ -30,6 +30,7 @@ const BASE_RUN: Run = {
   terminal: null,
   etag: "private-etag",
   selectedSkills: [],
+  archived: false,
 };
 
 function runFixture(overrides: Partial<Run>): Run {
@@ -165,15 +166,35 @@ describe("selectRecentWork", () => {
       { now },
     );
 
-    expect(groups.map(({ key }) => key)).toEqual([
-      "active",
-      "today",
-      "yesterday",
-      "earlier",
-    ]);
+    expect(groups.map(({ key }) => key)).toEqual(["active", "recent"]);
     expect(groups[0]?.items[0]?.title).toBe("Investigate fleet health");
     expect(JSON.stringify(groups)).not.toContain("session-do-not-display");
     expect(groups.flatMap(({ items }) => items)).toHaveLength(4);
+  });
+
+  it("places pinned sessions in a dedicated group ahead of attention", () => {
+    const groups = selectRecentWork(
+      [
+        runFixture({
+          runId: "waiting",
+          sessionId: "session-waiting",
+          title: "Needs a response",
+          status: "waiting",
+          updatedAt: today,
+        }),
+        runFixture({
+          runId: "pinned",
+          sessionId: "session-pinned",
+          title: "Keep this handy",
+          status: "completed",
+          updatedAt: yesterday,
+        }),
+      ],
+      { now, pinnedSessionIds: new Set(["session-pinned"]) },
+    );
+
+    expect(groups.map(({ key }) => key)).toEqual(["pinned", "attention"]);
+    expect(groups[0]?.items[0]?.title).toBe("Keep this handy");
   });
 
   it("searches only safe display fields and preserves the renderer bound", () => {

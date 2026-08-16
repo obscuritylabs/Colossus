@@ -110,6 +110,19 @@ global hash chain, indexes, projection outbox, per-read payload validation, and 
 or external rollback anchor. `platform` and `environment` enable authenticated payload
 encryption, Ed25519 checkpoints, and a separately protected anchor as one complete tier.
 
+Native sidecar bootstrap defaults to platform protection. Its explicit
+development-plaintext flag travels only over inherited bootstrap IPC and never comes
+from a renderer or public run request. Desktop debug builds select that flag and use a
+separate `development-plaintext/` runtime partition and instance identity; release
+builds retain platform protection. This separation prevents a debug build from
+reinterpreting or migrating an existing protected journal.
+
+Desktop Aside creation accepts an owned source-run identifier, never renderer-supplied
+transcript content or a renderer-guessed canonical message boundary. The runtime
+resolves the end of that source run from canonical session records, then copies only
+bounded visible user and assistant messages. Tool calls, tool results, system messages,
+and their payloads remain excluded from the child conversation.
+
 `storage.adapter: ephemeral` retains those keyless integrity checks only for the life of
 one process. It rejects protected keys because their anchor would outlive the journal,
 emits a security-posture warning, and cannot provide crash recovery or durable evidence
@@ -452,9 +465,35 @@ may already have committed.
 
 The renderer in a Tauri application is untrusted application input. It calls narrow
 capability-scoped Rust commands and receives ordered released updates. It never receives
-daemon credentials, private discovery paths, raw effect inputs or outputs, hidden
-reasoning, or a generic process, filesystem, network, or SDK invocation escape hatch.
+daemon credentials, private discovery paths, effect inputs, quarantined effect output,
+hidden reasoning, or a generic process, filesystem, network, or SDK invocation escape
+hatch. A successful tool lifecycle update may include a bounded preview of the tool
+output only after the same post-effect policy release that makes that output available to
+the model. The preview is capped at 64 KiB and marked when truncated; failed, cancelled,
+unstarted, and outcome-unknown tools do not release an output preview.
+Once permit-bound execution starts, its lifecycle update may also include at most 64 KiB
+of the validated structured tool input so an operator can see what actually ran.
+Requested, denied, and cancelled-before-start calls do not release that execution input.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
+
+Desktop Spaces are native-owned folder bindings, persisted as neutral
+`WorkspaceProfile` records. The renderer can add a Space only through the native folder
+picker, and duplicate canonical object identities are rejected or explicitly restored
+from archive. At most four Managed Local sidecars remain live. Starting a fifth evicts
+only the least-recently-used sidecar with no queued, running, waiting, cancelling, or
+terminal work; an all-busy set fails without changing selection. Each live Space owns
+its lifecycle generation, health, worker control client, approval mode, terminal
+context, and last-use state. Approval resets to Ask on every start or restart, and one
+Space's failure cannot replace another Space's state.
+
+All renderer-issued run, response, cancellation, permission, file, and terminal actions
+remain bound to the natively selected Space. Switching closes selected terminal sessions
+before activating the new context but does not stop background runs. Native status
+refreshes read only released run summaries from live sidecars and publish bounded
+`space-status-changed` and `space-attention` events. Global thread search uses a
+replaceable app-private redb index containing only bounded Space/run/session IDs, Space
+name, title, mode, status, timestamp, and attention state. It never stores prompts,
+messages, tool input/output, secrets, credentials, or canonical paths.
 
 The read-only Desktop file viewer is a separate, narrow local-user disclosure surface,
 not a generic filesystem bridge or an agent tool. It is available only while the exact
@@ -486,8 +525,8 @@ Linux executes the verified bytes from a sealed, non-writable `memfd`; other Uni
 platforms do not expose Managed Local until they provide an equivalent pre-instruction
 binding.
 
-Managed Local also binds the selected workspace by object identity rather than by
-pathname alone. On macOS, Desktop derives a versioned opaque digest from the device,
+Every Managed Local Space binds its selected workspace by object identity rather than
+by pathname alone. On macOS, Desktop derives a versioned opaque digest from the device,
 inode, and birth timestamp read from one opened no-follow directory descriptor. It
 persists that digest in owner-private settings, includes it in the managed state
 partition, and supplies it as an exact launch and restart ceiling. Preview-era
@@ -570,7 +609,7 @@ or convert every effect adapter to descriptor-relative operations before relying
 this boundary.
 
 Desktop's dedicated local Tauri terminal window can operate native-owned PTYs using
-opaque window-bound sessions and a fixed native-selected workspace context. The main
+opaque window-bound sessions and the selected Space's fixed native workspace context. The main
 renderer may request that window and one of the closed terminal kinds, but it cannot
 open or control a PTY. The terminal DTO accepts only `colossus_tui` or `shell`; it
 rejects renderer-selected processes, paths, working directories, environments, and
@@ -659,6 +698,13 @@ process stops after `effect.started` without a trustworthy terminal record, reco
 derives the interruption from the canonical indexed effect stream and records
 `effect.outcome_unknown`. A replaceable projection cursor cannot prove that no
 interrupted effects exist. No generic layer automatically retries an uncertain effect.
+
+The built-in policy gives the outer `research.run` orchestration a derived deadline that
+contains the configured sequential provider-call, evidence-collection, and orchestration
+budgets. Every nested provider, search, MCP, filesystem, and release effect retains its
+own narrower timeout and terminal evidence. This prevents the generic sandbox deadline
+from interrupting valid research while an inner external operation is active; external
+OPA policy remains responsible for supplying an equivalent bounded research deadline.
 
 Provider-visible tool turns preserve the same certainty boundary. The agent stages an
 assistant tool-call message with exactly one terminal tool-result message per emitted call

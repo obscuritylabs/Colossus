@@ -689,6 +689,16 @@ impl TerminalManager {
         }
     }
 
+    pub(crate) fn has_owner_sessions(&self, owner: &str) -> Result<bool, TerminalError> {
+        validate_owner(owner)?;
+        let sessions = self
+            .inner
+            .sessions
+            .lock()
+            .map_err(|_| TerminalError::Internal)?;
+        Ok(sessions.values().any(|session| session.owner == owner))
+    }
+
     pub(crate) fn close_kind(&self, owner: &str, kind: TerminalKind) {
         let removed = self.inner.sessions.lock().ok().map(|mut sessions| {
             let session_ids = sessions

@@ -92,6 +92,19 @@ impl Runtime {
         depth: ResearchDepth,
         source_kinds: Vec<ResearchSourceKind>,
     ) -> Result<ResearchRun, RuntimeError> {
+        self.run_research_as(session_id, question, depth, source_kinds, terminal_actor())
+            .await
+    }
+
+    /// Run bounded durable research for one authenticated application actor.
+    pub async fn run_research_as(
+        &self,
+        session_id: &str,
+        question: &str,
+        depth: ResearchDepth,
+        source_kinds: Vec<ResearchSourceKind>,
+        actor: Actor,
+    ) -> Result<ResearchRun, RuntimeError> {
         let operation = ResearchOperation::Run {
             session_id: session_id.into(),
             question: question.into(),
@@ -99,7 +112,7 @@ impl Runtime {
             source_kinds,
         };
         let mut request = effect_request(
-            terminal_actor(),
+            actor,
             operation.action(),
             format!("session:{session_id}"),
             serde_json::to_value(&operation)

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+.playwright-cli/
 playwright-report/
 test-results/
 *.log

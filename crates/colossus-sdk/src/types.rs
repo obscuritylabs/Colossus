@@ -35,6 +35,31 @@ pub enum RunMode {
     Execute,
     /// Block implementation and external mutation; local planning records may be created.
     Plan,
+    /// Run the dedicated durable evidence-and-citation service.
+    Research,
+}
+
+/// Requested breadth for a durable Research run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResearchDepth {
+    /// Fast, narrow evidence pass.
+    Quick,
+    /// Balanced default investigation.
+    #[default]
+    Standard,
+    /// Broadest configured investigation.
+    Deep,
+}
+
+/// Explicit evidence lane enabled for Research.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResearchSourceKind {
+    /// Selected Space repository evidence.
+    Repo,
+    /// Configured web-search evidence.
+    Web,
+    /// Configured MCP research evidence.
+    Mcp,
 }
 
 /// Released canonical Plan lifecycle.
@@ -124,6 +149,31 @@ pub enum InputContentPart {
     Artifact(String),
 }
 
+/// Projection used when a canonical session prefix starts a child conversation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RunBranchContextMode {
+    /// Preserve the exact provider transcript, including tool-call correlation.
+    #[default]
+    Exact,
+    /// Preserve only visible user and assistant messages, excluding tool traffic.
+    Conversation,
+    /// Resolve the canonical boundary through the source run, then preserve only
+    /// visible user and assistant messages.
+    SourceRunConversation,
+}
+
+/// Canonical session prefix used to start a separate child conversation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunBranch {
+    /// Caller-owned run whose session supplies the canonical context.
+    pub source_run_id: String,
+    /// Exact number of canonical messages to copy, or zero when the context mode
+    /// resolves the boundary through the source run.
+    pub source_message_count: u64,
+    /// Provider-transcript or visible-conversation projection for the copied prefix.
+    pub context_mode: RunBranchContextMode,
+}
+
 /// Request to create one durable run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateRunRequest {
@@ -139,10 +189,16 @@ pub struct CreateRunRequest {
     pub role: String,
     /// Requested execution mode.
     pub mode: RunMode,
+    /// Research breadth; present only for Research runs.
+    pub research_depth: Option<ResearchDepth>,
+    /// Explicit Research evidence lanes.
+    pub research_sources: Vec<ResearchSourceKind>,
     /// Declarative skill identities; these do not grant capabilities.
     pub selected_skills: Vec<String>,
     /// Exact Plan continuation anchored to a caller-owned source run.
     pub plan_action: Option<PlanRunAction>,
+    /// Optional point-in-time canonical context for a separate child session.
+    pub branch: Option<RunBranch>,
     /// Model-turn ceiling; zero selects the configured default.
     pub max_turns: u32,
     /// Required caller-scoped idempotency key.
@@ -252,6 +308,8 @@ pub struct Run {
     pub etag: String,
     /// Reserved skill identities; always empty for public v1alpha1 runs.
     pub selected_skills: Vec<String>,
+    /// Whether the containing thread is hidden from normal listings.
+    pub archived: bool,
 }
 
 /// Response from durable run creation.
@@ -302,6 +360,8 @@ pub struct ListRunsRequest {
     pub statuses: Vec<RunStatus>,
     /// Optional bounded page request.
     pub page: Option<PageRequest>,
+    /// Include runs whose containing thread is archived.
+    pub include_archived: bool,
 }
 
 /// Stable page of run summaries.
@@ -336,6 +396,33 @@ pub struct CancelRunRequest {
 pub struct CancelRunResponse {
     /// Current durable run summary.
     pub run: Run,
+}
+
+/// Idempotent request to archive one terminal thread.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveThreadRequest {
+    /// Any exact run identifier belonging to the thread.
+    pub run_id: String,
+    /// Required caller-scoped idempotency key.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Idempotent request to restore one archived thread.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RestoreThreadRequest {
+    /// Any exact run identifier belonging to the thread.
+    pub run_id: String,
+    /// Required caller-scoped idempotency key.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Current archive lifecycle for one durable thread.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThreadLifecycle {
+    /// Durable session identity shared by the thread's runs.
+    pub session_id: String,
+    /// Whether the thread is hidden from normal listings.
+    pub archived: bool,
 }
 
 /// Caller-visible interaction class.
@@ -495,6 +582,8 @@ pub enum ToolActivityState {
     Started,
     /// Known successful terminal state.
     Completed,
+    /// Settled without starting execution.
+    Cancelled,
     /// Known failed terminal state.
     Failed,
     /// Effect may have occurred.
@@ -512,6 +601,10 @@ pub struct ToolActivity {
     pub state: ToolActivityState,
     /// Bounded summary without arguments or quarantined output.
     pub summary: String,
+    /// Optional bounded validated input released once execution starts.
+    pub input: Option<String>,
+    /// Optional bounded preview of successful post-effect-released output.
+    pub preview: Option<String>,
 }
 
 /// Normalized provider accounting.

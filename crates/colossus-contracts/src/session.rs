@@ -15,6 +15,20 @@ pub enum ModelMessageRole {
     Tool,
 }
 
+/// Projection used when a canonical session prefix starts a child conversation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunBranchContextMode {
+    /// Preserve the exact provider transcript, including tool-call correlation.
+    #[default]
+    Exact,
+    /// Preserve only visible user and assistant messages, excluding tool traffic.
+    Conversation,
+    /// Resolve the canonical boundary through the source run, then preserve only
+    /// visible user and assistant messages.
+    SourceRunConversation,
+}
+
 /// One provider-neutral model message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

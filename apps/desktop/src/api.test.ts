@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   addExternalTarget,
   applyManagedModelConfiguration,
+  archiveThread,
   cancelRun,
   checkDesktopUpdate,
   closeTerminal,
@@ -35,6 +36,7 @@ import {
   listRuns,
   openTerminal,
   resizeTerminal,
+  restoreThread,
   removeExternalTarget,
   readWorkspaceFile,
   respondInteraction,
@@ -55,6 +57,7 @@ import type {
   GetRunRequest,
   ListRunsRequest,
   RespondInteractionRequest,
+  ThreadLifecycleRequest,
   WatchRunRequest,
 } from "./types";
 
@@ -80,6 +83,14 @@ describe("desktop API target routing", () => {
       runId: "run-1",
       idempotencyKey: "cancel-key",
     };
+    const archive: ThreadLifecycleRequest = {
+      runId: "run-1",
+      idempotencyKey: "archive-key",
+    };
+    const restore: ThreadLifecycleRequest = {
+      runId: "run-1",
+      idempotencyKey: "restore-key",
+    };
     const respond: RespondInteractionRequest = {
       runId: "run-1",
       interactionId: "interaction-1",
@@ -96,6 +107,8 @@ describe("desktop API target routing", () => {
     await getRun(targetId, get);
     await listRuns(targetId, list);
     await cancelRun(targetId, cancel);
+    await archiveThread(targetId, archive);
+    await restoreThread(targetId, restore);
     await respondInteraction(targetId, respond);
 
     expect(tauri.invoke.mock.calls).toEqual([
@@ -103,6 +116,8 @@ describe("desktop API target routing", () => {
       ["get_run", { targetId, request: get }],
       ["list_runs", { targetId, request: list }],
       ["cancel_run", { targetId, request: cancel }],
+      ["archive_thread", { targetId, request: archive }],
+      ["restore_thread", { targetId, request: restore }],
       ["respond_interaction", { targetId, request: respond }],
     ]);
   });

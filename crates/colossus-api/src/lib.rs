@@ -27,15 +27,16 @@ pub use identity::{
 };
 pub use repository::{EventSourcedRunRepository, RunRepository};
 pub use runs::{
-    AgentRunApi, ApprovalRisk, CancelRunRequest, ContentPart, CreateRunRequest, CreateRunResponse,
-    GetRunRequest, Idempotent, Interaction, InteractionKind, InteractionResponse,
-    InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun, PLAN_CONTINUATION_CAPABILITY,
-    PlanExecutionStrategy, PlanRunAction, PlanStatus, ReleasedArtifactPurpose,
-    ReleasedArtifactReference, ReleasedArtifactState, ReleasedContentPart, ReleasedMessageRole,
-    ReleasedSessionMessage, RespondInteractionRequest, Run, RunCancellation, RunExecutionRequest,
-    RunExecutor, RunFailure, RunMode, RunNotice, RunResult, RunStatus, RunUpdate, RunUpdateKind,
-    RunUpdateStream, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest,
-    validate_public_approval_display,
+    AgentRunApi, ApprovalRisk, ArchiveThreadRequest, CancelRunRequest, ContentPart,
+    CreateRunRequest, CreateRunResponse, GetRunRequest, Idempotent, Interaction, InteractionKind,
+    InteractionResponse, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun,
+    PLAN_CONTINUATION_CAPABILITY, PlanExecutionStrategy, PlanRunAction, PlanStatus,
+    ReleasedArtifactPurpose, ReleasedArtifactReference, ReleasedArtifactState, ReleasedContentPart,
+    ReleasedMessageRole, ReleasedSessionMessage, ResearchDepth, ResearchSourceKind,
+    RespondInteractionRequest, RestoreThreadRequest, Run, RunBranch, RunBranchContextMode,
+    RunCancellation, RunExecutionRequest, RunExecutor, RunFailure, RunMode, RunNotice, RunResult,
+    RunStatus, RunUpdate, RunUpdateKind, RunUpdateStream, ThreadLifecycle, TokenUsage,
+    ToolActivity, ToolActivityState, WatchRunRequest, validate_public_approval_display,
 };
 
 #[cfg(test)]

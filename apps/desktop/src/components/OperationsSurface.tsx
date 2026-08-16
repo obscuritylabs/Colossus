@@ -9,6 +9,7 @@ import {
   IconDownload,
   IconFileText,
   IconFolder,
+  IconMenu2,
   IconPlus,
   IconPlugConnected,
   IconRefresh,
@@ -18,6 +19,7 @@ import {
   IconTopologyStar3,
   IconTrash,
 } from "@tabler/icons-react";
+import { useEffect, useRef } from "react";
 
 import type { OperationalActivityItem, PresentedArtifact } from "../presenters";
 import { agentRoleLabel, presentRunStatus } from "../presenters";
@@ -42,6 +44,8 @@ interface OperationsSurfaceProps {
   artifacts: readonly PresentedArtifact[];
   activity: readonly OperationalActivityItem[];
   demoParticipants: readonly AgentParticipant[] | null;
+  workNavigationOpen: boolean;
+  onOpenWorkNavigation: () => void;
   onConnect: () => void;
   onOpenRun: (run: Run) => void;
   onSelectTarget: (targetId: string) => void;
@@ -95,9 +99,9 @@ function FleetView({
   return (
     <>
       <SurfaceHeader
-        eyebrow="Agents & workflows / Overview"
-        title="Operational capabilities"
-        description="Inspect only the orchestration features advertised by the connected runtime."
+        eyebrow="Capabilities / This Space"
+        title="Derived capability catalog"
+        description="A read-only view derived from the selected sidecar, access profile, tools, skills, workflows, and agents."
       />
       <div className="overview-scroll">
         <section className="overview-section">
@@ -108,6 +112,34 @@ function FleetView({
             </div>
           </div>
           <div className="target-grid">
+            <article className="capability-summary-card">
+              <span className="target-node-icon" aria-hidden="true">
+                <IconShieldCheck size={20} stroke={1.6} />
+              </span>
+              <span>
+                <strong>Tool access</strong>
+                <small>
+                  {desktop.accessProfile.replaceAll("_", " ")} profile ·{" "}
+                  {desktop.executionBoundary.replaceAll("_", " ")} boundary
+                </small>
+              </span>
+              <span className="status-chip tone-success">Derived</span>
+            </article>
+            {desktop.capabilities.files ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconFolder size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Workspace tools</strong>
+                  <small>
+                    The selected Space advertises bounded file browsing and
+                    workspace-aware tool execution.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
             {desktop.capabilities.delegation ? (
               <article className="capability-summary-card">
                 <span className="target-node-icon" aria-hidden="true">
@@ -379,6 +411,122 @@ function ActivityView({ activity }: Pick<OperationsSurfaceProps, "activity">) {
   );
 }
 
+function ConnectionsView({
+  desktop,
+  connecting,
+  onSelectTarget,
+  onAddExternalTarget,
+  onRemoveExternalTarget,
+}: Pick<
+  OperationsSurfaceProps,
+  | "desktop"
+  | "connecting"
+  | "onSelectTarget"
+  | "onAddExternalTarget"
+  | "onRemoveExternalTarget"
+>) {
+  const externalTargets = desktop.targets.filter(
+    (target) => target.kind === "external_daemon",
+  );
+  return (
+    <>
+      <SurfaceHeader
+        eyebrow="Connections / Runtime routing"
+        title="Connections"
+        description="Spaces own local sidecars. External daemons remain shared connection targets."
+      />
+      <div className="overview-scroll">
+        <section className="overview-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Folder-backed runtimes</p>
+              <h3>
+                {desktop.spaces.filter((space) => !space.archived).length}{" "}
+                Spaces
+              </h3>
+            </div>
+            <span className="status-chip tone-neutral">Up to 4 live</span>
+          </div>
+          <div className="target-grid">
+            {desktop.spaces
+              .filter((space) => !space.archived)
+              .map((space) => (
+                <button
+                  type="button"
+                  key={space.spaceId}
+                  className={space.selected ? "is-selected" : undefined}
+                  aria-pressed={space.selected}
+                  disabled={connecting || space.selected}
+                  onClick={() => onSelectTarget(space.targetId)}
+                >
+                  <span className="target-node-icon" aria-hidden="true">
+                    <IconFolder size={20} stroke={1.6} />
+                  </span>
+                  <span>
+                    <strong>{space.displayName}</strong>
+                    <small>{space.message}</small>
+                  </span>
+                  <span className={`target-state target-state-${space.state}`}>
+                    {space.state.replaceAll("_", " ")}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </section>
+        <section className="overview-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Advanced connections</p>
+              <h3>External daemons</h3>
+            </div>
+            <button
+              className="button secondary compact"
+              type="button"
+              disabled={connecting}
+              onClick={onAddExternalTarget}
+            >
+              <IconPlus size={16} stroke={1.8} aria-hidden="true" />
+              Add daemon
+            </button>
+          </div>
+          <div className="external-target-settings-list">
+            {externalTargets.map((target) => (
+              <article key={target.targetId}>
+                <div>
+                  <strong>{target.label}</strong>
+                  <span>{target.state.replaceAll("_", " ")}</span>
+                </div>
+                <div className="external-target-row-actions">
+                  <button
+                    className="button secondary compact"
+                    type="button"
+                    disabled={connecting || target.selected}
+                    onClick={() => onSelectTarget(target.targetId)}
+                  >
+                    {target.selected ? "Selected" : "Use"}
+                  </button>
+                  <button
+                    className="icon-button danger-icon-button"
+                    type="button"
+                    disabled={connecting}
+                    aria-label={`Remove ${target.label}`}
+                    onClick={() => onRemoveExternalTarget(target.targetId)}
+                  >
+                    <IconTrash size={17} stroke={1.7} aria-hidden="true" />
+                  </button>
+                </div>
+              </article>
+            ))}
+            {externalTargets.length === 0 ? (
+              <p className="inline-empty">No external daemons are saved.</p>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
 function effectiveManagedConfiguration(desktop: DesktopStatus): string {
   const configuration = desktop.managedModelConfiguration;
   return JSON.stringify(
@@ -561,7 +709,7 @@ function SettingsView({
           </div>
           <div>
             <p className="eyebrow">Managed Local</p>
-            <h3>{desktop.workspace?.displayName ?? "Choose a workspace"}</h3>
+            <h3>{desktop.workspace?.displayName ?? "Add a Space"}</h3>
             <p>
               {desktop.workspace?.displayPath ??
                 "Workspace authority has not been granted to this app yet."}
@@ -590,7 +738,7 @@ function SettingsView({
               disabled={connecting}
               onClick={onChooseWorkspace}
             >
-              Choose folder
+              Add Space
             </button>
             <button
               className="button secondary"
@@ -863,8 +1011,30 @@ function SettingsView({
 }
 
 export function OperationsSurface(props: OperationsSurfaceProps) {
+  const navigationTriggerRef = useRef<HTMLButtonElement>(null);
+  const previousNavigationOpen = useRef(props.workNavigationOpen);
+
+  useEffect(() => {
+    if (previousNavigationOpen.current && !props.workNavigationOpen) {
+      requestAnimationFrame(() => navigationTriggerRef.current?.focus());
+    }
+    previousNavigationOpen.current = props.workNavigationOpen;
+  }, [props.workNavigationOpen]);
+
   return (
     <main className="operations-surface" id="primary-workspace" tabIndex={-1}>
+      <button
+        ref={navigationTriggerRef}
+        className="button secondary compact work-navigation-button operations-navigation-button"
+        type="button"
+        aria-label="Open Space navigation"
+        aria-controls="work-navigation"
+        aria-expanded={props.workNavigationOpen}
+        onClick={props.onOpenWorkNavigation}
+      >
+        <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
+        <span className="compact-action-copy">Spaces</span>
+      </button>
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
       {props.surface === "library" ? (
         <LibraryView artifacts={props.artifacts} />
@@ -872,6 +1042,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "activity" ? (
         <ActivityView activity={props.activity} />
       ) : null}
+      {props.surface === "connections" ? <ConnectionsView {...props} /> : null}
       {props.surface === "settings" ? (
         <SettingsView
           connection={props.connection}

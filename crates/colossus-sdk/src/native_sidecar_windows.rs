@@ -1,10 +1,11 @@
 use crate::{
-    AgentRunClient, ApiResult, ArtifactClient, Backend, BackendKind, CancelRunRequest,
-    CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider, GetRunRequest,
-    GetRunResponse, GrpcBackend, GrpcConnectOptions, ListRunsRequest, ListRunsResponse,
-    NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
-    RespondInteractionResponse, RunUpdateStream, SdkError, SdkResult, Secret, ServerCapabilities,
-    SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, TlsFingerprint, WatchRunRequest,
+    AgentRunClient, ApiResult, ArchiveThreadRequest, ArtifactClient, Backend, BackendKind,
+    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
+    GetRunRequest, GetRunResponse, GrpcBackend, GrpcConnectOptions, ListRunsRequest,
+    ListRunsResponse, NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
+    RespondInteractionResponse, RestoreThreadRequest, RunUpdateStream, SdkError, SdkResult, Secret,
+    ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, ThreadLifecycle,
+    TlsFingerprint, WatchRunRequest,
 };
 use async_trait::async_trait;
 use colossus_sidecar_protocol::{
@@ -391,6 +392,14 @@ impl AgentRunClient for WindowsAgentRuns {
 
     async fn cancel_run(&self, request: CancelRunRequest) -> ApiResult<CancelRunResponse> {
         self.primary.agent_runs().cancel_run(request).await
+    }
+
+    async fn archive_thread(&self, request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
+        self.primary.agent_runs().archive_thread(request).await
+    }
+
+    async fn restore_thread(&self, request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
+        self.primary.agent_runs().restore_thread(request).await
     }
 
     async fn respond_interaction(

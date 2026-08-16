@@ -2,11 +2,13 @@ use colossus_sdk::{
     ApiErrorCode, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest, RunStatus,
     ServerCapabilities,
 };
+use futures_util::future::join_all;
+use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
-use tauri::{AppHandle, Manager as _, State};
+use tauri::{AppHandle, Emitter as _, Manager as _, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use uuid::Uuid;
 
@@ -16,24 +18,53 @@ use crate::{
         ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
         DesktopApprovalModeDto, DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
         ManagedModelConfigurationDto, ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto,
-        RuntimeTargetKindDto, WorkspaceSummaryDto,
+        RuntimeTargetKindDto, SpaceAttentionDto, SpaceSearchPageDto, SpaceStatusEventDto,
+        SpaceSummaryDto, WorkspaceSummaryDto,
     },
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ExternalTargetSetting,
         LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
         ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        SettingsStore, WorkspaceSetting, delete_provider_secret, load_provider_secret,
-        provider_base_url, revalidate_workspace, store_provider_secret, validate_workspace,
+        SettingsStore, delete_provider_secret, load_provider_secret, provider_base_url,
+        revalidate_workspace, store_provider_secret, validate_workspace,
     },
-    dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto},
-    managed_runtime, provider_enrollment,
-    state::{
-        AppState, ExternalHealth, MANAGED_TARGET_ID, ManagedHealth, TargetConsentContext,
-        TargetHandle,
-    },
+    dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
+    managed_runtime, provider_enrollment, space_search,
+    state::{AppState, ExternalHealth, ManagedHealth, TargetConsentContext, TargetHandle},
 };
 
+#[cfg(test)]
+use crate::desktop_settings::WorkspaceSetting;
 const EXTERNAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const SPACE_SUMMARY_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn emit_space_events(app: &AppHandle, status: &DesktopStatusDto) {
+    for summary in &status.spaces {
+        let _ = app.emit(
+            "space-status-changed",
+            SpaceStatusEventDto {
+                space_id: summary.space_id.clone(),
+                target_id: summary.target_id.clone(),
+                display_name: summary.display_name.clone(),
+                archived: summary.archived,
+                state: summary.state.clone(),
+                selected: summary.selected,
+                attention_count: summary.attention_count,
+                last_activity_at: summary.last_activity_at.clone(),
+            },
+        );
+        if summary.attention_count > 0 {
+            let _ = app.emit(
+                "space-attention",
+                SpaceAttentionDto {
+                    space_id: summary.space_id.clone(),
+                    target_id: summary.target_id.clone(),
+                    attention_count: summary.attention_count,
+                },
+            );
+        }
+    }
+}
 
 #[tauri::command]
 pub(crate) fn desktop_release_channel() -> DesktopReleaseChannelDto {
@@ -63,7 +94,11 @@ pub(crate) async fn initialize_desktop(
         .as_deref()
         .filter(|target| target_exists(&settings, target))
         .map(str::to_owned)
-        .or_else(|| has_managed_configuration(&settings).then(|| MANAGED_TARGET_ID.to_owned()))
+        .or_else(|| {
+            has_managed_configuration(&settings)
+                .then(|| settings.selected_space_id.clone())
+                .flatten()
+        })
         .or_else(|| {
             (!had_settings)
                 .then(|| settings.external_targets.first())
@@ -84,7 +119,10 @@ pub(crate) async fn initialize_desktop(
 
     if should_start_managed_on_initialize(
         has_managed_configuration(&settings),
-        state.connected(MANAGED_TARGET_ID).await,
+        match settings.selected_space_id.as_deref() {
+            Some(space_id) => state.connected(space_id).await,
+            None => false,
+        },
     ) {
         spawn_managed_start_on_initialize(app.clone());
     }
@@ -96,6 +134,7 @@ pub(crate) async fn initialize_desktop(
         let _ = connect_external(&state, target).await;
     }
     let status = desktop_status_from(&state, &settings).await?;
+    emit_space_events(&app, &status);
     spawn_external_health_probes(&app, settings.external_targets).await;
     Ok(status)
 }
@@ -106,7 +145,9 @@ pub(crate) async fn desktop_status(
     state: State<'_, AppState>,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let settings = settings_store()?.load()?;
+    refresh_live_space_search_index(&state, &settings).await;
     let status = desktop_status_from(&state, &settings).await?;
+    emit_space_events(&app, &status);
     spawn_external_health_probes(&app, settings.external_targets).await;
     Ok(status)
 }
@@ -132,8 +173,9 @@ pub(crate) async fn connect_colossus(
         })
         .ok_or_else(CommandErrorDto::not_configured)?;
     validate_target(&settings, &target_id)?;
-    if target_id == MANAGED_TARGET_ID {
-        if !state.connected(MANAGED_TARGET_ID).await {
+    if settings.spaces.iter().any(|space| space.id == target_id) {
+        settings.activate_space(&target_id)?;
+        if !state.connected(&target_id).await {
             managed_runtime::start(&state, &store, &settings, false).await?;
         }
     } else {
@@ -149,6 +191,9 @@ pub(crate) async fn connect_colossus(
     settings.selected_target_id = Some(target_id.clone());
     store.save(&settings)?;
     state.select_target(Some(target_id.clone())).await;
+    if settings.selected_space_id.as_deref() == Some(target_id.as_str()) {
+        state.activate_managed_terminal_for(&target_id).await;
+    }
     Ok(ConnectionStatusDto::connected(target_id))
 }
 
@@ -310,11 +355,7 @@ pub(crate) async fn remove_external_target(
         .external_targets
         .retain(|target| target.target_id != target_id);
     if settings.selected_target_id.as_deref() == Some(target_id.as_str()) {
-        settings.selected_target_id = if settings.managed_configured() {
-            Some(MANAGED_TARGET_ID.to_owned())
-        } else {
-            None
-        };
+        settings.selected_target_id = settings.selected_space_id.clone();
     }
     store.save(&settings)?;
     state
@@ -332,6 +373,25 @@ pub(crate) async fn choose_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<WorkspaceSummaryDto>, CommandErrorDto> {
+    create_space_from_picker(&app, &state)
+        .await
+        .map(|result| result.map(|(workspace, _)| workspace))
+}
+
+#[tauri::command]
+pub(crate) async fn create_space(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<DesktopStatusDto>, CommandErrorDto> {
+    create_space_from_picker(&app, &state)
+        .await
+        .map(|result| result.map(|(_, status)| status))
+}
+
+async fn create_space_from_picker(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<Option<(WorkspaceSummaryDto, DesktopStatusDto)>, CommandErrorDto> {
     let selected = app.dialog().file().blocking_pick_folder();
     let Some(path) = selected else {
         return Ok(None);
@@ -343,49 +403,337 @@ pub(crate) async fn choose_workspace(
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
-    let previous_settings =
-        persist_workspace_change(&mut settings, workspace.clone(), |settings| {
-            store.save(settings)
-        })?;
+    let previous_settings = settings.clone();
+    if let Some(existing) = workspace
+        .identity
+        .as_ref()
+        .and_then(|identity| settings.space_for_workspace_identity(identity))
+        .cloned()
+    {
+        if !existing.archived {
+            return Err(CommandErrorDto::invalid(
+                "workspace",
+                "That folder already belongs to an active Space.",
+            ));
+        }
+        if !confirm_restore_space(app, &existing.display_name).await? {
+            return Ok(None);
+        }
+        if let Some(space) = settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == existing.id)
+        {
+            space.archived = false;
+        }
+        settings.activate_space(&existing.id)?;
+    } else {
+        settings.add_space(workspace.clone())?;
+    }
+    let space_id = settings
+        .selected_space_id
+        .clone()
+        .ok_or_else(CommandErrorDto::not_configured)?;
+    store.save(&settings)?;
+    state.select_target(None).await;
     if settings.managed_configured() {
-        let selected = settings
-            .selected_target_id
-            .clone()
-            .expect("workspace persistence selects Managed Local when a provider exists");
-        state.select_target(Some(selected)).await;
-        if let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await {
-            // Restore the durable workspace before restoring renderer-visible target state.
-            // If persistence itself fails, keep the new selection visible rather than
-            // claiming that the prior runtime is active.
-            rollback_workspace_change(&mut settings, previous_settings, |settings| {
-                store.save(settings)
-            })?;
-            restore_managed_after_rollback(&state, &store, &settings).await?;
-            return Err(start_error);
+        if let Err(error) = managed_runtime::start(state, &store, &settings, false).await {
+            store.save(&previous_settings)?;
+            state
+                .select_target(previous_settings.selected_target_id.clone())
+                .await;
+            if let Some(previous_space_id) = previous_settings.selected_space_id.as_deref() {
+                state.activate_managed_terminal_for(previous_space_id).await;
+            }
+            return Err(error);
         }
     } else {
         state.clear_terminal_workspace().await;
         state
-            .set_managed_health(ManagedHealth {
-                state: ManagedRuntimeStateDto::NeedsProvider,
-                message: "Configure a provider to start Managed Local.".into(),
-                failure_code: None,
-            })
+            .set_managed_health_for(
+                &space_id,
+                ManagedHealth {
+                    state: ManagedRuntimeStateDto::NeedsProvider,
+                    message: "Configure a provider to start this Space.".into(),
+                    failure_code: None,
+                },
+            )
             .await;
     }
-    Ok(Some(WorkspaceSummaryDto::from(&workspace)))
+    state.select_target(Some(space_id.clone())).await;
+    state.activate_managed_terminal_for(&space_id).await;
+    let status = desktop_status_from(state, &settings).await?;
+    Ok(Some((WorkspaceSummaryDto::from(&workspace), status)))
 }
 
+async fn confirm_restore_space(app: &AppHandle, name: &str) -> Result<bool, CommandErrorDto> {
+    let name = name.to_owned();
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(format!("{name} is archived. Restore and open this Space?"))
+            .title("Restore Space")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Restore Space".into(),
+                "Cancel".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "space_confirmation",
+            "The native Space confirmation could not be opened.",
+            true,
+        )
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn list_spaces(
+    state: State<'_, AppState>,
+) -> Result<Vec<SpaceSummaryDto>, CommandErrorDto> {
+    let settings = settings_store()?.load()?;
+    Ok(space_summaries(&state, &settings).await)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SearchSpaceThreadsInput {
+    query: String,
+    #[serde(default)]
+    space_id: Option<String>,
+    #[serde(default)]
+    include_archived: bool,
+    #[serde(default)]
+    cursor: String,
+    #[serde(default = "default_search_page_size")]
+    page_size: usize,
+}
+
+const fn default_search_page_size() -> usize {
+    50
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn search_space_threads(
+    state: State<'_, AppState>,
+    request: SearchSpaceThreadsInput,
+) -> Result<SpaceSearchPageDto, CommandErrorDto> {
+    if request.query.len() > 128 || request.query.chars().any(char::is_control) {
+        return Err(CommandErrorDto::invalid(
+            "query",
+            "Search queries must be at most 128 visible characters.",
+        ));
+    }
+    if request.page_size == 0 || request.page_size > 100 {
+        return Err(CommandErrorDto::invalid(
+            "pageSize",
+            "Search pages must contain between 1 and 100 results.",
+        ));
+    }
+    let settings = settings_store()?.load()?;
+    if request
+        .space_id
+        .as_ref()
+        .is_some_and(|space_id| settings.space(space_id).is_none())
+    {
+        return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+    }
+    refresh_live_space_search_index(&state, &settings).await;
+    let offset = if request.cursor.is_empty() {
+        0
+    } else {
+        request
+            .cursor
+            .parse::<usize>()
+            .map_err(|_| CommandErrorDto::invalid("cursor", "The search cursor is invalid."))?
+    };
+    space_search::search(
+        &settings,
+        &request.query,
+        request.space_id.as_deref(),
+        request.include_archived,
+        offset,
+        request.page_size,
+    )
+}
+
+async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSettings) {
+    let mut requests = Vec::new();
+    for space_id in state.live_managed_target_ids().await {
+        let Some(target) = state.target(&space_id).await else {
+            continue;
+        };
+        requests.push(async move {
+            let response = tokio::time::timeout(
+                SPACE_SUMMARY_REFRESH_TIMEOUT,
+                target.client.list_runs(ListRunsRequest {
+                    session_id: None,
+                    statuses: Vec::new(),
+                    page: Some(PageRequest {
+                        page_size: 100,
+                        page_token: String::new(),
+                    }),
+                    include_archived: false,
+                }),
+            )
+            .await
+            .ok()?
+            .ok()?;
+            Some((space_id, response))
+        });
+    }
+    for result in join_all(requests).await.into_iter().flatten() {
+        let (space_id, response) = result;
+        let runs = response
+            .runs
+            .into_iter()
+            .map(RunDto::from)
+            .collect::<Vec<_>>();
+        let _ = space_search::index_runs(settings, &space_id, &runs);
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn select_space(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let previous_settings = settings.clone();
+    settings.activate_space(&space_id)?;
+    store.save(&settings)?;
+    state.select_target(None).await;
+    if settings.managed_configured() && !state.connected(&space_id).await {
+        if let Err(error) = managed_runtime::start(&state, &store, &settings, false).await {
+            store.save(&previous_settings)?;
+            state
+                .select_target(previous_settings.selected_target_id.clone())
+                .await;
+            if let Some(previous_space_id) = previous_settings.selected_space_id.as_deref() {
+                state.activate_managed_terminal_for(previous_space_id).await;
+            }
+            return Err(error);
+        }
+    }
+    state.select_target(Some(space_id.clone())).await;
+    state.touch_managed_space(&space_id).await;
+    state.activate_managed_terminal_for(&space_id).await;
+    desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn rename_space(
+    state: State<'_, AppState>,
+    space_id: String,
+    display_name: String,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let name = display_name.trim();
+    if name.is_empty() || name.len() > 80 || name.chars().any(|character| character.is_control()) {
+        return Err(CommandErrorDto::invalid(
+            "displayName",
+            "Space names must be 1–80 visible characters.",
+        ));
+    }
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let space = settings
+        .spaces
+        .iter_mut()
+        .find(|space| space.id == space_id)
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+    space.display_name = name.to_owned();
+    store.save(&settings)?;
+    desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn archive_space(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    if settings.space(&space_id).is_none() {
+        return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+    }
+    reject_active_managed_runs_for(&state, &space_id).await?;
+    if settings.selected_space_id.as_deref() == Some(&space_id) && state.terminal_session_active() {
+        return Err(CommandErrorDto::busy(
+            "Close this Space's terminal sessions before archiving it.",
+        ));
+    }
+    if settings.selected_space_id.as_deref() == Some(&space_id) {
+        state.select_target(None).await;
+    }
+    if let Some(target) = state.remove_target(&space_id).await {
+        target
+            .client
+            .close()
+            .await
+            .map_err(|_| CommandErrorDto::busy("The Space runtime is still stopping."))?;
+    }
+    state.remove_managed_space_runtime(&space_id).await;
+    if let Some(space) = settings
+        .spaces
+        .iter_mut()
+        .find(|space| space.id == space_id)
+    {
+        space.archived = true;
+    }
+    if settings.selected_space_id.as_deref() == Some(&space_id) {
+        let next = settings
+            .spaces
+            .iter()
+            .filter(|space| !space.archived)
+            .max_by_key(|space| space.last_opened_at_ms)
+            .map(|space| space.id.clone());
+        settings.selected_space_id = next.clone();
+        settings.selected_target_id = next;
+        settings.project_selected_space();
+    }
+    store.save(&settings)?;
+    if let Some(selected) = settings.selected_space_id.clone() {
+        if settings.managed_configured() && !state.connected(&selected).await {
+            managed_runtime::start(&state, &store, &settings, false).await?;
+        }
+        state.select_target(Some(selected.clone())).await;
+        state.activate_managed_terminal_for(&selected).await;
+    }
+    desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn restore_space(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let space = settings
+        .spaces
+        .iter_mut()
+        .find(|space| space.id == space_id)
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+    space.archived = false;
+    store.save(&settings)?;
+    desktop_status_from(&state, &settings).await
+}
+
+#[cfg(test)]
 fn persist_workspace_change(
     settings: &mut DesktopSettings,
     workspace: WorkspaceSetting,
     save_settings: impl FnOnce(&DesktopSettings) -> Result<(), CommandErrorDto>,
 ) -> Result<DesktopSettings, CommandErrorDto> {
     let previous = settings.clone();
-    settings.workspace = Some(workspace);
-    if settings.managed_configured() && settings.selected_target_id.is_none() {
-        settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
-    }
+    settings.add_space(workspace)?;
     if let Err(error) = save_settings(settings) {
         *settings = previous;
         return Err(error);
@@ -466,7 +814,7 @@ pub(crate) async fn configure_managed_runtime(
                 store.save(settings)
             })?;
         state
-            .select_target(Some(MANAGED_TARGET_ID.to_owned()))
+            .select_target(settings.selected_space_id.clone())
             .await;
         if let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await {
             rollback_workspace_change(&mut settings, previous_settings, |settings| {
@@ -487,7 +835,7 @@ pub(crate) async fn configure_managed_runtime(
         |settings| store.save(settings),
     )?;
     state
-        .select_target(Some(MANAGED_TARGET_ID.to_owned()))
+        .select_target(settings.selected_space_id.clone())
         .await;
     if let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await {
         let rollback = rollback_provider_rotation(
@@ -569,7 +917,9 @@ async fn configure_managed_codex_runtime(
     settings.model_roles = BTreeMap::from([("primary".into(), "primary".into())]);
     settings.access_profile = request.access_profile;
     settings.execution_boundary = request.execution_boundary;
-    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    settings
+        .selected_target_id
+        .clone_from(&settings.selected_space_id);
     for credential_id in &retired_ids {
         if !settings
             .pending_provider_cleanup_ids
@@ -582,7 +932,7 @@ async fn configure_managed_codex_runtime(
     }
     store.save(settings)?;
     state
-        .select_target(Some(MANAGED_TARGET_ID.to_owned()))
+        .select_target(settings.selected_space_id.clone())
         .await;
     if let Err(start_error) = managed_runtime::start(state, store, settings, true).await {
         store.save(&previous_settings)?;
@@ -630,7 +980,9 @@ pub(crate) async fn apply_managed_model_configuration(
     settings.model_roles = request.roles.clone();
     settings.access_profile = request.access_profile;
     settings.execution_boundary = request.execution_boundary;
-    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    settings
+        .selected_target_id
+        .clone_from(&settings.selected_space_id);
     settings
         .pending_provider_cleanup_ids
         .retain(|credential_id| !credentials.fresh_ids.contains(credential_id));
@@ -841,7 +1193,7 @@ async fn restart_after_model_configuration(
     credentials: &ProviderCredentialPlan,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     state
-        .select_target(Some(MANAGED_TARGET_ID.to_owned()))
+        .select_target(settings.selected_space_id.clone())
         .await;
     if let Err(start_error) = managed_runtime::start(state, store, settings, true).await {
         rollback_staged_provider_credentials(
@@ -879,9 +1231,22 @@ fn rollback_staged_provider_credentials(
 }
 
 async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandErrorDto> {
-    let Some(target) = state.target(MANAGED_TARGET_ID).await else {
+    let Some(target_id) = state.selected_target_id().await else {
         return Ok(());
     };
+    reject_active_managed_runs_for(state, &target_id).await
+}
+
+async fn reject_active_managed_runs_for(
+    state: &AppState,
+    target_id: &str,
+) -> Result<(), CommandErrorDto> {
+    let Some(target) = state.target(target_id).await else {
+        return Ok(());
+    };
+    if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
+        return Ok(());
+    }
     let runs = target
         .client
         .list_runs(ListRunsRequest {
@@ -896,6 +1261,7 @@ async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandError
                 page_size: 1,
                 page_token: String::new(),
             }),
+            include_archived: false,
         })
         .await
         .map_err(CommandErrorDto::from_api)?;
@@ -1100,7 +1466,9 @@ fn persist_reused_provider_configuration(
         .model = std::mem::take(&mut request.model);
     settings.access_profile = request.access_profile;
     settings.execution_boundary = request.execution_boundary;
-    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    settings
+        .selected_target_id
+        .clone_from(&settings.selected_space_id);
     if let Err(error) = save_settings(settings) {
         *settings = previous;
         return Err(error);
@@ -1167,7 +1535,9 @@ fn persist_provider_rotation(
     settings.model_roles = std::collections::BTreeMap::from([("primary".into(), "primary".into())]);
     settings.access_profile = request.access_profile;
     settings.execution_boundary = request.execution_boundary;
-    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    settings
+        .selected_target_id
+        .clone_from(&settings.selected_space_id);
     settings
         .pending_provider_cleanup_ids
         .retain(|pending| pending != &credential_id);
@@ -1300,17 +1670,23 @@ pub(crate) async fn set_approval_mode(
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let settings = settings_store()?.load()?;
-    if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
-        || !state.managed_lifecycle_ready()
+    let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
+        CommandErrorDto::invalid(
+            "approvalMode",
+            "Select a Space before changing permission mode.",
+        )
+    })?;
+    if state.selected_target_id().await.as_deref() != Some(space_id)
+        || !state.managed_lifecycle_ready_for(space_id).await
     {
         return Err(CommandErrorDto::invalid(
             "approvalMode",
             "Permission mode can be changed only while Managed Local is selected and ready.",
         ));
     }
-    let _run_admission = state.approval_mode_change_guard().await;
-    state.refresh_approval_mode().await;
-    let current = state.approval_mode();
+    let _run_admission = state.approval_mode_change_guard_for(space_id).await;
+    state.refresh_approval_mode_for(space_id).await;
+    let current = state.approval_mode_for(space_id).await;
     if current == approval_mode {
         return desktop_status_from(&state, &settings).await;
     }
@@ -1323,7 +1699,7 @@ pub(crate) async fn set_approval_mode(
             return desktop_status_from(&state, &settings).await;
         }
     }
-    let worker = state.managed_worker().await.ok_or_else(|| {
+    let worker = state.managed_worker_for(space_id).await.ok_or_else(|| {
         CommandErrorDto::local_sanitized(
             "approval_mode_unavailable",
             "Managed Local permission mode is unavailable. Restart Managed Local and retry.",
@@ -1341,14 +1717,14 @@ pub(crate) async fn set_approval_mode(
             )
         })?;
     if DesktopApprovalModeDto::from_worker_mode(confirmed) != approval_mode {
-        state.refresh_approval_mode().await;
+        state.refresh_approval_mode_for(space_id).await;
         return Err(CommandErrorDto::local_sanitized(
             "approval_mode_invalid",
             "Managed Local returned an invalid permission mode response.",
             false,
         ));
     }
-    state.set_approval_mode(approval_mode);
+    state.set_approval_mode_for(space_id, approval_mode).await;
     desktop_status_from(&state, &settings).await
 }
 
@@ -1411,8 +1787,9 @@ pub(crate) async fn select_target(
     let store = settings_store()?;
     let mut settings = store.load()?;
     validate_target(&settings, &target_id)?;
-    if target_id == MANAGED_TARGET_ID {
-        if !state.connected(MANAGED_TARGET_ID).await && settings.managed_configured() {
+    if settings.spaces.iter().any(|space| space.id == target_id) {
+        settings.activate_space(&target_id)?;
+        if !state.connected(&target_id).await && settings.managed_configured() {
             managed_runtime::start(&state, &store, &settings, false).await?;
         }
     } else {
@@ -1427,7 +1804,11 @@ pub(crate) async fn select_target(
     }
     settings.selected_target_id = Some(target_id.clone());
     store.save(&settings)?;
-    state.select_target(Some(target_id)).await;
+    state.select_target(Some(target_id.clone())).await;
+    if settings.selected_space_id.as_deref() == Some(target_id.as_str()) {
+        state.touch_managed_space(&target_id).await;
+        state.activate_managed_terminal_for(&target_id).await;
+    }
     desktop_status_from(&state, &settings).await
 }
 
@@ -1683,6 +2064,7 @@ async fn probe_connected_external(
             page_size: 1,
             page_token: String::new(),
         }),
+        include_archived: false,
     };
     let mut probe = tauri::async_runtime::spawn(async move {
         // The permit lives with the actual request task. If the health deadline
@@ -1740,7 +2122,10 @@ async fn probe_disconnected_external(
 }
 
 async fn set_unstarted_health(state: &AppState, settings: &DesktopSettings) {
-    if state.connected(MANAGED_TARGET_ID).await {
+    let Some(space_id) = settings.selected_space_id.as_deref() else {
+        return;
+    };
+    if state.connected(space_id).await {
         return;
     }
     let health = if settings.workspace.is_none() {
@@ -1758,7 +2143,38 @@ async fn set_unstarted_health(state: &AppState, settings: &DesktopSettings) {
             failure_code: None,
         }
     };
-    state.set_managed_health(health).await;
+    state.set_managed_health_for(space_id, health).await;
+}
+
+async fn space_summaries(state: &AppState, settings: &DesktopSettings) -> Vec<SpaceSummaryDto> {
+    let selected = settings.selected_space_id.as_deref();
+    let attention = space_search::attention_counts(settings).unwrap_or_default();
+    let last_activity = space_search::last_activity(settings).unwrap_or_default();
+    let mut summaries = Vec::with_capacity(settings.spaces.len());
+    for profile in &settings.spaces {
+        let mut summary = SpaceSummaryDto::sleeping(profile, selected == Some(&profile.id));
+        summary.attention_count = attention.get(&profile.id).copied().unwrap_or(0);
+        summary.last_activity_at = last_activity.get(&profile.id).cloned();
+        if selected == Some(profile.id.as_str()) {
+            summary.provider_configured = settings.managed_configured();
+        }
+        if !profile.archived && state.connected(&profile.id).await {
+            state.sync_managed_lifecycle_health_for(&profile.id).await;
+            let health = state.managed_health_for(&profile.id).await;
+            summary.state = managed_state_name(health.state).into();
+            summary.message = health.message;
+        } else if !profile.archived && !summary.provider_configured {
+            summary.state = "needs_provider".into();
+        }
+        summaries.push(summary);
+    }
+    summaries.sort_by(|left, right| {
+        left.archived
+            .cmp(&right.archived)
+            .then_with(|| right.last_opened_at_ms.cmp(&left.last_opened_at_ms))
+            .then_with(|| left.display_name.cmp(&right.display_name))
+    });
+    summaries
 }
 
 async fn external_target_ready(state: &AppState, target_id: &str) -> bool {
@@ -1774,6 +2190,7 @@ fn desktop_capabilities(
     workspace_available: bool,
 ) -> DesktopCapabilitiesDto {
     DesktopCapabilitiesDto {
+        research: selected_managed && advertised.contains("research.create"),
         delegation: advertised.contains("agent_runs.delegation"),
         skills: advertised.contains("skills.select"),
         tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
@@ -1795,30 +2212,77 @@ async fn desktop_status_from(
     state: &AppState,
     settings: &DesktopSettings,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
-    state.sync_managed_lifecycle_health().await;
     let selected = state.selected_target_id().await;
-    let managed_health = state.managed_health().await;
-    let managed_connected = state.connected(MANAGED_TARGET_ID).await;
-    let managed_closed = state.target_is_closed(MANAGED_TARGET_ID).await;
+    let selected_space_id = settings.selected_space_id.clone();
+    let selected_managed_id = selected.as_ref().and_then(|target_id| {
+        settings
+            .spaces
+            .iter()
+            .any(|space| space.id == *target_id)
+            .then(|| target_id.clone())
+    });
+    if let Some(space_id) = selected_managed_id.as_deref() {
+        state.sync_managed_lifecycle_health_for(space_id).await;
+    }
+    let managed_connected = match selected_managed_id.as_deref() {
+        Some(space_id) => state.connected(space_id).await,
+        None => false,
+    };
+    let managed_closed = match selected_managed_id.as_deref() {
+        Some(space_id) => state.target_is_closed(space_id).await,
+        None => false,
+    };
+    let managed_health = match selected_managed_id.as_deref() {
+        Some(space_id) if managed_connected => state.managed_health_for(space_id).await,
+        Some(_) if !settings.managed_configured() => ManagedHealth {
+            state: ManagedRuntimeStateDto::NeedsProvider,
+            message: "Configure a provider to start this Space.".into(),
+            failure_code: None,
+        },
+        Some(_) => ManagedHealth {
+            state: ManagedRuntimeStateDto::Starting,
+            message: "This Space starts when selected.".into(),
+            failure_code: None,
+        },
+        None => ManagedHealth::default(),
+    };
     let health_was_ready = managed_health.state == ManagedRuntimeStateDto::Ready;
     let managed_health = managed_health_for_status(managed_health, managed_closed);
-    if managed_closed && health_was_ready {
-        state.set_managed_health(managed_health.clone()).await;
+    if managed_closed
+        && health_was_ready
+        && let Some(space_id) = selected_managed_id.as_deref()
+    {
+        state
+            .set_managed_health_for(space_id, managed_health.clone())
+            .await;
     }
     let workspace = settings.workspace.as_ref().map(WorkspaceSummaryDto::from);
     let managed_state = managed_health.state;
     let managed_ready = managed_connected && managed_state == ManagedRuntimeStateDto::Ready;
-    let mut targets = vec![RuntimeTargetDto {
-        target_id: MANAGED_TARGET_ID.into(),
-        kind: RuntimeTargetKindDto::ManagedLocal,
-        label: "Managed Local".into(),
-        state: managed_state_name(managed_state).into(),
-        message: managed_health.message.clone(),
-        selected: selected.as_deref() == Some(MANAGED_TARGET_ID),
-        terminal_available: managed_ready && cfg!(any(target_os = "macos", target_os = "windows")),
-        workspace: workspace.clone(),
-        failure_code: managed_health.failure_code,
-    }];
+    let spaces = space_summaries(state, settings).await;
+    let mut targets = spaces
+        .iter()
+        .filter(|space| !space.archived)
+        .filter_map(|space| {
+            let profile = settings.space(&space.space_id)?;
+            Some(RuntimeTargetDto {
+                target_id: space.target_id.clone(),
+                kind: RuntimeTargetKindDto::ManagedLocal,
+                label: space.display_name.clone(),
+                state: space.state.clone(),
+                message: space.message.clone(),
+                selected: selected.as_deref() == Some(space.target_id.as_str()),
+                terminal_available: space.state == "ready"
+                    && cfg!(any(target_os = "macos", target_os = "windows")),
+                workspace: Some(WorkspaceSummaryDto::from(&profile.workspace)),
+                failure_code: if selected.as_deref() == Some(space.target_id.as_str()) {
+                    managed_health.failure_code
+                } else {
+                    None
+                },
+            })
+        })
+        .collect::<Vec<_>>();
     let mut selected_external_ready = false;
     for target in &settings.external_targets {
         let (status, ready) = external_target_status(state, target, selected.as_deref()).await;
@@ -1828,10 +2292,14 @@ async fn desktop_status_from(
         targets.push(status);
     }
     let connection = match selected.as_deref() {
-        Some(MANAGED_TARGET_ID) if managed_ready => {
-            ConnectionStatusDto::connected(MANAGED_TARGET_ID)
+        Some(target_id)
+            if settings.spaces.iter().any(|space| space.id == target_id) && managed_ready =>
+        {
+            ConnectionStatusDto::connected(target_id)
         }
-        Some(MANAGED_TARGET_ID) => managed_connection_status(&managed_health),
+        Some(target_id) if settings.spaces.iter().any(|space| space.id == target_id) => {
+            managed_connection_status(target_id, &managed_health)
+        }
         Some(target_id)
             if settings
                 .external_targets
@@ -1851,9 +2319,9 @@ async fn desktop_status_from(
         }
         _ => ConnectionStatusDto::not_configured(),
     };
-    let selected_managed = selected.as_deref() == Some(MANAGED_TARGET_ID) && managed_ready;
-    if managed_ready {
-        state.ensure_approval_mode_synchronized().await;
+    let selected_managed = selected_managed_id.is_some() && managed_ready;
+    if managed_ready && let Some(space_id) = selected_managed_id.as_deref() {
+        state.ensure_approval_mode_synchronized_for(space_id).await;
     }
     let advertised = if connection.state == ConnectionStateDto::Connected {
         match selected.as_deref() {
@@ -1879,6 +2347,8 @@ async fn desktop_status_from(
         connection,
         targets,
         selected_target_id: selected,
+        spaces,
+        selected_space_id,
         managed_state,
         workspace,
         provider: ProviderSummaryDto::from_settings(settings),
@@ -1886,7 +2356,10 @@ async fn desktop_status_from(
         managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
         execution_boundary: settings.execution_boundary,
-        approval_mode: state.approval_mode(),
+        approval_mode: match selected_managed_id.as_deref() {
+            Some(space_id) => state.approval_mode_for(space_id).await,
+            None => DesktopApprovalModeDto::Ask,
+        },
         terminal_enabled: settings.local_terminal_enabled(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
         capabilities,
@@ -1966,7 +2439,7 @@ fn managed_health_for_status(health: ManagedHealth, client_closed: bool) -> Mana
     }
 }
 
-fn managed_connection_status(health: &ManagedHealth) -> ConnectionStatusDto {
+fn managed_connection_status(target_id: &str, health: &ManagedHealth) -> ConnectionStatusDto {
     let state = match health.state {
         ManagedRuntimeStateDto::NeedsWorkspace | ManagedRuntimeStateDto::NeedsProvider => {
             ConnectionStateDto::NotConfigured
@@ -1977,7 +2450,7 @@ fn managed_connection_status(health: &ManagedHealth) -> ConnectionStatusDto {
         ManagedRuntimeStateDto::Stopping => ConnectionStateDto::Stopping,
         ManagedRuntimeStateDto::Failed => ConnectionStateDto::Failed,
     };
-    ConnectionStatusDto::managed(state, &health.message)
+    ConnectionStatusDto::managed_for(target_id, state, &health.message)
 }
 
 const fn managed_state_name(state: ManagedRuntimeStateDto) -> &'static str {
@@ -2014,7 +2487,10 @@ fn validate_target(settings: &DesktopSettings, target_id: &str) -> Result<(), Co
 }
 
 fn target_exists(settings: &DesktopSettings, target_id: &str) -> bool {
-    target_id == MANAGED_TARGET_ID
+    settings
+        .spaces
+        .iter()
+        .any(|space| space.id == target_id && !space.archived)
         || settings
             .external_targets
             .iter()
@@ -2057,7 +2533,8 @@ const fn should_start_managed_on_initialize(managed_configured: bool, connected:
 }
 
 fn managed_workspace_is_selected(settings: &DesktopSettings) -> bool {
-    settings.selected_target_id.as_deref() == Some(MANAGED_TARGET_ID)
+    settings.selected_target_id == settings.selected_space_id
+        && settings.selected_space_id.is_some()
 }
 
 fn spawn_managed_start_on_initialize(app: AppHandle) {
@@ -2074,9 +2551,18 @@ fn spawn_managed_start_on_initialize(app: AppHandle) {
         };
         if should_start_managed_on_initialize(
             has_managed_configuration(&settings),
-            state.connected(MANAGED_TARGET_ID).await,
+            match settings.selected_space_id.as_deref() {
+                Some(space_id) => state.connected(space_id).await,
+                None => false,
+            },
         ) {
-            let _ = managed_runtime::start(&state, &store, &settings, false).await;
+            if managed_runtime::start(&state, &store, &settings, false)
+                .await
+                .is_ok()
+                && let Some(space_id) = settings.selected_space_id.as_deref()
+            {
+                state.activate_managed_terminal_for(space_id).await;
+            }
         }
     });
 }
@@ -2140,7 +2626,7 @@ mod tests {
         let credential_account =
             crate::desktop_settings::external_credential_account(&instance_id, &certificate_sha256)
                 .expect("credential binding");
-        let settings = DesktopSettings {
+        let mut settings = DesktopSettings {
             external_targets: vec![ExternalTargetSetting {
                 target_id: external_id.clone(),
                 label: "Lab daemon".into(),
@@ -2153,7 +2639,17 @@ mod tests {
             }],
             ..DesktopSettings::default()
         };
-        assert!(validate_target(&settings, MANAGED_TARGET_ID).is_ok());
+        let managed_id = Uuid::now_v7().to_string();
+        settings
+            .add_space(WorkspaceSetting {
+                id: managed_id.clone(),
+                path: "/tmp/managed-workspace".into(),
+                identity: Some(test_workspace_identity()),
+                display_name: "managed-workspace".into(),
+                display_path: "/tmp/managed-workspace".into(),
+            })
+            .expect("managed Space");
+        assert!(validate_target(&settings, &managed_id).is_ok());
         assert!(validate_target(&settings, &external_id).is_ok());
         assert!(validate_target(&settings, "/private/tmp/runtime").is_err());
         assert!(validate_target(&settings, "managed-local/../../other").is_err());
@@ -2211,7 +2707,7 @@ mod tests {
             assert_eq!(persisted.workspace.as_ref(), Some(&workspace));
             assert_eq!(
                 persisted.selected_target_id.as_deref(),
-                Some(MANAGED_TARGET_ID)
+                Some(workspace.id.as_str())
             );
             Ok(())
         })
@@ -2300,14 +2796,14 @@ mod tests {
     #[test]
     fn embedded_shell_selection_survives_transient_runtime_disconnects() {
         let mut settings = settings_with_provider(&Uuid::now_v7().to_string());
-        settings.workspace = Some(WorkspaceSetting {
+        let workspace = WorkspaceSetting {
             id: Uuid::now_v7().to_string(),
             path: "/tmp/selected-workspace".into(),
             identity: Some(test_workspace_identity()),
             display_name: "selected-workspace".into(),
             display_path: "/tmp/selected-workspace".into(),
-        });
-        settings.selected_target_id = Some(MANAGED_TARGET_ID.into());
+        };
+        settings.add_space(workspace).expect("selected Space");
 
         assert!(managed_workspace_is_selected(&settings));
 

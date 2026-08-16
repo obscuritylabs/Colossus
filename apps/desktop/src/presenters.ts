@@ -33,7 +33,7 @@ export interface StatusPresentation {
   tone: PresentationTone;
 }
 
-export type WorkGroupKey = "active" | "today" | "yesterday" | "earlier";
+export type WorkGroupKey = "pinned" | "attention" | "active" | "recent";
 
 export interface RecentWorkItem {
   /** Opaque routing value. It is never used as display copy. */
@@ -61,6 +61,7 @@ export interface RecentWorkOptions {
   query?: string;
   now?: Date;
   limit?: number;
+  pinnedSessionIds?: ReadonlySet<string>;
 }
 
 export interface PresentedArtifact {
@@ -183,6 +184,11 @@ const TOOL_STATE_PRESENTATIONS: Readonly<
     copy: "Tool completed",
     tone: "success",
   },
+  cancelled: {
+    label: "Cancelled",
+    copy: "Tool did not start",
+    tone: "neutral",
+  },
   failed: {
     label: "Failed",
     copy: "Tool failed",
@@ -196,17 +202,17 @@ const TOOL_STATE_PRESENTATIONS: Readonly<
 };
 
 const GROUP_LABELS: Readonly<Record<WorkGroupKey, string>> = {
+  pinned: "Pinned",
+  attention: "Needs attention",
   active: "Active",
-  today: "Today",
-  yesterday: "Yesterday",
-  earlier: "Earlier",
+  recent: "Recent",
 };
 
 const GROUP_ORDER: readonly WorkGroupKey[] = [
+  "pinned",
+  "attention",
   "active",
-  "today",
-  "yesterday",
-  "earlier",
+  "recent",
 ];
 
 function boundedLimit(
@@ -276,7 +282,11 @@ export function presentToolState(state: ToolActivityState): StatusPresentation {
 }
 
 export function runModeLabel(mode: RunMode): string {
-  return mode === "plan" ? "Plan" : "Execute";
+  return mode === "plan"
+    ? "Plan"
+    : mode === "research"
+      ? "Research"
+      : "Execute";
 }
 
 export function agentRoleLabel(role: string): string {
@@ -301,34 +311,21 @@ function timestampValue(timestamp: string): number {
   return Number.isNaN(value) ? 0 : value;
 }
 
-function localDayStart(value: Date): number {
-  if (Number.isNaN(value.getTime())) {
-    return Number.NaN;
+function workGroupFor(run: Run, pinned: boolean): WorkGroupKey {
+  if (pinned) {
+    return "pinned";
   }
-  return new Date(
-    value.getFullYear(),
-    value.getMonth(),
-    value.getDate(),
-  ).getTime();
-}
-
-function workGroupFor(run: Run, now: Date): WorkGroupKey {
+  if (
+    run.status === "waiting" ||
+    run.status === "outcome_unknown" ||
+    run.pendingInteractionCount > 0
+  ) {
+    return "attention";
+  }
   if (ACTIVE_STATUSES.has(run.status)) {
     return "active";
   }
-
-  const updatedAt = timestampValue(run.updatedAt);
-  const today = localDayStart(now);
-  if (!Number.isFinite(today) || updatedAt === 0) {
-    return "earlier";
-  }
-  if (updatedAt >= today) {
-    return "today";
-  }
-
-  const yesterdayDate = new Date(today);
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  return updatedAt >= yesterdayDate.getTime() ? "yesterday" : "earlier";
+  return "recent";
 }
 
 function toRecentWorkItem(run: Run): RecentWorkItem {
@@ -401,7 +398,6 @@ export function selectRecentWork(
   runs: readonly Run[],
   options: RecentWorkOptions = {},
 ): RecentWorkGroup[] {
-  const now = options.now ?? new Date();
   const limit = boundedLimit(
     options.limit,
     MAX_PRESENTED_WORK_ITEMS,
@@ -441,7 +437,10 @@ export function selectRecentWork(
       continue;
     }
 
-    const key = workGroupFor(run, now);
+    const key = workGroupFor(
+      run,
+      options.pinnedSessionIds?.has(run.sessionId) === true,
+    );
     const items = groups.get(key) ?? [];
     items.push(item);
     groups.set(key, items);

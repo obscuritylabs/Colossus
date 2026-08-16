@@ -3,6 +3,8 @@ import {
   IconAt,
   IconFolder,
   IconPaperclip,
+  IconPlaylistAdd,
+  IconRouteAltLeft,
   IconSend2,
   IconShieldCheck,
 } from "@tabler/icons-react";
@@ -12,9 +14,13 @@ import type {
   ApprovalMode,
   ArtifactReference,
   CommandError,
+  ResearchDepth,
+  ResearchSourceKind,
   RunMode,
 } from "../types";
 import { USE_CONFIGURED_MAX_TURNS } from "../types";
+import type { QueuedMessage } from "../message-queue";
+import { NextUpQueue } from "./NextUpQueue";
 
 interface WorkComposerProps {
   formRef: RefObject<HTMLFormElement | null>;
@@ -27,6 +33,9 @@ interface WorkComposerProps {
   maxTurns: number;
   maxTurnsLimit: number;
   mode: RunMode;
+  researchDepth: ResearchDepth;
+  researchSources: readonly ResearchSourceKind[];
+  researchAvailable: boolean;
   approvalMode: ApprovalMode;
   approvalModeVisible: boolean;
   approvalModeAvailable: boolean;
@@ -36,8 +45,11 @@ interface WorkComposerProps {
   submitting: boolean;
   continuation: boolean;
   planRevision: { planId: string; revision: number } | null;
+  queueing: boolean;
   activeWorkRunning: boolean;
   activeWorkNeedsInput: boolean;
+  activeWorkRedirectable: boolean;
+  queuedMessages: readonly QueuedMessage[];
   attachmentsAvailable: boolean;
   attachments: readonly ArtifactReference[];
   attachmentBusy: boolean;
@@ -46,10 +58,16 @@ interface WorkComposerProps {
   onRoleChange: (role: string) => void;
   onMaxTurnsChange: (maxTurns: number) => void;
   onModeChange: (mode: RunMode) => void;
+  onResearchDepthChange: (depth: ResearchDepth) => void;
+  onResearchSourcesChange: (sources: ResearchSourceKind[]) => void;
   onApprovalModeChange: (mode: ApprovalMode) => void;
   onCancelPlanRevision: () => void;
   onChooseAttachment: () => void;
   onRemoveAttachment: (artifactId: string) => void;
+  onEditQueuedMessage: (messageId: string, prompt: string) => void;
+  onDeleteQueuedMessage: (messageId: string) => void;
+  onRetryQueuedMessage: (messageId: string) => void;
+  onRedirect: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
 
@@ -64,6 +82,9 @@ export function WorkComposer({
   maxTurns,
   maxTurnsLimit,
   mode,
+  researchDepth,
+  researchSources,
+  researchAvailable,
   approvalMode,
   approvalModeVisible,
   approvalModeAvailable,
@@ -73,8 +94,11 @@ export function WorkComposer({
   submitting,
   continuation,
   planRevision,
+  queueing,
   activeWorkRunning,
   activeWorkNeedsInput,
+  activeWorkRedirectable,
+  queuedMessages,
   attachmentsAvailable,
   attachments,
   attachmentBusy,
@@ -83,13 +107,28 @@ export function WorkComposer({
   onRoleChange,
   onMaxTurnsChange,
   onModeChange,
+  onResearchDepthChange,
+  onResearchSourcesChange,
   onApprovalModeChange,
   onCancelPlanRevision,
   onChooseAttachment,
   onRemoveAttachment,
+  onEditQueuedMessage,
+  onDeleteQueuedMessage,
+  onRetryQueuedMessage,
+  onRedirect,
   onSubmit,
 }: WorkComposerProps) {
   const roleMissing = role.trim().length === 0;
+  const researchSourceSummary = researchSources
+    .map((source) =>
+      source === "repo"
+        ? "This Space"
+        : source === "web"
+          ? "Web"
+          : "Connections",
+    )
+    .join(", ");
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (
@@ -105,7 +144,7 @@ export function WorkComposer({
   return (
     <form
       ref={formRef}
-      className={`work-composer${mode === "plan" ? " is-plan-mode" : ""}`}
+      className={`work-composer${mode === "plan" ? " is-plan-mode" : ""}${mode === "research" ? " is-research-mode" : ""}`}
       id="work-composer"
       aria-label="Send a prompt"
       onSubmit={onSubmit}
@@ -158,9 +197,11 @@ export function WorkComposer({
           <summary
             className={roleMissing ? "run-controls-invalid" : undefined}
             aria-label={
-              roleMissing
-                ? "Advanced run controls, role required"
-                : "Advanced run controls"
+              mode === "research"
+                ? `Research controls, sources ${researchSourceSummary || "none"}`
+                : roleMissing
+                  ? "Advanced run controls, role required"
+                  : "Advanced run controls"
             }
           >
             <IconAdjustmentsHorizontal
@@ -168,53 +209,114 @@ export function WorkComposer({
               stroke={1.7}
               aria-hidden="true"
             />
-            {roleMissing ? "Role required" : "Run controls"}
+            {mode === "research"
+              ? `Sources: ${researchSourceSummary || "None"}`
+              : roleMissing
+                ? "Role required"
+                : "Run controls"}
           </summary>
           <div className="run-controls-popover">
-            <label>
-              <span>Role</span>
-              <input
-                value={role}
-                maxLength={64}
-                required
-                aria-invalid={roleMissing}
-                aria-describedby={
-                  roleMissing ? "role-required-error" : undefined
-                }
-                disabled={submitting}
-                onChange={(event) => onRoleChange(event.target.value)}
-              />
-              {roleMissing ? (
-                <span
-                  className="run-control-error"
-                  id="role-required-error"
-                  role="alert"
-                >
-                  Enter the enrolled agent role used for this run.
-                </span>
-              ) : null}
-            </label>
-            <label>
-              <span>Maximum turns</span>
-              <input
-                type="number"
-                value={maxTurns === USE_CONFIGURED_MAX_TURNS ? "" : maxTurns}
-                placeholder="Server default"
-                min={1}
-                max={maxTurnsLimit}
-                aria-describedby="max-turns-default-hint"
-                disabled={submitting}
-                onChange={(event) =>
-                  onMaxTurnsChange(Number(event.target.value))
-                }
-              />
-              <span className="run-control-hint" id="max-turns-default-hint">
-                Leave blank to use the server default.
-              </span>
-            </label>
+            {mode === "research" ? (
+              <>
+                <label>
+                  <span>Research depth</span>
+                  <select
+                    value={researchDepth}
+                    disabled={submitting}
+                    onChange={(event) =>
+                      onResearchDepthChange(event.target.value as ResearchDepth)
+                    }
+                  >
+                    <option value="quick">Quick</option>
+                    <option value="standard">Standard</option>
+                    <option value="deep">Deep</option>
+                  </select>
+                </label>
+                <fieldset className="research-source-controls">
+                  <legend>Evidence sources</legend>
+                  {(["repo", "web", "mcp"] as const).map((source) => (
+                    <label key={source}>
+                      <input
+                        type="checkbox"
+                        checked={researchSources.includes(source)}
+                        disabled={submitting}
+                        onChange={(event) => {
+                          const next = event.target.checked
+                            ? [...researchSources, source]
+                            : researchSources.filter((item) => item !== source);
+                          onResearchSourcesChange(next);
+                        }}
+                      />
+                      <span>
+                        {source === "repo"
+                          ? "This Space"
+                          : source === "web"
+                            ? "Web"
+                            : "Connections"}
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
+              </>
+            ) : (
+              <>
+                <label>
+                  <span>Role</span>
+                  <input
+                    value={role}
+                    maxLength={64}
+                    required
+                    aria-invalid={roleMissing}
+                    aria-describedby={
+                      roleMissing ? "role-required-error" : undefined
+                    }
+                    disabled={submitting}
+                    onChange={(event) => onRoleChange(event.target.value)}
+                  />
+                  {roleMissing ? (
+                    <span
+                      className="run-control-error"
+                      id="role-required-error"
+                      role="alert"
+                    >
+                      Enter the enrolled agent role used for this run.
+                    </span>
+                  ) : null}
+                </label>
+                <label>
+                  <span>Maximum turns</span>
+                  <input
+                    type="number"
+                    value={
+                      maxTurns === USE_CONFIGURED_MAX_TURNS ? "" : maxTurns
+                    }
+                    placeholder="Server default"
+                    min={1}
+                    max={maxTurnsLimit}
+                    aria-describedby="max-turns-default-hint"
+                    disabled={submitting}
+                    onChange={(event) =>
+                      onMaxTurnsChange(Number(event.target.value))
+                    }
+                  />
+                  <span
+                    className="run-control-hint"
+                    id="max-turns-default-hint"
+                  >
+                    Leave blank to use the server default.
+                  </span>
+                </label>
+              </>
+            )}
           </div>
         </details>
       </div>
+      <NextUpQueue
+        messages={queuedMessages}
+        onEdit={onEditQueuedMessage}
+        onDelete={onDeleteQueuedMessage}
+        onRetry={onRetryQueuedMessage}
+      />
       <textarea
         ref={textareaRef}
         value={prompt}
@@ -222,16 +324,20 @@ export function WorkComposer({
         maxLength={65_536}
         placeholder={
           activeWorkNeedsInput
-            ? "Respond to the request above before sending another prompt."
+            ? "Add a follow-up to Next up, or answer the request above…"
             : activeWorkRunning
-              ? "This run is working. Cancel it or start new work to send another prompt."
-              : planRevision !== null
-                ? "Describe what Colossus should change in this Plan…"
-                : continuation
-                  ? "Continue this thread…"
-                  : mode === "plan"
-                    ? "Describe the work you want Colossus to plan…"
-                    : "Ask Colossus to work on something…"
+              ? "Add a follow-up while Colossus keeps working…"
+              : queueing
+                ? "Add another message to Next up…"
+                : planRevision !== null
+                  ? "Describe what Colossus should change in this Plan…"
+                  : continuation
+                    ? "Continue this thread…"
+                    : mode === "plan"
+                      ? "Describe the work you want Colossus to plan…"
+                      : mode === "research"
+                        ? "Ask a source-backed question…"
+                        : "Ask Colossus to work on something…"
         }
         aria-label="Prompt"
         aria-invalid={promptOverLimit}
@@ -308,20 +414,72 @@ export function WorkComposer({
             />
             <span>Execute</span>
           </label>
+          <label>
+            <input
+              type="radio"
+              name="mode"
+              value="research"
+              checked={mode === "research"}
+              disabled={
+                submitting || planRevision !== null || !researchAvailable
+              }
+              onChange={() => onModeChange("research")}
+            />
+            <span
+              title={
+                researchAvailable
+                  ? undefined
+                  : "Research is unavailable for this target"
+              }
+            >
+              Research
+            </span>
+          </label>
         </fieldset>
+        {activeWorkRunning ? (
+          <button
+            className="redirect-button"
+            type="button"
+            aria-label="Redirect current response"
+            title="Stop the current response and send this guidance next"
+            disabled={
+              !canCompose ||
+              !activeWorkRedirectable ||
+              prompt.trim().length === 0 ||
+              promptOverLimit ||
+              roleMissing
+            }
+            onClick={onRedirect}
+          >
+            <IconRouteAltLeft size={16} stroke={1.9} aria-hidden="true" />
+            Redirect
+          </button>
+        ) : null}
         <button
-          className="send-button"
+          className={`send-button${queueing ? " is-queue" : ""}`}
           type="submit"
-          aria-label={submitting ? "Sending prompt" : "Send prompt"}
+          aria-label={
+            submitting
+              ? "Sending prompt"
+              : queueing
+                ? "Add message to Next up"
+                : "Send prompt"
+          }
           disabled={
             !canCompose ||
             prompt.trim().length === 0 ||
             promptOverLimit ||
-            roleMissing
+            roleMissing ||
+            (mode === "research" && researchSources.length === 0)
           }
         >
           {submitting ? (
             <span className="spinner" aria-hidden="true" />
+          ) : queueing ? (
+            <>
+              <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
+              <span>Queue</span>
+            </>
           ) : (
             <IconSend2 size={19} stroke={2} aria-hidden="true" />
           )}
@@ -329,19 +487,29 @@ export function WorkComposer({
       </div>
       <div className="composer-meta">
         <span>
-          {mode === "plan"
-            ? planRevision === null
-              ? "Plan creates a new durable draft; implementation and external mutation are blocked."
-              : "This prompt revises the selected draft; implementation and external mutation remain blocked."
-            : !approvalModeVisible
-              ? "Effects remain policy-bound and may require approval."
-              : approvalMode === "deny"
-                ? "Approval-required effects are denied. Policy and sandbox boundaries remain active."
-                : approvalMode === "ask"
-                  ? "Approval-required effects pause and ask before continuing."
-                  : approvalMode === "risk_auto"
-                    ? "Eligible low-risk approvals may proceed automatically; other effects ask."
-                    : "Approval obligations proceed without asking; policy and sandbox boundaries remain active."}
+          {mode === "research" && researchSources.length === 0
+            ? "Select at least one evidence source before starting Research."
+            : activeWorkRunning
+              ? activeWorkNeedsInput
+                ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
+                : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
+              : queueing
+                ? "New messages join Next up. Resolve or remove a failed item to continue in order."
+                : mode === "plan"
+                  ? planRevision === null
+                    ? "Plan creates a new durable draft; implementation and external mutation are blocked."
+                    : "This prompt revises the selected draft; implementation and external mutation remain blocked."
+                  : mode === "research"
+                    ? "Research gathers released evidence from the selected sources and returns a citation-backed report."
+                    : !approvalModeVisible
+                      ? "Effects remain policy-bound and may require approval."
+                      : approvalMode === "deny"
+                        ? "Approval-required effects are denied. Policy and sandbox boundaries remain active."
+                        : approvalMode === "ask"
+                          ? "Approval-required effects pause and ask before continuing."
+                          : approvalMode === "risk_auto"
+                            ? "Eligible low-risk approvals may proceed automatically; other effects ask."
+                            : "Approval obligations proceed without asking; policy and sandbox boundaries remain active."}
         </span>
         <span className={promptOverLimit ? "counter-over-limit" : undefined}>
           {promptBytes.toLocaleString()} / {promptByteLimit.toLocaleString()}{" "}

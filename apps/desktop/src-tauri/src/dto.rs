@@ -1,12 +1,14 @@
 use colossus_sdk::{
-    ApiError, ApiErrorCode, ApprovalInteraction, ApprovalRisk, ArtifactPurpose, ArtifactReference,
-    ArtifactState, CancelRunRequest, CreateRunRequest, FieldViolation, GetRunRequest,
-    IdempotencyKey, InputContentPart, Interaction, InteractionAnswer, InteractionContent,
-    InteractionKind, InteractionStatus, ListRunsRequest, MessageContentPart, MessageRole,
-    OutcomeCertainty, PageRequest, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer,
-    PromptChoice, RespondInteractionRequest, Run, RunCancellation, RunFailure, RunMode, RunResult,
-    RunStatus, RunTerminal, RunUpdate, RunUpdateKind, SdkError, SessionMessage, TokenUsage,
-    ToolActivity, ToolActivityState, WatchRunRequest,
+    ApiError, ApiErrorCode, ApprovalInteraction, ApprovalRisk, ArchiveThreadRequest,
+    ArtifactPurpose, ArtifactReference, ArtifactState, CancelRunRequest, CreateRunRequest,
+    FieldViolation, GetRunRequest, IdempotencyKey, InputContentPart, Interaction,
+    InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest,
+    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PlanExecutionStrategy,
+    PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind,
+    RespondInteractionRequest, RestoreThreadRequest, Run, RunBranch, RunBranchContextMode,
+    RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
+    RunUpdateKind, SdkError, SessionMessage, TokenUsage, ToolActivity, ToolActivityState,
+    WatchRunRequest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,11 +67,15 @@ impl ConnectionStatusDto {
         }
     }
 
-    pub(crate) fn managed(state: ConnectionStateDto, message: impl Into<String>) -> Self {
+    pub(crate) fn managed_for(
+        target_id: &str,
+        state: ConnectionStateDto,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             state,
             message: message.into(),
-            target_id: Some(crate::state::MANAGED_TARGET_ID.into()),
+            target_id: Some(target_id.into()),
         }
     }
 }
@@ -490,6 +496,7 @@ fn api_error_code(code: ApiErrorCode) -> &'static str {
 pub(crate) enum RunModeDto {
     Execute,
     Plan,
+    Research,
 }
 
 impl From<RunMode> for RunModeDto {
@@ -497,6 +504,7 @@ impl From<RunMode> for RunModeDto {
         match value {
             RunMode::Execute => Self::Execute,
             RunMode::Plan => Self::Plan,
+            RunMode::Research => Self::Research,
         }
     }
 }
@@ -697,6 +705,7 @@ pub(crate) struct RunDto {
     pub(crate) terminal: Option<RunTerminalDto>,
     pub(crate) etag: String,
     pub(crate) selected_skills: Vec<String>,
+    pub(crate) archived: bool,
 }
 
 impl From<Run> for RunDto {
@@ -717,6 +726,7 @@ impl From<Run> for RunDto {
             terminal: value.terminal.map(Into::into),
             etag: value.etag,
             selected_skills: value.selected_skills,
+            archived: value.archived,
         }
     }
 }
@@ -872,6 +882,7 @@ pub(crate) enum ToolActivityStateDto {
     WaitingApproval,
     Started,
     Completed,
+    Cancelled,
     Failed,
     OutcomeUnknown,
 }
@@ -883,6 +894,7 @@ impl From<ToolActivityState> for ToolActivityStateDto {
             ToolActivityState::WaitingApproval => Self::WaitingApproval,
             ToolActivityState::Started => Self::Started,
             ToolActivityState::Completed => Self::Completed,
+            ToolActivityState::Cancelled => Self::Cancelled,
             ToolActivityState::Failed => Self::Failed,
             ToolActivityState::OutcomeUnknown => Self::OutcomeUnknown,
         }
@@ -896,6 +908,8 @@ pub(crate) struct ToolActivityDto {
     pub(crate) tool_name: String,
     pub(crate) state: ToolActivityStateDto,
     pub(crate) summary: String,
+    pub(crate) input: Option<String>,
+    pub(crate) preview: Option<String>,
 }
 
 impl From<ToolActivity> for ToolActivityDto {
@@ -905,6 +919,8 @@ impl From<ToolActivity> for ToolActivityDto {
             tool_name: value.tool_name,
             state: value.state.into(),
             summary: value.summary,
+            input: value.input,
+            preview: value.preview,
         }
     }
 }
@@ -1202,6 +1218,23 @@ pub(crate) struct ListRunsDto {
 pub(crate) enum RunModeInput {
     Execute,
     Plan,
+    Research,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResearchDepthInput {
+    Quick,
+    Standard,
+    Deep,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResearchSourceInput {
+    Repo,
+    Web,
+    Mcp,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -1246,6 +1279,7 @@ impl From<RunModeInput> for RunMode {
         match value {
             RunModeInput::Execute => Self::Execute,
             RunModeInput::Plan => Self::Plan,
+            RunModeInput::Research => Self::Research,
         }
     }
 }
@@ -1260,12 +1294,30 @@ pub(crate) struct CreateRunInput {
     role: String,
     mode: RunModeInput,
     #[serde(default)]
+    research_depth: Option<ResearchDepthInput>,
+    #[serde(default)]
+    research_sources: Vec<ResearchSourceInput>,
+    #[serde(default)]
     plan_action: Option<PlanRunActionInput>,
+    #[serde(default)]
+    branch: Option<RunBranchInput>,
     max_turns: u32,
     idempotency_key: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunBranchInput {
+    source_run_id: String,
+}
+
 impl CreateRunInput {
+    pub(crate) fn branch_link(&self) -> Option<String> {
+        self.branch
+            .as_ref()
+            .map(|branch| branch.source_run_id.clone())
+    }
+
     pub(crate) fn into_sdk(self) -> Result<CreateRunRequest, CommandErrorDto> {
         validate_text(&self.prompt, "prompt", false)?;
         if let Some(session_id) = self.session_id.as_deref() {
@@ -1340,18 +1392,66 @@ impl CreateRunInput {
                 }
             })
             .transpose()?;
+        let branch = self
+            .branch
+            .map(|branch| {
+                validate_identifier(&branch.source_run_id, "branch.sourceRunId")?;
+                Ok(RunBranch {
+                    source_run_id: branch.source_run_id,
+                    source_message_count: 0,
+                    context_mode: RunBranchContextMode::SourceRunConversation,
+                })
+            })
+            .transpose()?;
+        if branch.is_some() && (self.session_id.is_some() || plan_action.is_some()) {
+            return Err(CommandErrorDto::invalid(
+                "branch",
+                "An Aside must start a separate session and cannot continue a Plan.",
+            ));
+        }
         Ok(CreateRunRequest {
             input,
             session_id: self.session_id,
             end_user_id: None,
             role: self.role,
             mode: self.mode.into(),
+            research_depth: self.research_depth.map(|depth| match depth {
+                ResearchDepthInput::Quick => ResearchDepth::Quick,
+                ResearchDepthInput::Standard => ResearchDepth::Standard,
+                ResearchDepthInput::Deep => ResearchDepth::Deep,
+            }),
+            research_sources: self
+                .research_sources
+                .into_iter()
+                .map(|kind| match kind {
+                    ResearchSourceInput::Repo => ResearchSourceKind::Repo,
+                    ResearchSourceInput::Web => ResearchSourceKind::Web,
+                    ResearchSourceInput::Mcp => ResearchSourceKind::Mcp,
+                })
+                .collect(),
             selected_skills: Vec::new(),
             plan_action,
+            branch,
             max_turns: self.max_turns,
             idempotency_key,
         })
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AsideDto {
+    pub(crate) parent_session_id: String,
+    pub(crate) source_run_id: String,
+    pub(crate) created_at: String,
+    pub(crate) closed: bool,
+    pub(crate) run: RunDto,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ListAsidesInput {
+    pub(crate) parent_session_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1375,6 +1475,8 @@ pub(crate) struct ListRunsInput {
     session_id: Option<String>,
     #[serde(default)]
     page_token: String,
+    #[serde(default)]
+    include_archived: bool,
 }
 
 impl ListRunsInput {
@@ -1390,8 +1492,43 @@ impl ListRunsInput {
                 page_size: PAGE_SIZE,
                 page_token: self.page_token,
             }),
+            include_archived: self.include_archived,
         })
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ThreadLifecycleInput {
+    run_id: String,
+    idempotency_key: String,
+}
+
+impl ThreadLifecycleInput {
+    pub(crate) fn into_archive_sdk(self) -> Result<ArchiveThreadRequest, CommandErrorDto> {
+        validate_identifier(&self.run_id, "runId")?;
+        Ok(ArchiveThreadRequest {
+            run_id: self.run_id,
+            idempotency_key: IdempotencyKey::new(self.idempotency_key)
+                .map_err(CommandErrorDto::from_api)?,
+        })
+    }
+
+    pub(crate) fn into_restore_sdk(self) -> Result<RestoreThreadRequest, CommandErrorDto> {
+        validate_identifier(&self.run_id, "runId")?;
+        Ok(RestoreThreadRequest {
+            run_id: self.run_id,
+            idempotency_key: IdempotencyKey::new(self.idempotency_key)
+                .map_err(CommandErrorDto::from_api)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadLifecycleDto {
+    pub(crate) session_id: String,
+    pub(crate) archived: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1595,6 +1732,33 @@ mod tests {
     }
 
     #[test]
+    fn create_input_maps_research_depth_and_evidence_lanes() {
+        let input: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Compare the current implementation with primary sources",
+            "sessionId": null,
+            "role": "primary",
+            "mode": "research",
+            "researchDepth": "standard",
+            "researchSources": ["repo", "web", "mcp"],
+            "maxTurns": 0,
+            "idempotencyKey": "research-key"
+        }))
+        .expect("valid Research request");
+
+        let request = input.into_sdk().expect("mapped Research request");
+        assert_eq!(request.mode, RunMode::Research);
+        assert_eq!(request.research_depth, Some(ResearchDepth::Standard));
+        assert_eq!(
+            request.research_sources,
+            vec![
+                ResearchSourceKind::Repo,
+                ResearchSourceKind::Web,
+                ResearchSourceKind::Mcp,
+            ]
+        );
+    }
+
+    #[test]
     fn create_input_preserves_the_configured_turn_default_sentinel() {
         let input: CreateRunInput = serde_json::from_value(json!({
             "prompt": "Continue until the work is complete",
@@ -1608,6 +1772,54 @@ mod tests {
 
         let request = input.into_sdk().expect("valid SDK request");
         assert_eq!(request.max_turns, 0);
+    }
+
+    #[test]
+    fn aside_branch_resolves_its_boundary_natively() {
+        let input: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Explain this separately",
+            "sessionId": null,
+            "role": "primary",
+            "mode": "execute",
+            "branch": {
+                "sourceRunId": "run-parent"
+            },
+            "maxTurns": 0,
+            "idempotencyKey": "aside-create"
+        }))
+        .expect("Aside request");
+        let branch = input
+            .into_sdk()
+            .expect("valid Aside")
+            .branch
+            .expect("branch");
+        assert_eq!(branch.source_run_id, "run-parent");
+        assert_eq!(branch.source_message_count, 0);
+        assert_eq!(
+            branch.context_mode,
+            RunBranchContextMode::SourceRunConversation
+        );
+
+        let invalid: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "Explain this separately",
+            "sessionId": "parent-session",
+            "role": "primary",
+            "mode": "execute",
+            "branch": {
+                "sourceRunId": "run-parent"
+            },
+            "maxTurns": 0,
+            "idempotencyKey": "aside-invalid"
+        }))
+        .expect("wire shape");
+        assert_eq!(
+            invalid
+                .into_sdk()
+                .expect_err("Aside cannot alter the parent session")
+                .violations[0]
+                .field,
+            "branch"
+        );
     }
 
     #[test]

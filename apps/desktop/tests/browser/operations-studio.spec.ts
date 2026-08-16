@@ -72,6 +72,39 @@ test("required response card lines up with the prompt composer", async ({
   ).toBeLessThan(1);
 });
 
+test("follow-ups can be queued, edited, deleted, and used to redirect active work", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=interaction-question");
+
+  const prompt = page.getByLabel("Prompt", { exact: true });
+  await expect(prompt).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Add message to Next up" }),
+  ).toBeVisible();
+
+  await prompt.fill("Check the Windows path too");
+  await page.getByRole("button", { name: "Add message to Next up" }).click();
+
+  const nextUp = page.getByRole("region", { name: "Next up" });
+  await expect(nextUp).toContainText("Check the Windows path too");
+  await nextUp.getByRole("button", { name: "Edit queued message" }).click();
+  const editor = nextUp.getByLabel("Edit queued message");
+  await editor.fill("Check Windows and Linux paths");
+  await nextUp.getByRole("button", { name: "Save" }).click();
+  await expect(nextUp).toContainText("Check Windows and Linux paths");
+  await nextUp.getByRole("button", { name: "Delete queued message" }).click();
+  await expect(nextUp).toHaveCount(0);
+
+  await prompt.fill("Focus on the cancellation race first");
+  await page.getByRole("button", { name: "Redirect current response" }).click();
+
+  await expect(page.getByRole("region", { name: "Next up" })).toHaveCount(0);
+  await expect(
+    page.getByText("Focus on the cancellation race first", { exact: true }),
+  ).toBeVisible();
+});
+
 test("right-side drawers trap focus, close with Escape, and restore focus", async ({
   page,
 }) => {
@@ -103,7 +136,7 @@ test("right-side drawers trap focus, close with Escape, and restore focus", asyn
   await expect(artifactsTrigger).toBeFocused();
 });
 
-test("work navigation and approvals are keyboard-operable", async ({
+test("Space navigation and approvals are keyboard-operable", async ({
   page,
 }) => {
   const navigationTrigger = page.getByRole("button", {
@@ -111,10 +144,10 @@ test("work navigation and approvals are keyboard-operable", async ({
   });
   await navigationTrigger.click();
 
-  const navigation = page.getByRole("dialog", { name: "Work navigation" });
+  const navigation = page.getByRole("dialog", { name: "Space navigation" });
   await expect(navigation).toBeVisible();
   await expect(
-    navigation.getByRole("button", { name: "Close work navigation" }),
+    navigation.getByRole("button", { name: "Close navigation" }),
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(navigation).toHaveCount(0);
@@ -132,13 +165,257 @@ test("work navigation and approvals are keyboard-operable", async ({
   await expect(page.getByLabel("Required response")).toHaveCount(0);
 });
 
+test("responsive Space navigation remains reachable from catalog surfaces", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page
+    .getByRole("dialog", { name: "Space navigation" })
+    .getByRole("button", { name: "Capabilities", exact: true })
+    .click();
+
+  const navigationTrigger = page.getByRole("button", {
+    name: "Open Space navigation",
+  });
+  await expect(navigationTrigger).toBeVisible();
+  await navigationTrigger.click();
+
+  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  const close = navigation.getByRole("button", { name: "Close navigation" });
+  await expect(close).toBeVisible();
+  await close.click();
+  await expect(navigation).toHaveCount(0);
+  await expect(navigationTrigger).toBeFocused();
+});
+
+test("desktop Space sidebar resizes and remembers its width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  const sidebar = page.locator(".work-sidebar");
+  const resizeHandle = page.getByRole("separator", {
+    name: "Resize Space sidebar",
+  });
+  const initialBox = await sidebar.boundingBox();
+  const handleBox = await resizeHandle.boundingBox();
+  expect(initialBox).not.toBeNull();
+  expect(handleBox).not.toBeNull();
+
+  await page.mouse.move(
+    handleBox!.x + handleBox!.width / 2,
+    handleBox!.y + handleBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(handleBox!.x + 84, handleBox!.y + 120, { steps: 5 });
+  await page.mouse.up();
+
+  await expect
+    .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(initialBox!.width + 60);
+  const resizedWidth = (await sidebar.boundingBox())!.width;
+
+  await page.reload();
+  await expect
+    .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
+    .toBeCloseTo(resizedWidth, 0);
+
+  await resizeHandle.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect
+    .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
+    .toBeCloseTo(resizedWidth - 8, 0);
+});
+
+test("collapsing the active Space keeps the remaining navigation pinned", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  const sidebar = page.locator(".work-sidebar");
+  const threadStack = page.locator(".space-thread-stack");
+  const footer = page.locator(".space-sidebar-footer");
+  const footerBefore = await footer.boundingBox();
+  const sidebarBox = await sidebar.boundingBox();
+  expect(footerBefore).not.toBeNull();
+  expect(sidebarBox).not.toBeNull();
+
+  await page.getByRole("button", { name: "Collapse Colossus threads" }).click();
+
+  await expect(threadStack).toHaveAttribute("aria-hidden", "true");
+  await expect(
+    page.getByRole("button", { name: "Expand Colossus threads" }),
+  ).toBeVisible();
+  await expect
+    .poll(async () => (await footer.boundingBox())?.y ?? 0)
+    .toBeCloseTo(footerBefore!.y, 0);
+
+  const footerAfter = await footer.boundingBox();
+  expect(footerAfter).not.toBeNull();
+  expect(
+    sidebarBox!.y + sidebarBox!.height - (footerAfter!.y + footerAfter!.height),
+  ).toBeLessThanOrEqual(14);
+});
+
+test("Space folders disclose thread summaries without switching context", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  const activeSpace = page.locator(".space-shelf.is-active");
+  await expect(activeSpace).toContainText("Colossus");
+
+  await page
+    .getByRole("button", { name: "Expand Research Lab threads" })
+    .click();
+  await expect(page.getByText("Review source provenance")).toBeVisible();
+  await expect(activeSpace).toContainText("Colossus");
+
+  await page
+    .getByRole("button", { name: "Expand Proposal Studio threads" })
+    .click();
+  await expect(page.getByText("Resolve compliance findings")).toBeVisible();
+  await expect(page.getByText("Review source provenance")).toBeVisible();
+
+  await page.getByRole("button", { name: "Research Lab", exact: true }).click();
+  await expect(activeSpace).toContainText("Research Lab");
+  await expect(
+    page.getByRole("button", { name: "New thread in Research Lab" }),
+  ).toBeVisible();
+});
+
+test("terminal threads can be archived from the Space sidebar", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
+  const archive = page.getByRole("button", {
+    name: "Archive Audit ipc boundary",
+  });
+  await expect(archive).toBeEnabled();
+  await archive.click();
+
+  await expect(archive).toHaveCount(0);
+  await expect(
+    page.getByText("Audit ipc boundary", { exact: true }),
+  ).toHaveCount(0);
+});
+
+test("threads can be pinned, persisted, and returned to their normal group", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  await page.getByText("Audit ipc boundary", { exact: true }).hover();
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
+  await page.getByRole("button", { name: "Pin Audit ipc boundary" }).click();
+
+  const pinned = page.locator(".work-group").filter({
+    has: page.getByRole("heading", { name: "Pinned", exact: true }),
+  });
+  await expect(pinned).toContainText("Audit ipc boundary");
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Unpin Audit ipc boundary" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await page.reload();
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Unpin Audit ipc boundary" }),
+  ).toBeAttached();
+
+  await page.getByRole("button", { name: "Unpin Audit ipc boundary" }).click();
+  await expect(pinned).toContainText("Harden desktop agent bootstrap");
+  await expect(pinned).not.toContainText("Audit ipc boundary");
+});
+
+test("search scope is part of the search control", async ({ page }) => {
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+
+  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  const search = navigation.getByRole("searchbox", {
+    name: "Search threads",
+  });
+  const scopeTrigger = navigation.locator(".search-scope-menu > summary");
+
+  await expect(search).toHaveAttribute("placeholder", "Search threads");
+  await expect(scopeTrigger).toHaveAttribute(
+    "aria-label",
+    "Search scope: This Space",
+  );
+
+  await scopeTrigger.click();
+  await navigation
+    .locator(".search-scope-popover")
+    .getByRole("button", { name: "All Spaces", exact: true })
+    .click({ force: true });
+
+  await expect(search).toHaveAttribute("placeholder", "Search threads");
+  await expect(scopeTrigger).toHaveAttribute(
+    "aria-label",
+    "Search scope: All Spaces",
+  );
+  await expect(search).toBeFocused();
+});
+
+test("Space startup keeps search and navigation responsive", async ({
+  page,
+}) => {
+  await page.goto(`${FIXTURE}&spaceStartup=1`);
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+
+  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  await expect(
+    navigation.getByText("Research Lab", { exact: true }),
+  ).toBeVisible();
+  await expect(navigation.getByText("Starting", { exact: true })).toBeVisible();
+  await expect(
+    navigation.getByRole("searchbox", { name: "Search threads" }),
+  ).toBeEnabled();
+  await expect(
+    navigation.getByRole("button", { name: "Capabilities", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    navigation.getByRole("button", { name: "New thread in Research Lab" }),
+  ).toBeDisabled();
+  await expect(
+    navigation.locator('.space-shelf.is-active[aria-busy="true"]'),
+  ).toBeVisible();
+  await expect(
+    navigation.locator('.space-shelf-identity[title="~/tools/research-lab"]'),
+  ).toBeVisible();
+});
+
 test("follow-up prompts remain in the same work conversation", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Open work navigation" }).click();
   await page
-    .getByRole("dialog", { name: "Work navigation" })
-    .getByRole("button", { name: "New work" })
+    .getByRole("dialog", { name: "Space navigation" })
+    .getByRole("button", { name: "New thread in Colossus" })
     .click();
 
   const prompt = page.getByRole("textbox", { name: "Prompt" });
@@ -164,10 +441,10 @@ test("follow-up prompts remain in the same work conversation", async ({
 
   await page.getByRole("button", { name: "Open work navigation" }).click();
   const workNavigation = page.getByRole("dialog", {
-    name: "Work navigation",
+    name: "Space navigation",
   });
   await expect(
-    workNavigation.getByRole("button", { name: new RegExp(opening, "u") }),
+    workNavigation.locator(".work-item").filter({ hasText: opening }),
   ).toHaveCount(1);
   await expect(workNavigation.getByText(followUp, { exact: true })).toHaveCount(
     0,

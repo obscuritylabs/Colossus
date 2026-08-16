@@ -1,17 +1,19 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
 } from "react";
-import type { FormEvent } from "react";
+import type { CSSProperties, FormEvent } from "react";
 
 import {
   CommandFailure,
   addExternalTarget,
   applyManagedModelConfiguration,
+  archiveThread,
   cancelRun,
   checkDesktopUpdate,
   chooseRunAttachment,
@@ -20,6 +22,7 @@ import {
   codexAuthLogout,
   configureManagedRuntime,
   connectColossus,
+  createSpace,
   createRun,
   desktopReleaseChannel,
   desktopStatus,
@@ -28,19 +31,28 @@ import {
   importCaBundle,
   installDesktopUpdate,
   initializeDesktop,
+  listAsides,
   listWorkspaceDirectory,
   listRuns,
+  onSpaceAttention,
+  onSpaceStatusChanged,
   readArtifactContent,
   readWorkspaceFile,
+  renameSpace,
   restartManagedRuntime,
+  restoreThread,
+  restoreSpace,
   removeCaBundle,
   removeExternalTarget,
   respondInteraction,
   runManagedSelfTest,
+  searchSpaceThreads,
+  selectSpace,
   selectTarget,
   setApprovalMode,
   setTerminalEnabled,
   showTerminalWindow,
+  archiveSpace,
   watchRun,
 } from "./api";
 import type { AgentParticipant, AgentWorkState } from "./components/AgentFlow";
@@ -48,25 +60,36 @@ import type {
   ArtifactPreviewLine,
   ArtifactViewItem,
 } from "./components/ArtifactWorkspace";
-import { ContextSidebar } from "./components/ContextSidebar";
 import {
   ExecutionBoundaryBanner,
+  executionBoundaryBannerVisible,
   managedRuntimeBoundaryActive,
 } from "./components/ExecutionBoundaryBanner";
 import { OperationsSurface } from "./components/OperationsSurface";
+import type { AsideDraft } from "./components/AsidePanel";
 import { OnboardingSurface } from "./components/OnboardingSurface";
-import { ProductRail } from "./components/ProductRail";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
+import type { SpaceSearchScope, SpaceStartup } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
+import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
 import {
+  buildActivityComparisonFixture,
   buildOperationsStudioFixture,
   buildPlanWorkflowFixture,
 } from "./dev/operations-studio-fixture";
 import { managedOnboardingRequired } from "./onboarding";
+import {
+  enqueueMessage,
+  messagesForThread,
+  nextPendingMessage,
+  removeQueuedMessage,
+  updateQueuedMessage,
+} from "./message-queue";
+import type { QueuePlacement, QueuedMessage } from "./message-queue";
 import {
   REMOTE_PROVIDER_TIMEOUT_MS,
   automaticProviderTimeoutMs,
@@ -93,7 +116,18 @@ import {
   utf8ByteLength,
   withBoundedEntry,
 } from "./state";
-import type { IdempotentAttempt } from "./state";
+import type { IdempotentAttempt, RunView } from "./state";
+import {
+  clearStoredWorkSidebarWidth,
+  readStoredWorkSidebarWidth,
+  storeWorkSidebarWidth,
+} from "./sidebar-width";
+import {
+  pinnedThreadIdsForSpace,
+  readStoredThreadPins,
+  setThreadPinned,
+  storeThreadPins,
+} from "./thread-pins";
 import {
   TargetRouteRegistry,
   selectedTargetRouteChanged,
@@ -102,6 +136,7 @@ import {
 import type { TargetRoute } from "./target-routing";
 import type {
   ApplyManagedModelConfigurationRequest,
+  Aside,
   ApprovalMode,
   ArtifactReference,
   CommandError,
@@ -111,9 +146,12 @@ import type {
   DesktopStatus,
   Interaction,
   InteractionAnswer,
+  ResearchDepth,
+  ResearchSourceKind,
   Run,
   RunMode,
   RunStatus,
+  SpaceSearchResult,
   TerminalKind,
 } from "./types";
 import { USE_CONFIGURED_MAX_TURNS, isTerminalStatus } from "./types";
@@ -122,14 +160,16 @@ import {
   readFixtureWorkspaceFile,
 } from "./dev/workspace-files-fixture";
 
-const FIXTURE_SCENARIO = new URLSearchParams(window.location.search).get(
-  "fixture",
-);
+const FIXTURE_QUERY = new URLSearchParams(window.location.search);
+const FIXTURE_SCENARIO = FIXTURE_QUERY.get("fixture");
 const FIXTURE_MODE =
   import.meta.env.DEV &&
   (FIXTURE_SCENARIO === "operations-studio" ||
+    FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
+const FIXTURE_SPACE_STARTUP =
+  FIXTURE_MODE && FIXTURE_QUERY.get("spaceStartup") === "1";
 
 const INITIAL_CONNECTION: ConnectionStatus = FIXTURE_MODE
   ? {
@@ -167,6 +207,67 @@ const INITIAL_DESKTOP: DesktopStatus = {
       ]
     : [],
   selectedTargetId: FIXTURE_MODE ? "fixture-managed-local" : null,
+  spaces: FIXTURE_MODE
+    ? [
+        {
+          spaceId: "fixture-managed-local",
+          targetId: "fixture-managed-local",
+          displayName: "Colossus",
+          displayPath: "~/tools/Colossus",
+          archived: false,
+          lastOpenedAtMs: Date.now(),
+          lastActivityAt: null,
+          state: "ready",
+          message: "Fixture runtime ready.",
+          selected: true,
+          attentionCount: 1,
+          providerConfigured: true,
+        },
+        {
+          spaceId: "fixture-research",
+          targetId: "fixture-research",
+          displayName: "Research Lab",
+          displayPath: "~/tools/research-lab",
+          archived: false,
+          lastOpenedAtMs: Date.now() - 1,
+          lastActivityAt: "2026-07-20T14:20:00Z",
+          state: "sleeping",
+          message: "Starts when selected.",
+          selected: false,
+          attentionCount: 2,
+          providerConfigured: true,
+        },
+        {
+          spaceId: "fixture-proposal",
+          targetId: "fixture-proposal",
+          displayName: "Proposal Studio",
+          displayPath: "~/tools/proposal-studio",
+          archived: false,
+          lastOpenedAtMs: Date.now() - 2,
+          lastActivityAt: "2026-07-20T14:10:00Z",
+          state: "sleeping",
+          message: "Background work needs attention.",
+          selected: false,
+          attentionCount: 3,
+          providerConfigured: true,
+        },
+        {
+          spaceId: "fixture-personal",
+          targetId: "fixture-personal",
+          displayName: "Personal",
+          displayPath: "~/personal",
+          archived: false,
+          lastOpenedAtMs: Date.now() - 3,
+          lastActivityAt: null,
+          state: "sleeping",
+          message: "Starts when selected.",
+          selected: false,
+          attentionCount: 0,
+          providerConfigured: true,
+        },
+      ]
+    : [],
+  selectedSpaceId: FIXTURE_MODE ? "fixture-managed-local" : null,
   managedState: FIXTURE_MODE ? "ready" : "starting",
   workspace: FIXTURE_MODE
     ? {
@@ -226,6 +327,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
     fingerprintsSha256: [],
   },
   capabilities: {
+    research: true,
     delegation: false,
     skills: false,
     tui: FIXTURE_MODE,
@@ -238,6 +340,97 @@ const INITIAL_DESKTOP: DesktopStatus = {
     attachments: false,
   },
 };
+
+const FIXTURE_SPACE_THREAD_PREVIEWS: ReadonlyMap<
+  string,
+  readonly SpaceSearchResult[]
+> = new Map([
+  [
+    "fixture-research",
+    [
+      {
+        spaceId: "fixture-research",
+        spaceName: "Research Lab",
+        targetId: "fixture-research",
+        runId: "fixture-research-source-review",
+        sessionId: "fixture-research-source-review",
+        title: "Review source provenance",
+        mode: "research",
+        status: "waiting",
+        updatedAt: "2026-07-20T14:20:00Z",
+        archived: false,
+        threadArchived: false,
+        attention: true,
+      },
+      {
+        spaceId: "fixture-research",
+        spaceName: "Research Lab",
+        targetId: "fixture-research",
+        runId: "fixture-research-search-backends",
+        sessionId: "fixture-research-search-backends",
+        title: "Compare search backends",
+        mode: "research",
+        status: "running",
+        updatedAt: "2026-07-20T14:16:00Z",
+        archived: false,
+        threadArchived: false,
+        attention: false,
+      },
+    ],
+  ],
+  [
+    "fixture-proposal",
+    [
+      {
+        spaceId: "fixture-proposal",
+        spaceName: "Proposal Studio",
+        targetId: "fixture-proposal",
+        runId: "fixture-proposal-compliance",
+        sessionId: "fixture-proposal-compliance",
+        title: "Resolve compliance findings",
+        mode: "execute",
+        status: "waiting",
+        updatedAt: "2026-07-20T14:10:00Z",
+        archived: false,
+        threadArchived: false,
+        attention: true,
+      },
+      {
+        spaceId: "fixture-proposal",
+        spaceName: "Proposal Studio",
+        targetId: "fixture-proposal",
+        runId: "fixture-proposal-pricing",
+        sessionId: "fixture-proposal-pricing",
+        title: "Polish pricing narrative",
+        mode: "execute",
+        status: "completed",
+        updatedAt: "2026-07-20T13:48:00Z",
+        archived: false,
+        threadArchived: false,
+        attention: false,
+      },
+    ],
+  ],
+  [
+    "fixture-personal",
+    [
+      {
+        spaceId: "fixture-personal",
+        spaceName: "Personal",
+        targetId: "fixture-personal",
+        runId: "fixture-personal-weekly-plan",
+        sessionId: "fixture-personal-weekly-plan",
+        title: "Draft weekly plan",
+        mode: "plan",
+        status: "completed",
+        updatedAt: "2026-07-19T18:30:00Z",
+        archived: false,
+        threadArchived: false,
+        attention: false,
+      },
+    ],
+  ],
+]);
 
 const FALLBACK_ACTION_ERROR: CommandError = {
   code: "desktop_request_failed",
@@ -425,21 +618,63 @@ interface PlanRevisionTarget {
   revision: number;
 }
 
+interface RunSubmission {
+  prompt: string;
+  attachments: readonly ArtifactReference[];
+  role: string;
+  mode: RunMode;
+  researchDepth: ResearchDepth;
+  researchSources: readonly ResearchSourceKind[];
+  maxTurns: number;
+  idempotencyKey: string;
+  sessionId?: string;
+  planRevision?: PlanRevisionTarget;
+}
+
+type RunSubmissionResult =
+  | { type: "accepted"; run: Run }
+  | { type: "failed"; error: CommandError }
+  | { type: "stale" };
+
 export default function App() {
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE
-      ? FIXTURE_SCENARIO === "plan-workflow"
-        ? buildPlanWorkflowFixture()
-        : buildOperationsStudioFixture(
-            FIXTURE_SCENARIO === "interaction-question"
-              ? "user_prompt"
-              : "approval",
-          )
+      ? FIXTURE_SCENARIO === "activity-comparison"
+        ? buildActivityComparisonFixture()
+        : FIXTURE_SCENARIO === "plan-workflow"
+          ? buildPlanWorkflowFixture()
+          : buildOperationsStudioFixture(
+              FIXTURE_SCENARIO === "interaction-question"
+                ? "user_prompt"
+                : "approval",
+            )
       : initialChatState,
   );
   const chatRef = useRef(chat);
+  const [asideChat, dispatchAside] = useReducer(chatReducer, initialChatState);
+  const [asideHistory, setAsideHistory] = useState<readonly Aside[]>([]);
+  const [asideBusy, setAsideBusy] = useState(false);
+  const [asideError, setAsideError] = useState<CommandError | null>(null);
+  const [asideReadOnly, setAsideReadOnly] = useState(false);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  const [initialWorkSidebarWidth] = useState(readStoredWorkSidebarWidth);
+  const workSidebarWidthRef = useRef(initialWorkSidebarWidth);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
+  const [storedThreadPins, setStoredThreadPins] =
+    useState(readStoredThreadPins);
+  const pinnedThreadSessionIds = useMemo(() => {
+    const pinned = new Set(
+      pinnedThreadIdsForSpace(storedThreadPins, desktop.selectedSpaceId),
+    );
+    if (FIXTURE_MODE && chat.activeRunId !== null) {
+      const fixtureSessionId = chat.views.get(chat.activeRunId)?.run.sessionId;
+      if (fixtureSessionId !== undefined) {
+        pinned.add(fixtureSessionId);
+      }
+    }
+    return pinned;
+  }, [chat.activeRunId, chat.views, desktop.selectedSpaceId, storedThreadPins]);
   const [releaseChannel, setReleaseChannel] = useState(
     INITIAL_DESKTOP.releaseChannel,
   );
@@ -447,9 +682,38 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
+  const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
+    useState<WorkspaceFileOpenRequest | null>(null);
+  const workspaceFileOpenSequence = useRef(0);
+  const [spaceStartup, setSpaceStartup] = useState<SpaceStartup | null>(() =>
+    FIXTURE_SPACE_STARTUP
+      ? { spaceId: "fixture-research", displayName: "Research Lab" }
+      : null,
+  );
   const [workQuery, setWorkQuery] = useState("");
+  const deferredWorkQuery = useDeferredValue(workQuery);
+  const [searchScope, setSearchScope] = useState<SpaceSearchScope>("space");
+  const [includeArchivedSearch, setIncludeArchivedSearch] = useState(false);
+  const [spaceSearchResults, setSpaceSearchResults] = useState<
+    readonly SpaceSearchResult[]
+  >([]);
+  const [spaceSearchCursor, setSpaceSearchCursor] = useState("");
+  const [spaceSearchBusy, setSpaceSearchBusy] = useState(false);
+  const [spaceSearchError, setSpaceSearchError] = useState("");
+  const [spaceThreadPreviews, setSpaceThreadPreviews] = useState<
+    ReadonlyMap<string, readonly SpaceSearchResult[]>
+  >(new Map());
+  const [spaceThreadPreviewBusyIds, setSpaceThreadPreviewBusyIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const [spaceThreadPreviewErrors, setSpaceThreadPreviewErrors] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
+  const spaceThreadPreviewRequests = useRef(new Set<string>());
   const connection = desktop.connection;
-  const [connecting, setConnecting] = useState(!FIXTURE_MODE);
+  const [connecting, setConnecting] = useState(
+    !FIXTURE_MODE || FIXTURE_SPACE_STARTUP,
+  );
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
@@ -467,6 +731,10 @@ export default function App() {
   >(new Set());
   const [role, setRole] = useState("primary");
   const [mode, setMode] = useState<RunMode>("execute");
+  const [researchDepth, setResearchDepth] = useState<ResearchDepth>("standard");
+  const [researchSources, setResearchSources] = useState<ResearchSourceKind[]>([
+    "repo",
+  ]);
   const [planRevision, setPlanRevision] = useState<PlanRevisionTarget | null>(
     null,
   );
@@ -474,11 +742,17 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
+  const [queuedMessages, setQueuedMessages] = useState<
+    readonly QueuedMessage[]
+  >([]);
   const [actionError, setActionError] = useState<CommandError | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [threadLifecycleBusySessionId, setThreadLifecycleBusySessionId] =
+    useState<string | null>(null);
   const watchedRuns = useRef(new Map<string, symbol>());
+  const watchedAsides = useRef(new Map<string, symbol>());
   const targetRoutes = useRef<TargetRouteRegistry | null>(null);
   if (targetRoutes.current === null) {
     targetRoutes.current = new TargetRouteRegistry();
@@ -492,13 +766,70 @@ export default function App() {
   }
   const connectingRef = useRef(false);
   const submitInFlight = useRef(false);
+  const queuedMessagesRef = useRef<readonly QueuedMessage[]>([]);
+  const queueDeliveryRef = useRef<string | null>(null);
   const createAttempt = useRef<RoutedAttempt | null>(null);
+  const asideCreateAttempt = useRef<RoutedAttempt | null>(null);
   const cancelAttempts = useRef(new Map<string, IdempotentAttempt>());
   const responseAttempts = useRef(new Map<string, IdempotentAttempt>());
+  const threadLifecycleAttempts = useRef(new Map<string, IdempotentAttempt>());
   const listRequest = useRef<symbol | null>(null);
   const cancelRequest = useRef<symbol | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
+
+  const commitQueuedMessages = useCallback(
+    (messages: readonly QueuedMessage[]) => {
+      queuedMessagesRef.current = messages;
+      setQueuedMessages(messages);
+    },
+    [],
+  );
+
+  const previewWorkSidebarWidth = useCallback((width: number) => {
+    workSidebarWidthRef.current = width;
+    appShellRef.current?.style.setProperty(
+      "--work-sidebar-width",
+      `${width}px`,
+    );
+  }, []);
+
+  const commitWorkSidebarWidth = useCallback(
+    (width: number) => {
+      previewWorkSidebarWidth(width);
+      storeWorkSidebarWidth(width);
+    },
+    [previewWorkSidebarWidth],
+  );
+
+  const resetWorkSidebarWidth = useCallback(() => {
+    workSidebarWidthRef.current = null;
+    appShellRef.current?.style.removeProperty("--work-sidebar-width");
+    clearStoredWorkSidebarWidth();
+  }, []);
+
+  const updateThreadPin = useCallback(
+    (spaceId: string, sessionId: string, pinned: boolean) => {
+      setStoredThreadPins((current) => {
+        const next = setThreadPinned(current, spaceId, sessionId, pinned);
+        storeThreadPins(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  function handleToggleThreadPinned(run: Run) {
+    const spaceId = desktopRef.current.selectedSpaceId;
+    if (spaceId === null) {
+      return;
+    }
+    updateThreadPin(
+      spaceId,
+      run.sessionId,
+      !pinnedThreadSessionIds.has(run.sessionId),
+    );
+  }
 
   useEffect(() => {
     chatRef.current = chat;
@@ -507,6 +838,77 @@ export default function App() {
   useEffect(() => {
     desktopRef.current = desktop;
   }, [desktop]);
+
+  useEffect(() => {
+    dispatchAside({ type: "reset" });
+    setAsideHistory([]);
+    setAsideError(null);
+    setAsideReadOnly(false);
+    asideCreateAttempt.current = null;
+  }, [desktop.selectedTargetId]);
+
+  useEffect(() => {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    let cancelled = false;
+    let unlistenStatus: (() => void) | undefined;
+    let unlistenAttention: (() => void) | undefined;
+    void Promise.all([
+      onSpaceStatusChanged((summary) => {
+        if (cancelled) {
+          return;
+        }
+        setDesktop((current) => ({
+          ...current,
+          spaces: current.spaces.map((space) =>
+            space.spaceId === summary.spaceId
+              ? {
+                  ...space,
+                  displayName: summary.displayName,
+                  archived: summary.archived,
+                  state: summary.state,
+                  selected: summary.selected,
+                  attentionCount: summary.attentionCount,
+                  lastActivityAt: summary.lastActivityAt,
+                }
+              : space,
+          ),
+        }));
+      }),
+      onSpaceAttention((attention) => {
+        if (cancelled) {
+          return;
+        }
+        setDesktop((current) => ({
+          ...current,
+          spaces: current.spaces.map((space) =>
+            space.spaceId === attention.spaceId
+              ? { ...space, attentionCount: attention.attentionCount }
+              : space,
+          ),
+        }));
+      }),
+    ])
+      .then(([stopStatus, stopAttention]) => {
+        if (cancelled) {
+          stopStatus();
+          stopAttention();
+        } else {
+          unlistenStatus = stopStatus;
+          unlistenAttention = stopAttention;
+        }
+      })
+      .catch(() => {
+        // The five-second native status refresh remains the fallback when the
+        // WebView event bridge is unavailable during startup or teardown.
+      });
+    return () => {
+      cancelled = true;
+      unlistenStatus?.();
+      unlistenAttention?.();
+    };
+  }, []);
 
   const markConnectionFailure = useCallback(
     (failure: CommandError, route?: TargetRoute) => {
@@ -650,6 +1052,65 @@ export default function App() {
     [markConnectionFailure],
   );
 
+  const startAsideWatch = useCallback(
+    (runId: string, afterSequence: number, route: TargetRoute) => {
+      if (FIXTURE_MODE || targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      const watchKey = `${route.targetId}:${route.generation}:aside:${runId}`;
+      if (watchedAsides.current.has(watchKey)) {
+        return;
+      }
+      const token = Symbol(runId);
+      watchedAsides.current.set(watchKey, token);
+      dispatchAside({ type: "watch_started", runId });
+      void watchDurableRun({
+        route,
+        runId,
+        afterSequence,
+        isCurrent: (candidate) =>
+          targetRoutes.current?.isCurrent(candidate) === true,
+        watch: (targetId, watchedRunId, cursor, onEvent) =>
+          watchRun(
+            targetId,
+            { runId: watchedRunId, afterSequence: cursor },
+            onEvent,
+          ),
+        getRun: (targetId, watchedRunId) =>
+          getRun(targetId, { runId: watchedRunId }),
+        normalizeError: commandError,
+        canRecover: (failure, candidate) =>
+          candidate.kind === "managed_local" &&
+          failure.retryable &&
+          isConnectionError(failure),
+        onUpdate: (update) => dispatchAside({ type: "ingest_update", update }),
+        onHydrate: (details) => {
+          targetRoutes.current?.bindRun(details.run.runId, route);
+          dispatchAside({ type: "hydrate_run", details });
+        },
+      })
+        .then((result) => {
+          if (
+            result.type === "stale" ||
+            targetRoutes.current?.isCurrent(route) !== true
+          ) {
+            return;
+          }
+          if (result.type === "complete") {
+            dispatchAside({ type: "watch_complete", runId });
+          } else {
+            dispatchAside({ type: "watch_error", runId, error: result.error });
+          }
+        })
+        .finally(() => {
+          if (watchedAsides.current.get(watchKey) === token) {
+            watchedAsides.current.delete(watchKey);
+          }
+        });
+    },
+    [],
+  );
+
   const acceptDesktopStatus = useCallback(
     async (status: DesktopStatus, resetWork: boolean) => {
       const previousStatus = desktopRef.current;
@@ -770,7 +1231,7 @@ export default function App() {
 
   useEffect(() => {
     if (FIXTURE_MODE) {
-      setConnecting(false);
+      setConnecting(FIXTURE_SPACE_STARTUP);
       return;
     }
     let cancelled = false;
@@ -843,6 +1304,213 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, [acceptDesktopStatus]);
+
+  useEffect(() => {
+    const query = deferredWorkQuery.trim();
+    if (query === "") {
+      setSpaceSearchResults([]);
+      setSpaceSearchCursor("");
+      setSpaceSearchBusy(false);
+      setSpaceSearchError("");
+      return;
+    }
+    if (searchScope === "space" && desktop.selectedSpaceId === null) {
+      setSpaceSearchResults([]);
+      setSpaceSearchCursor("");
+      setSpaceSearchBusy(false);
+      setSpaceSearchError("Select a Space before searching it.");
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSpaceSearchBusy(true);
+      setSpaceSearchError("");
+      if (FIXTURE_MODE) {
+        const normalized = query.toLocaleLowerCase();
+        const space = desktop.spaces.find(
+          (candidate) => candidate.spaceId === desktop.selectedSpaceId,
+        );
+        const results = chat.recentRuns
+          .filter((run) =>
+            [run.title, run.mode, run.status]
+              .join(" ")
+              .toLocaleLowerCase()
+              .includes(normalized),
+          )
+          .slice(0, 50)
+          .map((run): SpaceSearchResult => ({
+            spaceId: space?.spaceId ?? "fixture-managed-local",
+            spaceName: space?.displayName ?? "Colossus",
+            targetId: space?.targetId ?? "fixture-managed-local",
+            runId: run.runId,
+            sessionId: run.sessionId,
+            title: run.title,
+            mode: run.mode,
+            status: run.status,
+            updatedAt: run.updatedAt,
+            archived: false,
+            threadArchived: run.archived,
+            attention:
+              run.status === "waiting" ||
+              run.status === "outcome_unknown" ||
+              run.pendingInteractionCount > 0,
+          }));
+        if (!cancelled) {
+          setSpaceSearchResults(results);
+          setSpaceSearchCursor("");
+          setSpaceSearchBusy(false);
+        }
+        return;
+      }
+
+      void searchSpaceThreads({
+        query,
+        ...(searchScope === "space" && desktop.selectedSpaceId !== null
+          ? { spaceId: desktop.selectedSpaceId }
+          : {}),
+        includeArchived: searchScope === "all" && includeArchivedSearch,
+        pageSize: 50,
+      })
+        .then((page) => {
+          if (!cancelled) {
+            setSpaceSearchResults(page.results);
+            setSpaceSearchCursor(page.nextCursor);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setSpaceSearchResults([]);
+            setSpaceSearchCursor("");
+            setSpaceSearchError(commandError(error).message);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSpaceSearchBusy(false);
+          }
+        });
+    }, 160);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    chat.recentRuns,
+    deferredWorkQuery,
+    desktop.selectedSpaceId,
+    desktop.spaces,
+    includeArchivedSearch,
+    searchScope,
+  ]);
+
+  async function loadMoreSpaceSearch() {
+    const query = deferredWorkQuery.trim();
+    if (
+      FIXTURE_MODE ||
+      query === "" ||
+      spaceSearchCursor === "" ||
+      spaceSearchBusy
+    ) {
+      return;
+    }
+    setSpaceSearchBusy(true);
+    setSpaceSearchError("");
+    try {
+      const page = await searchSpaceThreads({
+        query,
+        ...(searchScope === "space" && desktop.selectedSpaceId !== null
+          ? { spaceId: desktop.selectedSpaceId }
+          : {}),
+        includeArchived: searchScope === "all" && includeArchivedSearch,
+        cursor: spaceSearchCursor,
+        pageSize: 50,
+      });
+      setSpaceSearchResults((current) => [...current, ...page.results]);
+      setSpaceSearchCursor(page.nextCursor);
+    } catch (error: unknown) {
+      setSpaceSearchError(commandError(error).message);
+    } finally {
+      setSpaceSearchBusy(false);
+    }
+  }
+
+  async function loadSpaceThreadPreview(spaceId: string) {
+    if (
+      spaceThreadPreviews.has(spaceId) ||
+      spaceThreadPreviewRequests.current.has(spaceId)
+    ) {
+      return;
+    }
+    const space = desktopRef.current.spaces.find(
+      (candidate) => candidate.spaceId === spaceId && !candidate.archived,
+    );
+    if (space === undefined) {
+      return;
+    }
+
+    spaceThreadPreviewRequests.current.add(spaceId);
+    setSpaceThreadPreviewBusyIds((current) => {
+      const next = new Set(current);
+      next.add(spaceId);
+      return next;
+    });
+    setSpaceThreadPreviewErrors((current) => {
+      const next = new Map(current);
+      next.delete(spaceId);
+      return next;
+    });
+    try {
+      const results = FIXTURE_MODE
+        ? (FIXTURE_SPACE_THREAD_PREVIEWS.get(spaceId) ??
+          chatRef.current.recentRuns
+            .slice(0, 8)
+            .map((run): SpaceSearchResult => ({
+              spaceId,
+              spaceName: space.displayName,
+              targetId: space.targetId,
+              runId: run.runId,
+              sessionId: run.sessionId,
+              title: run.title,
+              mode: run.mode,
+              status: run.status,
+              updatedAt: run.updatedAt,
+              archived: false,
+              threadArchived: run.archived,
+              attention:
+                run.status === "waiting" ||
+                run.status === "outcome_unknown" ||
+                run.pendingInteractionCount > 0,
+            })))
+        : (
+            await searchSpaceThreads({
+              query: "",
+              spaceId,
+              includeArchived: false,
+              pageSize: 8,
+            })
+          ).results;
+      setSpaceThreadPreviews((current) => {
+        const next = new Map(current);
+        next.set(spaceId, results);
+        return next;
+      });
+    } catch (error: unknown) {
+      setSpaceThreadPreviewErrors((current) => {
+        const next = new Map(current);
+        next.set(spaceId, commandError(error).message);
+        return next;
+      });
+    } finally {
+      spaceThreadPreviewRequests.current.delete(spaceId);
+      setSpaceThreadPreviewBusyIds((current) => {
+        const next = new Set(current);
+        next.delete(spaceId);
+        return next;
+      });
+    }
+  }
 
   async function openRun(run: Run) {
     if (submitInFlight.current || connectingRef.current) {
@@ -942,6 +1610,182 @@ export default function App() {
     requestAnimationFrame(() => composerRef.current?.focus());
   }
 
+  const performRunSubmission = useCallback(
+    async (
+      submission: RunSubmission,
+      route: TargetRoute,
+    ): Promise<RunSubmissionResult> => {
+      if (
+        submitInFlight.current ||
+        connectingRef.current ||
+        targetRoutes.current?.isCurrent(route) !== true
+      ) {
+        return { type: "stale" };
+      }
+      const request: CreateRunRequest = {
+        prompt: submission.prompt,
+        artifactIds: submission.attachments.map(
+          (attachment) => attachment.artifactId,
+        ),
+        role: submission.role,
+        mode: submission.mode,
+        ...(submission.mode === "research"
+          ? {
+              researchDepth: submission.researchDepth,
+              researchSources: [...submission.researchSources],
+            }
+          : {}),
+        maxTurns: submission.maxTurns,
+        idempotencyKey: submission.idempotencyKey,
+        ...(submission.sessionId === undefined
+          ? {}
+          : { sessionId: submission.sessionId }),
+        ...(submission.planRevision === undefined
+          ? {}
+          : {
+              planAction: {
+                type: "revise" as const,
+                sourceRunId: submission.planRevision.sourceRunId,
+                expectedRevision: submission.planRevision.revision,
+              },
+            }),
+      };
+
+      submitInFlight.current = true;
+      setSubmitting(true);
+      setActionError(null);
+      try {
+        let run: Run;
+        if (FIXTURE_MODE) {
+          const now = new Date().toISOString();
+          const identity = crypto.randomUUID();
+          const runId = `fixture-composed-${identity}`;
+          run = {
+            runId,
+            sessionId: submission.sessionId ?? `fixture-session-${identity}`,
+            title: safeDisplayLabel(submission.prompt, "Untitled work", 80),
+            role: submission.role,
+            mode: submission.mode,
+            status: "completed",
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            finishedAt: now,
+            lastSequence: 0,
+            pendingInteractionCount: 0,
+            terminal: {
+              type: "result",
+              result: {
+                output:
+                  submission.planRevision === undefined
+                    ? "Showcase response: the request was accepted by the local Operations Studio fixture. Live builds send this through the scoped native command boundary."
+                    : "The selected Plan was revised in this chat and saved as a new durable draft revision.",
+                ...(submission.planRevision === undefined
+                  ? {}
+                  : {
+                      planId: submission.planRevision.planId,
+                      planRevision: submission.planRevision.revision + 1,
+                      planStatus: "draft" as const,
+                    }),
+                profile: "desktop-showcase",
+                modelProfile: "desktop-showcase",
+                providerProfile: "fixture-provider",
+                model: "fixture",
+                elapsedSeconds: 0.2,
+              },
+            },
+            etag: `fixture-etag-${runId}`,
+            selectedSkills: [],
+            archived: false,
+          };
+        } else {
+          run = await createRun(route.targetId, request);
+        }
+        if (targetRoutes.current?.isCurrent(route) !== true) {
+          return { type: "stale" };
+        }
+        targetRoutes.current.bindRun(run.runId, route);
+        dispatch({ type: "upsert_run", run });
+        dispatch({
+          type: "record_local_prompt",
+          runId: run.runId,
+          prompt: submission.prompt,
+        });
+        dispatch({ type: "select_run", runId: run.runId });
+        if (!FIXTURE_MODE) {
+          startWatch(run.runId, 0, route);
+        }
+        return { type: "accepted", run };
+      } catch (error: unknown) {
+        if (targetRoutes.current?.isCurrent(route) !== true) {
+          return { type: "stale" };
+        }
+        const failure = commandError(error);
+        markConnectionFailure(failure, route);
+        return { type: "failed", error: failure };
+      } finally {
+        submitInFlight.current = false;
+        setSubmitting(false);
+      }
+    },
+    [markConnectionFailure, startWatch],
+  );
+
+  function enqueueCurrentMessage(
+    currentView: NonNullable<ReturnType<typeof chat.views.get>>,
+    route: TargetRoute,
+    placement: QueuePlacement,
+  ): QueuedMessage | null {
+    const cleanPrompt = prompt.trim();
+    const cleanRole = role.trim();
+    if (
+      cleanPrompt.length === 0 ||
+      cleanRole.length === 0 ||
+      !isPromptWithinByteLimit(prompt) ||
+      (mode === "research" && researchSources.length === 0)
+    ) {
+      return null;
+    }
+    const message: QueuedMessage = {
+      id: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(),
+      targetId: route.targetId,
+      sessionId: currentView.run.sessionId,
+      prompt: cleanPrompt,
+      role: cleanRole,
+      mode,
+      researchDepth,
+      researchSources: [...researchSources],
+      maxTurns,
+      attachments: [...attachments],
+      createdAt: new Date().toISOString(),
+      state: "pending",
+      error: null,
+    };
+    const result = enqueueMessage(
+      queuedMessagesRef.current,
+      message,
+      placement,
+    );
+    if (!result.accepted) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "message_queue_full",
+        message:
+          result.reason === "thread_full"
+            ? "Next up is full for this thread. Edit or delete a queued message first."
+            : "The Desktop message queue is full. Send or remove another queued message first.",
+        retryable: false,
+      });
+      return null;
+    }
+    commitQueuedMessages(result.messages);
+    setPrompt("");
+    setAttachments([]);
+    setComposerError(null);
+    return message;
+  }
+
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitInFlight.current || connectingRef.current) {
@@ -977,18 +1821,43 @@ export default function App() {
       });
       return;
     }
-    const sessionId =
+    const continuationQueueLength =
+      continuationView === undefined
+        ? 0
+        : messagesForThread(
+            queuedMessagesRef.current,
+            route.targetId,
+            continuationView.run.sessionId,
+          ).length;
+    if (
+      planRevision === null &&
       continuationView !== undefined &&
-      isTerminalStatus(continuationView.run.status)
-        ? continuationView.run.sessionId
-        : undefined;
+      (!isTerminalStatus(continuationView.run.status) ||
+        continuationQueueLength > 0)
+    ) {
+      enqueueCurrentMessage(continuationView, route, "last");
+      return;
+    }
+
+    const sessionId = continuationView?.run.sessionId;
     const effectiveMode: RunMode = planRevision === null ? mode : "plan";
+    if (effectiveMode === "research" && researchSources.length === 0) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "invalid_argument",
+        message: "Select at least one evidence source for Research.",
+      });
+      return;
+    }
     const fingerprint = operationFingerprint([
       cleanPrompt,
       route.targetId,
       sessionId ?? "",
       cleanRole,
       effectiveMode,
+      ...(effectiveMode === "research"
+        ? [researchDepth, ...researchSources]
+        : []),
       maxTurns,
       planRevision?.sourceRunId ?? "",
       planRevision?.planId ?? "",
@@ -1002,116 +1871,179 @@ export default function App() {
         ? previousRoutedAttempt.attempt
         : null;
     const attempt = stableIdempotentAttempt(previousAttempt, fingerprint);
-    createAttempt.current = {
-      targetId: route.targetId,
-      attempt,
-    };
-    const commonRequest: CreateRunRequest = {
-      prompt: cleanPrompt,
-      artifactIds: attachments.map((attachment) => attachment.artifactId),
-      role: cleanRole,
-      mode: effectiveMode,
-      maxTurns,
-      idempotencyKey: attempt.key,
-      ...(planRevision === null
-        ? {}
-        : {
-            planAction: {
-              type: "revise" as const,
-              sourceRunId: planRevision.sourceRunId,
-              expectedRevision: planRevision.revision,
-            },
-          }),
-    };
-    const request: CreateRunRequest =
-      sessionId === undefined ? commonRequest : { ...commonRequest, sessionId };
-
-    submitInFlight.current = true;
-    setSubmitting(true);
+    createAttempt.current = { targetId: route.targetId, attempt };
     setComposerError(null);
-    setActionError(null);
-    try {
-      if (FIXTURE_MODE) {
-        const now = new Date().toISOString();
-        const runId = `fixture-composed-${Date.now()}`;
-        const run: Run = {
-          runId,
-          sessionId: sessionId ?? `fixture-session-${Date.now()}`,
-          title: safeDisplayLabel(cleanPrompt, "Untitled work", 80),
-          role: cleanRole,
-          mode: effectiveMode,
-          status: "completed",
-          createdAt: now,
-          updatedAt: now,
-          startedAt: now,
-          finishedAt: now,
-          lastSequence: 0,
-          pendingInteractionCount: 0,
-          terminal: {
-            type: "result",
-            result: {
-              output:
-                planRevision === null
-                  ? "Showcase response: the request was accepted by the local Operations Studio fixture. Live builds send this through the scoped native command boundary."
-                  : "The selected Plan was revised in this chat and saved as a new durable draft revision.",
-              ...(planRevision === null
-                ? {}
-                : {
-                    planId: planRevision.planId,
-                    planRevision: planRevision.revision + 1,
-                    planStatus: "draft" as const,
-                  }),
-              profile: "desktop-showcase",
-              modelProfile: "desktop-showcase",
-              providerProfile: "fixture-provider",
-              model: "fixture",
-              elapsedSeconds: 0.2,
-            },
-          },
-          etag: `fixture-etag-${runId}`,
-          selectedSkills: [],
-        };
-        createAttempt.current = null;
-        setPrompt("");
-        setPlanRevision(null);
-        setAttachments([]);
-        targetRoutes.current?.bindRun(runId, route);
-        dispatch({ type: "upsert_run", run });
-        dispatch({ type: "record_local_prompt", runId, prompt: cleanPrompt });
-        dispatch({ type: "select_run", runId });
-        return;
-      }
-
-      if (route === null) {
-        return;
-      }
-      const run = await createRun(route.targetId, request);
-      if (targetRoutes.current?.isCurrent(route) !== true) {
-        return;
-      }
+    const result = await performRunSubmission(
+      {
+        prompt: cleanPrompt,
+        attachments: [...attachments],
+        role: cleanRole,
+        mode: effectiveMode,
+        researchDepth,
+        researchSources,
+        maxTurns,
+        idempotencyKey: attempt.key,
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ...(planRevision === null ? {} : { planRevision }),
+      },
+      route,
+    );
+    if (result.type === "accepted") {
       createAttempt.current = null;
       setPrompt("");
       setPlanRevision(null);
       setAttachments([]);
-      targetRoutes.current.bindRun(run.runId, route);
-      dispatch({ type: "upsert_run", run });
-      dispatch({
-        type: "record_local_prompt",
-        runId: run.runId,
-        prompt: cleanPrompt,
-      });
-      dispatch({ type: "select_run", runId: run.runId });
-      startWatch(run.runId, 0, route);
-    } catch (error: unknown) {
-      if (route !== null && targetRoutes.current?.isCurrent(route) !== true) {
+    } else if (result.type === "failed") {
+      setComposerError(result.error);
+    }
+  }
+
+  const deliverQueuedMessage = useCallback(
+    async (message: QueuedMessage, route: TargetRoute) => {
+      if (queueDeliveryRef.current !== null) {
         return;
       }
-      const failure = commandError(error);
-      markConnectionFailure(failure, route ?? undefined);
-      setComposerError(failure);
-    } finally {
-      submitInFlight.current = false;
-      setSubmitting(false);
+      queueDeliveryRef.current = message.id;
+      commitQueuedMessages(
+        updateQueuedMessage(
+          queuedMessagesRef.current,
+          message.id,
+          (current) => ({ ...current, state: "sending", error: null }),
+        ),
+      );
+      try {
+        const result = await performRunSubmission(
+          {
+            prompt: message.prompt,
+            attachments: message.attachments,
+            role: message.role,
+            mode: message.mode,
+            researchDepth: message.researchDepth,
+            researchSources: message.researchSources,
+            maxTurns: message.maxTurns,
+            idempotencyKey: message.idempotencyKey,
+            sessionId: message.sessionId,
+          },
+          route,
+        );
+        if (result.type === "accepted") {
+          commitQueuedMessages(
+            removeQueuedMessage(queuedMessagesRef.current, message.id),
+          );
+          return;
+        }
+        if (result.type === "failed") {
+          commitQueuedMessages(
+            updateQueuedMessage(
+              queuedMessagesRef.current,
+              message.id,
+              (current) => ({
+                ...current,
+                state: "failed",
+                error: result.error,
+              }),
+            ),
+          );
+          return;
+        }
+        commitQueuedMessages(
+          updateQueuedMessage(
+            queuedMessagesRef.current,
+            message.id,
+            (current) => ({ ...current, state: "pending", error: null }),
+          ),
+        );
+      } finally {
+        queueDeliveryRef.current = null;
+      }
+    },
+    [commitQueuedMessages, performRunSubmission],
+  );
+
+  function editQueuedMessage(messageId: string, nextPrompt: string) {
+    if (!isPromptWithinByteLimit(nextPrompt)) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "prompt_too_large",
+        message: `Queued messages must be ${MAX_PROMPT_BYTES.toLocaleString()} UTF-8 bytes or fewer.`,
+        retryable: false,
+      });
+      return;
+    }
+    commitQueuedMessages(
+      updateQueuedMessage(queuedMessagesRef.current, messageId, (message) =>
+        message.state === "sending" || message.error?.outcomeUnknown === true
+          ? message
+          : {
+              ...message,
+              prompt: nextPrompt.trim(),
+              idempotencyKey: crypto.randomUUID(),
+              state: "pending",
+              error: null,
+            },
+      ),
+    );
+    setComposerError(null);
+  }
+
+  function deleteQueuedMessage(messageId: string) {
+    const message = queuedMessagesRef.current.find(
+      (candidate) => candidate.id === messageId,
+    );
+    if (message?.state === "sending") {
+      return;
+    }
+    commitQueuedMessages(
+      removeQueuedMessage(queuedMessagesRef.current, messageId),
+    );
+  }
+
+  function retryQueuedMessage(messageId: string) {
+    commitQueuedMessages(
+      updateQueuedMessage(queuedMessagesRef.current, messageId, (message) =>
+        message.state === "failed"
+          ? { ...message, state: "pending", error: null }
+          : message,
+      ),
+    );
+  }
+
+  async function redirectCurrentResponse() {
+    if (submitInFlight.current || connectingRef.current) {
+      return;
+    }
+    const activeView =
+      chatRef.current.activeRunId === null
+        ? undefined
+        : chatRef.current.views.get(chatRef.current.activeRunId);
+    if (
+      activeView === undefined ||
+      isTerminalStatus(activeView.run.status) ||
+      !isCancelable(activeView.run.status)
+    ) {
+      return;
+    }
+    const route =
+      targetRoutes.current?.routeForRun(activeView.run.runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "disconnected",
+        message: "The active response is no longer bound to this target.",
+      });
+      return;
+    }
+    const queued = enqueueCurrentMessage(activeView, route, "next");
+    if (queued === null) {
+      return;
+    }
+    if (!(await cancelActiveRun())) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "redirect_not_started",
+        message:
+          "Your guidance is saved in Next up, but the current response could not be stopped. Retry Stop or let it finish.",
+      });
     }
   }
 
@@ -1249,6 +2181,7 @@ export default function App() {
           },
           etag: `fixture-etag-${runId}`,
           selectedSkills: [],
+          archived: false,
         };
       } else {
         run = await createRun(route.targetId, request);
@@ -1368,14 +2301,16 @@ export default function App() {
     }
   }
 
-  async function cancelActiveRun() {
+  async function cancelActiveRun(): Promise<boolean> {
     if (connectingRef.current) {
-      return;
+      return false;
     }
     const activeView =
-      chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
+      chatRef.current.activeRunId === null
+        ? undefined
+        : chatRef.current.views.get(chatRef.current.activeRunId);
     if (activeView === undefined || !isCancelable(activeView.run.status)) {
-      return;
+      return false;
     }
     const runId = activeView.run.runId;
     if (FIXTURE_MODE) {
@@ -1394,7 +2329,7 @@ export default function App() {
           },
         },
       });
-      return;
+      return true;
     }
 
     const route = targetRoutes.current?.routeForRun(runId) ?? null;
@@ -1404,7 +2339,7 @@ export default function App() {
         code: "disconnected",
         message: "The active run is no longer bound to this target.",
       });
-      return;
+      return false;
     }
     const attemptKey = `${route.targetId}:${runId}`;
     const fingerprint = operationFingerprint([route.targetId, runId, "cancel"]);
@@ -1427,17 +2362,19 @@ export default function App() {
         idempotencyKey: attempt.key,
       });
       if (targetRoutes.current?.isCurrent(route) !== true) {
-        return;
+        return false;
       }
       dispatch({ type: "upsert_run", run });
       startWatch(runId, activeView.lastSequence, route);
+      return true;
     } catch (error: unknown) {
       if (targetRoutes.current?.isCurrent(route) !== true) {
-        return;
+        return false;
       }
       const failure = commandError(error);
       markConnectionFailure(failure, route);
       setActionError(failure);
+      return false;
     } finally {
       if (cancelRequest.current === requestToken) {
         cancelRequest.current = null;
@@ -1519,6 +2456,313 @@ export default function App() {
     },
     [markConnectionFailure, startWatch],
   );
+
+  async function loadAsides(parentSessionId: string) {
+    const route = targetRoutes.current?.capture() ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      return;
+    }
+    setAsideError(null);
+    if (FIXTURE_MODE) {
+      return;
+    }
+    try {
+      setAsideHistory(await listAsides(route.targetId, parentSessionId));
+    } catch (error: unknown) {
+      setAsideError(commandError(error));
+    }
+  }
+
+  async function createAsideRun(
+    promptText: string,
+    draft: AsideDraft,
+  ): Promise<boolean> {
+    const route = targetRoutes.current?.capture() ?? null;
+    const sourceView = chatRef.current.views.get(draft.sourceRunId);
+    if (
+      route === null ||
+      sourceView === undefined ||
+      targetRoutes.current?.isCurrent(route) !== true ||
+      asideBusy
+    ) {
+      return false;
+    }
+    const visiblePrompt =
+      draft.quote === ""
+        ? promptText
+        : `Regarding this excerpt:\n\n${draft.quote}\n\n${promptText}`;
+    if (!isPromptWithinByteLimit(visiblePrompt)) {
+      setAsideError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "prompt_too_large",
+        message: `Aside messages must be ${MAX_PROMPT_BYTES.toLocaleString()} UTF-8 bytes or fewer, including selected text.`,
+        retryable: false,
+      });
+      return false;
+    }
+    const fingerprint = operationFingerprint([
+      route.targetId,
+      draft.sourceRunId,
+      visiblePrompt,
+    ]);
+    const previous =
+      asideCreateAttempt.current?.targetId === route.targetId
+        ? asideCreateAttempt.current.attempt
+        : null;
+    const attempt = stableIdempotentAttempt(previous, fingerprint);
+    asideCreateAttempt.current = { targetId: route.targetId, attempt };
+    setAsideBusy(true);
+    setAsideError(null);
+    try {
+      let run: Run;
+      if (FIXTURE_MODE) {
+        const now = new Date().toISOString();
+        const identity = crypto.randomUUID();
+        run = {
+          ...sourceView.run,
+          runId: `fixture-aside-${identity}`,
+          sessionId: `fixture-aside-session-${identity}`,
+          title: safeDisplayLabel(promptText, "Untitled Aside", 80),
+          status: "completed",
+          createdAt: now,
+          updatedAt: now,
+          startedAt: now,
+          finishedAt: now,
+          lastSequence: 0,
+          pendingInteractionCount: 0,
+          terminal: {
+            type: "result",
+            result: {
+              output:
+                "This is a separate Aside response. The main thread remains unchanged.",
+              profile: "desktop-showcase",
+              modelProfile: "desktop-showcase",
+              providerProfile: "fixture-provider",
+              model: "fixture",
+              elapsedSeconds: 0.1,
+            },
+          },
+          etag: `fixture-etag-${identity}`,
+          archived: false,
+        };
+      } else {
+        run = await createRun(route.targetId, {
+          prompt: visiblePrompt,
+          role: sourceView.run.role,
+          mode: "execute",
+          maxTurns: USE_CONFIGURED_MAX_TURNS,
+          idempotencyKey: attempt.key,
+          branch: {
+            sourceRunId: draft.sourceRunId,
+          },
+        });
+      }
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return false;
+      }
+      targetRoutes.current.bindRun(run.runId, route);
+      dispatchAside({ type: "upsert_run", run });
+      dispatchAside({
+        type: "record_local_prompt",
+        runId: run.runId,
+        prompt: visiblePrompt,
+      });
+      dispatchAside({ type: "select_run", runId: run.runId });
+      setAsideReadOnly(false);
+      asideCreateAttempt.current = null;
+      startAsideWatch(run.runId, 0, route);
+      return true;
+    } catch (error: unknown) {
+      setAsideError(commandError(error));
+      return false;
+    } finally {
+      setAsideBusy(false);
+    }
+  }
+
+  async function continueAsideRun(
+    promptText: string,
+    current: RunView,
+  ): Promise<boolean> {
+    const route = targetRoutes.current?.routeForRun(current.run.runId) ?? null;
+    if (
+      route === null ||
+      targetRoutes.current?.isCurrent(route) !== true ||
+      asideBusy ||
+      !isTerminalStatus(current.run.status)
+    ) {
+      return false;
+    }
+    if (!isPromptWithinByteLimit(promptText)) {
+      setAsideError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "prompt_too_large",
+        message: `Aside messages must be ${MAX_PROMPT_BYTES.toLocaleString()} UTF-8 bytes or fewer.`,
+        retryable: false,
+      });
+      return false;
+    }
+    setAsideBusy(true);
+    setAsideError(null);
+    const fingerprint = operationFingerprint([
+      route.targetId,
+      current.run.sessionId,
+      promptText,
+    ]);
+    const previous =
+      asideCreateAttempt.current?.targetId === route.targetId
+        ? asideCreateAttempt.current.attempt
+        : null;
+    const attempt = stableIdempotentAttempt(previous, fingerprint);
+    asideCreateAttempt.current = { targetId: route.targetId, attempt };
+    try {
+      const run = FIXTURE_MODE
+        ? {
+            ...current.run,
+            runId: `fixture-aside-${crypto.randomUUID()}`,
+            title: safeDisplayLabel(promptText, "Untitled Aside", 80),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }
+        : await createRun(route.targetId, {
+            prompt: promptText,
+            sessionId: current.run.sessionId,
+            role: current.run.role,
+            mode: "execute",
+            maxTurns: USE_CONFIGURED_MAX_TURNS,
+            idempotencyKey: attempt.key,
+          });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return false;
+      }
+      targetRoutes.current.bindRun(run.runId, route);
+      dispatchAside({ type: "upsert_run", run });
+      dispatchAside({
+        type: "record_local_prompt",
+        runId: run.runId,
+        prompt: promptText,
+      });
+      dispatchAside({ type: "select_run", runId: run.runId });
+      setAsideReadOnly(false);
+      asideCreateAttempt.current = null;
+      startAsideWatch(run.runId, 0, route);
+      return true;
+    } catch (error: unknown) {
+      setAsideError(commandError(error));
+      return false;
+    } finally {
+      setAsideBusy(false);
+    }
+  }
+
+  async function openAside(aside: Aside) {
+    const route = targetRoutes.current?.capture() ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      return;
+    }
+    setAsideBusy(true);
+    setAsideError(null);
+    try {
+      const details = FIXTURE_MODE
+        ? { run: aside.run, pendingInteractions: [] }
+        : await getRun(route.targetId, { runId: aside.run.runId });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      targetRoutes.current.bindRun(details.run.runId, route);
+      dispatchAside({ type: "reset" });
+      dispatchAside({ type: "hydrate_run", details });
+      dispatchAside({ type: "select_run", runId: details.run.runId });
+      setAsideReadOnly(aside.closed || details.run.archived);
+      if (!isTerminalStatus(details.run.status)) {
+        startAsideWatch(details.run.runId, details.run.lastSequence, route);
+      }
+    } catch (error: unknown) {
+      setAsideError(commandError(error));
+    } finally {
+      setAsideBusy(false);
+    }
+  }
+
+  async function closeAside(current: RunView | undefined): Promise<boolean> {
+    if (current === undefined) {
+      dispatchAside({ type: "reset" });
+      setAsideReadOnly(false);
+      return true;
+    }
+    const route = targetRoutes.current?.routeForRun(current.run.runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      return false;
+    }
+    setAsideBusy(true);
+    setAsideError(null);
+    try {
+      let run = current.run;
+      if (!isTerminalStatus(run.status) && !FIXTURE_MODE) {
+        run = await cancelRun(route.targetId, {
+          runId: run.runId,
+          idempotencyKey: crypto.randomUUID(),
+        });
+        for (
+          let attempt = 0;
+          attempt < 40 && !isTerminalStatus(run.status);
+          attempt += 1
+        ) {
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+          run = (await getRun(route.targetId, { runId: run.runId })).run;
+        }
+      }
+      if (!isTerminalStatus(run.status) && !FIXTURE_MODE) {
+        throw new Error(
+          "The Aside is still stopping. Try closing it again shortly.",
+        );
+      }
+      if (!FIXTURE_MODE) {
+        await archiveThread(route.targetId, {
+          runId: run.runId,
+          idempotencyKey: crypto.randomUUID(),
+        });
+      }
+      dispatchAside({ type: "reset" });
+      setAsideReadOnly(false);
+      if (activeRun !== undefined) {
+        await loadAsides(activeRun.sessionId);
+      }
+      return true;
+    } catch (error: unknown) {
+      setAsideError(commandError(error));
+      return false;
+    } finally {
+      setAsideBusy(false);
+    }
+  }
+
+  async function respondAside(
+    interaction: Interaction,
+    response: InteractionAnswer,
+  ) {
+    if (FIXTURE_MODE) {
+      dispatchAside({
+        type: "interaction_resolved",
+        interaction: { ...interaction, status: "answered" },
+      });
+      return;
+    }
+    const route = targetRoutes.current?.routeForRun(interaction.runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      return;
+    }
+    const resolved = await respondInteraction(route.targetId, {
+      runId: interaction.runId,
+      interactionId: interaction.interactionId,
+      etag: interaction.etag,
+      idempotencyKey: crypto.randomUUID(),
+      response,
+    });
+    dispatchAside({ type: "interaction_resolved", interaction: resolved });
+    const cursor = asideChat.views.get(interaction.runId)?.lastSequence ?? 0;
+    startAsideWatch(interaction.runId, cursor, route);
+  }
 
   async function handleChooseWorkspace() {
     if (connectingRef.current || submitInFlight.current) {
@@ -1842,6 +3086,430 @@ export default function App() {
     }
   }
 
+  async function handleSelectSpace(spaceId: string) {
+    if (
+      spaceId === desktop.selectedSpaceId ||
+      connectingRef.current ||
+      submitInFlight.current
+    ) {
+      setWorkNavigationOpen(false);
+      return;
+    }
+    const requestedSpace = desktopRef.current.spaces.find(
+      (space) => space.spaceId === spaceId,
+    );
+    setSpaceStartup({
+      spaceId,
+      displayName: requestedSpace?.displayName ?? "Space",
+    });
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        if (requestedSpace === undefined) {
+          return;
+        }
+        const status: DesktopStatus = {
+          ...desktopRef.current,
+          selectedSpaceId: spaceId,
+          selectedTargetId: requestedSpace.targetId,
+          connection: {
+            ...desktopRef.current.connection,
+            targetId: requestedSpace.targetId,
+          },
+          workspace: {
+            workspaceId: requestedSpace.spaceId,
+            displayName: requestedSpace.displayName,
+            displayPath: requestedSpace.displayPath,
+          },
+          spaces: desktopRef.current.spaces.map((space) => ({
+            ...space,
+            selected: space.spaceId === spaceId,
+          })),
+        };
+        desktopRef.current = status;
+        setDesktop(status);
+        setSurface("work");
+        setWorkNavigationOpen(false);
+        return;
+      }
+      const status = await selectSpace(spaceId);
+      await acceptDesktopStatus(status, true);
+      setShowOnboarding(managedOnboardingRequired(status));
+      setSurface("work");
+      setWorkNavigationOpen(false);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+      setSpaceStartup(null);
+    }
+  }
+
+  async function handleCreateSpace() {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    setSpaceStartup({ spaceId: null, displayName: "New Space" });
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        return;
+      }
+      const status = await createSpace();
+      if (status === null) {
+        return;
+      }
+      invalidateTargetRoute();
+      await acceptDesktopStatus(status, true);
+      setShowOnboarding(managedOnboardingRequired(status));
+      setSurface("work");
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+      setSpaceStartup(null);
+    }
+  }
+
+  async function handleRenameSpace(spaceId: string, displayName: string) {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (!FIXTURE_MODE) {
+        await acceptDesktopStatus(
+          await renameSpace(spaceId, displayName),
+          false,
+        );
+      }
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleArchiveSpace(spaceId: string) {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        return;
+      }
+      const wasSelected = desktopRef.current.selectedSpaceId === spaceId;
+      if (wasSelected) {
+        invalidateTargetRoute();
+      }
+      const status = await archiveSpace(spaceId);
+      await acceptDesktopStatus(status, wasSelected);
+      setShowOnboarding(managedOnboardingRequired(status));
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleRestoreSpace(spaceId: string) {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (!FIXTURE_MODE) {
+        await acceptDesktopStatus(await restoreSpace(spaceId), false);
+      }
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleSelectSearchResult(result: SpaceSearchResult) {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    if (FIXTURE_MODE) {
+      if (desktopRef.current.selectedSpaceId !== result.spaceId) {
+        await handleSelectSpace(result.spaceId);
+      }
+      const run = chatRef.current.recentRuns.find(
+        (candidate) => candidate.runId === result.runId,
+      );
+      if (run !== undefined) {
+        await openRun(run);
+      }
+      return;
+    }
+
+    const startsAnotherSpace =
+      result.archived || desktopRef.current.selectedSpaceId !== result.spaceId;
+    if (startsAnotherSpace) {
+      setSpaceStartup({
+        spaceId: result.spaceId,
+        displayName: result.spaceName,
+      });
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    setRunLoadError("");
+    try {
+      let status = desktopRef.current;
+      if (result.archived) {
+        status = await restoreSpace(result.spaceId);
+      }
+      if (status.selectedSpaceId !== result.spaceId) {
+        invalidateTargetRoute();
+        status = await selectSpace(result.spaceId);
+        await acceptDesktopStatus(status, true);
+      } else if (result.archived) {
+        await acceptDesktopStatus(status, false);
+      }
+
+      const route = targetRoutes.current?.capture() ?? null;
+      if (
+        route === null ||
+        route.targetId !== result.targetId ||
+        targetRoutes.current?.isCurrent(route) !== true
+      ) {
+        throw new CommandFailure({
+          ...FALLBACK_ACTION_ERROR,
+          code: "target_changed",
+          message: "The Space changed before the thread could be opened.",
+        });
+      }
+      const details = await getRun(route.targetId, { runId: result.runId });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      targetRoutes.current.bindRun(details.run.runId, route);
+      dispatch({ type: "hydrate_run", details });
+      dispatch({ type: "select_run", runId: details.run.runId });
+      setPlanRevision(null);
+      setWorkQuery("");
+      setSurface("work");
+      setWorkNavigationOpen(false);
+      startWatch(details.run.runId, details.run.lastSequence, route);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setRunLoadError(failure.message);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+      if (startsAnotherSpace) {
+        setSpaceStartup(null);
+      }
+    }
+  }
+
+  async function handleArchiveThread(run: Run) {
+    if (
+      connectingRef.current ||
+      submitInFlight.current ||
+      threadLifecycleBusySessionId !== null
+    ) {
+      return;
+    }
+    if (!isTerminalStatus(run.status)) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "invalid_state",
+        message: "Finish or cancel this thread before archiving it.",
+      });
+      return;
+    }
+    if (
+      queuedMessagesRef.current.some(
+        (message) => message.sessionId === run.sessionId,
+      )
+    ) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "thread_has_queued_messages",
+        message:
+          "Let Next up finish, or delete its queued messages, before archiving this thread.",
+        retryable: false,
+      });
+      return;
+    }
+    const spaceId = desktopRef.current.selectedSpaceId;
+    if (FIXTURE_MODE) {
+      if (spaceId !== null) {
+        updateThreadPin(spaceId, run.sessionId, false);
+      }
+      dispatch({ type: "remove_session", sessionId: run.sessionId });
+      return;
+    }
+    const route = targetRoutes.current?.routeForRun(run.runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "target_changed",
+        message: "The thread is no longer bound to the selected Space.",
+      });
+      return;
+    }
+    const attemptKey = `${route.targetId}:${run.sessionId}:archive`;
+    const attempt = stableIdempotentAttempt(
+      threadLifecycleAttempts.current.get(attemptKey) ?? null,
+      operationFingerprint([route.targetId, run.sessionId, "archive"]),
+    );
+    threadLifecycleAttempts.current = withBoundedEntry(
+      threadLifecycleAttempts.current,
+      attemptKey,
+      attempt,
+    );
+    setThreadLifecycleBusySessionId(run.sessionId);
+    setActionError(null);
+    try {
+      await archiveThread(route.targetId, {
+        runId: run.runId,
+        idempotencyKey: attempt.key,
+      });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      for (const recent of chatRef.current.recentRuns) {
+        if (recent.sessionId === run.sessionId) {
+          watchedRuns.current.delete(recent.runId);
+        }
+      }
+      if (spaceId !== null) {
+        updateThreadPin(spaceId, run.sessionId, false);
+      }
+      dispatch({ type: "remove_session", sessionId: run.sessionId });
+      await loadRuns("", false, route);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure, route);
+      setActionError(failure);
+    } finally {
+      setThreadLifecycleBusySessionId(null);
+    }
+  }
+
+  async function handleRestoreThread(result: SpaceSearchResult) {
+    if (
+      connectingRef.current ||
+      submitInFlight.current ||
+      threadLifecycleBusySessionId !== null
+    ) {
+      return;
+    }
+    if (FIXTURE_MODE) {
+      return;
+    }
+    const startsAnotherSpace =
+      result.archived || desktopRef.current.selectedSpaceId !== result.spaceId;
+    if (startsAnotherSpace) {
+      setSpaceStartup({
+        spaceId: result.spaceId,
+        displayName: result.spaceName,
+      });
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setThreadLifecycleBusySessionId(result.sessionId);
+    setActionError(null);
+    try {
+      let status = desktopRef.current;
+      if (result.archived) {
+        status = await restoreSpace(result.spaceId);
+      }
+      if (status.selectedSpaceId !== result.spaceId) {
+        invalidateTargetRoute();
+        status = await selectSpace(result.spaceId);
+        await acceptDesktopStatus(status, true);
+      } else if (result.archived) {
+        await acceptDesktopStatus(status, false);
+      }
+      const route = targetRoutes.current?.capture() ?? null;
+      if (
+        route === null ||
+        route.targetId !== result.targetId ||
+        targetRoutes.current?.isCurrent(route) !== true
+      ) {
+        throw new CommandFailure({
+          ...FALLBACK_ACTION_ERROR,
+          code: "target_changed",
+          message: "The Space changed before the thread could be restored.",
+        });
+      }
+      const before = await getRun(route.targetId, { runId: result.runId });
+      targetRoutes.current.bindRun(before.run.runId, route);
+      const attemptKey = `${route.targetId}:${result.sessionId}:restore`;
+      const attempt = stableIdempotentAttempt(
+        threadLifecycleAttempts.current.get(attemptKey) ?? null,
+        operationFingerprint([route.targetId, result.sessionId, "restore"]),
+      );
+      threadLifecycleAttempts.current = withBoundedEntry(
+        threadLifecycleAttempts.current,
+        attemptKey,
+        attempt,
+      );
+      await restoreThread(route.targetId, {
+        runId: result.runId,
+        idempotencyKey: attempt.key,
+      });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      const details = await getRun(route.targetId, { runId: result.runId });
+      targetRoutes.current.bindRun(details.run.runId, route);
+      dispatch({ type: "hydrate_run", details });
+      dispatch({ type: "select_run", runId: details.run.runId });
+      await loadRuns("", false, route);
+      setWorkQuery("");
+      setSurface("work");
+      setWorkNavigationOpen(false);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+      setThreadLifecycleBusySessionId(null);
+      if (startsAnotherSpace) {
+        setSpaceStartup(null);
+      }
+    }
+  }
+
   async function handleAddExternalTarget(): Promise<boolean> {
     if (connectingRef.current || submitInFlight.current) {
       return false;
@@ -2057,9 +3725,60 @@ export default function App() {
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
+  const activeRoute =
+    activeRun === undefined
+      ? null
+      : (targetRoutes.current?.routeForRun(activeRun.runId) ?? null);
+  const activeQueuedMessages = useMemo(
+    () =>
+      activeRun === undefined || activeRoute === null
+        ? []
+        : messagesForThread(
+            queuedMessages,
+            activeRoute.targetId,
+            activeRun.sessionId,
+          ),
+    [activeRoute, activeRun, queuedMessages],
+  );
+  useEffect(() => {
+    if (
+      activeRun === undefined ||
+      activeRoute === null ||
+      !isTerminalStatus(activeRun.status) ||
+      connecting ||
+      submitting ||
+      queueDeliveryRef.current !== null ||
+      targetRoutes.current?.isCurrent(activeRoute) !== true
+    ) {
+      return;
+    }
+    const next = nextPendingMessage(
+      queuedMessagesRef.current,
+      activeRoute.targetId,
+      activeRun.sessionId,
+    );
+    if (next !== undefined) {
+      void deliverQueuedMessage(next, activeRoute);
+    }
+  }, [
+    activeRoute,
+    activeRun,
+    connecting,
+    deliverQueuedMessage,
+    queuedMessages,
+    submitting,
+  ]);
   const conversationViews = useMemo(
     () => selectConversationViews(chat, activeRun?.sessionId ?? null),
     [activeRun?.sessionId, chat],
+  );
+  const asideView =
+    asideChat.activeRunId === null
+      ? undefined
+      : asideChat.views.get(asideChat.activeRunId);
+  const asideConversationViews = useMemo(
+    () => selectConversationViews(asideChat, asideView?.run.sessionId ?? null),
+    [asideChat, asideView?.run.sessionId],
   );
   const openingRun = useMemo(() => {
     if (activeRun === undefined) {
@@ -2079,8 +3798,7 @@ export default function App() {
     connection.state === "connected" &&
     !connecting &&
     !submitting &&
-    !approvalModeChanging &&
-    (activeRun === undefined || isTerminalStatus(activeRun.status));
+    !approvalModeChanging;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
   const promptBytes = utf8ByteLength(prompt);
@@ -2139,26 +3857,11 @@ export default function App() {
       },
     ];
   }, [activeRun, activeView]);
-  const attentionCount = chat.recentRuns.reduce(
-    (count, run) =>
-      count +
-      run.pendingInteractionCount +
-      (run.status === "outcome_unknown" ? 1 : 0),
-    0,
-  );
   const selectedTarget = desktop.targets.find(
     (target) => target.targetId === desktop.selectedTargetId,
   );
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
   const workspaceFilesAvailable = desktop.capabilities.files;
-  const workCount = new Set(chat.recentRuns.map((run) => run.sessionId)).size;
-  const activeCount = new Set(
-    chat.recentRuns
-      .filter((run) =>
-        ["queued", "running", "waiting", "cancelling"].includes(run.status),
-      )
-      .map((run) => run.sessionId),
-  ).size;
   const title =
     activeRun === undefined
       ? "New work"
@@ -2191,6 +3894,9 @@ export default function App() {
       maxTurns={maxTurns}
       maxTurnsLimit={MAX_TURNS}
       mode={mode}
+      researchDepth={researchDepth}
+      researchSources={researchSources}
+      researchAvailable={desktop.capabilities.research === true}
       approvalMode={desktop.approvalMode}
       approvalModeVisible={selectedTarget?.kind === "managed_local"}
       approvalModeAvailable={
@@ -2213,10 +3919,18 @@ export default function App() {
               revision: planRevision.revision,
             }
       }
+      queueing={
+        (activeRun !== undefined && !isTerminalStatus(activeRun.status)) ||
+        activeQueuedMessages.length > 0
+      }
       activeWorkRunning={
         activeRun !== undefined && !isTerminalStatus(activeRun.status)
       }
       activeWorkNeedsInput={(activeView?.pendingInteractions.length ?? 0) > 0}
+      activeWorkRedirectable={
+        activeRun !== undefined && isCancelable(activeRun.status) && !cancelling
+      }
+      queuedMessages={activeQueuedMessages}
       attachmentsAvailable={desktop.capabilities.attachments}
       attachments={attachments}
       attachmentBusy={attachmentBusy}
@@ -2232,6 +3946,8 @@ export default function App() {
           setMode(nextMode);
         }
       }}
+      onResearchDepthChange={setResearchDepth}
+      onResearchSourcesChange={setResearchSources}
       onApprovalModeChange={(nextMode) => void handleSetApprovalMode(nextMode)}
       onCancelPlanRevision={() => {
         setPlanRevision(null);
@@ -2243,16 +3959,32 @@ export default function App() {
           current.filter((attachment) => attachment.artifactId !== artifactId),
         )
       }
+      onEditQueuedMessage={editQueuedMessage}
+      onDeleteQueuedMessage={deleteQueuedMessage}
+      onRetryQueuedMessage={retryQueuedMessage}
+      onRedirect={() => void redirectCurrentResponse()}
       onSubmit={(event) => void submitRun(event)}
     />
   );
   const onboardingRequired = managedOnboardingRequired(desktop);
   const onboardingActive = showOnboarding || onboardingRequired;
   const developerPreview = releaseChannel === "developer_preview";
+  const unsafeExecutionBannerVisible = executionBoundaryBannerVisible(
+    desktop.managedState,
+    desktop.executionBoundary,
+  );
 
   return (
     <div
-      className={`app-shell${developerPreview ? " app-shell--developer-preview" : ""}`}
+      ref={appShellRef}
+      className={`app-shell${developerPreview ? " app-shell--developer-preview" : ""}${unsafeExecutionBannerVisible ? " app-shell--unsafe-execution" : ""}`}
+      style={
+        workSidebarWidthRef.current === null
+          ? undefined
+          : ({
+              "--work-sidebar-width": `${workSidebarWidthRef.current}px`,
+            } as CSSProperties)
+      }
     >
       <a className="skip-link" href="#primary-workspace">
         Skip to workspace
@@ -2262,19 +3994,7 @@ export default function App() {
         active={managedRuntimeBoundaryActive(desktop.managedState)}
         boundary={desktop.executionBoundary}
       />
-      <ProductRail
-        surface={surface}
-        attentionCount={attentionCount}
-        connectionState={connection.state}
-        terminalEnabled={desktop.terminalEnabled}
-        terminalAvailable={terminalAvailable}
-        capabilities={desktop.capabilities}
-        onSelect={selectSurface}
-        onOpenTerminal={() => void handleOpenTerminal("colossus_tui")}
-        onOpenShell={() => void handleOpenTerminal("shell")}
-      />
-
-      {!onboardingActive && surface === "work" && workNavigationOpen ? (
+      {!onboardingActive && workNavigationOpen ? (
         <button
           className="workspace-drawer-backdrop work-navigation-backdrop"
           type="button"
@@ -2285,32 +4005,67 @@ export default function App() {
         />
       ) : null}
 
-      {onboardingActive ? null : surface === "work" ? (
+      {onboardingActive ? null : (
         <WorkSidebar
           runs={chat.recentRuns}
-          workspace={desktop.workspace}
+          spaces={desktop.spaces}
+          selectedSpaceId={desktop.selectedSpaceId}
+          surface={surface}
+          connectionState={connection.state}
+          capabilities={desktop.capabilities}
+          terminalEnabled={desktop.terminalEnabled}
+          terminalAvailable={terminalAvailable}
           activeSessionId={activeRun?.sessionId ?? null}
+          pinnedSessionIds={pinnedThreadSessionIds}
           query={workQuery}
+          searchScope={searchScope}
+          includeArchived={includeArchivedSearch}
+          searchResults={spaceSearchResults}
+          searchBusy={spaceSearchBusy}
+          searchError={spaceSearchError}
+          searchHasMore={spaceSearchCursor !== ""}
+          spaceThreadPreviews={spaceThreadPreviews}
+          spaceThreadPreviewBusyIds={spaceThreadPreviewBusyIds}
+          spaceThreadPreviewErrors={spaceThreadPreviewErrors}
           busy={listBusy}
           error={listError}
           hasMore={chat.nextPageToken !== ""}
-          disabled={submitting || connecting}
+          disabled={submitting || (connecting && spaceStartup === null)}
+          spaceStartup={spaceStartup}
+          threadLifecycleBusySessionId={threadLifecycleBusySessionId}
+          sidebarWidth={initialWorkSidebarWidth}
           drawerOpen={workNavigationOpen}
           onQueryChange={setWorkQuery}
+          onSearchScopeChange={setSearchScope}
+          onIncludeArchivedChange={setIncludeArchivedSearch}
           onNewWork={newWork}
           onSelect={(run) => void openRun(run)}
+          onSelectSearchResult={(result) =>
+            void handleSelectSearchResult(result)
+          }
           onLoadMore={() => void loadRuns(chat.nextPageToken, true)}
+          onLoadMoreSearch={() => void loadMoreSpaceSearch()}
+          onLoadSpaceThreadPreview={(spaceId) =>
+            void loadSpaceThreadPreview(spaceId)
+          }
+          onSelectSpace={(spaceId) => void handleSelectSpace(spaceId)}
+          onCreateSpace={() => void handleCreateSpace()}
+          onRenameSpace={(spaceId, displayName) =>
+            void handleRenameSpace(spaceId, displayName)
+          }
+          onArchiveSpace={(spaceId) => void handleArchiveSpace(spaceId)}
+          onRestoreSpace={(spaceId) => void handleRestoreSpace(spaceId)}
+          onArchiveThread={(run) => void handleArchiveThread(run)}
+          onToggleThreadPinned={handleToggleThreadPinned}
+          onRestoreThread={(result) => void handleRestoreThread(result)}
+          onSelectSurface={selectSurface}
+          onOpenTerminal={() => void handleOpenTerminal("colossus_tui")}
+          onOpenShell={() => void handleOpenTerminal("shell")}
+          onSidebarWidthPreview={previewWorkSidebarWidth}
+          onSidebarWidthCommit={commitWorkSidebarWidth}
+          onSidebarWidthReset={resetWorkSidebarWidth}
           onDrawerOpen={openWorkNavigation}
           onDrawerClose={closeWorkNavigation}
-        />
-      ) : (
-        <ContextSidebar
-          surface={surface}
-          connection={connection}
-          runCount={workCount}
-          activeCount={activeCount}
-          artifactCount={allArtifacts.length}
-          activityCount={activity.length}
         />
       )}
 
@@ -2348,8 +4103,26 @@ export default function App() {
           artifacts={artifactItems}
           composer={composer}
           filesAvailable={desktop.capabilities.files}
+          onOpenWorkspaceFile={(path) => {
+            if (desktop.workspace === null) {
+              return;
+            }
+            workspaceFileOpenSequence.current += 1;
+            setWorkspaceFileOpenRequest({
+              workspaceId: desktop.workspace.workspaceId,
+              path,
+              requestId: workspaceFileOpenSequence.current,
+            });
+          }}
           artifactsAvailable={desktop.capabilities.artifacts}
+          asideView={asideView}
+          asideConversationViews={asideConversationViews}
+          asideHistory={asideHistory}
+          asideBusy={asideBusy}
+          asideError={asideError}
+          asideReadOnly={asideReadOnly}
           planContinuationAvailable={desktop.capabilities.planContinuation}
+          activityComparisonEnabled={FIXTURE_SCENARIO === "activity-comparison"}
           planWorkflowAvailable={
             desktop.terminalEnabled &&
             terminalAvailable &&
@@ -2368,6 +4141,7 @@ export default function App() {
                 FIXTURE_MODE ? readFixtureWorkspaceFile : readWorkspaceFile
               }
               onOpenSettings={() => setSurface("settings")}
+              openRequest={workspaceFileOpenRequest}
             />
           }
           workNavigationOpen={workNavigationOpen}
@@ -2393,6 +4167,17 @@ export default function App() {
           onExecutePlan={executePlan}
           onOpenWorkNavigation={openWorkNavigation}
           onCloseWorkNavigation={closeWorkNavigation}
+          onLoadAsides={loadAsides}
+          onCreateAside={createAsideRun}
+          onContinueAside={continueAsideRun}
+          onOpenAside={openAside}
+          onNewAside={() => {
+            dispatchAside({ type: "reset" });
+            setAsideError(null);
+            setAsideReadOnly(false);
+          }}
+          onRespondAside={respondAside}
+          onCloseAside={closeAside}
         />
       ) : (
         <OperationsSurface
@@ -2406,6 +4191,8 @@ export default function App() {
           artifacts={allArtifacts}
           activity={activity}
           demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
+          workNavigationOpen={workNavigationOpen}
+          onOpenWorkNavigation={openWorkNavigation}
           onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
           onOpenRun={(run) => void openRun(run)}
           onSelectTarget={(targetId) => void handleSelectTarget(targetId)}
