@@ -276,6 +276,41 @@ async fn offline_orchestration_persists_progress_limit_and_session_report() {
 }
 
 #[tokio::test]
+async fn released_report_can_be_owned_by_the_public_application_run() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn ResearchRepository> =
+        Arc::new(EventSourcedResearchRepository::new(journal.clone()));
+    let sessions = Arc::new(EventSourcedSessionRepository::new(journal));
+    sessions
+        .create_session("session-1", Some("Research"), actor())
+        .expect("session");
+    let service = ResearchService::new(
+        repository,
+        sessions.clone(),
+        Arc::new(OfflineCollector),
+        ResearchLimits::default(),
+    )
+    .expect("service");
+
+    let run = service
+        .run_with_message_run_id(
+            "session-1",
+            "How does audit work?",
+            ResearchDepth::Quick,
+            vec![ResearchSourceKind::Repo],
+            Some("public-run-1"),
+            actor(),
+        )
+        .await
+        .expect("research");
+
+    let messages = sessions.list_messages("session-1").expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].run_id, "public-run-1");
+    assert_eq!(messages[0].message.content, run.report);
+}
+
+#[tokio::test]
 async fn quick_research_bounds_canonical_sources_before_worker_extraction() {
     let journal = Arc::new(InMemoryEventJournal::default());
     let repository: Arc<dyn ResearchRepository> =

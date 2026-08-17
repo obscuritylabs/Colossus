@@ -1,13 +1,13 @@
 use colossus_sdk::{
     ApiErrorCode, GetRunRequest, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest,
-    RunStatus, ServerCapabilities,
+    PageResponse, RunStatus, ServerCapabilities,
 };
 use colossus_worker_protocol::{WorkerSessionMap, WorkerThreadDelegateInspection};
 use futures_util::future::join_all;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter as _, Manager as _, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
@@ -38,6 +38,8 @@ use crate::{
 use crate::desktop_settings::WorkspaceSetting;
 const EXTERNAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SPACE_SUMMARY_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+const SPACE_SEARCH_INDEX_PAGE_SIZE: u32 = 100;
+const MAX_SPACE_SEARCH_INDEX_RUNS: usize = 4_096;
 
 fn emit_space_events(app: &AppHandle, status: &DesktopStatusDto) {
     for summary in &status.spaces {
@@ -401,7 +403,7 @@ async fn create_space_from_picker(
         CommandErrorDto::invalid("workspace", "The selected folder is unavailable.")
     })?;
     let workspace = validate_workspace(&path)?;
-    let _guard = connect_guard(&state)?;
+    let _guard = connect_guard(state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
     let previous_settings = settings.clone();
@@ -567,33 +569,59 @@ async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSet
             continue;
         };
         requests.push(async move {
-            let response = tokio::time::timeout(
-                SPACE_SUMMARY_REFRESH_TIMEOUT,
-                target.client.list_runs(ListRunsRequest {
-                    session_id: None,
-                    statuses: Vec::new(),
-                    page: Some(PageRequest {
-                        page_size: 100,
-                        page_token: String::new(),
+            let started = Instant::now();
+            let mut runs = Vec::new();
+            let mut page_token = String::new();
+            let mut seen_tokens = BTreeSet::new();
+            loop {
+                let remaining = SPACE_SUMMARY_REFRESH_TIMEOUT.checked_sub(started.elapsed())?;
+                let response = tokio::time::timeout(
+                    remaining,
+                    target.client.list_runs(ListRunsRequest {
+                        session_id: None,
+                        statuses: Vec::new(),
+                        page: Some(PageRequest {
+                            page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
+                            page_token,
+                        }),
+                        include_archived: false,
                     }),
-                    include_archived: false,
-                }),
-            )
-            .await
-            .ok()?
-            .ok()?;
-            Some((space_id, response))
+                )
+                .await
+                .ok()?
+                .ok()?;
+                let available = MAX_SPACE_SEARCH_INDEX_RUNS.saturating_sub(runs.len());
+                runs.extend(response.runs.into_iter().take(available).map(RunDto::from));
+                let Some(next_page_token) = next_space_search_page_token(
+                    response.page.as_ref(),
+                    &mut seen_tokens,
+                    runs.len(),
+                ) else {
+                    return Some((space_id, runs));
+                };
+                page_token = next_page_token;
+            }
         });
     }
     for result in join_all(requests).await.into_iter().flatten() {
-        let (space_id, response) = result;
-        let runs = response
-            .runs
-            .into_iter()
-            .map(RunDto::from)
-            .collect::<Vec<_>>();
+        let (space_id, runs) = result;
         let _ = space_search::index_runs(settings, &space_id, &runs);
     }
+}
+
+fn next_space_search_page_token(
+    page: Option<&PageResponse>,
+    seen_tokens: &mut BTreeSet<String>,
+    indexed_runs: usize,
+) -> Option<String> {
+    if indexed_runs >= MAX_SPACE_SEARCH_INDEX_RUNS {
+        return None;
+    }
+    let token = page?.next_page_token.clone();
+    if token.is_empty() || !seen_tokens.insert(token.clone()) {
+        return None;
+    }
+    Some(token)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -608,17 +636,18 @@ pub(crate) async fn select_space(
     settings.activate_space(&space_id)?;
     store.save(&settings)?;
     state.select_target(None).await;
-    if settings.managed_configured() && !state.connected(&space_id).await {
-        if let Err(error) = managed_runtime::start(&state, &store, &settings, false).await {
-            store.save(&previous_settings)?;
-            state
-                .select_target(previous_settings.selected_target_id.clone())
-                .await;
-            if let Some(previous_space_id) = previous_settings.selected_space_id.as_deref() {
-                state.activate_managed_terminal_for(previous_space_id).await;
-            }
-            return Err(error);
+    if settings.managed_configured()
+        && !state.connected(&space_id).await
+        && let Err(error) = managed_runtime::start(&state, &store, &settings, false).await
+    {
+        store.save(&previous_settings)?;
+        state
+            .select_target(previous_settings.selected_target_id.clone())
+            .await;
+        if let Some(previous_space_id) = previous_settings.selected_space_id.as_deref() {
+            state.activate_managed_terminal_for(previous_space_id).await;
         }
+        return Err(error);
     }
     state.select_target(Some(space_id.clone())).await;
     state.touch_managed_space(&space_id).await;
@@ -633,7 +662,7 @@ pub(crate) async fn rename_space(
     display_name: String,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let name = display_name.trim();
-    if name.is_empty() || name.len() > 80 || name.chars().any(|character| character.is_control()) {
+    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
         return Err(CommandErrorDto::invalid(
             "displayName",
             "Space names must be 1–80 visible characters.",
@@ -647,7 +676,7 @@ pub(crate) async fn rename_space(
         .iter_mut()
         .find(|space| space.id == space_id)
         .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
-    space.display_name = name.to_owned();
+    name.clone_into(&mut space.display_name);
     store.save(&settings)?;
     desktop_status_from(&state, &settings).await
 }
@@ -2330,19 +2359,14 @@ fn desktop_capabilities(
     }
 }
 
-async fn desktop_status_from(
+async fn selected_managed_health(
     state: &AppState,
     settings: &DesktopSettings,
-) -> Result<DesktopStatusDto, CommandErrorDto> {
-    let selected = state.selected_target_id().await;
-    let selected_space_id = settings.selected_space_id.clone();
-    let selected_managed_id = selected.as_ref().and_then(|target_id| {
-        settings
-            .spaces
-            .iter()
-            .any(|space| space.id == *target_id)
-            .then(|| target_id.clone())
-    });
+    selected: Option<&str>,
+) -> (Option<String>, bool, ManagedHealth) {
+    let selected_managed_id = selected
+        .filter(|target_id| settings.spaces.iter().any(|space| space.id == *target_id))
+        .map(str::to_owned);
     if let Some(space_id) = selected_managed_id.as_deref() {
         state.sync_managed_lifecycle_health_for(space_id).await;
     }
@@ -2378,6 +2402,54 @@ async fn desktop_status_from(
             .set_managed_health_for(space_id, managed_health.clone())
             .await;
     }
+    (selected_managed_id, managed_connected, managed_health)
+}
+
+fn desktop_connection_status(
+    selected: Option<&str>,
+    settings: &DesktopSettings,
+    managed_ready: bool,
+    managed_health: &ManagedHealth,
+    selected_external_ready: bool,
+) -> ConnectionStatusDto {
+    match selected {
+        Some(target_id)
+            if settings.spaces.iter().any(|space| space.id == target_id) && managed_ready =>
+        {
+            ConnectionStatusDto::connected(target_id)
+        }
+        Some(target_id) if settings.spaces.iter().any(|space| space.id == target_id) => {
+            managed_connection_status(target_id, managed_health)
+        }
+        Some(target_id)
+            if settings
+                .external_targets
+                .iter()
+                .any(|target| target.target_id == target_id)
+                && selected_external_ready =>
+        {
+            ConnectionStatusDto::connected(target_id)
+        }
+        Some(target_id)
+            if settings
+                .external_targets
+                .iter()
+                .any(|target| target.target_id == target_id) =>
+        {
+            ConnectionStatusDto::disconnected(Some(target_id.into()))
+        }
+        _ => ConnectionStatusDto::not_configured(),
+    }
+}
+
+async fn desktop_status_from(
+    state: &AppState,
+    settings: &DesktopSettings,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let selected = state.selected_target_id().await;
+    let selected_space_id = settings.selected_space_id.clone();
+    let (selected_managed_id, managed_connected, managed_health) =
+        selected_managed_health(state, settings, selected.as_deref()).await;
     let workspace = settings.workspace.as_ref().map(WorkspaceSummaryDto::from);
     let managed_state = managed_health.state;
     let managed_ready = managed_connected && managed_state == ManagedRuntimeStateDto::Ready;
@@ -2413,34 +2485,13 @@ async fn desktop_status_from(
         }
         targets.push(status);
     }
-    let connection = match selected.as_deref() {
-        Some(target_id)
-            if settings.spaces.iter().any(|space| space.id == target_id) && managed_ready =>
-        {
-            ConnectionStatusDto::connected(target_id)
-        }
-        Some(target_id) if settings.spaces.iter().any(|space| space.id == target_id) => {
-            managed_connection_status(target_id, &managed_health)
-        }
-        Some(target_id)
-            if settings
-                .external_targets
-                .iter()
-                .any(|target| target.target_id == target_id)
-                && selected_external_ready =>
-        {
-            ConnectionStatusDto::connected(target_id)
-        }
-        Some(target_id)
-            if settings
-                .external_targets
-                .iter()
-                .any(|target| target.target_id == target_id) =>
-        {
-            ConnectionStatusDto::disconnected(Some(target_id.into()))
-        }
-        _ => ConnectionStatusDto::not_configured(),
-    };
+    let connection = desktop_connection_status(
+        selected.as_deref(),
+        settings,
+        managed_ready,
+        &managed_health,
+        selected_external_ready,
+    );
     let selected_managed = selected_managed_id.is_some() && managed_ready;
     if managed_ready && let Some(space_id) = selected_managed_id.as_deref() {
         state.ensure_approval_mode_synchronized_for(space_id).await;
@@ -2677,14 +2728,12 @@ fn spawn_managed_start_on_initialize(app: AppHandle) {
                 Some(space_id) => state.connected(space_id).await,
                 None => false,
             },
-        ) {
-            if managed_runtime::start(&state, &store, &settings, false)
-                .await
-                .is_ok()
-                && let Some(space_id) = settings.selected_space_id.as_deref()
-            {
-                state.activate_managed_terminal_for(space_id).await;
-            }
+        ) && managed_runtime::start(&state, &store, &settings, false)
+            .await
+            .is_ok()
+            && let Some(space_id) = settings.selected_space_id.as_deref()
+        {
+            state.activate_managed_terminal_for(space_id).await;
         }
     });
 }
@@ -2692,6 +2741,44 @@ fn spawn_managed_start_on_initialize(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn space_search_pagination_follows_unique_tokens_with_a_hard_run_bound() {
+        let mut seen = BTreeSet::new();
+        let page = PageResponse {
+            next_page_token: "page-2".into(),
+        };
+        assert_eq!(
+            next_space_search_page_token(Some(&page), &mut seen, 100).as_deref(),
+            Some("page-2")
+        );
+        assert_eq!(
+            next_space_search_page_token(Some(&page), &mut seen, 200),
+            None,
+            "a repeated server token must not loop forever"
+        );
+        assert_eq!(
+            next_space_search_page_token(
+                Some(&PageResponse {
+                    next_page_token: String::new(),
+                }),
+                &mut seen,
+                200,
+            ),
+            None
+        );
+        assert_eq!(
+            next_space_search_page_token(
+                Some(&PageResponse {
+                    next_page_token: "page-3".into(),
+                }),
+                &mut seen,
+                MAX_SPACE_SEARCH_INDEX_RUNS,
+            ),
+            None,
+            "the live refresh must stay bounded"
+        );
+    }
 
     fn test_workspace_identity() -> colossus_sdk::WorkspaceIdentity {
         colossus_sdk::WorkspaceIdentity::from_macos_parts(1, 2, 1_700_000_000, 0)

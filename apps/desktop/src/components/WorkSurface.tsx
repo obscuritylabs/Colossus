@@ -271,6 +271,8 @@ export function WorkSurface({
   );
   const workLayoutRef = useRef<HTMLDivElement>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
+  const stableFeedPositionRef = useRef({ top: 0, left: 0 });
+  const stableFeedPositionTimerRef = useRef<number | null>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const filesTriggerRef = useRef<HTMLButtonElement>(null);
@@ -315,6 +317,30 @@ export function WorkSurface({
     feed.scrollTo({ top: feed.scrollHeight, behavior });
   }
 
+  function scheduleStableFeedPosition(feed: HTMLDivElement) {
+    if (stableFeedPositionTimerRef.current !== null) {
+      window.clearTimeout(stableFeedPositionTimerRef.current);
+    }
+    stableFeedPositionTimerRef.current = window.setTimeout(() => {
+      stableFeedPositionRef.current = {
+        top: feed.scrollTop,
+        left: feed.scrollLeft,
+      };
+      stableFeedPositionTimerRef.current = null;
+    }, 100);
+  }
+
+  function restoreFeedPosition(position: { top: number; left: number }) {
+    const restore = () => {
+      feedScrollRef.current?.scrollTo(position);
+      stableFeedPositionRef.current = position;
+    };
+    requestAnimationFrame(() => {
+      restore();
+      window.setTimeout(restore, 200);
+    });
+  }
+
   useEffect(() => {
     setSessionWorkspaceView("conversation");
     setSelectedPlanId(null);
@@ -333,7 +359,9 @@ export function WorkSurface({
         }
         return;
       }
-      feed.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      const position = { top: 0, left: 0 };
+      feed.scrollTo({ ...position, behavior: "auto" });
+      stableFeedPositionRef.current = position;
     });
     return () => cancelAnimationFrame(frame);
   }, [sessionWorkspaceView]);
@@ -357,6 +385,15 @@ export function WorkSurface({
     });
     return () => cancelAnimationFrame(frame);
   }, [conversationViews, sessionWorkspaceView]);
+
+  useEffect(
+    () => () => {
+      if (stableFeedPositionTimerRef.current !== null) {
+        window.clearTimeout(stableFeedPositionTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const sessionPlans = useMemo(
     () => selectSessionPlans(conversationViews),
@@ -673,17 +710,14 @@ export function WorkSurface({
   }
 
   function openParticipantInDetails(participant: AgentParticipant) {
-    const feedPosition = {
-      top: feedScrollRef.current?.scrollTop ?? 0,
-      left: feedScrollRef.current?.scrollLeft ?? 0,
-    };
+    const feedPosition = stableFeedPositionRef.current;
     onCloseWorkNavigation();
     lastDrawerTriggerRef.current = detailsTriggerRef.current;
     setSelectedPlanId(null);
     setSelectedSessionResource(null);
     setActiveDrawer("details");
     onSelectParticipant(participant);
-    requestAnimationFrame(() => feedScrollRef.current?.scrollTo(feedPosition));
+    restoreFeedPosition(feedPosition);
   }
 
   function openPlanInDetails(plan: SessionPlanReference) {
@@ -748,17 +782,14 @@ export function WorkSurface({
       openParticipantInDetails(participant);
       return;
     }
-    const feedPosition = {
-      top: feedScrollRef.current?.scrollTop ?? 0,
-      left: feedScrollRef.current?.scrollLeft ?? 0,
-    };
+    const feedPosition = stableFeedPositionRef.current;
     onCloseWorkNavigation();
     onBackToThreadDetails();
     lastDrawerTriggerRef.current = detailsTriggerRef.current;
     setSelectedPlanId(null);
     setSelectedSessionResource(resource);
     setActiveDrawer("details");
-    requestAnimationFrame(() => feedScrollRef.current?.scrollTo(feedPosition));
+    restoreFeedPosition(feedPosition);
   }
 
   function chooseActivityPresentation(presentation: ActivityPresentation) {
@@ -1003,11 +1034,12 @@ export function WorkSurface({
             <div
               ref={feedScrollRef}
               className="work-feed-scroll"
-              onScroll={(event) =>
+              onScroll={(event) => {
                 updateFollowingLatest(
                   isNearConversationLatest(event.currentTarget),
-                )
-              }
+                );
+                scheduleStableFeedPosition(event.currentTarget);
+              }}
             >
               {connection.state !== "connected" ? (
                 <section className="connection-panel" aria-live="polite">

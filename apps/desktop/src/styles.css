@@ -2218,6 +2218,7 @@ p {
   min-height: 0;
   padding: 20px clamp(18px, 2.2vw, 31px) 26px;
   overflow: auto;
+  overflow-anchor: none;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: #2d425e transparent;
@@ -4508,7 +4509,7 @@ p {
 
 .usage-summary {
   margin: 1px 0 0;
-  color: #5c7088;
+  color: #8297ae;
   font-size: 0.6rem;
 }
 
@@ -8498,7 +8499,7 @@ textarea {
 
   .workspace-drawer-backdrop {
     position: fixed;
-    z-index: 20;
+    z-index: 70;
     inset: 0;
     display: block;
     padding: 0;
@@ -8510,7 +8511,7 @@ textarea {
 
   .work-sidebar {
     position: fixed;
-    z-index: 30;
+    z-index: 80;
     top: calc(
       var(--release-channel-banner-height) +
         var(--unsafe-execution-banner-height)
@@ -8535,7 +8536,7 @@ textarea {
 
   .compact-drawer-close {
     position: absolute;
-    z-index: 4;
+    z-index: 40;
     top: 12px;
     right: 12px;
     display: grid;
@@ -8564,7 +8565,7 @@ textarea {
 
   .artifact-drawer {
     position: fixed;
-    z-index: 30;
+    z-index: 80;
     top: 0;
     right: 0;
     bottom: 0;

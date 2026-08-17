@@ -195,13 +195,13 @@ pub(crate) async fn create_run(
     }
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
-    let _managed_run_creation =
+    let managed_run_creation =
         if matches!(target.target.consent, TargetConsentContext::ManagedLocal) {
             Some(state.run_creation_guard_for(&target_id).await)
         } else {
             None
         };
-    let _external_run_creation = if _managed_run_creation.is_none() {
+    let _external_run_creation = if managed_run_creation.is_none() {
         Some(state.run_creation_guard().await)
     } else {
         None

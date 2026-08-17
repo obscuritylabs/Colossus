@@ -585,10 +585,8 @@ impl AppState {
             .read()
             .await
             .iter()
-            .filter_map(|(target_id, target)| {
-                matches!(target.consent, TargetConsentContext::ManagedLocal)
-                    .then(|| target_id.clone())
-            })
+            .filter(|(_, target)| matches!(target.consent, TargetConsentContext::ManagedLocal))
+            .map(|(target_id, _)| target_id.clone())
             .collect()
     }
 

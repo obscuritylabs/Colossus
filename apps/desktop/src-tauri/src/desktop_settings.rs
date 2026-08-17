@@ -254,7 +254,7 @@ pub(crate) struct DesktopSettings {
     /// message, tool output, or selected text is persisted here.
     #[serde(default)]
     pub(crate) asides: Vec<AsideSetting>,
-    /// Selected-Space projection retained for narrow command paths. SettingsStore
+    /// Selected-Space projection retained for narrow command paths. `SettingsStore`
     /// synchronizes it into `spaces` before every write and refreshes it after load.
     pub(crate) workspace: Option<WorkspaceSetting>,
     #[serde(default)]
@@ -517,6 +517,18 @@ fn unix_time_millis() -> u64 {
         })
 }
 
+fn settings_schema_version(bytes: &[u8]) -> Result<u16, CommandErrorDto> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("schemaVersion")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(storage_error)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SettingsStore {
     root: PathBuf,
@@ -638,15 +650,7 @@ impl SettingsStore {
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_SETTINGS_BYTES {
             return Err(storage_error());
         }
-        let schema_version = serde_json::from_slice::<serde_json::Value>(&bytes)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("schemaVersion")
-                    .and_then(serde_json::Value::as_u64)
-            })
-            .and_then(|value| u16::try_from(value).ok())
-            .ok_or_else(storage_error)?;
+        let schema_version = settings_schema_version(&bytes)?;
         let (mut settings, mut migrated_settings) = if schema_version == 1 {
             let legacy: LegacyDesktopSettingsV1 =
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?;

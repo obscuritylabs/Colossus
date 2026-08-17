@@ -171,7 +171,11 @@ pub(crate) fn search(
     let next = offset.saturating_add(limit);
     Ok(SpaceSearchPageDto {
         results: page,
-        next_cursor: (next < total).then(|| next.to_string()).unwrap_or_default(),
+        next_cursor: if next < total {
+            next.to_string()
+        } else {
+            String::new()
+        },
     })
 }
 

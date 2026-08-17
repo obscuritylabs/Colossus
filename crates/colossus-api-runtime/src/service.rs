@@ -27,7 +27,7 @@ use colossus_contracts::{
     ResearchSourceKind, RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
-use colossus_runtime::{Runtime, RuntimeError};
+use colossus_runtime::{ResearchRunContext, Runtime, RuntimeError};
 use futures::FutureExt as _;
 use std::{
     collections::{BTreeMap, btree_map::Entry},
@@ -363,6 +363,20 @@ impl RuntimeAgentRunApi {
             source_message_count,
             context_mode,
         }))
+    }
+
+    fn require_research_tools(caller: &CallerContext, request: &CreateRunRequest) -> ApiResult<()> {
+        if request.mode != RunMode::Research {
+            return Ok(());
+        }
+        for source in &request.research_sources {
+            caller.require_tool(match source {
+                PublicResearchSourceKind::Repo => "filesystem.search",
+                PublicResearchSourceKind::Web => "web.search",
+                PublicResearchSourceKind::Mcp => "mcp.call",
+            })?;
+        }
+        Ok(())
     }
 
     async fn rendered_input(
@@ -1111,7 +1125,11 @@ impl RuntimeAgentRunApi {
                 &prompt,
                 depth,
                 source_kinds,
-                caller.actor(),
+                ResearchRunContext {
+                    actor: caller.actor(),
+                    allowed_tools,
+                    message_run_id: Some(run.id.clone()),
+                },
             );
             let kind = match self
                 .interactions
@@ -1302,6 +1320,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 run: self.recover_orphan(caller, replay)?,
             });
         }
+        Self::require_research_tools(caller, &request)?;
         self.plan_selection(caller, &request)?;
         self.branch_source_session(caller, &request)?;
         self.rendered_input(caller, &request).await?;

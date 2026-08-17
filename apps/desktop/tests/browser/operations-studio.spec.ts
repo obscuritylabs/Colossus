@@ -133,7 +133,7 @@ test("conversation follow pauses for reading and resumes on demand or submit", a
   });
   await expect(jumpToLatest).toBeVisible();
   await page.getByLabel("Prompt", { exact: true }).fill("Follow this message");
-  await page.getByRole("button", { name: "Send prompt" }).click();
+  await page.getByRole("button", { name: "Add message to Next up" }).click();
   await expect(jumpToLatest).toHaveCount(0);
 });
 

@@ -56,7 +56,11 @@ struct CreateFingerprint<'request> {
     end_user_id: &'request Option<String>,
     role: &'request Option<String>,
     mode: crate::RunMode,
+    research_depth: &'request Option<crate::ResearchDepth>,
+    research_sources: &'request [crate::ResearchSourceKind],
     skill_ids: Vec<&'request str>,
+    plan_action: &'request Option<crate::PlanRunAction>,
+    branch: &'request Option<crate::RunBranch>,
     max_turns: u32,
 }
 
@@ -326,7 +330,11 @@ impl EventSourcedRunRepository {
             end_user_id: &request.end_user_id,
             role: &request.role,
             mode: request.mode,
+            research_depth: &request.research_depth,
+            research_sources: &request.research_sources,
             skill_ids,
+            plan_action: &request.plan_action,
+            branch: &request.branch,
             max_turns: request.max_turns,
         })
         .map_err(|_| ApiError::internal("the run request could not be normalized"))?;

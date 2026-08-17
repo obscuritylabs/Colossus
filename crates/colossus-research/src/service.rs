@@ -134,6 +134,20 @@ impl ResearchService {
         source_kinds: Vec<ResearchSourceKind>,
         actor: Actor,
     ) -> Result<ResearchRun, StoreError> {
+        self.run_with_message_run_id(session_id, question, depth, source_kinds, None, actor)
+            .await
+    }
+
+    /// Execute durable research while assigning the released report to a caller-owned run.
+    pub async fn run_with_message_run_id(
+        &self,
+        session_id: &str,
+        question: &str,
+        depth: ResearchDepth,
+        source_kinds: Vec<ResearchSourceKind>,
+        message_run_id: Option<&str>,
+        actor: Actor,
+    ) -> Result<ResearchRun, StoreError> {
         if self.sessions.get_session(session_id)?.is_none() {
             return Err(StoreError::NotFound(format!("session {session_id}")));
         }
@@ -408,7 +422,7 @@ impl ResearchService {
         self.repository.update_run(run.clone(), actor.clone())?;
         self.sessions.append_message(
             session_id,
-            &run.id,
+            message_run_id.unwrap_or(&run.id),
             ModelMessage {
                 role: ModelMessageRole::Assistant,
                 content: run.report.clone(),

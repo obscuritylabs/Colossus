@@ -191,6 +191,7 @@ pub use config::{
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;
+pub use workflows_research::ResearchRunContext;
 pub use workspace::RuntimeOpenOptions;
 pub use workspace_lease::WorkspaceIdentityToken;
 

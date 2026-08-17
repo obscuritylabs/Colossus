@@ -1274,6 +1274,54 @@ enum PlanRunActionInput {
     },
 }
 
+impl PlanRunActionInput {
+    fn into_sdk(self) -> Result<PlanRunAction, CommandErrorDto> {
+        let (source_run_id, expected_revision) = match &self {
+            Self::Revise {
+                source_run_id,
+                expected_revision,
+            }
+            | Self::Execute {
+                source_run_id,
+                expected_revision,
+                ..
+            } => (source_run_id, *expected_revision),
+        };
+        validate_identifier(source_run_id, "planAction.sourceRunId")?;
+        if expected_revision == 0 {
+            return Err(CommandErrorDto::invalid(
+                "planAction.expectedRevision",
+                "The Plan revision must be greater than zero.",
+            ));
+        }
+        match self {
+            Self::Revise { source_run_id, .. } => Ok(PlanRunAction::Revise {
+                source_run_id,
+                expected_revision,
+            }),
+            Self::Execute {
+                source_run_id,
+                strategy,
+                ..
+            } => {
+                if let PlanExecutionStrategyInput::Goal { max_iterations } = strategy
+                    && !(1..=50).contains(&max_iterations)
+                {
+                    return Err(CommandErrorDto::invalid(
+                        "planAction.strategy.maxIterations",
+                        "Goal iterations must be in 1..=50.",
+                    ));
+                }
+                Ok(PlanRunAction::Execute {
+                    source_run_id,
+                    expected_revision,
+                    strategy: strategy.into(),
+                })
+            }
+        }
+    }
+}
+
 impl From<RunModeInput> for RunMode {
     fn from(value: RunModeInput) -> Self {
         match value {
@@ -1347,50 +1395,7 @@ impl CreateRunInput {
         }
         let plan_action = self
             .plan_action
-            .map(|action| match action {
-                PlanRunActionInput::Revise {
-                    source_run_id,
-                    expected_revision,
-                } => {
-                    validate_identifier(&source_run_id, "planAction.sourceRunId")?;
-                    if expected_revision == 0 {
-                        return Err(CommandErrorDto::invalid(
-                            "planAction.expectedRevision",
-                            "The Plan revision must be greater than zero.",
-                        ));
-                    }
-                    Ok(PlanRunAction::Revise {
-                        source_run_id,
-                        expected_revision,
-                    })
-                }
-                PlanRunActionInput::Execute {
-                    source_run_id,
-                    expected_revision,
-                    strategy,
-                } => {
-                    validate_identifier(&source_run_id, "planAction.sourceRunId")?;
-                    if expected_revision == 0 {
-                        return Err(CommandErrorDto::invalid(
-                            "planAction.expectedRevision",
-                            "The Plan revision must be greater than zero.",
-                        ));
-                    }
-                    if let PlanExecutionStrategyInput::Goal { max_iterations } = strategy
-                        && !(1..=50).contains(&max_iterations)
-                    {
-                        return Err(CommandErrorDto::invalid(
-                            "planAction.strategy.maxIterations",
-                            "Goal iterations must be in 1..=50.",
-                        ));
-                    }
-                    Ok(PlanRunAction::Execute {
-                        source_run_id,
-                        expected_revision,
-                        strategy: strategy.into(),
-                    })
-                }
-            })
+            .map(PlanRunActionInput::into_sdk)
             .transpose()?;
         let branch = self
             .branch

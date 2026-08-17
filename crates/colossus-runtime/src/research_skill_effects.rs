@@ -118,14 +118,38 @@ impl EffectExecutor for ResearchEffectExecutor {
             question,
             depth,
             source_kinds,
+            message_run_id,
         } = operation;
+        if request.context.run_id != message_run_id {
+            return Err(ExecutionError::Failed(
+                "research operation does not match its authorized run context".into(),
+            ));
+        }
+        let offered_tools = request
+            .context
+            .offered_tools
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if source_kinds.iter().any(|kind| {
+            !offered_tools.contains(match kind {
+                ResearchSourceKind::Repo => "filesystem.search",
+                ResearchSourceKind::Web => "web.search",
+                ResearchSourceKind::Mcp => "mcp.call",
+            })
+        }) {
+            return Err(ExecutionError::Failed(
+                "research evidence lane exceeds the authorized tool ceiling".into(),
+            ));
+        }
         let run = self
             .service
-            .run(
+            .run_with_message_run_id(
                 &session_id,
                 &question,
                 depth,
                 source_kinds,
+                message_run_id.as_deref(),
                 request.actor.clone(),
             )
             .await

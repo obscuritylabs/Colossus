@@ -572,6 +572,71 @@ fn idempotency_key_reuse_with_different_request_fails_closed() {
     assert_eq!(error.reason, ApiErrorReason::IdempotencyKeyReused);
 }
 
+fn assert_create_idempotency_conflict(first: CreateRunRequest, changed: CreateRunRequest) {
+    first.validate().expect("first request");
+    changed.validate().expect("changed request");
+    let (_, repository, caller) = fixture();
+    let first_session = first.session_id.as_deref().unwrap_or("session-first");
+    create_run(&repository, &caller, &first, "run-first", first_session);
+    let changed_session = changed.session_id.as_deref().unwrap_or("session-changed");
+    let new_run = NewRun::from_request("run-changed", changed_session, "assistant", &changed)
+        .expect("changed run");
+    let error = repository
+        .create_run(&caller, &changed, &new_run)
+        .expect_err("semantic request changes must not replay an idempotency key");
+    assert_eq!(error.reason, ApiErrorReason::IdempotencyKeyReused);
+}
+
+#[test]
+fn create_idempotency_binds_research_plan_and_branch_options() {
+    let research_request = |key: &str| {
+        let mut request = create_request(key, "What changed?");
+        request.mode = RunMode::Research;
+        request.research_depth = Some(ResearchDepth::Standard);
+        request.research_sources = vec![ResearchSourceKind::Repo];
+        request
+    };
+
+    let first = research_request("research-depth-key");
+    let mut changed = first.clone();
+    changed.research_depth = Some(ResearchDepth::Deep);
+    assert_create_idempotency_conflict(first, changed);
+
+    let first = research_request("research-sources-key");
+    let mut changed = first.clone();
+    changed.research_sources = vec![ResearchSourceKind::Web];
+    assert_create_idempotency_conflict(first, changed);
+
+    let mut first = create_request("plan-action-key", "Continue the Plan");
+    first.session_id = Some("session-plan".into());
+    first.plan_action = Some(PlanRunAction::Execute {
+        source_run_id: "source-plan".into(),
+        expected_revision: 1,
+        strategy: PlanExecutionStrategy::Direct,
+    });
+    let mut changed = first.clone();
+    changed.plan_action = Some(PlanRunAction::Execute {
+        source_run_id: "source-plan".into(),
+        expected_revision: 2,
+        strategy: PlanExecutionStrategy::Direct,
+    });
+    assert_create_idempotency_conflict(first, changed);
+
+    let mut first = create_request("branch-key", "Start an Aside");
+    first.branch = Some(RunBranch {
+        source_run_id: "source-run-a".into(),
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    let mut changed = first.clone();
+    changed.branch = Some(RunBranch {
+        source_run_id: "source-run-b".into(),
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    assert_create_idempotency_conflict(first, changed);
+}
+
 #[test]
 fn create_request_rejects_more_than_the_bounded_number_of_input_parts() {
     let mut request = create_request("many-input-parts", "x");
