@@ -1,12 +1,13 @@
 use crate::{
-    AgentRunClient, ApiResult, ArtifactClient, ArtifactReference, Backend, BackendKind,
-    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
-    DownloadedArtifact, GetRunRequest, GetRunResponse, GrpcBackend, GrpcConnectOptions,
-    Interaction, InteractionAnswer, InteractionContent, InteractionStatus, ListRunsRequest,
-    ListRunsResponse, MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
-    RespondInteractionRequest, RespondInteractionResponse, RunUpdateKind, RunUpdateStream,
-    SdkError, SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle,
-    SidecarOptions, TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
+    AgentRunClient, ApiResult, ArchiveThreadRequest, ArtifactClient, ArtifactReference, Backend,
+    BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
+    CredentialProvider, DownloadedArtifact, GetRunRequest, GetRunResponse, GrpcBackend,
+    GrpcConnectOptions, Interaction, InteractionAnswer, InteractionContent, InteractionStatus,
+    ListRunsRequest, ListRunsResponse, MacosCodeSigningRequirement, NativeSidecarFailure,
+    NativeSidecarStatus, RespondInteractionRequest, RespondInteractionResponse,
+    RestoreThreadRequest, RunUpdateKind, RunUpdateStream, SdkError, SdkResult, Secret,
+    ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, ThreadLifecycle,
+    TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
 };
 #[cfg(test)]
 use crate::{ApiError, ApiErrorReason};
@@ -1162,6 +1163,14 @@ impl AgentRunClient for SwitchingAgentRunClient {
         self.current().await.primary.cancel_run(request).await
     }
 
+    async fn archive_thread(&self, request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
+        self.current().await.primary.archive_thread(request).await
+    }
+
+    async fn restore_thread(&self, request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
+        self.current().await.primary.restore_thread(request).await
+    }
+
     async fn respond_interaction(
         &self,
         request: RespondInteractionRequest,
@@ -2247,6 +2256,7 @@ mod tests {
             terminal: None,
             etag: "approval-etag".into(),
             selected_skills: Vec::new(),
+            archived: false,
         }
     }
 

@@ -15,6 +15,8 @@ use std::{collections::BTreeMap, sync::Arc};
 
 struct OfflineCollector;
 
+struct ManySourcesCollector;
+
 struct StructuredModel;
 
 #[test]
@@ -45,7 +47,10 @@ impl ResearchModel for StructuredModel {
         _sources: &[ResearchSource],
         _claims: &[ResearchClaim],
     ) -> Result<String, String> {
-        Ok("# Model report\n\nModel-backed claim [R1].".into())
+        Ok(
+            "# Model report\n\nModel-backed claim [R1].\n\n## Sources\n\n- [R1] Model-written source summary"
+                .into(),
+        )
     }
 }
 
@@ -75,6 +80,31 @@ impl ResearchCollector for OfflineCollector {
                 message: "adapter is not configured".into(),
                 sources: Vec::new(),
             },
+        }
+    }
+}
+
+#[async_trait]
+impl ResearchCollector for ManySourcesCollector {
+    async fn collect(
+        &self,
+        _run: &ResearchRun,
+        kind: ResearchSourceKind,
+        _query: &str,
+        _limit: usize,
+    ) -> ResearchCollection {
+        ResearchCollection {
+            status: ResearchLaneStatus::Completed,
+            message: "many repository sources released".into(),
+            sources: (0..20)
+                .map(|index| ResearchSourceDraft {
+                    kind,
+                    title: format!("Source {index}"),
+                    uri: format!("docs/source-{index}.md"),
+                    content: format!("Evidence {index}"),
+                    metadata: BTreeMap::new(),
+                })
+                .collect(),
         }
     }
 }
@@ -246,6 +276,72 @@ async fn offline_orchestration_persists_progress_limit_and_session_report() {
 }
 
 #[tokio::test]
+async fn released_report_can_be_owned_by_the_public_application_run() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn ResearchRepository> =
+        Arc::new(EventSourcedResearchRepository::new(journal.clone()));
+    let sessions = Arc::new(EventSourcedSessionRepository::new(journal));
+    sessions
+        .create_session("session-1", Some("Research"), actor())
+        .expect("session");
+    let service = ResearchService::new(
+        repository,
+        sessions.clone(),
+        Arc::new(OfflineCollector),
+        ResearchLimits::default(),
+    )
+    .expect("service");
+
+    let run = service
+        .run_with_message_run_id(
+            "session-1",
+            "How does audit work?",
+            ResearchDepth::Quick,
+            vec![ResearchSourceKind::Repo],
+            Some("public-run-1"),
+            actor(),
+        )
+        .await
+        .expect("research");
+
+    let messages = sessions.list_messages("session-1").expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].run_id, "public-run-1");
+    assert_eq!(messages[0].message.content, run.report);
+}
+
+#[tokio::test]
+async fn quick_research_bounds_canonical_sources_before_worker_extraction() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn ResearchRepository> =
+        Arc::new(EventSourcedResearchRepository::new(journal.clone()));
+    let sessions = Arc::new(EventSourcedSessionRepository::new(journal));
+    sessions
+        .create_session("session-1", Some("Research"), actor())
+        .expect("session");
+    let service = ResearchService::new(
+        repository.clone(),
+        sessions,
+        Arc::new(ManySourcesCollector),
+        ResearchLimits::default(),
+    )
+    .expect("service");
+    let run = service
+        .run(
+            "session-1",
+            "What is implemented?",
+            ResearchDepth::Quick,
+            vec![ResearchSourceKind::Repo],
+            actor(),
+        )
+        .await
+        .expect("research");
+
+    assert_eq!(repository.list_sources(&run.id).expect("sources").len(), 4);
+    assert_eq!(repository.list_claims(&run.id).expect("claims").len(), 4);
+}
+
+#[tokio::test]
 async fn valid_model_phases_replace_fallbacks_without_weakening_citations() {
     let journal = Arc::new(InMemoryEventJournal::default());
     let repository: Arc<dyn ResearchRepository> =
@@ -276,7 +372,10 @@ async fn valid_model_phases_replace_fallbacks_without_weakening_citations() {
         .await
         .expect("research");
     assert_eq!(run.queries, vec!["model query"]);
-    assert_eq!(run.report, "# Model report\n\nModel-backed claim [R1].");
+    assert_eq!(
+        run.report,
+        "# Model report\n\nModel-backed claim [R1].\n\n## Sources\n\n- [R1] Architecture — docs/develop/architecture.md#model query\n"
+    );
     assert!(
         run.progress
             .iter()

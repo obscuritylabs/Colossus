@@ -1,7 +1,7 @@
 use crate::{
     ApiError, ApiErrorReason, ApiResult, CallerContext, CreateRunRequest, Idempotent, Interaction,
     InteractionKind, InteractionResponse, InteractionStatus, ListRunsRequest, ListRunsResponse,
-    NewRun, Run, RunExecutionRequest, RunStatus, RunUpdate, RunUpdateKind,
+    NewRun, Run, RunExecutionRequest, RunStatus, RunUpdate, RunUpdateKind, ThreadLifecycle,
     identity::scopes,
     validate_public_approval_display,
     validation::{
@@ -16,16 +16,24 @@ use colossus_ports::{EventJournal, StoreError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const CREATE_OPERATION: &str = "agent_run.create.v1";
 const CANCEL_OPERATION: &str = "agent_run.cancel.v1";
 const RESPOND_OPERATION: &str = "agent_run.interaction.respond.v1";
+const ARCHIVE_THREAD_OPERATION: &str = "agent_run.thread.archive.v1";
+const RESTORE_THREAD_OPERATION: &str = "agent_run.thread.restore.v1";
 const IDEMPOTENCY_EVENT: &str = "api.idempotency.claimed.v1";
 const RUN_CREATED_EVENT: &str = "api.run.created.v1";
-const RUN_INDEXED_EVENT: &str = "api.run.indexed.v1";
+pub(crate) const RUN_INDEXED_EVENT: &str = "api.run.indexed.v1";
 const RUN_UPDATE_EVENT: &str = "api.run.update.v1";
+const THREAD_ATTACHED_EVENT: &str = "api.thread.run.attached.v1";
+const THREAD_ARCHIVED_EVENT: &str = "api.thread.archived.v1";
+const THREAD_RESTORED_EVENT: &str = "api.thread.restored.v1";
 const LIST_INDEX_READ_BATCH: usize = 8;
 const MAX_LIST_INDEX_EVENTS_SCANNED: usize = 64;
 const MAX_RUN_STREAM_EVENTS: usize = 4_099;
@@ -37,6 +45,7 @@ const LIST_CURSOR_BYTES: usize = 1 + 8 + 8 + 32 + 32;
 const LIST_CURSOR_HEX_BYTES: usize = LIST_CURSOR_BYTES * 2;
 const MAX_NONTERMINAL_RUN_SEQUENCE: u64 = 4_096;
 const MAX_RELEASED_BYTES_PER_RUN: usize = 16 * 1_048_576;
+const MAX_THREAD_STREAM_EVENTS: u64 = 4_096;
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -46,7 +55,11 @@ struct CreateFingerprint<'request> {
     end_user_id: &'request Option<String>,
     role: &'request Option<String>,
     mode: crate::RunMode,
+    research_depth: &'request Option<crate::ResearchDepth>,
+    research_sources: &'request [crate::ResearchSourceKind],
     skill_ids: Vec<&'request str>,
+    plan_action: &'request Option<crate::PlanRunAction>,
+    branch: &'request Option<crate::RunBranch>,
     max_turns: u32,
 }
 
@@ -73,6 +86,13 @@ struct RunCreated {
 #[serde(deny_unknown_fields)]
 struct RunIndexed {
     run_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThreadLifecycleEvent {
+    session_id: String,
+    archived: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -185,6 +205,22 @@ pub trait RunRepository: Send + Sync {
         request: &ListRunsRequest,
     ) -> ApiResult<ListRunsResponse>;
 
+    /// Durably hide one terminal caller-owned thread.
+    fn archive_thread(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        idempotency_key: &crate::IdempotencyKey,
+    ) -> ApiResult<ThreadLifecycle>;
+
+    /// Durably restore one caller-owned thread.
+    fn restore_thread(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        idempotency_key: &crate::IdempotencyKey,
+    ) -> ApiResult<ThreadLifecycle>;
+
     /// Append one safe released update with optimistic sequence concurrency.
     fn append_update(
         &self,
@@ -249,11 +285,20 @@ impl EventSourcedRunRepository {
         format!("api-run:{run_id}")
     }
 
-    fn run_index_stream(caller: &CallerContext) -> String {
+    pub(crate) fn run_index_stream(caller: &CallerContext) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"colossus-api-run-index-v1\0");
         hasher.update(caller.principal().application_id().as_bytes());
         format!("api-run-index:{}", hex::encode(hasher.finalize()))
+    }
+
+    fn thread_stream(caller: &CallerContext, session_id: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"colossus-api-thread-v1\0");
+        hasher.update(caller.principal().application_id().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(session_id.as_bytes());
+        format!("api-thread:{}", hex::encode(hasher.finalize()))
     }
 
     fn idempotency_stream(
@@ -284,11 +329,325 @@ impl EventSourcedRunRepository {
             end_user_id: &request.end_user_id,
             role: &request.role,
             mode: request.mode,
+            research_depth: &request.research_depth,
+            research_sources: &request.research_sources,
             skill_ids,
+            plan_action: &request.plan_action,
+            branch: &request.branch,
             max_turns: request.max_turns,
         })
         .map_err(|_| ApiError::internal("the run request could not be normalized"))?;
         Ok(hex::encode(Sha256::digest(canonical)))
+    }
+
+    fn thread_operation_fingerprint(operation: &str, run_id: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"colossus-api-thread-operation-v1\0");
+        hasher.update(operation.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(run_id.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    fn thread_state(
+        &self,
+        caller: &CallerContext,
+        session_id: &str,
+    ) -> ApiResult<(ThreadLifecycle, u64)> {
+        let stream_id = Self::thread_stream(caller, session_id);
+        let events = self
+            .journal
+            .read_stream_backwards(&stream_id, None, 1)
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+        let Some(event) = events.first() else {
+            return Ok((
+                ThreadLifecycle {
+                    session_id: session_id.into(),
+                    archived: false,
+                },
+                0,
+            ));
+        };
+        if event.stream_version == 0 || event.stream_version > MAX_THREAD_STREAM_EVENTS {
+            return Err(invariant(
+                caller,
+                "the durable thread lifecycle exceeds its bounded event budget",
+            ));
+        }
+        let lifecycle =
+            decode_thread_lifecycle(self.journal.as_ref(), caller, &stream_id, session_id, event)?;
+        Ok((lifecycle, event.stream_version))
+    }
+
+    fn replay_thread_operation(
+        &self,
+        caller: &CallerContext,
+        idempotency_stream: &str,
+        operation: &str,
+        request_fingerprint: &str,
+        archived: bool,
+    ) -> ApiResult<Option<ThreadLifecycle>> {
+        let events = self
+            .journal
+            .read_stream(idempotency_stream)
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+        let Some(first) = events.first() else {
+            return Ok(None);
+        };
+        if events.len() != 1
+            || first.event_type != IDEMPOTENCY_EVENT
+            || first.actor.actor_type != ActorType::Application
+            || first.actor.id != caller.principal().application_id()
+        {
+            return Err(invariant(
+                caller,
+                "durable thread idempotency evidence could not be verified",
+            ));
+        }
+        let claim: IdempotencyClaim = self
+            .journal
+            .decrypt_payload(first)
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))
+            .and_then(|payload| {
+                serde_json::from_value(payload).map_err(|_| {
+                    invariant(
+                        caller,
+                        "durable thread idempotency evidence could not be decoded",
+                    )
+                })
+            })?;
+        if claim.operation != operation {
+            return Err(invariant(
+                caller,
+                "durable thread idempotency operation could not be verified",
+            ));
+        }
+        if claim.request_fingerprint != request_fingerprint {
+            return Err(ApiError::conflict(
+                ApiErrorReason::IdempotencyKeyReused,
+                "the idempotency key was already used for a different request",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        let run = self.load(caller, &claim.run_id)?.ok_or_else(|| {
+            invariant(
+                caller,
+                "the thread idempotency claim references an absent durable run",
+            )
+        })?;
+        Ok(Some(ThreadLifecycle {
+            session_id: run.session_id,
+            archived,
+        }))
+    }
+
+    fn ensure_thread_terminal(&self, caller: &CallerContext, session_id: &str) -> ApiResult<()> {
+        let thread_stream = Self::thread_stream(caller, session_id);
+        let mut before_version = None;
+        let mut scanned = 0_usize;
+        loop {
+            let remaining = usize::try_from(MAX_THREAD_STREAM_EVENTS)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(scanned);
+            if remaining == 0 {
+                let has_more = !self
+                    .journal
+                    .read_stream_backwards(&thread_stream, before_version, 1)
+                    .map_err(|error| ApiError::from_store(&error, caller.request_id()))?
+                    .is_empty();
+                if has_more {
+                    return Err(ApiError::bounded_resource_exhausted(
+                        ApiErrorReason::CapacityExceeded,
+                        "the thread is too large to archive safely",
+                    )
+                    .with_correlation_id(caller.request_id().clone()));
+                }
+                return Ok(());
+            }
+            let read_limit = remaining.min(colossus_ports::MAX_STREAM_READ_BATCH);
+            let events = self
+                .journal
+                .read_stream_backwards(&thread_stream, before_version, read_limit)
+                .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+            if events.is_empty() {
+                return Ok(());
+            }
+            for event in &events {
+                decode_thread_lifecycle(
+                    self.journal.as_ref(),
+                    caller,
+                    &thread_stream,
+                    session_id,
+                    event,
+                )?;
+                scanned = scanned.saturating_add(1);
+                before_version = Some(event.stream_version);
+                if event.event_type != THREAD_ATTACHED_EVENT {
+                    continue;
+                }
+                let run_id = event.context.run_id.as_deref().ok_or_else(|| {
+                    invariant(caller, "the thread membership is missing its run identity")
+                })?;
+                let (run, _) = self.load_append_state(caller, run_id)?.ok_or_else(|| {
+                    invariant(caller, "the thread membership references an absent run")
+                })?;
+                if run.session_id != session_id {
+                    return Err(invariant(
+                        caller,
+                        "the thread membership references another session",
+                    ));
+                }
+                if !run.status.is_terminal() {
+                    return Err(ApiError::failed_precondition(
+                        ApiErrorReason::InvalidRunTransition,
+                        "finish or cancel all work in this thread before archiving it",
+                    )
+                    .with_correlation_id(caller.request_id().clone()));
+                }
+            }
+            if events.len() < read_limit {
+                return Ok(());
+            }
+        }
+    }
+
+    fn set_thread_archived(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        idempotency_key: &crate::IdempotencyKey,
+        archived: bool,
+    ) -> ApiResult<ThreadLifecycle> {
+        caller.require_scope(scopes::RUNS_CONTROL)?;
+        token(run_id, "run_id", MAX_IDENTIFIER_BYTES)
+            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        let operation = if archived {
+            ARCHIVE_THREAD_OPERATION
+        } else {
+            RESTORE_THREAD_OPERATION
+        };
+        let fingerprint = Self::thread_operation_fingerprint(operation, run_id);
+        let idempotency_stream = Self::idempotency_stream(caller, operation, idempotency_key);
+        if let Some(replay) = self.replay_thread_operation(
+            caller,
+            &idempotency_stream,
+            operation,
+            &fingerprint,
+            archived,
+        )? {
+            return Ok(replay);
+        }
+        let run = self.load(caller, run_id)?.ok_or_else(|| {
+            ApiError::not_found(
+                ApiErrorReason::RunNotFound,
+                "the requested run was not found",
+            )
+            .with_correlation_id(caller.request_id().clone())
+        })?;
+        let stream_id = Self::thread_stream(caller, &run.session_id);
+        let actor = caller.actor();
+        let context = ExecutionContext {
+            correlation_id: caller.request_id().as_str().into(),
+            session_id: Some(run.session_id.clone()),
+            run_id: Some(run.id.clone()),
+            ..ExecutionContext::default()
+        };
+        for _ in 0..MAX_CREATE_INDEX_CONFLICT_RETRIES {
+            if let Some(replay) = self.replay_thread_operation(
+                caller,
+                &idempotency_stream,
+                operation,
+                &fingerprint,
+                archived,
+            )? {
+                return Ok(replay);
+            }
+            if archived {
+                self.ensure_thread_terminal(caller, &run.session_id)?;
+            }
+            let (current, expected_version) = self.thread_state(caller, &run.session_id)?;
+            let claim = NewEvent {
+                event_version: 1,
+                stream_id: idempotency_stream.clone(),
+                expected_stream_version: 0,
+                classification: EventClassification::System,
+                event_type: IDEMPOTENCY_EVENT.into(),
+                actor: actor.clone(),
+                context: context.clone(),
+                payload: json!({
+                    "operation": operation,
+                    "request_fingerprint": fingerprint,
+                    "run_id": run.id,
+                }),
+            };
+            let mut events = vec![claim];
+            if current.archived != archived {
+                if expected_version >= MAX_THREAD_STREAM_EVENTS {
+                    return Err(ApiError::bounded_resource_exhausted(
+                        ApiErrorReason::CapacityExceeded,
+                        "the thread reached its lifecycle event budget",
+                    )
+                    .with_correlation_id(caller.request_id().clone()));
+                }
+                events.push(NewEvent {
+                    event_version: 1,
+                    stream_id: stream_id.clone(),
+                    expected_stream_version: expected_version,
+                    classification: EventClassification::Domain,
+                    event_type: if archived {
+                        THREAD_ARCHIVED_EVENT.into()
+                    } else {
+                        THREAD_RESTORED_EVENT.into()
+                    },
+                    actor: actor.clone(),
+                    context: context.clone(),
+                    payload: serde_json::to_value(ThreadLifecycleEvent {
+                        session_id: run.session_id.clone(),
+                        archived,
+                    })
+                    .map_err(|_| invariant(caller, "the thread lifecycle could not be encoded"))?,
+                });
+            }
+            match self.journal.append_batch(events) {
+                Ok(_) => {
+                    return Ok(ThreadLifecycle {
+                        session_id: run.session_id.clone(),
+                        archived,
+                    });
+                }
+                Err(StoreError::Conflict {
+                    stream_id: conflict,
+                    ..
+                }) if conflict == idempotency_stream => {
+                    return self
+                        .replay_thread_operation(
+                            caller,
+                            &idempotency_stream,
+                            operation,
+                            &fingerprint,
+                            archived,
+                        )?
+                        .ok_or_else(|| {
+                            invariant(
+                                caller,
+                                "the concurrent thread idempotency claim disappeared",
+                            )
+                        });
+                }
+                Err(StoreError::Conflict {
+                    stream_id: conflict,
+                    ..
+                }) if conflict == stream_id => {
+                    continue;
+                }
+                Err(error) => return Err(ApiError::from_store(&error, caller.request_id())),
+            }
+        }
+        Err(ApiError::resource_exhausted(
+            ApiErrorReason::CapacityExceeded,
+            "the thread lifecycle is contending with other requests; retry with the same idempotency key",
+        )
+        .with_correlation_id(caller.request_id().clone()))
     }
 
     fn replay(
@@ -360,7 +719,9 @@ impl EventSourcedRunRepository {
         if !visible_to(caller, &events)? {
             return Ok(None);
         }
-        reconstruct(self.journal.as_ref(), caller, run_id, &events).map(Some)
+        let mut run = reconstruct(self.journal.as_ref(), caller, run_id, &events)?;
+        run.archived = self.thread_state(caller, &run.session_id)?.0.archived;
+        Ok(Some(run))
     }
 
     fn read_bounded_run_stream(
@@ -730,6 +1091,11 @@ impl RunRepository for EventSourcedRunRepository {
             run_id: new_run.id().into(),
         })
         .map_err(|_| invariant(caller, "the run index entry could not be encoded"))?;
+        let thread_payload = serde_json::to_value(ThreadLifecycleEvent {
+            session_id: new_run.session_id().into(),
+            archived: false,
+        })
+        .map_err(|_| invariant(caller, "the thread membership could not be encoded"))?;
         let context = ExecutionContext {
             correlation_id: caller.request_id().as_str().into(),
             session_id: Some(new_run.session_id().into()),
@@ -738,11 +1104,28 @@ impl RunRepository for EventSourcedRunRepository {
         };
         let actor = caller.actor();
         let index_stream = Self::run_index_stream(caller);
+        let thread_stream = Self::thread_stream(caller, new_run.session_id());
         for _ in 0..MAX_CREATE_INDEX_CONFLICT_RETRIES {
             if let Some(replay) =
                 self.replay(caller, &idempotency_stream, CREATE_OPERATION, &fingerprint)?
             {
                 return Ok(replay);
+            }
+            let (thread, expected_thread_version) =
+                self.thread_state(caller, new_run.session_id())?;
+            if thread.archived {
+                return Err(ApiError::failed_precondition(
+                    ApiErrorReason::InvalidRunTransition,
+                    "restore this thread before adding more work",
+                )
+                .with_correlation_id(caller.request_id().clone()));
+            }
+            if expected_thread_version >= MAX_THREAD_STREAM_EVENTS {
+                return Err(ApiError::bounded_resource_exhausted(
+                    ApiErrorReason::CapacityExceeded,
+                    "the thread reached its durable run budget",
+                )
+                .with_correlation_id(caller.request_id().clone()));
             }
             let tail = self
                 .journal
@@ -792,6 +1175,16 @@ impl RunRepository for EventSourcedRunRepository {
                     context: context.clone(),
                     payload: index_payload.clone(),
                 },
+                NewEvent {
+                    event_version: 1,
+                    stream_id: thread_stream.clone(),
+                    expected_stream_version: expected_thread_version,
+                    classification: EventClassification::Domain,
+                    event_type: THREAD_ATTACHED_EVENT.into(),
+                    actor: actor.clone(),
+                    context: context.clone(),
+                    payload: thread_payload.clone(),
+                },
             ]);
             let envelopes = match append {
                 Ok(envelopes) => envelopes,
@@ -803,6 +1196,9 @@ impl RunRepository for EventSourcedRunRepository {
                         });
                 }
                 Err(StoreError::Conflict { stream_id, .. }) if stream_id == index_stream => {
+                    continue;
+                }
+                Err(StoreError::Conflict { stream_id, .. }) if stream_id == thread_stream => {
                     continue;
                 }
                 Err(error) => return Err(ApiError::from_store(&error, caller.request_id())),
@@ -819,9 +1215,17 @@ impl RunRepository for EventSourcedRunRepository {
                     "atomic run creation did not return its durable index entry",
                 )
             })?;
-            if envelopes.len() != 3
+            let thread_envelope = envelopes.get(3).ok_or_else(|| {
+                invariant(
+                    caller,
+                    "atomic run creation did not return its durable thread membership",
+                )
+            })?;
+            if envelopes.len() != 4
                 || index_envelope.stream_id != index_stream
                 || index_envelope.stream_version != expected_index_version.saturating_add(1)
+                || thread_envelope.stream_id != thread_stream
+                || thread_envelope.stream_version != expected_thread_version.saturating_add(1)
             {
                 return Err(invariant(
                     caller,
@@ -885,7 +1289,8 @@ impl RunRepository for EventSourcedRunRepository {
         if events.is_empty() || !visible_to(caller, &events)? {
             return Ok(None);
         }
-        let run = reconstruct(self.journal.as_ref(), caller, run_id, &events)?;
+        let mut run = reconstruct(self.journal.as_ref(), caller, run_id, &events)?;
+        run.archived = self.thread_state(caller, &run.session_id)?.0.archived;
         let first = events
             .first()
             .ok_or_else(|| invariant(caller, "the durable run creation event disappeared"))?;
@@ -945,6 +1350,7 @@ impl RunRepository for EventSourcedRunRepository {
         let mut last_processed_version = None;
         let mut index_has_more = false;
         let mut runs = Vec::with_capacity(target_count);
+        let mut archived_threads = BTreeMap::<String, bool>::new();
 
         'read_index: loop {
             let remaining = MAX_LIST_INDEX_EVENTS_SCANNED.saturating_sub(scanned);
@@ -990,7 +1396,8 @@ impl RunRepository for EventSourcedRunRepository {
                     break 'read_index;
                 }
                 reconstructed_events = reconstructed_events.saturating_add(run_events.len());
-                let run = reconstruct(self.journal.as_ref(), caller, &indexed.run_id, &run_events)?;
+                let mut run =
+                    reconstruct(self.journal.as_ref(), caller, &indexed.run_id, &run_events)?;
                 let created = run_events.first().ok_or_else(|| {
                     invariant(caller, "the durable run index references an absent run")
                 })?;
@@ -1004,6 +1411,14 @@ impl RunRepository for EventSourcedRunRepository {
                     ));
                 }
 
+                run.archived = if let Some(archived) = archived_threads.get(&run.session_id) {
+                    *archived
+                } else {
+                    let archived = self.thread_state(caller, &run.session_id)?.0.archived;
+                    archived_threads.insert(run.session_id.clone(), archived);
+                    archived
+                };
+
                 scanned = scanned.saturating_add(1);
                 before_version = Some(index_event.stream_version);
                 last_processed_version = Some(index_event.stream_version);
@@ -1012,6 +1427,7 @@ impl RunRepository for EventSourcedRunRepository {
                     .as_ref()
                     .is_none_or(|session_id| &run.session_id == session_id)
                     && (request.statuses.is_empty() || request.statuses.contains(&run.status))
+                    && (request.include_archived || !run.archived)
                 {
                     runs.push((run, index_event.stream_version));
                     if runs.len() >= target_count {
@@ -1056,6 +1472,24 @@ impl RunRepository for EventSourcedRunRepository {
             runs: page,
             next_page_token,
         })
+    }
+
+    fn archive_thread(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        idempotency_key: &crate::IdempotencyKey,
+    ) -> ApiResult<ThreadLifecycle> {
+        self.set_thread_archived(caller, run_id, idempotency_key, true)
+    }
+
+    fn restore_thread(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        idempotency_key: &crate::IdempotencyKey,
+    ) -> ApiResult<ThreadLifecycle> {
+        self.set_thread_archived(caller, run_id, idempotency_key, false)
     }
 
     fn append_update(
@@ -1416,6 +1850,7 @@ fn initial_run(envelope: &EventEnvelope, new_run: &NewRun, request: &CreateRunRe
         cancellation: None,
         pending_interaction: None,
         etag: run_etag(new_run.id(), envelope.stream_version),
+        archived: false,
     }
 }
 
@@ -1438,6 +1873,7 @@ fn initial_run_from_created(envelope: &EventEnvelope, created: &RunCreated) -> R
         cancellation: None,
         pending_interaction: None,
         etag: run_etag(&created.id, envelope.stream_version),
+        archived: false,
     }
 }
 
@@ -1845,6 +2281,12 @@ fn validate_update(run: &Run, kind: &RunUpdateKind) -> ApiResult<()> {
                 65_536,
                 true,
             )?;
+            if let Some(input) = &activity.input {
+                bounded_text(input, "update.tool_activity.input", 65_536, false)?;
+            }
+            if let Some(preview) = &activity.preview {
+                bounded_text(preview, "update.tool_activity.preview", 65_536, false)?;
+            }
         }
         RunUpdateKind::Usage { usage } => {
             if usage
@@ -2341,6 +2783,53 @@ fn decode_indexed(
     Ok(indexed)
 }
 
+fn decode_thread_lifecycle(
+    journal: &dyn EventJournal,
+    caller: &CallerContext,
+    stream_id: &str,
+    session_id: &str,
+    event: &EventEnvelope,
+) -> ApiResult<ThreadLifecycle> {
+    if event.event_version != 1
+        || event.stream_id != stream_id
+        || event.stream_version == 0
+        || event.classification != EventClassification::Domain
+        || !matches!(
+            event.event_type.as_str(),
+            THREAD_ATTACHED_EVENT | THREAD_ARCHIVED_EVENT | THREAD_RESTORED_EVENT
+        )
+        || event.actor.actor_type != ActorType::Application
+        || event.actor.id != caller.principal().application_id()
+        || event.context.session_id.as_deref() != Some(session_id)
+    {
+        return Err(invariant(
+            caller,
+            "the durable thread lifecycle envelope could not be verified",
+        ));
+    }
+    let lifecycle: ThreadLifecycleEvent = journal
+        .decrypt_payload(event)
+        .map_err(|error| ApiError::from_store(&error, caller.request_id()))
+        .and_then(|payload| {
+            serde_json::from_value(payload)
+                .map_err(|_| invariant(caller, "the durable thread lifecycle is invalid"))
+        })?;
+    let expected_archived = event.event_type == THREAD_ARCHIVED_EVENT;
+    if lifecycle.session_id != session_id
+        || token(&lifecycle.session_id, "session_id", MAX_IDENTIFIER_BYTES).is_err()
+        || lifecycle.archived != expected_archived
+    {
+        return Err(invariant(
+            caller,
+            "the durable thread lifecycle identity could not be verified",
+        ));
+    }
+    Ok(ThreadLifecycle {
+        session_id: lifecycle.session_id,
+        archived: lifecycle.archived,
+    })
+}
+
 fn list_query_digest(caller: &CallerContext, request: &ListRunsRequest) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"colossus-api-run-list-query-v1\0");
@@ -2372,6 +2861,7 @@ fn list_query_digest(caller: &CallerContext, request: &ListRunsRequest) -> [u8; 
     for status in statuses {
         hasher.update([run_status_cursor_byte(status)]);
     }
+    hasher.update([u8::from(request.include_archived)]);
     hasher.finalize().into()
 }
 

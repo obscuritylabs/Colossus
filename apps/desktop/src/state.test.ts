@@ -21,6 +21,7 @@ import {
   stableIdempotentAttempt,
   utf8ByteLength,
   withBoundedEntry,
+  withoutEntry,
 } from "./state";
 import type { Interaction, Run, RunUpdate } from "./types";
 import { USE_CONFIGURED_MAX_TURNS } from "./types";
@@ -41,6 +42,7 @@ const baseRun: Run = {
   terminal: null,
   etag: "run-etag",
   selectedSkills: [],
+  archived: false,
 };
 
 function withRun() {
@@ -482,6 +484,31 @@ describe("chatReducer", () => {
       }
     }
   });
+
+  it("removes every cached run in an archived session and clears its selection", () => {
+    const first = { ...runFixture("archive-1"), sessionId: "session-archive" };
+    const second = {
+      ...runFixture("archive-2"),
+      sessionId: "session-archive",
+    };
+    const retained = runFixture("retained");
+    let state = chatReducer(initialChatState, {
+      type: "upsert_run",
+      run: first,
+    });
+    state = chatReducer(state, { type: "upsert_run", run: second });
+    state = chatReducer(state, { type: "upsert_run", run: retained });
+    state = chatReducer(state, { type: "select_run", runId: second.runId });
+
+    state = chatReducer(state, {
+      type: "remove_session",
+      sessionId: "session-archive",
+    });
+
+    expect(state.activeRunId).toBeNull();
+    expect([...state.views.keys()]).toEqual([retained.runId]);
+    expect(state.recentRuns.map((run) => run.runId)).toEqual([retained.runId]);
+  });
 });
 
 describe("stableIdempotentAttempt", () => {
@@ -518,6 +545,25 @@ describe("stableIdempotentAttempt", () => {
     expect(attempts.get(MAX_CACHED_IDEMPOTENCY_ATTEMPTS)).toBe(
       `attempt-${MAX_CACHED_IDEMPOTENCY_ATTEMPTS}`,
     );
+  });
+
+  it("rotates a lifecycle key after a completed operation is removed", () => {
+    let generated = 0;
+    const createKey = () => `key-${++generated}`;
+    const fingerprint = operationFingerprint(["session-1", "archive"]);
+    const first = stableIdempotentAttempt(null, fingerprint, createKey);
+    const attempts = withoutEntry(
+      withBoundedEntry(new Map(), "session-1:archive", first),
+      "session-1:archive",
+    );
+    const next = stableIdempotentAttempt(
+      attempts.get("session-1:archive") ?? null,
+      fingerprint,
+      createKey,
+    );
+
+    expect(next.key).not.toBe(first.key);
+    expect(generated).toBe(2);
   });
 });
 

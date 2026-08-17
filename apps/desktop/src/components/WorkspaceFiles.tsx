@@ -33,6 +33,13 @@ interface WorkspaceFilesProps {
   listDirectory: DirectoryLoader;
   readFile: FileLoader;
   onOpenSettings: () => void;
+  openRequest: WorkspaceFileOpenRequest | null;
+}
+
+export interface WorkspaceFileOpenRequest {
+  workspaceId: string;
+  path: string;
+  requestId: number;
 }
 
 function humanFileSize(bytes: number): string {
@@ -162,6 +169,7 @@ export function WorkspaceFiles({
   listDirectory,
   readFile,
   onOpenSettings,
+  openRequest,
 }: WorkspaceFilesProps) {
   const [directories, setDirectories] = useState<
     ReadonlyMap<string, WorkspaceDirectory>
@@ -179,6 +187,8 @@ export function WorkspaceFiles({
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
   const [error, setError] = useState("");
   const requestGeneration = useRef(0);
+  const openRequestRef = useRef(openRequest);
+  openRequestRef.current = openRequest;
 
   const openFile = useCallback(
     async (path: string) => {
@@ -292,7 +302,10 @@ export function WorkspaceFiles({
           (entry) =>
             entry.kind === "file" && entry.name.toLowerCase() === "readme.md",
         );
-        if (readme !== undefined) {
+        if (
+          readme !== undefined &&
+          openRequestRef.current?.workspaceId !== workspace.workspaceId
+        ) {
           void openFile(readme.path);
         }
       })
@@ -306,6 +319,17 @@ export function WorkspaceFiles({
         }
       });
   }, [available, listDirectory, openFile, resetExplorer, workspace]);
+
+  useEffect(() => {
+    if (
+      openRequest === null ||
+      workspace === null ||
+      openRequest.workspaceId !== workspace.workspaceId
+    ) {
+      return;
+    }
+    void openFile(openRequest.path);
+  }, [openFile, openRequest, workspace]);
 
   const activeFile = activePath === null ? undefined : files.get(activePath);
   const exclusionCount = useMemo(

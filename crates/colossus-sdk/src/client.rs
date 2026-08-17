@@ -1,10 +1,10 @@
 use crate::{
-    AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArtifactClient,
-    ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest,
-    CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse, ListRunsRequest,
-    ListRunsResponse, PLAN_CONTINUATION_CAPABILITY, RespondInteractionRequest,
-    RespondInteractionResponse, RunUpdates, SdkResult, ServerCapabilities, UploadArtifactRequest,
-    WatchRunRequest,
+    AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArchiveThreadRequest,
+    ArtifactClient, ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
+    CreateRunRequest, CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse,
+    ListRunsRequest, ListRunsResponse, PLAN_CONTINUATION_CAPABILITY, RespondInteractionRequest,
+    RespondInteractionResponse, RestoreThreadRequest, RunUpdates, SdkResult, ServerCapabilities,
+    ThreadLifecycle, UploadArtifactRequest, WatchRunRequest,
 };
 use std::{fmt, sync::Arc};
 
@@ -128,6 +128,22 @@ impl Colossus {
     /// Request cooperative cancellation.
     pub async fn cancel_run(&self, request: CancelRunRequest) -> ApiResult<CancelRunResponse> {
         self.backend.agent_runs().cancel_run(request).await
+    }
+
+    /// Hide one terminal thread from normal listings.
+    pub async fn archive_thread(
+        &self,
+        request: ArchiveThreadRequest,
+    ) -> ApiResult<ThreadLifecycle> {
+        self.backend.agent_runs().archive_thread(request).await
+    }
+
+    /// Return one archived thread to normal listings.
+    pub async fn restore_thread(
+        &self,
+        request: RestoreThreadRequest,
+    ) -> ApiResult<ThreadLifecycle> {
+        self.backend.agent_runs().restore_thread(request).await
     }
 
     /// Answer one pending prompt or approval exactly once.

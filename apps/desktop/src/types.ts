@@ -41,6 +41,68 @@ export interface WorkspaceSummary {
   displayPath: string;
 }
 
+export type SpaceRuntimeState = ManagedRuntimeState | "sleeping" | "archived";
+
+export interface SpaceSummary {
+  spaceId: string;
+  targetId: string;
+  displayName: string;
+  displayPath: string;
+  archived: boolean;
+  lastOpenedAtMs: number;
+  lastActivityAt: string | null;
+  state: SpaceRuntimeState;
+  message: string;
+  selected: boolean;
+  attentionCount: number;
+  providerConfigured: boolean;
+}
+
+export interface SpaceSearchResult {
+  spaceId: string;
+  spaceName: string;
+  targetId: string;
+  runId: string;
+  sessionId: string;
+  title: string;
+  mode: RunMode;
+  status: RunStatus;
+  updatedAt: string;
+  archived: boolean;
+  threadArchived: boolean;
+  attention: boolean;
+}
+
+export interface SpaceSearchPage {
+  results: SpaceSearchResult[];
+  nextCursor: string;
+}
+
+export interface SpaceAttentionEvent {
+  spaceId: string;
+  targetId: string;
+  attentionCount: number;
+}
+
+export interface SpaceStatusEvent {
+  spaceId: string;
+  targetId: string;
+  displayName: string;
+  archived: boolean;
+  state: SpaceRuntimeState;
+  selected: boolean;
+  attentionCount: number;
+  lastActivityAt: string | null;
+}
+
+export interface SearchSpaceThreadsRequest {
+  query: string;
+  spaceId?: string;
+  includeArchived?: boolean;
+  cursor?: string;
+  pageSize?: number;
+}
+
 export type WorkspaceEntryKind = "directory" | "file";
 
 export interface WorkspaceEntry {
@@ -72,6 +134,8 @@ export interface RuntimeTarget {
   label: string;
   state:
     | ManagedRuntimeState
+    | "sleeping"
+    | "archived"
     | "disconnected"
     | "checking"
     | "available"
@@ -155,6 +219,8 @@ export interface DesktopStatus {
   connection: ConnectionStatus;
   targets: RuntimeTarget[];
   selectedTargetId: string | null;
+  spaces: SpaceSummary[];
+  selectedSpaceId: string | null;
   managedState: ManagedRuntimeState;
   workspace: WorkspaceSummary | null;
   provider: ProviderSummary;
@@ -180,6 +246,7 @@ export interface CaBundleStatus {
 }
 
 export interface DesktopCapabilities {
+  research?: boolean;
   delegation: boolean;
   skills: boolean;
   tui: boolean;
@@ -278,7 +345,9 @@ export interface CommandError {
   violations: CommandViolation[];
 }
 
-export type RunMode = "execute" | "plan";
+export type RunMode = "execute" | "plan" | "research";
+export type ResearchDepth = "quick" | "standard" | "deep";
+export type ResearchSourceKind = "repo" | "web" | "mcp";
 
 export type RunStatus =
   | "queued"
@@ -363,7 +432,172 @@ export interface Run {
   terminal: RunTerminal | null;
   etag: string;
   selectedSkills: string[];
+  archived: boolean;
 }
+
+export type ThreadDelegateStatus =
+  "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+
+export type ThreadDelegateActivityState =
+  "started" | "completed" | "cancelled" | "failed";
+
+export interface ThreadDelegateActivity {
+  callId: string;
+  toolName: string;
+  state: ThreadDelegateActivityState;
+  summary: string;
+  input?: string;
+  preview?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface ThreadDelegateInspection {
+  jobId: string;
+  parentRunId: string;
+  childSessionId: string;
+  childRunId?: string;
+  task: string;
+  role: string;
+  status: ThreadDelegateStatus;
+  finalOutput: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  activities: ThreadDelegateActivity[];
+}
+
+export interface SessionMapDelegate {
+  jobId: string;
+  parentRunId: string;
+  childSessionId: string;
+  childRunId?: string;
+  task: string;
+  role: string;
+  status: ThreadDelegateStatus;
+  finalOutput: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface SessionMapTask {
+  id: string;
+  title: string;
+  description: string;
+  status: "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionMapPlan {
+  id: string;
+  prompt: string;
+  status: "draft" | "approved" | "executed" | "discarded";
+  revision: number;
+  content: string;
+  stepCount: number;
+  executedRunId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionMapGoal {
+  id: string;
+  objective: string;
+  sourcePlanId?: string;
+  status: "active" | "complete" | "blocked";
+  summary: string;
+  blockedReason: string;
+  iterationBudget: number;
+  iterationsCompleted: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionMapDecision {
+  id: string;
+  goalId?: string;
+  planId?: string;
+  source: "user" | "agent";
+  status: "active" | "archived" | "superseded";
+  priority: "critical" | "high" | "normal";
+  title: string;
+  decision: string;
+  intent: string;
+  appliesWhen: string;
+  rationale: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionMapMemory {
+  id: string;
+  scope: "global" | "repository" | "session";
+  kind: string;
+  confidence: number;
+  source: string;
+  status: "active" | "archived" | "superseded";
+  text: string;
+  rationale: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+  supersededBy?: string;
+}
+
+export interface SessionMapResearchRun {
+  id: string;
+  question: string;
+  depth: ResearchDepth;
+  sourceKinds: ResearchSourceKind[];
+  status: "running" | "completed" | "failed" | "interrupted";
+  queryCount: number;
+  sourceCount: number;
+  limitationCount: number;
+  report: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface SessionMapResearchSource {
+  id: string;
+  runId: string;
+  label: string;
+  kind: ResearchSourceKind;
+  title: string;
+  uri: string;
+  query: string;
+  createdAt: string;
+}
+
+export interface SessionMap {
+  sessionId: string;
+  delegates: SessionMapDelegate[];
+  goals: SessionMapGoal[];
+  tasks: SessionMapTask[];
+  plans: SessionMapPlan[];
+  decisions: SessionMapDecision[];
+  memories: SessionMapMemory[];
+  researchRuns: SessionMapResearchRun[];
+  researchSources: SessionMapResearchSource[];
+}
+
+export type SessionMapResource =
+  | { family: "delegates"; value: SessionMapDelegate }
+  | { family: "goals"; value: SessionMapGoal }
+  | { family: "tasks"; value: SessionMapTask }
+  | { family: "plans"; value: SessionMapPlan }
+  | { family: "decisions"; value: SessionMapDecision }
+  | { family: "memories"; value: SessionMapMemory }
+  | { family: "research"; value: SessionMapResearchRun }
+  | { family: "sources"; value: SessionMapResearchSource };
 
 export interface PromptChoice {
   choiceId: string;
@@ -410,6 +644,7 @@ export type ToolActivityState =
   | "waiting_approval"
   | "started"
   | "completed"
+  | "cancelled"
   | "failed"
   | "outcome_unknown";
 
@@ -418,6 +653,8 @@ export interface ToolActivity {
   toolName: string;
   state: ToolActivityState;
   summary: string;
+  input?: string | null;
+  preview?: string | null;
 }
 
 export interface TokenUsage {
@@ -498,10 +735,23 @@ export interface CreateRunRequest {
   sessionId?: string;
   role: string;
   mode: RunMode;
+  researchDepth?: ResearchDepth;
+  researchSources?: ResearchSourceKind[];
   planAction?: PlanRunAction;
+  branch?: {
+    sourceRunId: string;
+  };
   /** Positive override, or USE_CONFIGURED_MAX_TURNS for the server default. */
   maxTurns: number;
   idempotencyKey: string;
+}
+
+export interface Aside {
+  parentSessionId: string;
+  sourceRunId: string;
+  createdAt: string;
+  closed: boolean;
+  run: Run;
 }
 
 export interface ArtifactContent {
@@ -516,6 +766,7 @@ export interface GetRunRequest {
 export interface ListRunsRequest {
   sessionId?: string;
   pageToken: string;
+  includeArchived?: boolean;
 }
 
 export interface WatchRunRequest {
@@ -526,6 +777,16 @@ export interface WatchRunRequest {
 export interface CancelRunRequest {
   runId: string;
   idempotencyKey: string;
+}
+
+export interface ThreadLifecycleRequest {
+  runId: string;
+  idempotencyKey: string;
+}
+
+export interface ThreadLifecycle {
+  sessionId: string;
+  archived: boolean;
 }
 
 export type InteractionAnswer =

@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 pub use colossus_sidecar_protocol::{
     ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter, ManagedModelCapabilities,
     ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
-    ManagedRuntimeConfig, REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity,
+    ManagedRuntimeConfig, ManagedSearchConfig, REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity,
     default_managed_provider_timeout_ms, validate_managed_model_identifier,
     validate_managed_provider_base_url,
 };
@@ -246,6 +246,7 @@ pub struct SidecarBootstrapConfig {
     expected_workspace_identity: Option<WorkspaceIdentity>,
     colossus_home: Option<PathBuf>,
     suppress_automatic_agent_instructions: bool,
+    plaintext_journal_for_development: bool,
     ca_bundle_path: Option<PathBuf>,
     codex_auth_path: Option<PathBuf>,
     approval_broker_grant: Option<SidecarApprovalBrokerGrant>,
@@ -273,6 +274,7 @@ impl SidecarBootstrapConfig {
             expected_workspace_identity: None,
             colossus_home: None,
             suppress_automatic_agent_instructions: false,
+            plaintext_journal_for_development: false,
             ca_bundle_path: None,
             codex_auth_path: None,
             approval_broker_grant: None,
@@ -304,6 +306,17 @@ impl SidecarBootstrapConfig {
     #[must_use]
     pub fn without_automatic_agent_instructions_for_diagnostics(mut self) -> Self {
         self.suppress_automatic_agent_instructions = true;
+        self
+    }
+
+    /// Use a keyless plaintext journal for an isolated development runtime.
+    ///
+    /// This deliberately removes journal confidentiality, signed checkpoints, and
+    /// external rollback detection. The supplied instance directory must not contain
+    /// state created with protected keys; in-place protection migration is rejected.
+    #[must_use]
+    pub const fn with_plaintext_journal_for_development(mut self) -> Self {
+        self.plaintext_journal_for_development = true;
         self
     }
 
@@ -467,6 +480,7 @@ impl SidecarBootstrapConfig {
                 })
                 .transpose()?,
             suppress_automatic_agent_instructions: self.suppress_automatic_agent_instructions,
+            plaintext_journal_for_development: self.plaintext_journal_for_development,
             ca_bundle_path: self
                 .ca_bundle_path
                 .as_ref()
@@ -580,6 +594,10 @@ impl fmt::Debug for SidecarBootstrapConfig {
             .field(
                 "automatic_agent_instructions",
                 &!self.suppress_automatic_agent_instructions,
+            )
+            .field(
+                "plaintext_journal_for_development",
+                &self.plaintext_journal_for_development,
             )
             .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
             .field("codex_auth_configured", &self.codex_auth_path.is_some())
@@ -794,6 +812,21 @@ mod tests {
         let diagnostic = bootstrap.without_automatic_agent_instructions_for_diagnostics();
         assert!(diagnostic.suppress_automatic_agent_instructions);
         assert!(format!("{diagnostic:?}").contains("automatic_agent_instructions: false"));
+    }
+
+    #[test]
+    fn plaintext_development_journal_is_explicit_and_defaults_off() {
+        let bootstrap = SidecarBootstrapConfig::new(
+            "/tmp/colossus-sdk-sidecar-workspace",
+            runtime(),
+            primary_grant(&[scopes::RUNS_READ]),
+        )
+        .expect("bootstrap");
+        assert!(!bootstrap.plaintext_journal_for_development);
+
+        let plaintext = bootstrap.with_plaintext_journal_for_development();
+        assert!(plaintext.plaintext_journal_for_development);
+        assert!(format!("{plaintext:?}").contains("plaintext_journal_for_development: true"));
     }
 
     #[test]

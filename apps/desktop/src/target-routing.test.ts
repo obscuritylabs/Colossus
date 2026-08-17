@@ -44,6 +44,7 @@ function run(
     terminal,
     etag: `etag-${lastSequence}`,
     selectedSkills: [],
+    archived: false,
   };
 }
 
@@ -88,6 +89,8 @@ function status(): DesktopStatus {
       },
     ],
     selectedTargetId: "managed-local",
+    spaces: [],
+    selectedSpaceId: null,
     managedState: "ready",
     workspace: null,
     provider: {

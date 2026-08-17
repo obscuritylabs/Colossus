@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ExecutionBoundaryBanner,
+  executionBoundaryBannerVisible,
   managedRuntimeBoundaryActive,
 } from "./ExecutionBoundaryBanner";
 
@@ -17,6 +18,9 @@ describe("ExecutionBoundaryBanner", () => {
     );
 
     expect(markup).toContain('role="alert"');
+    expect(markup).toContain(
+      'aria-label="Unsafe Managed Local execution boundary"',
+    );
     expect(markup).toContain("Unsafe: Full access");
     expect(markup).toContain("without Colossus isolation");
     expect(markup).toContain("Approval mode is separate");
@@ -50,5 +54,13 @@ describe("ExecutionBoundaryBanner", () => {
     ] as const) {
       expect(managedRuntimeBoundaryActive(state)).toBe(false);
     }
+  });
+
+  it("reserves the shell warning only for an active Full access runtime", () => {
+    expect(executionBoundaryBannerVisible("ready", "full_access")).toBe(true);
+    expect(executionBoundaryBannerVisible("ready", "workspace_isolated")).toBe(
+      false,
+    );
+    expect(executionBoundaryBannerVisible("failed", "full_access")).toBe(false);
   });
 });

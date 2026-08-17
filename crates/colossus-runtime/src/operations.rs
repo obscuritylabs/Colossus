@@ -374,6 +374,8 @@ pub(super) enum ResearchOperation {
         question: String,
         depth: ResearchDepth,
         source_kinds: Vec<ResearchSourceKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_run_id: Option<String>,
     },
 }
 

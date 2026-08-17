@@ -2,20 +2,24 @@ import {
   IconAlertTriangle,
   IconArrowRight,
   IconBrain,
+  IconBooks,
   IconCheck,
   IconChevronDown,
   IconCircle,
+  IconCopy,
   IconEdit,
   IconFile,
   IconInfoCircle,
+  IconListDetails,
   IconLoader2,
   IconMessageCircle,
   IconPlayerPlay,
   IconPlayerStop,
+  IconSparkles,
   IconTargetArrow,
   IconTerminal2,
 } from "@tabler/icons-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
@@ -27,14 +31,19 @@ import type {
   RunTerminal,
   RunUpdate,
   SessionMessage,
+  ToolActivity,
 } from "../types";
 import { MarkdownContent } from "./MarkdownContent";
+import { researchSources } from "./ResearchSourcesPanel";
 
 interface RunTimelineProps {
   view: RunView;
+  activityPresentation?: ActivityPresentation;
+  activityComparison?: boolean;
   planContinuationAvailable?: boolean;
   planWorkflowAvailable?: boolean;
   onOpenPlanWorkflow?: (sessionId: string, planId: string) => void;
+  onInspectPlan?: (sourceRunId: string, planId: string) => void;
   onRevisePlan?: (
     sourceRunId: string,
     planId: string,
@@ -46,7 +55,10 @@ interface RunTimelineProps {
     revision: number,
     strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
   ) => Promise<void>;
+  onOpenResearchSources?: () => void;
 }
+
+export type ActivityPresentation = "capsule" | "thread";
 
 type ToolActivityUpdate = RunUpdate & {
   update: Extract<RunUpdate["update"], { type: "tool_activity" }>;
@@ -80,14 +92,17 @@ function FailureMetadata({ failure }: { failure: RunFailure }) {
       : ["Response", `HTTP ${failure.httpStatus}`],
     failure.retryAfterMs == null
       ? null
-      : ["Retry after", `${failure.retryAfterMs} ms`],
-    ["Recoverable", failure.recoverable === true ? "Yes" : "No"],
+      : ["Retry after", `Retry after ${failure.retryAfterMs} ms`],
+    [
+      "Recovery",
+      failure.recoverable === true ? "Recoverable" : "Not recoverable",
+    ],
   ].filter((value): value is string[] => value !== null);
   return (
-    <dl className="failure-metadata">
+    <dl className="failure-metadata" aria-label="Failure details">
       {values.map(([label, value]) => (
         <div key={label}>
-          <dt>{label}</dt>
+          <dt className="sr-only">{label}</dt>
           <dd>{value}</dd>
         </div>
       ))}
@@ -122,6 +137,130 @@ function ContentPart({ part }: { part: MessageContentPart }) {
   );
 }
 
+function messageCopyText(message: SessionMessage): string {
+  return message.content
+    .map((part) =>
+      part.type === "text"
+        ? part.text
+        : `[Attachment: ${part.artifact.fileName}]`,
+    )
+    .join("\n")
+    .trim();
+}
+
+function fallbackCopyText(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  return copied;
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      return fallbackCopyText(text);
+    } catch {
+      return false;
+    }
+  }
+}
+
+function MessageCopyButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const resetTimerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  async function copy() {
+    const copied = await copyText(text);
+    setState(copied ? "copied" : "failed");
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    resetTimerRef.current = window.setTimeout(() => setState("idle"), 1600);
+  }
+
+  const copyLabel =
+    state === "copied"
+      ? `Copied ${label}`
+      : state === "failed"
+        ? `Could not copy ${label}`
+        : `Copy ${label}`;
+  return (
+    <button
+      className={`message-copy-button is-${state}`}
+      type="button"
+      aria-label={copyLabel}
+      title={copyLabel}
+      disabled={text.trim() === ""}
+      onClick={() => void copy()}
+    >
+      {state === "copied" ? (
+        <IconCheck size={13} stroke={2} aria-hidden="true" />
+      ) : (
+        <IconCopy size={13} stroke={1.8} aria-hidden="true" />
+      )}
+      <span>
+        {state === "copied" ? "Copied" : state === "failed" ? "Retry" : "Copy"}
+      </span>
+    </button>
+  );
+}
+
+function ResearchResponse({
+  output,
+  onOpenSources,
+}: {
+  output: string;
+  onOpenSources?: (() => void) | undefined;
+}) {
+  const sources = researchSources(output);
+  const heading = /^## Sources\s*$/m.exec(output);
+  if (sources.length === 0 || heading?.index === undefined) {
+    return <MarkdownContent content={output} />;
+  }
+  const report = output.slice(0, heading.index).trimEnd();
+  return (
+    <>
+      {report === "" ? null : <MarkdownContent content={report} />}
+      <section className="inline-research-sources" aria-label="Report sources">
+        <button type="button" onClick={onOpenSources}>
+          <IconBooks size={16} stroke={1.7} aria-hidden="true" />
+          <strong>Sources</strong>
+          <span>{sources.length}</span>
+          <span>View evidence</span>
+        </button>
+        <ol>
+          {sources.map((source) => (
+            <li key={`${source.label}:${source.uri}`}>
+              <button type="button" onClick={onOpenSources}>
+                <span>{source.label}</span>
+                <span>{source.title}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </section>
+    </>
+  );
+}
+
 function Message({ message }: { message: SessionMessage }) {
   if (message.role === "assistant") {
     return null;
@@ -139,10 +278,13 @@ function Message({ message }: { message: SessionMessage }) {
             {compactTime(message.createdAt)}
           </time>
         </header>
-        <div className="message-body">
+        <div className="message-body" data-aside-selectable="true">
           {message.content.map((part, index) => (
             <ContentPart key={`${message.sequence}-${index}`} part={part} />
           ))}
+        </div>
+        <div className="message-actions">
+          <MessageCopyButton text={messageCopyText(message)} label="message" />
         </div>
       </div>
     </article>
@@ -241,15 +383,65 @@ function compactTimelineItems(updates: readonly RunUpdate[]): TimelineItem[] {
   return items;
 }
 
-function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
+function formatToolActivityText(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function toolActivityInput(group: ToolActivityGroup): string | null {
+  for (let index = group.updates.length - 1; index >= 0; index -= 1) {
+    const input = group.updates[index]?.update.activity.input;
+    if (input?.trim()) {
+      return formatToolActivityText(input);
+    }
+  }
+  return null;
+}
+
+function toolActivityPreview(activity: ToolActivity): string {
+  const releasedPreview = activity.preview;
+  if (releasedPreview?.trim()) {
+    return formatToolActivityText(releasedPreview);
+  }
+  switch (activity.state) {
+    case "requested":
+      return "No preview is available until the tool starts.";
+    case "waiting_approval":
+      return "No preview is available while the tool is waiting for approval.";
+    case "started":
+      return "No preview is available while the tool is still running.";
+    case "completed":
+      return "The tool completed, but this activity feed does not include an output preview.";
+    case "cancelled":
+      return "No preview was generated because the tool was cancelled before it started.";
+    case "failed":
+      return "No preview was generated because the tool did not complete successfully.";
+    case "outcome_unknown":
+      return "A preview is unavailable because the tool's final outcome is unknown.";
+  }
+}
+
+function ToolActivityItem({
+  group,
+  presentation,
+}: {
+  group: ToolActivityGroup;
+  presentation: ActivityPresentation;
+}) {
   const latest = group.updates.at(-1);
   if (latest === undefined || latest.update.type !== "tool_activity") {
     return null;
   }
   const activity = latest.update.activity;
   const complete = activity.state === "completed";
+  const input = toolActivityInput(group);
   return (
-    <details className="compact-tool-activity">
+    <details
+      className={`compact-tool-activity activity-tool-${presentation} activity-state-${activity.state}`}
+    >
       <summary>
         <span className="feed-marker" aria-hidden="true">
           {complete ? (
@@ -260,7 +452,8 @@ function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
         </span>
         <span className="compact-tool-copy">
           <span className="compact-tool-heading">
-            <strong>{activity.toolName}</strong>
+            <strong>{activity.summary}</strong>
+            <span className="compact-tool-name">{activity.toolName}</span>
             <span className={`event-state tool-state-${activity.state}`}>
               {readable(activity.state)}
             </span>
@@ -268,7 +461,6 @@ function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
               {compactTime(latest.createdAt)}
             </time>
           </span>
-          <small>{activity.summary}</small>
         </span>
         <IconChevronDown
           className="compact-tool-chevron"
@@ -295,6 +487,221 @@ function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
           );
         })}
       </ol>
+      {input !== null ? (
+        <section className="tool-activity-input" aria-label="Tool input">
+          <strong>Input</strong>
+          <pre>{input}</pre>
+        </section>
+      ) : null}
+      <section
+        className="tool-activity-preview"
+        aria-label="Tool output preview"
+      >
+        <strong>Preview</strong>
+        <pre>{toolActivityPreview(activity)}</pre>
+      </section>
+    </details>
+  );
+}
+
+function isUserMessageItem(item: TimelineItem): boolean {
+  return (
+    item.type === "update" &&
+    item.update.update.type === "message" &&
+    item.update.update.message.role === "user"
+  );
+}
+
+function isVisibleActivityItem(item: TimelineItem): boolean {
+  if (item.type === "tool_activity") {
+    return true;
+  }
+  switch (item.update.update.type) {
+    case "reasoning_summary":
+    case "notice":
+    case "failure":
+    case "cancellation":
+      return true;
+    case "message":
+      return (
+        item.update.update.message.role === "tool" ||
+        item.update.update.message.role === "system"
+      );
+    case "state":
+    case "output_delta":
+    case "usage":
+    case "interaction":
+    case "result":
+    case "tool_activity":
+      return false;
+  }
+}
+
+function activityDuration(view: RunView): string {
+  const terminalSeconds =
+    view.run.terminal?.type === "result"
+      ? view.run.terminal.result.elapsedSeconds
+      : null;
+  if (terminalSeconds !== null && Number.isFinite(terminalSeconds)) {
+    return `${Math.max(0, Math.round(terminalSeconds))}s`;
+  }
+  const start = new Date(view.run.startedAt ?? view.run.createdAt).getTime();
+  const finish = new Date(view.run.finishedAt ?? view.run.updatedAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(finish) || finish < start) {
+    return "";
+  }
+  return `${Math.round((finish - start) / 1_000)}s`;
+}
+
+function activityStatus(view: RunView): {
+  label: string;
+  tone: "success" | "warning" | "danger" | "active" | "neutral";
+} {
+  switch (view.run.status) {
+    case "completed":
+      return { label: "Completed", tone: "success" };
+    case "failed":
+    case "outcome_unknown":
+      return { label: "Failed", tone: "danger" };
+    case "cancelled":
+    case "interrupted":
+      return { label: "Stopped", tone: "neutral" };
+    case "waiting":
+      return { label: "Needs input", tone: "warning" };
+    case "cancelling":
+      return { label: "Stopping", tone: "warning" };
+    case "queued":
+    case "running":
+      return { label: "Working", tone: "active" };
+  }
+}
+
+function ActivityThought({ item }: { item: RunUpdate }) {
+  if (item.update.type !== "reasoning_summary") {
+    return null;
+  }
+  return (
+    <article className="activity-thought">
+      <span className="activity-thread-marker" aria-hidden="true">
+        <IconSparkles size={16} stroke={1.8} />
+      </span>
+      <p className="preserve-lines">{item.update.summary}</p>
+      <time dateTime={item.createdAt}>{compactTime(item.createdAt)}</time>
+    </article>
+  );
+}
+
+function ActivityItem({
+  item,
+  presentation,
+}: {
+  item: TimelineItem;
+  presentation: ActivityPresentation;
+}) {
+  if (item.type === "tool_activity") {
+    return <ToolActivityItem group={item.group} presentation={presentation} />;
+  }
+  if (item.update.update.type === "reasoning_summary") {
+    return <ActivityThought item={item.update} />;
+  }
+  return <FeedItem item={item.update} />;
+}
+
+function RunActivity({
+  view,
+  items,
+  presentation,
+  comparison,
+}: {
+  view: RunView;
+  items: readonly TimelineItem[];
+  presentation: ActivityPresentation;
+  comparison: boolean;
+}) {
+  const toolActionCount = items.filter(
+    (item) => item.type === "tool_activity",
+  ).length;
+  const researchStepCount = items.filter(
+    (item) =>
+      item.type === "update" &&
+      item.update.update.type === "notice" &&
+      item.update.update.reason.startsWith("research."),
+  ).length;
+  const actionCount = toolActionCount + researchStepCount;
+  const noteCount = items.filter(
+    (item) =>
+      item.type === "update" && item.update.update.type === "reasoning_summary",
+  ).length;
+  const failedActionCount = items.filter(
+    (item) =>
+      item.type === "tool_activity" &&
+      ["failed", "outcome_unknown"].includes(
+        item.group.updates.at(-1)?.update.activity.state ?? "",
+      ),
+  ).length;
+  const duration = activityDuration(view);
+  const status = activityStatus(view);
+  const active = ["queued", "running", "waiting", "cancelling"].includes(
+    view.run.status,
+  );
+  const summaryParts = [
+    view.run.mode === "research"
+      ? `${actionCount} ${actionCount === 1 ? "step" : "steps"}`
+      : `${actionCount} ${actionCount === 1 ? "action" : "actions"}`,
+    noteCount > 0 ? `${noteCount} ${noteCount === 1 ? "note" : "notes"}` : null,
+    duration === "" ? null : duration,
+  ].filter((part): part is string => part !== null);
+
+  return (
+    <details
+      className={`run-activity run-activity-${presentation} run-state-${view.run.status}`}
+      open={comparison || active || failedActionCount > 0}
+    >
+      <summary className="run-activity-summary">
+        <span className="run-activity-chevron" aria-hidden="true">
+          <IconChevronDown size={16} stroke={1.9} />
+        </span>
+        <span className="run-activity-mark" aria-hidden="true">
+          {presentation === "capsule" ? (
+            <IconBrain size={17} stroke={1.7} />
+          ) : (
+            <img src={colossusMark} alt="" />
+          )}
+        </span>
+        <span className="run-activity-title">
+          <strong>
+            {presentation === "capsule" ? view.run.title : "Colossus"}
+          </strong>
+          <small>{summaryParts.join(" · ")}</small>
+        </span>
+        <span className={`run-activity-status tone-${status.tone}`}>
+          {status.tone === "success" ? (
+            <IconCheck size={15} stroke={2} aria-hidden="true" />
+          ) : status.tone === "danger" ? (
+            <IconAlertTriangle size={15} stroke={1.9} aria-hidden="true" />
+          ) : null}
+          {status.label}
+        </span>
+        {failedActionCount > 0 ? (
+          <span className="run-activity-exceptions">
+            <IconAlertTriangle size={14} stroke={1.8} aria-hidden="true" />
+            {failedActionCount}
+          </span>
+        ) : null}
+      </summary>
+      <div className="run-activity-body">
+        {items.map((item) => (
+          <ActivityItem
+            item={item}
+            presentation={presentation}
+            key={
+              item.type === "tool_activity"
+                ? `tool-${item.group.key}`
+                : item.update.sequence
+            }
+          />
+        ))}
+      </div>
     </details>
   );
 }
@@ -387,7 +794,7 @@ function FeedItem({ item }: { item: RunUpdate }): ReactNode {
           </div>
           <div className="feed-entry-content">
             <header className="feed-entry-heading">
-              <strong>Run failed</strong>
+              <strong className="failure-title">Run failed</strong>
               <time dateTime={item.createdAt}>
                 {compactTime(item.createdAt)}
               </time>
@@ -436,7 +843,7 @@ function TerminalSummary({ terminal }: { terminal: RunTerminal }) {
           <IconAlertTriangle size={17} stroke={1.8} />
         </div>
         <div className="feed-entry-content">
-          <strong>Run failed</strong>
+          <strong className="failure-title">Run failed</strong>
           <p>{terminal.failure.message}</p>
           <FailureMetadata failure={terminal.failure} />
           {terminal.failure.outcomeCertainty === "unknown" ? (
@@ -518,6 +925,7 @@ function PlanResultCard({
   cancelled,
   continuationAvailable,
   workflowAvailable,
+  onInspect,
   onOpenWorkflow,
   onRevise,
   onExecute,
@@ -528,6 +936,7 @@ function PlanResultCard({
   cancelled: boolean;
   continuationAvailable: boolean;
   workflowAvailable: boolean;
+  onInspect: ((sourceRunId: string, planId: string) => void) | undefined;
   onOpenWorkflow: ((sessionId: string, planId: string) => void) | undefined;
   onRevise:
     | ((sourceRunId: string, planId: string, revision: number) => void)
@@ -683,6 +1092,14 @@ function PlanResultCard({
           <button
             className="button tertiary compact"
             type="button"
+            onClick={() => onInspect?.(sourceRunId, plan.planId)}
+          >
+            <IconListDetails size={15} stroke={1.8} aria-hidden="true" />
+            Read plan
+          </button>
+          <button
+            className="button tertiary compact"
+            type="button"
             disabled={!workflowAvailable}
             title={
               workflowAvailable
@@ -702,11 +1119,15 @@ function PlanResultCard({
 
 export function RunTimeline({
   view,
+  activityPresentation = "thread",
+  activityComparison = false,
   planContinuationAvailable = false,
   planWorkflowAvailable = false,
+  onInspectPlan,
   onOpenPlanWorkflow,
   onRevisePlan,
   onExecutePlan,
+  onOpenResearchSources,
 }: RunTimelineProps) {
   const hasTerminalFeedItem = view.updates.some(
     ({ update }) => update.type === "failure" || update.type === "cancellation",
@@ -718,6 +1139,8 @@ export function RunTimeline({
     view.streamState === "watching" &&
     (view.run.status === "queued" || view.run.status === "running");
   const timelineItems = compactTimelineItems(view.updates);
+  const userTimelineItems = timelineItems.filter(isUserMessageItem);
+  const activityItems = timelineItems.filter(isVisibleActivityItem);
   const showLiveStatus = isGenerating && view.output === "";
   const partialResponse =
     view.output !== "" &&
@@ -745,19 +1168,31 @@ export function RunTimeline({
             <header className="feed-entry-heading">
               <strong>You</strong>
             </header>
-            <div className="message-body preserve-lines">
+            <div
+              className="message-body preserve-lines"
+              data-aside-selectable="true"
+            >
               {view.localPrompt}
+            </div>
+            <div className="message-actions">
+              <MessageCopyButton text={view.localPrompt} label="message" />
             </div>
           </div>
         </article>
       ) : null}
-      {timelineItems.map((item) =>
-        item.type === "tool_activity" ? (
-          <ToolActivityItem group={item.group} key={`tool-${item.group.key}`} />
-        ) : (
+      {userTimelineItems.map((item) =>
+        item.type === "update" ? (
           <FeedItem item={item.update} key={item.update.sequence} />
-        ),
+        ) : null,
       )}
+      {activityItems.length > 0 ? (
+        <RunActivity
+          view={view}
+          items={activityItems}
+          presentation={activityPresentation}
+          comparison={activityComparison}
+        />
+      ) : null}
       {showLiveStatus ? <LiveRunStatus view={view} /> : null}
       {view.output !== "" ? (
         <article className="feed-entry message message-assistant">
@@ -777,9 +1212,15 @@ export function RunTimeline({
             </header>
             <div
               className={`message-body${isGenerating ? " preserve-lines" : ""}`}
+              data-aside-selectable="true"
             >
               {isGenerating ? (
                 view.output
+              ) : view.run.mode === "research" ? (
+                <ResearchResponse
+                  output={view.output}
+                  onOpenSources={onOpenResearchSources}
+                />
               ) : (
                 <MarkdownContent content={view.output} />
               )}
@@ -801,17 +1242,25 @@ export function RunTimeline({
           cancelled={view.run.terminal?.type === "cancellation"}
           continuationAvailable={planContinuationAvailable}
           workflowAvailable={planWorkflowAvailable}
+          onInspect={onInspectPlan}
           onOpenWorkflow={onOpenPlanWorkflow}
           onRevise={onRevisePlan}
           onExecute={onExecutePlan}
         />
       ) : null}
-      {view.usage !== null ? (
-        <p className="usage-summary">
-          {view.usage.totalTokens.toLocaleString()} tokens ·{" "}
-          {view.usage.inputTokens.toLocaleString()} in /{" "}
-          {view.usage.outputTokens.toLocaleString()} out
-        </p>
+      {view.usage !== null || view.output !== "" ? (
+        <div className="response-utilities">
+          {view.usage !== null ? (
+            <p className="usage-summary">
+              {view.usage.totalTokens.toLocaleString()} tokens ·{" "}
+              {view.usage.inputTokens.toLocaleString()} in /{" "}
+              {view.usage.outputTokens.toLocaleString()} out
+            </p>
+          ) : null}
+          {view.output !== "" ? (
+            <MessageCopyButton text={view.output} label="Colossus response" />
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

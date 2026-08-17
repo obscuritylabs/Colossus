@@ -7,7 +7,8 @@ use crate::{
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, MAX_MANAGED_MODELS,
         MAX_MANAGED_PROVIDERS, ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting,
-        ProviderSetting, ReasoningEffortSetting, WorkspaceSetting, provider_base_url,
+        ProviderSetting, ReasoningEffortSetting, WorkspaceProfile, WorkspaceSetting,
+        provider_base_url,
     },
     dto::{CommandErrorDto, ConnectionStatusDto},
 };
@@ -124,6 +125,89 @@ pub(crate) struct WorkspaceSummaryDto {
     pub(crate) display_path: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceSummaryDto {
+    pub(crate) space_id: String,
+    pub(crate) target_id: String,
+    pub(crate) display_name: String,
+    pub(crate) display_path: String,
+    pub(crate) archived: bool,
+    pub(crate) last_opened_at_ms: u64,
+    pub(crate) last_activity_at: Option<String>,
+    pub(crate) state: String,
+    pub(crate) message: String,
+    pub(crate) selected: bool,
+    pub(crate) attention_count: u32,
+    pub(crate) provider_configured: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceAttentionDto {
+    pub(crate) space_id: String,
+    pub(crate) target_id: String,
+    pub(crate) attention_count: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceStatusEventDto {
+    pub(crate) space_id: String,
+    pub(crate) target_id: String,
+    pub(crate) display_name: String,
+    pub(crate) archived: bool,
+    pub(crate) state: String,
+    pub(crate) selected: bool,
+    pub(crate) attention_count: u32,
+    pub(crate) last_activity_at: Option<String>,
+}
+
+impl SpaceSummaryDto {
+    pub(crate) fn sleeping(profile: &WorkspaceProfile, selected: bool) -> Self {
+        let provider_configured = profile
+            .model_roles
+            .get("primary")
+            .and_then(|model_profile| {
+                profile
+                    .models
+                    .iter()
+                    .find(|model| &model.profile == model_profile)
+            })
+            .is_some_and(|model| {
+                profile
+                    .providers
+                    .iter()
+                    .any(|provider| provider.profile == model.provider_profile)
+            });
+        Self {
+            space_id: profile.id.clone(),
+            target_id: profile.id.clone(),
+            display_name: profile.display_name.clone(),
+            display_path: profile.workspace.display_path.clone(),
+            archived: profile.archived,
+            last_opened_at_ms: profile.last_opened_at_ms,
+            last_activity_at: None,
+            state: if profile.archived {
+                "archived"
+            } else {
+                "sleeping"
+            }
+            .into(),
+            message: if profile.archived {
+                "Archived Space".into()
+            } else if provider_configured {
+                "Starts when selected".into()
+            } else {
+                "Configure a provider to start this Space".into()
+            },
+            selected,
+            attention_count: 0,
+            provider_configured,
+        }
+    }
+}
+
 impl From<&WorkspaceSetting> for WorkspaceSummaryDto {
     fn from(value: &WorkspaceSetting) -> Self {
         Self {
@@ -183,6 +267,8 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) connection: ConnectionStatusDto,
     pub(crate) targets: Vec<RuntimeTargetDto>,
     pub(crate) selected_target_id: Option<String>,
+    pub(crate) spaces: Vec<SpaceSummaryDto>,
+    pub(crate) selected_space_id: Option<String>,
     pub(crate) managed_state: ManagedRuntimeStateDto,
     pub(crate) workspace: Option<WorkspaceSummaryDto>,
     pub(crate) provider: ProviderSummaryDto,
@@ -194,6 +280,30 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) terminal_enabled: bool,
     pub(crate) additional_ca_bundle: CaBundleStatusDto,
     pub(crate) capabilities: DesktopCapabilitiesDto,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceSearchResultDto {
+    pub(crate) space_id: String,
+    pub(crate) space_name: String,
+    pub(crate) target_id: String,
+    pub(crate) run_id: String,
+    pub(crate) session_id: String,
+    pub(crate) title: String,
+    pub(crate) mode: String,
+    pub(crate) status: String,
+    pub(crate) updated_at: String,
+    pub(crate) archived: bool,
+    pub(crate) thread_archived: bool,
+    pub(crate) attention: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceSearchPageDto {
+    pub(crate) results: Vec<SpaceSearchResultDto>,
+    pub(crate) next_cursor: String,
 }
 
 /// Renderer-safe trust-bundle state without source or private storage paths.
@@ -227,6 +337,7 @@ impl CaBundleStatusDto {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)] // Wire-compatible feature flags are independently optional.
 pub(crate) struct DesktopCapabilitiesDto {
+    pub(crate) research: bool,
     pub(crate) delegation: bool,
     pub(crate) skills: bool,
     pub(crate) tui: bool,

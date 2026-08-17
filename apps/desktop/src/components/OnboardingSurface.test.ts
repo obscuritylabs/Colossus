@@ -21,6 +21,8 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
     },
     targets: [],
     selectedTargetId: null,
+    spaces: [],
+    selectedSpaceId: null,
     managedState:
       selectedWorkspace === null ? "needs_workspace" : "needs_provider",
     workspace: selectedWorkspace,
@@ -90,7 +92,8 @@ describe("OnboardingSurface", () => {
   it("starts with folder selection and keeps offline verification disabled", () => {
     const markup = renderOnboarding(null);
 
-    expect(markup).toContain("Choose a folder");
+    expect(markup).toContain("Add your first Space");
+    expect(markup).toContain("Add Space from folder");
     expect(markup).not.toContain("provider-setup-form");
     expect(openingButtonTag(markup, "Run offline self-test")).toContain(
       "disabled",

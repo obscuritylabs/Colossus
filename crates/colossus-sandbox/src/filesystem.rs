@@ -136,6 +136,21 @@ pub(super) fn search_files(
             "filesystem.search max_matches must be in 1..=1000",
         ));
     }
+    let context_lines = content
+        .get("context_lines")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if context_lines > 20 {
+        return Err(adapter_failure(
+            "filesystem.search context_lines must be in 0..=20",
+        ));
+    }
+    let context_lines = usize::try_from(context_lines).unwrap_or(20);
+    let workspace_scoped = content
+        .get("workspace_scoped")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let respect_repository_ignores = !ambient || workspace_scoped;
     let glob = content
         .get("glob")
         .and_then(Value::as_str)
@@ -153,10 +168,10 @@ pub(super) fn search_files(
     walker
         .follow_links(false)
         .hidden(false)
-        .ignore(!ambient)
-        .git_ignore(!ambient)
-        .git_global(!ambient)
-        .git_exclude(!ambient)
+        .ignore(respect_repository_ignores)
+        .git_ignore(respect_repository_ignores)
+        .git_global(respect_repository_ignores)
+        .git_exclude(respect_repository_ignores)
         .max_filesize(Some(MAX_SEARCH_FILE_BYTES));
     for entry in walker.build().filter_map(Result::ok) {
         let path = entry.path();
@@ -167,7 +182,9 @@ pub(super) fn search_files(
             continue;
         }
         let relative = path.strip_prefix(root).map_err(adapter_failure)?;
-        if (!ambient && is_control_path(relative)) || !glob_matches(glob.as_ref(), relative) {
+        if ((!ambient || workspace_scoped) && is_control_path(relative))
+            || !glob_matches(glob.as_ref(), relative)
+        {
             continue;
         }
         let Ok(bytes) = fs::read(path) else {
@@ -181,15 +198,17 @@ pub(super) fn search_files(
         let Ok(text) = std::str::from_utf8(&bytes) else {
             continue;
         };
-        for (line_index, line) in text.lines().enumerate() {
+        let lines = text.lines().collect::<Vec<_>>();
+        for (line_index, line) in lines.iter().copied().enumerate() {
             let Some(column) = matcher.find(line) else {
                 continue;
             };
+            let text = search_match_text(&lines, line_index, context_lines);
             matches.push(json!({
                 "path": relative.to_string_lossy(),
                 "line": line_index.saturating_add(1),
                 "column": column.saturating_add(1),
-                "text": bounded_search_line(line),
+                "text": text,
             }));
             if matches.len() >= usize::try_from(max_matches).unwrap_or(usize::MAX) {
                 truncated = true;
@@ -211,6 +230,23 @@ pub(super) fn search_files(
         json!({"matches": matches, "truncated": truncated}),
         max_output,
     )
+}
+
+fn search_match_text(lines: &[&str], line_index: usize, context_lines: usize) -> String {
+    if context_lines == 0 {
+        return bounded_search_line(lines[line_index]).to_owned();
+    }
+    let start = line_index.saturating_sub(context_lines);
+    let end = line_index
+        .saturating_add(context_lines)
+        .saturating_add(1)
+        .min(lines.len());
+    lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| format!("{}: {}", start + offset + 1, bounded_search_line(line)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) enum SearchMatcher {

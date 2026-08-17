@@ -24,6 +24,8 @@ const (
 	AgentRunService_ListRuns_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
 	AgentRunService_WatchRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/WatchRun"
 	AgentRunService_CancelRun_FullMethodName          = "/colossus.api.v1alpha1.AgentRunService/CancelRun"
+	AgentRunService_ArchiveThread_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/ArchiveThread"
+	AgentRunService_RestoreThread_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/RestoreThread"
 	AgentRunService_RespondInteraction_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/RespondInteraction"
 )
 
@@ -43,6 +45,10 @@ type AgentRunServiceClient interface {
 	WatchRun(ctx context.Context, in *WatchRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRunResponse], error)
 	// CancelRun requests idempotent cooperative cancellation.
 	CancelRun(ctx context.Context, in *CancelRunRequest, opts ...grpc.CallOption) (*CancelRunResponse, error)
+	// ArchiveThread hides a terminal thread from normal listings.
+	ArchiveThread(ctx context.Context, in *ArchiveThreadRequest, opts ...grpc.CallOption) (*ArchiveThreadResponse, error)
+	// RestoreThread returns an archived thread to normal listings.
+	RestoreThread(ctx context.Context, in *RestoreThreadRequest, opts ...grpc.CallOption) (*RestoreThreadResponse, error)
 	// RespondInteraction answers one caller-bound prompt or approval exactly once.
 	RespondInteraction(ctx context.Context, in *RespondInteractionRequest, opts ...grpc.CallOption) (*RespondInteractionResponse, error)
 }
@@ -114,6 +120,26 @@ func (c *agentRunServiceClient) CancelRun(ctx context.Context, in *CancelRunRequ
 	return out, nil
 }
 
+func (c *agentRunServiceClient) ArchiveThread(ctx context.Context, in *ArchiveThreadRequest, opts ...grpc.CallOption) (*ArchiveThreadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ArchiveThreadResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_ArchiveThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) RestoreThread(ctx context.Context, in *RestoreThreadRequest, opts ...grpc.CallOption) (*RestoreThreadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreThreadResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_RestoreThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentRunServiceClient) RespondInteraction(ctx context.Context, in *RespondInteractionRequest, opts ...grpc.CallOption) (*RespondInteractionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RespondInteractionResponse)
@@ -140,6 +166,10 @@ type AgentRunServiceServer interface {
 	WatchRun(*WatchRunRequest, grpc.ServerStreamingServer[WatchRunResponse]) error
 	// CancelRun requests idempotent cooperative cancellation.
 	CancelRun(context.Context, *CancelRunRequest) (*CancelRunResponse, error)
+	// ArchiveThread hides a terminal thread from normal listings.
+	ArchiveThread(context.Context, *ArchiveThreadRequest) (*ArchiveThreadResponse, error)
+	// RestoreThread returns an archived thread to normal listings.
+	RestoreThread(context.Context, *RestoreThreadRequest) (*RestoreThreadResponse, error)
 	// RespondInteraction answers one caller-bound prompt or approval exactly once.
 	RespondInteraction(context.Context, *RespondInteractionRequest) (*RespondInteractionResponse, error)
 	mustEmbedUnimplementedAgentRunServiceServer()
@@ -166,6 +196,12 @@ func (UnimplementedAgentRunServiceServer) WatchRun(*WatchRunRequest, grpc.Server
 }
 func (UnimplementedAgentRunServiceServer) CancelRun(context.Context, *CancelRunRequest) (*CancelRunResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelRun not implemented")
+}
+func (UnimplementedAgentRunServiceServer) ArchiveThread(context.Context, *ArchiveThreadRequest) (*ArchiveThreadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ArchiveThread not implemented")
+}
+func (UnimplementedAgentRunServiceServer) RestoreThread(context.Context, *RestoreThreadRequest) (*RestoreThreadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RestoreThread not implemented")
 }
 func (UnimplementedAgentRunServiceServer) RespondInteraction(context.Context, *RespondInteractionRequest) (*RespondInteractionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RespondInteraction not implemented")
@@ -274,6 +310,42 @@ func _AgentRunService_CancelRun_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentRunService_ArchiveThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArchiveThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).ArchiveThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_ArchiveThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).ArchiveThread(ctx, req.(*ArchiveThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunService_RestoreThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).RestoreThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_RestoreThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).RestoreThread(ctx, req.(*RestoreThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentRunService_RespondInteraction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RespondInteractionRequest)
 	if err := dec(in); err != nil {
@@ -314,6 +386,14 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelRun",
 			Handler:    _AgentRunService_CancelRun_Handler,
+		},
+		{
+			MethodName: "ArchiveThread",
+			Handler:    _AgentRunService_ArchiveThread_Handler,
+		},
+		{
+			MethodName: "RestoreThread",
+			Handler:    _AgentRunService_RestoreThread_Handler,
 		},
 		{
 			MethodName: "RespondInteraction",

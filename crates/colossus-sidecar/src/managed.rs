@@ -12,7 +12,7 @@ use colossus_provider::{
 use colossus_runtime::{
     HostCredentialResolver, KeyConfig, ModelCapabilities, ModelProfileConfig, ModelsConfig,
     ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig, RuntimeError,
-    RuntimeOpenOptions, StorageLocation, WorkspaceIdentityToken,
+    RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation, WorkspaceIdentityToken,
 };
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
@@ -162,6 +162,7 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         instance_id,
         &instance_dir,
         ca_bundle_path.as_deref(),
+        request.plaintext_journal_for_development,
     )?;
     let config = source_config
         .resolve_storage_paths(&workspace.canonical_path, instance_root.path())
@@ -436,16 +437,21 @@ fn managed_runtime_config(
     instance_id: Uuid,
     instance_dir: &Path,
     ca_bundle_path: Option<&Path>,
+    plaintext_journal_for_development: bool,
 ) -> Result<RuntimeConfig, FailureCode> {
     managed
         .validate()
         .map_err(|_| FailureCode::InvalidConfiguration)?;
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.storage.location = StorageLocation::HomeWorkspace;
-    config.storage.keys = KeyConfig::Platform {
-        service: MANAGED_KEYRING_SERVICE.into(),
-        journal_key_id: format!("journal-{instance_id}"),
-        signing_key_id: format!("checkpoint-{instance_id}"),
+    config.storage.keys = if plaintext_journal_for_development {
+        KeyConfig::None
+    } else {
+        KeyConfig::Platform {
+            service: MANAGED_KEYRING_SERVICE.into(),
+            journal_key_id: format!("journal-{instance_id}"),
+            signing_key_id: format!("checkpoint-{instance_id}"),
+        }
     };
     let access_profile = match managed.access_profile {
         ManagedAccessProfile::Minimal => AccessProfile::Minimal,
@@ -526,6 +532,25 @@ fn managed_runtime_config(
             .collect(),
         roles: managed.roles.clone(),
     };
+    config.search = SearchConfig {
+        profiles: managed
+            .search_profiles
+            .iter()
+            .map(|profile| {
+                (
+                    profile.profile.clone(),
+                    SearchProfileConfig::Searxng {
+                        endpoint: profile.endpoint.clone(),
+                        credential_reference: None,
+                        auth_header: "X-Searxng-Key".into(),
+                        user_agent: "colossus-desktop/0.10".into(),
+                        timeout_ms: profile.timeout_ms,
+                    },
+                )
+            })
+            .collect(),
+        roles: managed.search_roles.clone(),
+    };
     let mut network_destinations = managed
         .providers
         .iter()
@@ -536,6 +561,17 @@ fn managed_runtime_config(
                 .map(|url| url.origin().ascii_serialization())
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
+    for endpoint in managed
+        .search_profiles
+        .iter()
+        .map(|profile| profile.endpoint.as_str())
+    {
+        let origin = url::Url::parse(endpoint)
+            .map_err(|_| FailureCode::InvalidConfiguration)?
+            .origin()
+            .ascii_serialization();
+        network_destinations.insert(origin);
+    }
     if managed
         .providers
         .iter()
@@ -1179,6 +1215,8 @@ mod tests {
                 reasoning_effort: None,
             }],
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
+            search_profiles: Vec::new(),
+            search_roles: BTreeMap::new(),
         }
     }
 
@@ -1188,7 +1226,7 @@ mod tests {
         let mut managed = test_managed_runtime();
         managed.access_profile = ManagedAccessProfile::Minimal;
         managed.execution_boundary = ManagedExecutionBoundary::FullAccess;
-        let full = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let full = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("full access config");
         assert_eq!(full.access.profile, AccessProfile::Minimal);
         assert_eq!(full.sandbox.backend, "danger_full_access");
@@ -1197,19 +1235,62 @@ mod tests {
 
         managed.access_profile = ManagedAccessProfile::AllowAll;
         managed.execution_boundary = ManagedExecutionBoundary::WorkspaceIsolated;
-        let workspace = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
-            .expect("workspace isolated config");
+        let workspace =
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                .expect("workspace isolated config");
         assert_eq!(workspace.access.profile, AccessProfile::AllowAll);
         assert_ne!(workspace.sandbox.backend, "danger_full_access");
         assert_eq!(workspace.sandbox.profile, "workspace-development");
         assert!(!workspace.sandbox.acknowledge_danger_full_access);
 
         managed.execution_boundary = ManagedExecutionBoundary::OfflineIsolated;
-        let offline = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
-            .expect("offline isolated config");
+        let offline =
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                .expect("offline isolated config");
         assert_ne!(offline.sandbox.backend, "danger_full_access");
         assert_eq!(offline.sandbox.profile, "offline-default");
         assert!(!offline.sandbox.acknowledge_danger_full_access);
+    }
+
+    #[test]
+    fn managed_search_reaches_the_explicit_route_and_network_allowlist() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.search_profiles = vec![colossus_sidecar_protocol::ManagedSearchConfig {
+            profile: "local-dev-searxng".into(),
+            endpoint: "http://127.0.0.1:8888/search".into(),
+            timeout_ms: 30_000,
+        }];
+        managed.search_roles = BTreeMap::from([
+            ("agent".into(), "local-dev-searxng".into()),
+            ("research".into(), "local-dev-searxng".into()),
+        ]);
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("managed search config");
+        assert!(config.search.profiles.contains_key("local-dev-searxng"));
+        assert_eq!(config.search.roles["research"], "local-dev-searxng");
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&"http://127.0.0.1:8888".into())
+        );
+    }
+
+    #[test]
+    fn plaintext_development_journal_must_be_explicit() {
+        let instance = tempfile::tempdir().expect("instance");
+        let managed = test_managed_runtime();
+        let instance_id = Uuid::now_v7();
+
+        let protected = managed_runtime_config(&managed, instance_id, instance.path(), None, false)
+            .expect("protected config");
+        assert!(matches!(protected.storage.keys, KeyConfig::Platform { .. }));
+
+        let plaintext = managed_runtime_config(&managed, instance_id, instance.path(), None, true)
+            .expect("plaintext config");
+        assert!(matches!(plaintext.storage.keys, KeyConfig::None));
     }
 
     #[test]
@@ -1229,7 +1310,7 @@ mod tests {
         };
         managed.models[0].provider_profile = "private-provider".into();
 
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("offline managed config");
         assert!(
             config
@@ -1268,9 +1349,14 @@ mod tests {
         std::fs::write(&cli_state, []).expect("CLI state");
         std::fs::set_permissions(&cli_state, std::fs::Permissions::from_mode(0o600))
             .expect("CLI state permissions");
-        let config =
-            managed_runtime_config(&test_managed_runtime(), Uuid::now_v7(), &instance, None)
-                .expect("managed config");
+        let config = managed_runtime_config(
+            &test_managed_runtime(),
+            Uuid::now_v7(),
+            &instance,
+            None,
+            false,
+        )
+        .expect("managed config");
 
         symlink(&cli_state, instance.join("state.redb")).expect("state symlink");
         assert!(config.resolve_storage_paths(&workspace, &instance).is_err());
@@ -1486,9 +1572,11 @@ mod tests {
                 reasoning_effort: None,
             }],
             roles: BTreeMap::from([("primary".into(), "main".into())]),
+            search_profiles: Vec::new(),
+            search_roles: BTreeMap::new(),
         };
 
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed config");
         assert_eq!(
             config.providers.profiles["openrouter"].chat_completions_output_token_parameter,
@@ -1497,7 +1585,7 @@ mod tests {
 
         managed.providers[0].chat_completions_output_token_parameter =
             Some(ManagedChatCompletionsOutputTokenParameter::Omit);
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed config");
         assert_eq!(
             config.providers.profiles["openrouter"].chat_completions_output_token_parameter,
@@ -1505,7 +1593,7 @@ mod tests {
         );
 
         managed.providers[0].chat_completions_output_token_parameter = None;
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed config");
         assert_eq!(
             config.providers.profiles["openrouter"].chat_completions_output_token_parameter, None,
@@ -1541,8 +1629,10 @@ mod tests {
                 reasoning_effort: None,
             }],
             roles: BTreeMap::from([("primary".into(), "main".into())]),
+            search_profiles: Vec::new(),
+            search_roles: BTreeMap::new(),
         };
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed config");
         persist_managed_config(instance.path(), &config).expect("persist config");
         let path = instance.path().join(MANAGED_CONFIG_FILENAME);
@@ -1582,9 +1672,11 @@ mod tests {
                 reasoning_effort: Some(ManagedReasoningEffort::High),
             }],
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
+            search_profiles: Vec::new(),
+            search_roles: BTreeMap::new(),
         };
 
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed Codex config");
         let provider = &config.providers.profiles["codex"];
         assert_eq!(provider.kind, ProviderKind::OpenAiCodex);

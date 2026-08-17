@@ -1,5 +1,33 @@
 use super::*;
 
+/// Caller authority and conversation ownership captured for one Research execution.
+#[derive(Clone, Debug)]
+pub struct ResearchRunContext {
+    /// Authenticated actor responsible for the Research operation.
+    pub actor: Actor,
+    /// Exact caller-owned tool ceiling for internal evidence collectors.
+    pub allowed_tools: Vec<String>,
+    /// Optional public run that owns the synthesized assistant message.
+    pub message_run_id: Option<String>,
+}
+
+fn research_source_tool(kind: ResearchSourceKind) -> &'static str {
+    match kind {
+        ResearchSourceKind::Repo => "filesystem.search",
+        ResearchSourceKind::Web => "web.search",
+        ResearchSourceKind::Mcp => "mcp.call",
+    }
+}
+
+fn research_source_tools(source_kinds: &[ResearchSourceKind]) -> Vec<String> {
+    source_kinds
+        .iter()
+        .copied()
+        .map(research_source_tool)
+        .map(str::to_owned)
+        .collect()
+}
+
 impl Runtime {
     /// Durable workflow application API.
     pub fn workflows(&self) -> Arc<WorkflowService> {
@@ -92,14 +120,39 @@ impl Runtime {
         depth: ResearchDepth,
         source_kinds: Vec<ResearchSourceKind>,
     ) -> Result<ResearchRun, RuntimeError> {
+        let allowed_tools = research_source_tools(&source_kinds);
+        self.run_research_as(
+            session_id,
+            question,
+            depth,
+            source_kinds,
+            ResearchRunContext {
+                actor: terminal_actor(),
+                allowed_tools,
+                message_run_id: None,
+            },
+        )
+        .await
+    }
+
+    /// Run bounded durable research with an exact tool ceiling and message owner.
+    pub async fn run_research_as(
+        &self,
+        session_id: &str,
+        question: &str,
+        depth: ResearchDepth,
+        source_kinds: Vec<ResearchSourceKind>,
+        context: ResearchRunContext,
+    ) -> Result<ResearchRun, RuntimeError> {
         let operation = ResearchOperation::Run {
             session_id: session_id.into(),
             question: question.into(),
             depth,
             source_kinds,
+            message_run_id: context.message_run_id.clone(),
         };
         let mut request = effect_request(
-            terminal_actor(),
+            context.actor,
             operation.action(),
             format!("session:{session_id}"),
             serde_json::to_value(&operation)
@@ -107,6 +160,8 @@ impl Runtime {
         );
         request.capabilities = vec![operation.action().into()];
         request.context.session_id = Some(session_id.into());
+        request.context.run_id = context.message_run_id;
+        request.context.offered_tools = context.allowed_tools;
         let result = self
             .gateway
             .execute(request, self.research_executor.as_ref())

@@ -87,24 +87,25 @@ pub use secret::{CredentialProvider, Secret};
 pub use sidecar::{
     MANAGED_CONFIG_FILENAME, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
     ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
-    ManagedReasoningEffort, ManagedRuntimeConfig, NativeSidecarFailure, NativeSidecarStatus,
-    REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant, SidecarApprovalBrokerGrant,
-    SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle, SidecarOptions,
-    WorkspaceIdentity, default_managed_provider_timeout_ms, validate_managed_model_identifier,
-    validate_managed_provider_base_url,
+    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig, NativeSidecarFailure,
+    NativeSidecarStatus, REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle,
+    SidecarOptions, WorkspaceIdentity, default_managed_provider_timeout_ms,
+    validate_managed_model_identifier, validate_managed_provider_base_url,
 };
 pub use stream::RunUpdates;
 pub use types::{
-    ApprovalInteraction, ApprovalRisk, ArtifactPurpose, ArtifactReference, ArtifactState,
-    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, DownloadedArtifact,
-    GetRunRequest, GetRunResponse, InputContentPart, Interaction, InteractionAnswer,
-    InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse,
-    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse,
-    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice,
-    RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation, RunFailure,
+    ApprovalInteraction, ApprovalRisk, ArchiveThreadRequest, ArtifactPurpose, ArtifactReference,
+    ArtifactState, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
+    DownloadedArtifact, GetRunRequest, GetRunResponse, InputContentPart, Interaction,
+    InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest,
+    ListRunsResponse, MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse,
+    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth,
+    ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse,
+    RestoreThreadRequest, Run, RunBranch, RunBranchContextMode, RunCancellation, RunFailure,
     RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream,
-    ServerCapabilities, SessionMessage, TokenUsage, ToolActivity, ToolActivityState,
-    UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
+    ServerCapabilities, SessionMessage, ThreadLifecycle, TokenUsage, ToolActivity,
+    ToolActivityState, UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
 };
 
 #[cfg(test)]

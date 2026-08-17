@@ -8,12 +8,13 @@ use colossus_api::{
     ContentPart, CreateArtifactUploadRequest, CreateRunRequest, EventSourcedArtifactApi,
     EventSourcedRunRepository, GetRunRequest, IdempotencyKey, InteractionKind, InteractionResponse,
     NewRun, OutcomeCertainty, PlanRunAction, PlanStatus as PublicPlanStatus, RequestId,
-    RespondInteractionRequest, Run, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
+    ResearchDepth, ResearchSourceKind, RespondInteractionRequest, Run, RunBranch,
+    RunBranchContextMode, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
     WatchRunRequest, scopes,
 };
 use colossus_contracts::{
-    DecisionOutcome, EventEnvelope, NewEvent, PlanStep, PolicyDecision, PolicyObligations,
-    ProjectionWorkItem, SignedCheckpoint, UserPromptRequest,
+    DecisionOutcome, EventEnvelope, ModelMessageRole, NewEvent, PlanStep, PolicyDecision,
+    PolicyObligations, ProjectionWorkItem, SignedCheckpoint, UserPromptRequest,
 };
 use colossus_policy::{DenyApproval, effect_request};
 use colossus_ports::{
@@ -244,6 +245,15 @@ fn caller_with_additional_scopes(
     request_id: &str,
     additional_scopes: &[&str],
 ) -> CallerContext {
+    caller_with_scopes_and_tools(application_id, request_id, additional_scopes, &[])
+}
+
+fn caller_with_scopes_and_tools(
+    application_id: &str,
+    request_id: &str,
+    additional_scopes: &[&str],
+    allowed_tools: &[&str],
+) -> CallerContext {
     let scopes = [
         scopes::RUNS_EXECUTE,
         scopes::RUNS_READ,
@@ -261,11 +271,96 @@ fn caller_with_additional_scopes(
             ApplicationKind::Enrolled,
             scopes,
             ["primary".to_owned()],
-            std::iter::empty(),
+            allowed_tools.iter().map(|tool| (*tool).to_owned()),
         )
         .expect("principal"),
         RequestId::new(request_id).expect("request id"),
     )
+}
+
+async fn research_preserves_tool_ceiling_and_public_conversation_boundary(runtime: Arc<Runtime>) {
+    let service = service(Arc::clone(&runtime), RunAdmissionConfig::default());
+    let application_id = format!("app:research-owner-{}", Uuid::now_v7().simple());
+    let mut research = request("research-tool-denied", "What is in this workspace?");
+    research.mode = RunMode::Research;
+    research.research_depth = Some(ResearchDepth::Quick);
+    research.research_sources = vec![ResearchSourceKind::Repo];
+
+    let denied = service
+        .create_run(
+            &caller(&application_id, "research-denied"),
+            research.clone(),
+        )
+        .await
+        .expect_err("Research cannot exceed the application tool ceiling");
+    assert_eq!(denied.reason, colossus_api::ApiErrorReason::ToolDenied);
+
+    research.idempotency_key = IdempotencyKey::new("research-tool-allowed").expect("allowed key");
+    let owner = caller_with_scopes_and_tools(
+        &application_id,
+        "research-allowed",
+        &[],
+        &["filesystem.search"],
+    );
+    runtime
+        .create_application_session(
+            "runtime-ceiling-session",
+            Some("Runtime ceiling"),
+            owner.actor(),
+        )
+        .expect("runtime ceiling session");
+    let runtime_denied = runtime
+        .run_research_as(
+            "runtime-ceiling-session",
+            "What is in this workspace?",
+            colossus_contracts::ResearchDepth::Quick,
+            vec![colossus_contracts::ResearchSourceKind::Repo],
+            colossus_runtime::ResearchRunContext {
+                actor: owner.actor(),
+                allowed_tools: Vec::new(),
+                message_run_id: Some("runtime-ceiling-run".into()),
+            },
+        )
+        .await
+        .expect_err("the runtime must enforce the captured tool ceiling independently");
+    assert!(runtime_denied.to_string().contains("tool ceiling"));
+    let source = service
+        .create_run(&owner, research)
+        .await
+        .expect("tool-authorized Research run")
+        .run;
+    let source = wait_terminal(&service, &owner, &source.id).await;
+    assert_eq!(source.status, RunStatus::Completed);
+
+    let source_messages = runtime
+        .session_messages(&source.session_id)
+        .expect("Research messages");
+    let owned_messages = source_messages
+        .iter()
+        .filter(|message| message.run_id == source.id)
+        .collect::<Vec<_>>();
+    assert_eq!(owned_messages.len(), 2);
+    assert_eq!(owned_messages[0].message.role, ModelMessageRole::User);
+    assert_eq!(owned_messages[1].message.role, ModelMessageRole::Assistant);
+
+    let mut branch_request = request("research-aside", "Summarize that Research report.");
+    branch_request.branch = Some(RunBranch {
+        source_run_id: source.id,
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    let branch = service
+        .create_run(&owner, branch_request)
+        .await
+        .expect("Aside from Research conversation")
+        .run;
+    let branch = wait_terminal(&service, &owner, &branch.id).await;
+    let branch_messages = runtime
+        .session_messages(&branch.session_id)
+        .expect("Aside messages");
+    assert_eq!(branch_messages[0].message, owned_messages[0].message);
+    assert_eq!(branch_messages[1].message, owned_messages[1].message);
+    wait_inactive(&service).await;
 }
 
 async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: Arc<Runtime>) {
@@ -321,8 +416,11 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
                 end_user_id: None,
                 role: Some("primary".into()),
                 mode: RunMode::Execute,
+                research_depth: None,
+                research_sources: Vec::new(),
                 skill_ids: Vec::new(),
                 plan_action: None,
+                branch: None,
                 max_turns: 1,
                 idempotency_key: IdempotencyKey::new("attachment-run").expect("run key"),
             },
@@ -344,8 +442,11 @@ fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
         end_user_id: None,
         role: Some("primary".into()),
         mode: RunMode::Execute,
+        research_depth: None,
+        research_sources: Vec::new(),
         skill_ids: Vec::new(),
         plan_action: None,
+        branch: None,
         max_turns: 1,
         idempotency_key: IdempotencyKey::new(idempotency_key).expect("idempotency key"),
     }
@@ -522,6 +623,65 @@ async fn plan_continuation_is_bound_to_owner_source_session_and_exact_revision(
     assert_eq!(accepted.run.session_id, session.session_id);
     assert_eq!(accepted.run.mode, RunMode::Plan);
     service.request_shutdown();
+}
+
+async fn source_run_conversation_branch_includes_the_visible_final_response(runtime: Arc<Runtime>) {
+    let service = service(Arc::clone(&runtime), RunAdmissionConfig::default());
+    let owner = caller(
+        &format!("app:aside-owner-{}", Uuid::now_v7().simple()),
+        "aside-owner",
+    );
+    let source = service
+        .create_run(
+            &owner,
+            request("aside-source", "Describe the visible workspace context."),
+        )
+        .await
+        .expect("create source run")
+        .run;
+    let source = wait_terminal(&service, &owner, &source.id).await;
+    let source_messages = runtime
+        .session_messages(&source.session_id)
+        .expect("source messages");
+    let expected_context = source_messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.message.role,
+                ModelMessageRole::User | ModelMessageRole::Assistant
+            ) && !message.message.content.trim().is_empty()
+        })
+        .map(|message| (message.message.role, message.message.content.clone()))
+        .collect::<Vec<_>>();
+    assert!(
+        expected_context
+            .iter()
+            .any(|(role, _)| *role == ModelMessageRole::Assistant),
+        "the source run must have a visible final assistant response"
+    );
+
+    let mut branch_request = request("aside-branch", "What happened immediately before this?");
+    branch_request.branch = Some(RunBranch {
+        source_run_id: source.id,
+        source_message_count: 0,
+        context_mode: RunBranchContextMode::SourceRunConversation,
+    });
+    let branch = service
+        .create_run(&owner, branch_request)
+        .await
+        .expect("create Aside from canonical source-run boundary")
+        .run;
+    let branch = wait_terminal(&service, &owner, &branch.id).await;
+    let branch_messages = runtime
+        .session_messages(&branch.session_id)
+        .expect("Aside messages");
+    let actual_prefix = branch_messages
+        .iter()
+        .take(expected_context.len())
+        .map(|message| (message.message.role, message.message.content.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_prefix, expected_context);
+    wait_inactive(&service).await;
 }
 
 async fn concurrent_exact_create_key_executes_the_provider_once(runtime: Arc<Runtime>) {
@@ -1023,6 +1183,14 @@ fn runtime_service_conformance() {
             ))
             .await;
             plan_continuation_is_bound_to_owner_source_session_and_exact_revision(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            source_run_conversation_branch_includes_the_visible_final_response(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            research_preserves_tool_ceiling_and_public_conversation_boundary(Arc::clone(
                 &fixture.runtime,
             ))
             .await;

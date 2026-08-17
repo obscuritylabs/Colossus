@@ -17,7 +17,7 @@ use crate::{
         revalidate_workspace,
     },
     dto::CommandErrorDto,
-    state::{AppState, MANAGED_TARGET_ID},
+    state::AppState,
 };
 
 const MAX_DIRECTORY_ENTRIES: usize = 500;
@@ -87,7 +87,7 @@ pub(crate) async fn list_workspace_directory(
     let result = list_directory(&root, &request.path)?;
     ensure_workspace_unchanged(workspace, &root)?;
     let selected = state.selected_target_id().await;
-    if selected.as_deref() != Some(MANAGED_TARGET_ID) {
+    if selected != settings.selected_space_id {
         return Err(files_unavailable());
     }
     Ok(result)
@@ -104,7 +104,7 @@ pub(crate) async fn read_workspace_file(
     let result = read_file(&root, &request.path)?;
     ensure_workspace_unchanged(workspace, &root)?;
     let selected = state.selected_target_id().await;
-    if selected.as_deref() != Some(MANAGED_TARGET_ID) {
+    if selected != settings.selected_space_id {
         return Err(files_unavailable());
     }
     Ok(result)
@@ -118,7 +118,8 @@ fn authorize_workspace<'a>(
     settings: &'a DesktopSettings,
     workspace_id: &str,
 ) -> Result<&'a WorkspaceSetting, CommandErrorDto> {
-    if settings.selected_target_id.as_deref() != Some(MANAGED_TARGET_ID)
+    if settings.selected_target_id != settings.selected_space_id
+        || settings.selected_space_id.is_none()
         || settings.access_profile == AccessProfileSetting::Minimal
     {
         return Err(files_unavailable());
@@ -621,11 +622,10 @@ mod tests {
         let root = tempdir().expect("root");
         let canonical = fs::canonicalize(root.path()).expect("canonical root");
         let workspace = validate_workspace(&canonical).expect("workspace");
-        let mut settings = DesktopSettings {
-            workspace: Some(workspace.clone()),
-            selected_target_id: Some(MANAGED_TARGET_ID.into()),
-            ..DesktopSettings::default()
-        };
+        let mut settings = DesktopSettings::default();
+        settings
+            .add_space(workspace.clone())
+            .expect("selected Space");
 
         assert_eq!(
             authorize_workspace(&settings, &workspace.id)

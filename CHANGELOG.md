@@ -8,6 +8,24 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.1] - 2026-08-16
+
+### Added
+
+- Added a canonical Desktop session topology that visualizes delegated agents, goals,
+  tasks, plans, key decisions, memories, research, sources, and artifacts in a dedicated
+  tab with bounded, Space-scoped inspection.
+- Added a Slack-style multi-Space navigation surface, thread pinning and archiving,
+  background attention routing, side conversations, queued and redirected follow-ups,
+  research mode, source inspection, plan review, and thread/session details.
+
+### Changed
+
+- Refined Desktop timelines, tool previews, composer behavior, resizable panes, and
+  message controls for denser activity review without losing canonical context.
+- Extended the unsigned Desktop Developer Preview release path with a smoke-tested
+  Windows x64 NSIS installer, checksum, sealed bundle manifest, and provenance record.
+
 ## [0.10.9] - 2026-08-13
 
 ### Added

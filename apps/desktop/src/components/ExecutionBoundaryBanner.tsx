@@ -9,6 +9,13 @@ export function managedRuntimeBoundaryActive(state: ManagedRuntimeState) {
   );
 }
 
+export function executionBoundaryBannerVisible(
+  state: ManagedRuntimeState,
+  boundary: ExecutionBoundary,
+) {
+  return managedRuntimeBoundaryActive(state) && boundary === "full_access";
+}
+
 export function ExecutionBoundaryBanner({
   active,
   boundary,
@@ -21,7 +28,11 @@ export function ExecutionBoundaryBanner({
   }
 
   return (
-    <aside className="unsafe-execution-banner" role="alert">
+    <aside
+      className="unsafe-execution-banner"
+      role="alert"
+      aria-label="Unsafe Managed Local execution boundary"
+    >
       <strong>Unsafe: Full access</strong>
       <span>
         Managed Local commands can use host files, environment, and network

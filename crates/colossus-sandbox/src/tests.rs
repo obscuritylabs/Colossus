@@ -4,7 +4,7 @@ use super::{
     execute_sandbox_job, host_process_limits_apply, inherit_ambient_environment, non_public_ip,
     normalize_path_arguments, oci_command, oci_proxy_run_arguments, oci_remove_arguments,
     oci_resource_names, proposed_write_bytes, redact_proxy_credential, resolve_oci_origins,
-    sandbox_helper_budget, sha256_hex, tls_server_name, validate_process_spec,
+    sandbox_helper_budget, search_files, sha256_hex, tls_server_name, validate_process_spec,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{native_helper_diagnostics, native_target_pid};
@@ -1014,6 +1014,44 @@ async fn filesystem_search_is_bounded_utf8_only_and_skips_control_state() {
     assert_eq!(value["matches"][0]["column"], 1);
     assert_eq!(value["truncated"], true);
     assert_eq!(value["matches"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn ambient_workspace_search_respects_repository_ignores_and_releases_context() {
+    let directory = tempdir().expect("directory");
+    std::fs::create_dir_all(directory.path().join(".git")).expect("git marker");
+    std::fs::create_dir_all(directory.path().join("target")).expect("ignored directory");
+    std::fs::create_dir_all(directory.path().join(".colossus")).expect("control directory");
+    std::fs::write(directory.path().join(".gitignore"), "target/\n").expect("ignore file");
+    std::fs::write(
+        directory.path().join("visible.md"),
+        "before\nunique needle\nafter\n",
+    )
+    .expect("visible fixture");
+    std::fs::write(directory.path().join("target/ignored.md"), "unique needle")
+        .expect("ignored fixture");
+    std::fs::write(directory.path().join(".colossus/secret"), "unique needle")
+        .expect("control fixture");
+
+    let result = search_files(
+        directory.path(),
+        &json!({
+            "pattern": "unique needle",
+            "regex": false,
+            "case_sensitive": true,
+            "max_matches": 10,
+            "context_lines": 1,
+            "workspace_scoped": true,
+        }),
+        1024 * 1024,
+        true,
+    )
+    .expect("workspace-scoped ambient search");
+    let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");
+    let matches = value["matches"].as_array().expect("matches");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["path"], "visible.md");
+    assert_eq!(matches[0]["text"], "1: before\n2: unique needle\n3: after");
 }
 
 #[tokio::test]

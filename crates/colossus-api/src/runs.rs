@@ -10,6 +10,8 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+pub use colossus_contracts::RunBranchContextMode;
+
 const MAX_PUBLIC_APPROVAL_ORIGIN_BYTES: usize = 512;
 const MAX_RUN_TITLE_CHARACTERS: usize = 80;
 const UNTITLED_RUN: &str = "Untitled work";
@@ -104,6 +106,33 @@ pub enum RunMode {
     Execute,
     /// Block implementation and external mutation; local task/plan records remain available.
     Plan,
+    /// Run the dedicated durable evidence-and-citation research service.
+    Research,
+}
+
+/// Requested research breadth for a public Research run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchDepth {
+    /// Fast, narrow evidence pass.
+    Quick,
+    /// Balanced default investigation.
+    #[default]
+    Standard,
+    /// Broadest configured investigation.
+    Deep,
+}
+
+/// Explicit evidence lane enabled for a public Research run.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchSourceKind {
+    /// Selected Space repository evidence.
+    Repo,
+    /// Configured web-search evidence.
+    Web,
+    /// Configured MCP research evidence.
+    Mcp,
 }
 
 /// Released canonical Plan lifecycle state.
@@ -326,6 +355,8 @@ pub enum ToolActivityState {
     Started,
     /// Released output reached a known successful terminal state.
     Completed,
+    /// The call was settled without starting execution.
+    Cancelled,
     /// The call reached a known failed terminal state.
     Failed,
     /// An effect started without trustworthy terminal evidence.
@@ -344,6 +375,12 @@ pub struct ToolActivity {
     pub state: ToolActivityState,
     /// Bounded summary without raw arguments or quarantined output.
     pub summary: String,
+    /// Optional bounded validated input released once execution starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    /// Optional bounded preview of successful output released by post-effect policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// Normalized provider token accounting.
@@ -661,6 +698,9 @@ pub struct Run {
     pub pending_interaction: Option<Interaction>,
     /// Opaque optimistic-concurrency token.
     pub etag: String,
+    /// Whether the containing thread is hidden from normal listings.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 /// One durable, replayable UI update.
@@ -756,6 +796,20 @@ pub enum ContentPart {
     },
 }
 
+/// Canonical session prefix used to start a separate child conversation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunBranch {
+    /// Caller-owned run whose session supplies the canonical context.
+    pub source_run_id: String,
+    /// Exact number of canonical messages to copy, or zero when the context mode
+    /// resolves the boundary through the source run.
+    pub source_message_count: u64,
+    /// Provider-transcript or visible-conversation projection for the copied prefix.
+    #[serde(default)]
+    pub context_mode: RunBranchContextMode,
+}
+
 /// Request to create and start one agent run.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -772,12 +826,21 @@ pub struct CreateRunRequest {
     /// Requested execution mode.
     #[serde(default)]
     pub mode: RunMode,
+    /// Research breadth; present only for Research runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_depth: Option<ResearchDepth>,
+    /// Explicit evidence lanes; non-empty only for Research runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub research_sources: Vec<ResearchSourceKind>,
     /// Reserved for a future public skill ceiling; v1alpha1 requires this to be empty.
     #[serde(default)]
     pub skill_ids: Vec<String>,
     /// Exact caller-owned Plan continuation, when this run revises or executes a Plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_action: Option<PlanRunAction>,
+    /// Optional point-in-time canonical context for a separate child session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<RunBranch>,
     /// Model-turn ceiling; zero selects the configured default.
     pub max_turns: u32,
     /// Required key for atomic create replay.
@@ -935,6 +998,52 @@ impl CreateRunRequest {
                 "public application runs do not support skill activation",
             ));
         }
+        match self.mode {
+            RunMode::Research => {
+                if self.research_depth.is_none() {
+                    return Err(ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "research_depth",
+                        "Research mode requires an explicit depth",
+                    ));
+                }
+                if self.research_sources.is_empty() {
+                    return Err(ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "research_sources",
+                        "Research mode requires at least one evidence lane",
+                    ));
+                }
+                let unique = self
+                    .research_sources
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>();
+                if unique.len() != self.research_sources.len() {
+                    return Err(ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "research_sources",
+                        "Research evidence lanes must be unique",
+                    ));
+                }
+                if self.plan_action.is_some() || self.branch.is_some() {
+                    return Err(ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "mode",
+                        "Research mode does not support Plan continuation or Aside branching",
+                    ));
+                }
+            }
+            RunMode::Execute | RunMode::Plan => {
+                if self.research_depth.is_some() || !self.research_sources.is_empty() {
+                    return Err(ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "research_depth",
+                        "Research options are accepted only in Research mode",
+                    ));
+                }
+            }
+        }
         if let Some(action) = &self.plan_action {
             token(
                 action.source_run_id(),
@@ -982,6 +1091,36 @@ impl CreateRunRequest {
                     }
                 }
                 PlanRunAction::Revise { .. } => {}
+            }
+        }
+        if let Some(branch) = &self.branch {
+            token(
+                &branch.source_run_id,
+                "branch.source_run_id",
+                MAX_IDENTIFIER_BYTES,
+            )?;
+            if branch.source_message_count > 512 {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "branch.source_message_count",
+                    "branch context may contain at most 512 canonical messages",
+                ));
+            }
+            if branch.context_mode == RunBranchContextMode::SourceRunConversation
+                && branch.source_message_count != 0
+            {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "branch.source_message_count",
+                    "source-run conversation boundaries are resolved canonically and require a zero message count",
+                ));
+            }
+            if self.session_id.is_some() || self.plan_action.is_some() {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "branch",
+                    "branch creation cannot continue an existing session or Plan",
+                ));
             }
         }
         if self.max_turns > 100 {
@@ -1101,6 +1240,9 @@ pub struct ListRunsRequest {
     pub page_size: u32,
     /// Opaque continuation token.
     pub page_token: Option<String>,
+    /// Include runs whose containing thread is archived.
+    #[serde(default)]
+    pub include_archived: bool,
 }
 
 impl ListRunsRequest {
@@ -1143,6 +1285,36 @@ pub struct CancelRunRequest {
     pub run_id: String,
     /// Required key making cancellation retries safe.
     pub idempotency_key: IdempotencyKey,
+}
+
+/// Archive one terminal thread, addressed through a caller-owned run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveThreadRequest {
+    /// Any stable run identifier belonging to the thread.
+    pub run_id: String,
+    /// Required key making archive retries safe.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Restore one archived thread, addressed through a caller-owned run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreThreadRequest {
+    /// Any stable run identifier belonging to the thread.
+    pub run_id: String,
+    /// Required key making restore retries safe.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Current archive lifecycle for one durable thread.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadLifecycle {
+    /// Durable session identity shared by the thread's runs.
+    pub session_id: String,
+    /// Whether the thread is hidden from normal listings.
+    pub archived: bool,
 }
 
 /// One-use interaction response request.
@@ -1221,6 +1393,30 @@ pub trait AgentRunApi: Send + Sync {
     /// Request idempotent cooperative cancellation.
     async fn cancel_run(&self, caller: &CallerContext, request: CancelRunRequest)
     -> ApiResult<Run>;
+
+    /// Hide a thread after every run in it has reached a terminal state.
+    async fn archive_thread(
+        &self,
+        _caller: &CallerContext,
+        _request: ArchiveThreadRequest,
+    ) -> ApiResult<ThreadLifecycle> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support thread archiving",
+        ))
+    }
+
+    /// Return an archived thread to normal listings.
+    async fn restore_thread(
+        &self,
+        _caller: &CallerContext,
+        _request: RestoreThreadRequest,
+    ) -> ApiResult<ThreadLifecycle> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support thread restoration",
+        ))
+    }
 
     /// Resolve one caller-bound prompt or approval exactly once.
     async fn respond_interaction(

@@ -8,11 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 12 carries interactive presentation mutations on the session-bound duplex
-/// channel so a TUI acknowledgement cannot be lost before history or preference
-/// persistence. A version-11 worker cannot validate those request variants, so both
-/// sides must reject the mismatch and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 12;
+/// Version 14 adds a selected-session, bounded canonical resource-map operation for
+/// trusted native Desktop clients. Older workers cannot validate that request shape,
+/// so both sides must reject the mismatch and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 14;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -58,11 +57,20 @@ impl From<std::io::Error> for WorkerControlError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub(crate) enum ControlOperation {
     Ping,
-    SetApprovalMode { approval_mode: WorkerApprovalMode },
+    SetApprovalMode {
+        approval_mode: WorkerApprovalMode,
+    },
+    InspectThreadDelegate {
+        parent_run_id: String,
+        job_id: String,
+    },
+    InspectSessionMap {
+        session_id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -280,6 +288,28 @@ mod tests {
             serde_json::json!({
                 "operation": "set_approval_mode",
                 "approval_mode": "full_access",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::InspectThreadDelegate {
+                parent_run_id: "run-parent".into(),
+                job_id: "agent-child".into(),
+            })
+            .expect("inspect delegate"),
+            serde_json::json!({
+                "operation": "inspect_thread_delegate",
+                "parent_run_id": "run-parent",
+                "job_id": "agent-child",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::InspectSessionMap {
+                session_id: "session-primary".into(),
+            })
+            .expect("inspect session map"),
+            serde_json::json!({
+                "operation": "inspect_session_map",
+                "session_id": "session-primary",
             })
         );
     }

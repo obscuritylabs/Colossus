@@ -35,13 +35,22 @@ fn release_target() -> &'static str {
     }
 }
 
+fn release_channel() -> &'static str {
+    if env!("CARGO_PKG_VERSION").contains("-preview.") {
+        "preview"
+    } else {
+        "stable"
+    }
+}
+
 fn write_install_metadata(package: &Path) {
     fs::write(
         package.join("install-metadata"),
         format!(
-            "schema_version=1\nversion={}\ntarget={}\nchannel=stable\ndistribution_origin=https://github.com/obscuritylabs/Colossus/releases\ninstaller_kind=direct\n",
+            "schema_version=1\nversion={}\ntarget={}\nchannel={}\ndistribution_origin=https://github.com/obscuritylabs/Colossus/releases\ninstaller_kind=direct\n",
             env!("CARGO_PKG_VERSION"),
-            release_target()
+            release_target(),
+            release_channel()
         ),
     )
     .expect("package installation metadata");
@@ -289,14 +298,16 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
         ])
         .output()
         .expect("same-version direct update");
-    assert!(
-        update.status.success(),
-        "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&update.stdout),
-        String::from_utf8_lossy(&update.stderr)
-    );
+    let update_succeeded = update.status.success();
     let update: Value = serde_json::from_slice(&update.stdout).expect("update JSON");
-    assert_eq!(update["status"], "up_to_date");
+    if release_channel() == "preview" {
+        assert!(!update_succeeded);
+        assert_eq!(update["status"], "refused");
+        assert_eq!(update["refusalReason"], "preview_installation");
+    } else {
+        assert!(update_succeeded, "stable same-version update must succeed");
+        assert_eq!(update["status"], "up_to_date");
+    }
     assert_eq!(update["installerKind"], "direct");
 
     let config = offline_command(&binary, &smoke)

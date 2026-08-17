@@ -27,6 +27,12 @@ service AgentRunService {
   // CancelRun requests idempotent cooperative cancellation.
   rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
 
+  // ArchiveThread hides a terminal thread from normal listings.
+  rpc ArchiveThread(ArchiveThreadRequest) returns (ArchiveThreadResponse);
+
+  // RestoreThread returns an archived thread to normal listings.
+  rpc RestoreThread(RestoreThreadRequest) returns (RestoreThreadResponse);
+
   // RespondInteraction answers one caller-bound prompt or approval exactly once.
   rpc RespondInteraction(RespondInteractionRequest) returns (RespondInteractionResponse);
 }
@@ -42,6 +48,33 @@ enum RunMode {
   // RUN_MODE_PLAN blocks implementation and external mutation but may create
   // Colossus-local task and plan records.
   RUN_MODE_PLAN = 2;
+
+  // RUN_MODE_RESEARCH runs the dedicated evidence-and-citation service.
+  RUN_MODE_RESEARCH = 3;
+}
+
+// ResearchDepth controls bounded investigation breadth.
+enum ResearchDepth {
+  // Omission is rejected for Research mode.
+  RESEARCH_DEPTH_UNSPECIFIED = 0;
+  // Quick performs a narrow evidence pass.
+  RESEARCH_DEPTH_QUICK = 1;
+  // Standard is the balanced default.
+  RESEARCH_DEPTH_STANDARD = 2;
+  // Deep uses the broadest configured budget.
+  RESEARCH_DEPTH_DEEP = 3;
+}
+
+// ResearchSourceKind selects one explicit evidence lane.
+enum ResearchSourceKind {
+  // Omission is never an evidence lane.
+  RESEARCH_SOURCE_KIND_UNSPECIFIED = 0;
+  // Repo reads released evidence from the selected repository.
+  RESEARCH_SOURCE_KIND_REPO = 1;
+  // Web uses the configured research search route.
+  RESEARCH_SOURCE_KIND_WEB = 2;
+  // MCP uses configured research MCP tools.
+  RESEARCH_SOURCE_KIND_MCP = 3;
 }
 
 // PlanStatus is the released lifecycle of one canonical Plan revision.
@@ -237,6 +270,9 @@ message Run {
 
   // title is a bounded deterministic display label derived from the opening request.
   string title = 17;
+
+  // archived is true when the containing thread is hidden from normal listings.
+  bool archived = 18;
 }
 
 // CreateRunRequest allocates and starts one durable agent run.
@@ -272,6 +308,44 @@ message CreateRunRequest {
   // end_user_id is optional caller-asserted correlation data. It is not an
   // authenticated principal or authorization input and may contain PII.
   optional string end_user_id = 9;
+
+  // branch optionally starts a separate session from an exact canonical prefix.
+  RunBranch branch = 10;
+
+  // research_depth is required only when mode is Research.
+  ResearchDepth research_depth = 11;
+
+  // research_sources contains the explicit evidence lanes for Research.
+  repeated ResearchSourceKind research_sources = 12;
+}
+
+// RunBranch identifies a canonical prefix without accepting transcript text.
+message RunBranch {
+  // source_run_id is a caller-owned run whose session supplies context.
+  string source_run_id = 1;
+
+  // source_message_count is the exact number of canonical messages to copy, or
+  // zero when context_mode resolves the boundary through the source run.
+  uint64 source_message_count = 2;
+
+  // context_mode selects the safe projection materialized into the child session.
+  RunBranchContextMode context_mode = 3;
+}
+
+// RunBranchContextMode controls whether tool traffic is retained in branch context.
+enum RunBranchContextMode {
+  // Unspecified preserves the legacy exact-provider-transcript behavior.
+  RUN_BRANCH_CONTEXT_MODE_UNSPECIFIED = 0;
+
+  // Exact retains the complete canonical provider transcript.
+  RUN_BRANCH_CONTEXT_MODE_EXACT = 1;
+
+  // Conversation retains only visible user and assistant messages.
+  RUN_BRANCH_CONTEXT_MODE_CONVERSATION = 2;
+
+  // Source run conversation resolves through the source run and retains only
+  // visible user and assistant messages.
+  RUN_BRANCH_CONTEXT_MODE_SOURCE_RUN_CONVERSATION = 3;
 }
 
 // PlanRunAction continues the exact Plan released by a caller-owned source run.
@@ -335,6 +409,9 @@ message ListRunsRequest {
 
   // page contains the bounded size and opaque continuation token.
   PageRequest page = 3;
+
+  // include_archived includes runs whose containing thread is archived.
+  bool include_archived = 4;
 }
 
 // ListRunsResponse returns runs ordered by creation time then identifier.
@@ -374,6 +451,45 @@ message CancelRunRequest {
 message CancelRunResponse {
   // run reflects the accepted cancellation or an existing terminal state.
   Run run = 1;
+}
+
+// ThreadLifecycle is the current archive state for one durable thread.
+message ThreadLifecycle {
+  // session_id is the durable identity shared by every run in the thread.
+  string session_id = 1;
+
+  // archived is true when the thread is hidden from normal listings.
+  bool archived = 2;
+}
+
+// ArchiveThreadRequest selects a caller-owned thread through one of its runs.
+message ArchiveThreadRequest {
+  // run_id belongs to the thread being archived.
+  string run_id = 1;
+
+  // idempotency_key makes archive retries safe.
+  string idempotency_key = 2;
+}
+
+// ArchiveThreadResponse returns the accepted lifecycle state.
+message ArchiveThreadResponse {
+  // thread is the current durable lifecycle.
+  ThreadLifecycle thread = 1;
+}
+
+// RestoreThreadRequest selects a caller-owned thread through one of its runs.
+message RestoreThreadRequest {
+  // run_id belongs to the thread being restored.
+  string run_id = 1;
+
+  // idempotency_key makes restore retries safe.
+  string idempotency_key = 2;
+}
+
+// RestoreThreadResponse returns the accepted lifecycle state.
+message RestoreThreadResponse {
+  // thread is the current durable lifecycle.
+  ThreadLifecycle thread = 1;
 }
 
 // InteractionKind identifies a caller-visible blocking interaction.
@@ -610,6 +726,9 @@ enum ToolActivityState {
 
   // TOOL_ACTIVITY_STATE_OUTCOME_UNKNOWN means terminal evidence is unavailable.
   TOOL_ACTIVITY_STATE_OUTCOME_UNKNOWN = 6;
+
+  // TOOL_ACTIVITY_STATE_CANCELLED means execution was settled before it started.
+  TOOL_ACTIVITY_STATE_CANCELLED = 7;
 }
 
 // ToolActivity contains bounded released tool lifecycle metadata.
@@ -625,6 +744,12 @@ message ToolActivity {
 
   // summary is bounded and excludes raw arguments, secrets, and quarantined output.
   string summary = 4;
+
+  // preview is bounded successful output released by post-effect policy.
+  optional string preview = 5;
+
+  // input is bounded validated tool input released once execution starts.
+  optional string input = 6;
 }
 
 // TokenUsage is normalized provider token accounting.

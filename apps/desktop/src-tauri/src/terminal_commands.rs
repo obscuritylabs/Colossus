@@ -12,7 +12,7 @@ use crate::{
         ResizeTerminalInput, ShowTerminalInput, SignalTerminalInput, TerminalContextDto,
         TerminalEventDto, WriteTerminalInput,
     },
-    state::{AppState, MANAGED_TARGET_ID},
+    state::AppState,
     terminal::{TerminalError, TerminalEvent, TerminalKind, TerminalWorkspace},
     terminal_protocol,
 };
@@ -35,9 +35,7 @@ pub(crate) async fn show_terminal_window(
     let (kind, plan_context) = request.into_launch()?;
     match kind {
         TerminalKind::ColossusTui => {
-            if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
-                || !state.managed_lifecycle_ready()
-            {
+            if !state.selected_managed_space_ready().await {
                 return Err(CommandErrorDto::from_terminal(
                     TerminalError::InvalidWorkspace,
                 ));
@@ -149,7 +147,7 @@ pub(crate) async fn terminal_context(
     } else {
         None
     };
-    let managed_ready = selected_managed && state.managed_lifecycle_ready();
+    let managed_ready = selected_managed && state.selected_managed_space_ready().await;
     let tui_workspace = managed_ready.then_some(workspace).flatten();
     let shell_workspace = shell_terminal_workspace().ok();
     let terminal_enabled = state.terminal_enabled();
@@ -187,9 +185,7 @@ pub(crate) async fn open_terminal(
     let kind = TerminalKind::from(request.kind);
     let workspace = match kind {
         TerminalKind::ColossusTui => {
-            if state.selected_target_id().await.as_deref() != Some(MANAGED_TARGET_ID)
-                || !state.managed_lifecycle_ready()
-            {
+            if !state.selected_managed_space_ready().await {
                 return Err(CommandErrorDto::from_terminal(
                     TerminalError::InvalidWorkspace,
                 ));
@@ -226,10 +222,7 @@ pub(crate) async fn open_terminal(
     .map_err(|_| CommandErrorDto::from_terminal(TerminalError::Internal))?
     .map_err(CommandErrorDto::from_terminal)?;
     let kind_still_available = match kind {
-        TerminalKind::ColossusTui => {
-            state.selected_target_id().await.as_deref() == Some(MANAGED_TARGET_ID)
-                && state.managed_lifecycle_ready()
-        }
+        TerminalKind::ColossusTui => state.selected_managed_space_ready().await,
         TerminalKind::Shell => {
             shell_terminal_workspace().is_ok_and(|workspace| workspace.id == request.workspace_id)
         }
@@ -352,7 +345,9 @@ fn shell_terminal_workspace() -> Result<TerminalWorkspace, CommandErrorDto> {
     let store = SettingsStore::open_application()?;
     let colossus_home = store.home_root()?.to_owned();
     let settings = store.load()?;
-    if settings.selected_target_id.as_deref() != Some(MANAGED_TARGET_ID) {
+    if settings.selected_target_id != settings.selected_space_id
+        || settings.selected_space_id.is_none()
+    {
         return Err(CommandErrorDto::from_terminal(
             TerminalError::InvalidWorkspace,
         ));

@@ -226,10 +226,23 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   assert.match(dto, /deny_unknown_fields/u);
 });
 
-test("main WebView exposes the advanced configuration and updater commands it calls", () => {
+test("main WebView exposes every advanced configuration, Space, Aside, thread lifecycle, and updater command it calls", () => {
   const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
   for (const permission of [
     "allow-apply-managed-model-configuration",
+    "allow-set-approval-mode",
+    "allow-get-thread-delegate",
+    "allow-get-session-map",
+    "allow-create-space",
+    "allow-list-spaces",
+    "allow-select-space",
+    "allow-rename-space",
+    "allow-archive-space",
+    "allow-restore-space",
+    "allow-search-space-threads",
+    "allow-list-asides",
+    "allow-archive-thread",
+    "allow-restore-thread",
     "allow-check-desktop-update",
     "allow-install-desktop-update",
   ]) {
@@ -238,16 +251,150 @@ test("main WebView exposes the advanced configuration and updater commands it ca
 
   const bridge = read("apps/desktop/src-tauri/src/lib.rs");
   const api = read("apps/desktop/src/api.ts");
+  const build = read("apps/desktop/src-tauri/build.rs");
   for (const command of [
     "apply_managed_model_configuration",
+    "set_approval_mode",
+    "get_thread_delegate",
+    "get_session_map",
+    "create_space",
+    "list_spaces",
+    "select_space",
+    "rename_space",
+    "archive_space",
+    "restore_space",
+    "search_space_threads",
+    "list_asides",
+    "archive_thread",
+    "restore_thread",
     "check_desktop_update",
     "install_desktop_update",
   ]) {
     assert.match(bridge, new RegExp(`\\b${command}\\b`, "u"));
     assert.match(api, new RegExp(`"${command}"`, "u"));
+    assert.match(build, new RegExp(`"${command}"`, "u"));
   }
   assert.doesNotMatch(bridge, /\bopen_workspace_terminal\b/u);
   assert.doesNotMatch(api, /"open_workspace_terminal"/u);
+});
+
+test("delegated-agent inspection is selected-Space scoped and releases only bounded child activity", () => {
+  const command = read("apps/desktop/src-tauri/src/desktop_commands.rs");
+  assert.match(command, /pub\(crate\) async fn get_thread_delegate/u);
+  assert.match(command, /settings\.selected_space_id/u);
+  assert.match(
+    command,
+    /state\.selected_target_id\(\)\.await\.as_deref\(\) != Some\(space_id\)/u,
+  );
+  assert.match(command, /managed_lifecycle_ready_for\(space_id\)/u);
+  assert.match(command, /inspect_thread_delegate\(&parent_run_id, &job_id\)/u);
+
+  const projection = read("crates/colossus-worker/src/delegate_inspection.rs");
+  const productionProjection = projection.slice(
+    0,
+    projection.indexOf("#[cfg(test)]"),
+  );
+  assert.match(projection, /job\.parent_run_id != parent_run_id/u);
+  assert.match(
+    projection,
+    /event\.context\.subagent_id\.as_deref\(\) != Some\(job_id\)/u,
+  );
+  assert.match(projection, /MAX_DELEGATE_ACTIVITIES: usize = 24/u);
+  assert.match(projection, /MAX_ACTIVITY_TEXT_BYTES: usize = 64 \* 1024/u);
+  assert.match(projection, /"tool\.call\.started\.v1"/u);
+  assert.match(projection, /"tool\.call\.completed\.v1"/u);
+  assert.doesNotMatch(
+    productionProjection,
+    /reasoning\.summary|model\.delta|system_message|provider_response/iu,
+  );
+
+  const renderer = read("apps/desktop/src/App.tsx");
+  assert.match(
+    renderer,
+    /const parentRunId = participant\.parentRunId \?\? activeRun\.runId/u,
+  );
+  assert.match(
+    renderer,
+    /parentView\.run\.sessionId !== activeRun\.sessionId/u,
+  );
+  assert.match(renderer, /getThreadDelegate\(parentRunId, participant\.id\)/u);
+  assert.match(renderer, /inspection\.parentRunId !== parentRunId/u);
+  assert.doesNotMatch(renderer, /getRun\([^\n]*childRunId/u);
+});
+
+test("session map inspection is selected-Space scoped and releases bounded canonical records", () => {
+  const command = read("apps/desktop/src-tauri/src/desktop_commands.rs");
+  assert.match(command, /pub\(crate\) async fn get_session_map/u);
+  assert.match(command, /settings\.selected_space_id/u);
+  assert.match(command, /managed_lifecycle_ready_for\(space_id\)/u);
+  assert.match(command, /state\.selected_target\(space_id\)\.await/u);
+  assert.match(
+    command,
+    /state\.run_is_bound\(&target, &source_run_id\)\.await/u,
+  );
+  assert.match(command, /inspect_session_map\(&response\.run\.session_id\)/u);
+
+  const projection = read(
+    "crates/colossus-worker/src/session_map_inspection.rs",
+  );
+  assert.match(projection, /MAX_RECORDS_PER_FAMILY: usize = 32/u);
+  assert.match(projection, /MAX_DOCUMENT_BYTES: usize = 16 \* 1024/u);
+  assert.match(
+    projection,
+    /MemoryScope::Repository\(id\) => id == repository_id/u,
+  );
+  assert.match(projection, /MemoryScope::Session\(id\) => id == session_id/u);
+  assert.match(projection, /list_subagents\(Some\(session_id\)/u);
+  assert.match(projection, /list_tasks\(Some\(session_id\)/u);
+  assert.match(projection, /list_research_runs\(Some\(session_id\)/u);
+
+  const renderer = read("apps/desktop/src/App.tsx");
+  assert.match(renderer, /getSessionMap\(run\.runId\)/u);
+  assert.match(renderer, /next\.sessionId === run\.sessionId/u);
+});
+
+test("Aside context stays canonical, selected-Space scoped, and out of metadata search", () => {
+  const api = read("crates/colossus-api/src/runs.rs");
+  assert.match(api, /pub struct RunBranch \{/u);
+  assert.match(api, /pub source_run_id: String/u);
+  assert.match(api, /pub source_message_count: u64/u);
+  assert.match(api, /pub context_mode: RunBranchContextMode/u);
+  assert.doesNotMatch(api, /struct RunBranch[\s\S]{0,300}prompt/u);
+
+  const dto = read("apps/desktop/src-tauri/src/dto.rs");
+  assert.match(
+    dto,
+    /context_mode: RunBranchContextMode::SourceRunConversation/u,
+  );
+  assert.match(dto, /source_message_count: 0/u);
+  const rendererTypes = read("apps/desktop/src/types.ts");
+  assert.doesNotMatch(rendererTypes, /sourceMessageCount/u);
+  const runtime = read("crates/colossus-runtime/src/sessions_context.rs");
+  assert.match(runtime, /RunBranchContextMode::Conversation/u);
+  assert.match(runtime, /RunBranchContextMode::SourceRunConversation/u);
+  assert.match(runtime, /ModelMessageRole::Tool => None/u);
+
+  const service = read("crates/colossus-api-runtime/src/service.rs");
+  assert.match(service, /let \(source_message_count, context_mode\)/u);
+  assert.match(service, /message\.run_id == source\.id/u);
+
+  const commands = read("apps/desktop/src-tauri/src/commands.rs");
+  assert.match(commands, /require_selected_space\(&settings, &target_id\)/u);
+  assert.match(commands, /filter\(\|run: &RunDto\| !aside_sessions\.contains/u);
+
+  const settings = read("apps/desktop/src-tauri/src/desktop_settings.rs");
+  const asideRecord = settings.match(
+    /pub\(crate\) struct AsideSetting \{(?<record>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(asideRecord, null);
+  assert.doesNotMatch(
+    asideRecord.groups.record,
+    /prompt|quote|message|tool_output/iu,
+  );
+
+  const search = read("apps/desktop/src-tauri/src/space_search.rs");
+  assert.match(search, /settings\s*\.asides\s*\.iter\(\)\s*\.any/u);
+  assert.doesNotMatch(search, /prompt|tool_output|selected_text/iu);
 });
 
 test("every native capability permission is generated by the clean-build command manifest", () => {
@@ -287,7 +434,7 @@ test("workspace file preview is read-only, bounded, and workspace-bound", () => 
   assert.match(implementation, /MAX_FILE_BYTES: u64 = 256 \* 1_024/u);
   assert.match(
     implementation,
-    /settings\.selected_target_id\.as_deref\(\) != Some\(MANAGED_TARGET_ID\)/u,
+    /settings\.selected_target_id != settings\.selected_space_id/u,
   );
   assert.match(
     implementation,
@@ -309,6 +456,46 @@ test("workspace file preview is read-only, bounded, and workspace-bound", () => 
   assert.match(implementation, /"\.env"/u);
   assert.match(implementation, /"pem" \| "key"/u);
   assert.doesNotMatch(implementation, /write_all|create_dir|remove_file/u);
+});
+
+test("Space search indexes only bounded released thread metadata", () => {
+  const source = read("apps/desktop/src-tauri/src/space_search.rs");
+  const record = source.match(
+    /struct ThreadSummaryRecord \{(?<fields>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(record, null);
+  assert.match(record.groups.fields, /space_id: String/u);
+  assert.match(record.groups.fields, /run_id: String/u);
+  assert.match(record.groups.fields, /session_id: String/u);
+  assert.match(record.groups.fields, /title: String/u);
+  assert.match(record.groups.fields, /mode: String/u);
+  assert.match(record.groups.fields, /status: String/u);
+  assert.match(record.groups.fields, /updated_at: String/u);
+  assert.match(record.groups.fields, /archived: bool/u);
+  assert.doesNotMatch(
+    record.groups.fields,
+    /prompt|message|tool|output|credential|secret|path/iu,
+  );
+  assert.match(source, /const MAX_TITLE_BYTES: usize = 512/u);
+  assert.match(source, /const MAX_SEARCH_RESULTS: usize = 100/u);
+  assert.match(
+    source,
+    /\(space\.archived \|\| record\.archived\) && !include_archived/u,
+  );
+  assert.match(source, /thread_archived: record\.archived/u);
+
+  const dto = read("apps/desktop/src-tauri/src/desktop_dto.rs");
+  const event = dto.match(
+    /struct SpaceStatusEventDto \{(?<fields>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(event, null);
+  assert.doesNotMatch(
+    event.groups.fields,
+    /path|prompt|message|tool|output|credential|secret/iu,
+  );
+  const commands = read("apps/desktop/src-tauri/src/desktop_commands.rs");
+  assert.match(commands, /app\.emit\(\s*"space-status-changed"/u);
+  assert.match(commands, /"space-attention"/u);
 });
 
 test("Managed Local trusted tool ceiling exactly matches declared built-ins", () => {
@@ -591,6 +778,11 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   assert.match(windows, /steps\.renderer_tests\.outcome/u);
   assert.match(windows, /steps\.renderer_contracts\.outcome/u);
   assert.match(windows, /steps\.windows_native\.outcome/u);
+  assert.match(
+    windows,
+    /native_sidecar_windows::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity/u,
+  );
+  assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
   assert.match(windows, /steps\.desktop_prepare\.outcome/u);
   assert.match(windows, /steps\.native_clippy\.outcome/u);

@@ -1,4 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   CancelRunRequest,
@@ -7,6 +9,7 @@ import type {
   ApprovalMode,
   ArtifactContent,
   ArtifactReference,
+  Aside,
   ConfigureManagedRuntimeRequest,
   CodexAuthStatus,
   ConnectionStatus,
@@ -19,15 +22,24 @@ import type {
   Interaction,
   ListRunsRequest,
   RespondInteractionRequest,
+  SearchSpaceThreadsRequest,
+  SpaceAttentionEvent,
+  SpaceStatusEvent,
+  SpaceSearchPage,
+  SpaceSummary,
   Run,
   RunDetails,
   RunPage,
+  SessionMap,
   TerminalContext,
   TerminalEvent,
   TerminalKind,
   TerminalPlanContext,
   OpenTerminalResponse,
   TerminalSignal,
+  ThreadDelegateInspection,
+  ThreadLifecycle,
+  ThreadLifecycleRequest,
   WatchEvent,
   WatchRunRequest,
   WorkspaceDirectory,
@@ -176,6 +188,63 @@ export function chooseWorkspace(): Promise<WorkspaceSummary | null> {
   return call("choose_workspace");
 }
 
+export function createSpace(): Promise<DesktopStatus | null> {
+  return call("create_space");
+}
+
+export function listSpaces(): Promise<SpaceSummary[]> {
+  return call("list_spaces");
+}
+
+export function selectSpace(spaceId: string): Promise<DesktopStatus> {
+  return call("select_space", { spaceId });
+}
+
+export function renameSpace(
+  spaceId: string,
+  displayName: string,
+): Promise<DesktopStatus> {
+  return call("rename_space", { spaceId, displayName });
+}
+
+export function archiveSpace(spaceId: string): Promise<DesktopStatus> {
+  return call("archive_space", { spaceId });
+}
+
+export function restoreSpace(spaceId: string): Promise<DesktopStatus> {
+  return call("restore_space", { spaceId });
+}
+
+export function searchSpaceThreads(
+  request: SearchSpaceThreadsRequest,
+): Promise<SpaceSearchPage> {
+  return call("search_space_threads", {
+    request: {
+      query: request.query,
+      spaceId: request.spaceId ?? null,
+      includeArchived: request.includeArchived ?? false,
+      cursor: request.cursor ?? "",
+      pageSize: request.pageSize ?? 50,
+    },
+  });
+}
+
+export function onSpaceStatusChanged(
+  handler: (space: SpaceStatusEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SpaceStatusEvent>("space-status-changed", (event) =>
+    handler(event.payload),
+  );
+}
+
+export function onSpaceAttention(
+  handler: (attention: SpaceAttentionEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SpaceAttentionEvent>("space-attention", (event) =>
+    handler(event.payload),
+  );
+}
+
 export function listWorkspaceDirectory(
   workspaceId: string,
   path = "",
@@ -208,6 +277,17 @@ export function applyManagedModelConfiguration(
 
 export function restartManagedRuntime(): Promise<DesktopStatus> {
   return call("restart_managed_runtime");
+}
+
+export function getThreadDelegate(
+  parentRunId: string,
+  jobId: string,
+): Promise<ThreadDelegateInspection> {
+  return call("get_thread_delegate", { parentRunId, jobId });
+}
+
+export function getSessionMap(sourceRunId: string): Promise<SessionMap> {
+  return call("get_session_map", { sourceRunId });
 }
 
 export function setApprovalMode(
@@ -282,6 +362,16 @@ export function listRuns(
   return call("list_runs", { targetId, request });
 }
 
+export function listAsides(
+  targetId: string,
+  parentSessionId: string,
+): Promise<Aside[]> {
+  return call("list_asides", {
+    targetId,
+    request: { parentSessionId },
+  });
+}
+
 export async function watchRun(
   targetId: string,
   request: WatchRunRequest,
@@ -297,6 +387,20 @@ export function cancelRun(
   request: CancelRunRequest,
 ): Promise<Run> {
   return call("cancel_run", { targetId, request });
+}
+
+export function archiveThread(
+  targetId: string,
+  request: ThreadLifecycleRequest,
+): Promise<ThreadLifecycle> {
+  return call("archive_thread", { targetId, request });
+}
+
+export function restoreThread(
+  targetId: string,
+  request: ThreadLifecycleRequest,
+): Promise<ThreadLifecycle> {
+  return call("restore_thread", { targetId, request });
 }
 
 export function respondInteraction(

@@ -5,8 +5,247 @@ import type {
   Interaction,
   Run,
   RunUpdate,
+  SessionMap,
   TokenUsage,
 } from "../types";
+
+export function buildSessionMapFixture(): SessionMap {
+  return {
+    sessionId: SESSION_ID,
+    delegates: [
+      {
+        jobId: "fixture-delegate-builder",
+        parentRunId: SELECTED_RUN_ID,
+        childSessionId: "fixture-session-builder",
+        childRunId: "fixture-run-builder",
+        task: "Harden the desktop runtime boundary and verify its recovery path.",
+        role: "implementation",
+        status: "completed",
+        finalOutput: "Implemented the bounded bootstrap recovery changes.",
+        error: "",
+        createdAt: "2026-07-20T14:30:30Z",
+        updatedAt: "2026-07-20T14:33:10Z",
+        startedAt: "2026-07-20T14:30:31Z",
+        completedAt: "2026-07-20T14:33:10Z",
+      },
+      {
+        jobId: "fixture-delegate-sentinel",
+        parentRunId: SELECTED_RUN_ID,
+        childSessionId: "fixture-session-sentinel",
+        childRunId: "fixture-run-sentinel",
+        task: "Review the Desktop IPC and credential boundaries.",
+        role: "security",
+        status: "completed",
+        finalOutput: "No cross-Space control path was found.",
+        error: "",
+        createdAt: "2026-07-20T14:31:00Z",
+        updatedAt: "2026-07-20T14:34:00Z",
+        startedAt: "2026-07-20T14:31:01Z",
+        completedAt: "2026-07-20T14:34:00Z",
+      },
+      {
+        jobId: "fixture-delegate-scribe",
+        parentRunId: SELECTED_RUN_ID,
+        childSessionId: "fixture-session-scribe",
+        task: "Prepare the operator-facing change summary.",
+        role: "writer",
+        status: "running",
+        finalOutput: "",
+        error: "",
+        createdAt: "2026-07-20T14:33:00Z",
+        updatedAt: "2026-07-20T14:35:00Z",
+        startedAt: "2026-07-20T14:33:01Z",
+      },
+    ],
+    goals: [
+      {
+        id: "fixture-goal-architecture",
+        objective: "Review workspace architecture",
+        sourcePlanId: "fixture-plan-bootstrap",
+        status: "active",
+        summary: "Two of five bounded iterations are complete.",
+        blockedReason: "",
+        iterationBudget: 5,
+        iterationsCompleted: 2,
+        createdAt: "2026-07-20T14:30:00Z",
+        updatedAt: "2026-07-20T14:34:00Z",
+      },
+      {
+        id: "fixture-goal-runtime",
+        objective: "Harden desktop runtime",
+        status: "complete",
+        summary:
+          "The bootstrap path now fails safely and reports recovery guidance.",
+        blockedReason: "",
+        iterationBudget: 5,
+        iterationsCompleted: 5,
+        createdAt: "2026-07-20T14:29:00Z",
+        updatedAt: "2026-07-20T14:34:40Z",
+      },
+    ],
+    tasks: [
+      {
+        id: "fixture-task-bootstrap",
+        title: "Harden bootstrap recovery",
+        description: "Make startup failures explicit and recoverable.",
+        status: "completed",
+        createdAt: "2026-07-20T14:30:00Z",
+        updatedAt: "2026-07-20T14:34:00Z",
+      },
+      {
+        id: "fixture-task-tests",
+        title: "Verify selected-Space isolation",
+        description: "Add negative IPC and renderer contract coverage.",
+        status: "in_progress",
+        createdAt: "2026-07-20T14:30:10Z",
+        updatedAt: "2026-07-20T14:35:00Z",
+      },
+      {
+        id: "fixture-task-docs",
+        title: "Update recovery guidance",
+        description: "Document safe restart and operator recovery steps.",
+        status: "pending",
+        createdAt: "2026-07-20T14:30:20Z",
+        updatedAt: "2026-07-20T14:30:20Z",
+      },
+      {
+        id: "fixture-task-release",
+        title: "Run the Desktop completion gate",
+        description: "Verify renderer, native, and Rust completion checks.",
+        status: "pending",
+        createdAt: "2026-07-20T14:30:30Z",
+        updatedAt: "2026-07-20T14:30:30Z",
+      },
+    ],
+    plans: [
+      {
+        id: "fixture-plan-bootstrap",
+        prompt: "Harden desktop agent bootstrap",
+        status: "draft",
+        revision: 2,
+        content:
+          "## Bootstrap hardening\n\n1. Trace lifecycle boundaries.\n2. Make startup failures recoverable.\n3. Verify native isolation.\n4. Add focused tests.",
+        stepCount: 4,
+        createdAt: "2026-07-20T14:30:00Z",
+        updatedAt: "2026-07-20T14:34:00Z",
+      },
+    ],
+    decisions: [
+      {
+        id: "fixture-decision-boundary",
+        planId: "fixture-plan-bootstrap",
+        source: "user",
+        status: "active",
+        priority: "critical",
+        title: "Keep execution boundary unchanged",
+        decision:
+          "Do not broaden the native execution boundary without explicit approval.",
+        intent:
+          "Preserve the current security posture while improving reliability.",
+        appliesWhen: "Changing Desktop runtime or worker startup behavior.",
+        rationale:
+          "The reliability work does not require additional authority.",
+        createdAt: "2026-07-20T14:30:00Z",
+        updatedAt: "2026-07-20T14:30:00Z",
+      },
+      {
+        id: "fixture-decision-fail-closed",
+        goalId: "fixture-goal-runtime",
+        source: "agent",
+        status: "active",
+        priority: "high",
+        title: "Fail closed on identity drift",
+        decision: "Stop the affected Space when workspace identity changes.",
+        intent: "Avoid silently operating on a different folder object.",
+        appliesWhen:
+          "The selected Space no longer matches its canonical identity.",
+        rationale: "An explicit reselection is safer than path-only recovery.",
+        createdAt: "2026-07-20T14:31:00Z",
+        updatedAt: "2026-07-20T14:31:00Z",
+      },
+    ],
+    memories: [
+      {
+        id: "fixture-memory-rust",
+        scope: "repository",
+        kind: "rule",
+        confidence: 1,
+        source: "user",
+        status: "active",
+        text: "Use Rust 1.96 and edition 2024 for implementation work.",
+        rationale: "Repository engineering requirement.",
+        createdAt: "2026-07-20T14:30:00Z",
+        updatedAt: "2026-07-20T14:32:00Z",
+      },
+      {
+        id: "fixture-memory-tests",
+        scope: "repository",
+        kind: "preference",
+        confidence: 0.95,
+        source: "agent",
+        status: "active",
+        text: "Prefer focused tests while iterating.",
+        rationale:
+          "Fast feedback preserves momentum without replacing completion gates.",
+        createdAt: "2026-07-20T14:31:00Z",
+        updatedAt: "2026-07-20T14:31:00Z",
+      },
+      {
+        id: "fixture-memory-research",
+        scope: "session",
+        kind: "preference",
+        confidence: 0.9,
+        source: "user",
+        status: "active",
+        text: "Use source-backed research for product decisions.",
+        rationale: "This session compares interaction patterns and evidence.",
+        createdAt: "2026-07-20T14:32:00Z",
+        updatedAt: "2026-07-20T14:32:00Z",
+      },
+    ],
+    researchRuns: [
+      {
+        id: "fixture-research-patterns",
+        question:
+          "Which Desktop session-map patterns preserve clarity at scale?",
+        depth: "standard",
+        sourceKinds: ["repo", "web"],
+        status: "completed",
+        queryCount: 3,
+        sourceCount: 5,
+        limitationCount: 1,
+        report:
+          "The strongest pattern combines progressive disclosure with a persistent inspector.",
+        error: "",
+        createdAt: "2026-07-20T14:30:00Z",
+        updatedAt: "2026-07-20T14:34:00Z",
+        completedAt: "2026-07-20T14:34:00Z",
+      },
+    ],
+    researchSources: [
+      {
+        id: "fixture-source-architecture",
+        runId: "fixture-research-patterns",
+        label: "R1",
+        kind: "repo",
+        title: "Colossus Desktop architecture",
+        uri: "workspace://docs/develop/architecture.md",
+        query: "desktop architecture boundaries",
+        createdAt: "2026-07-20T14:31:00Z",
+      },
+      {
+        id: "fixture-source-security",
+        runId: "fixture-research-patterns",
+        label: "R2",
+        kind: "repo",
+        title: "Security architecture",
+        uri: "workspace://docs/develop/security-architecture.md",
+        query: "renderer native boundary",
+        createdAt: "2026-07-20T14:31:10Z",
+      },
+    ],
+  };
+}
 
 const SELECTED_RUN_ID = "fixture-run-desktop-release";
 const SESSION_ID = "fixture-session-operations-studio";
@@ -62,6 +301,7 @@ function recentRun(
       : null,
     etag: `fixture-etag-${runId}`,
     selectedSkills: [],
+    archived: false,
   };
 }
 
@@ -264,6 +504,7 @@ export function buildOperationsStudioFixture(
     terminal: null,
     etag: "fixture-etag-desktop-release",
     selectedSkills: ["release-management", "security-review", "documents"],
+    archived: false,
   };
   const selectedView: RunView = {
     run: selectedRun,
@@ -298,7 +539,7 @@ The reviewed patch is ready and waiting for your approval.`,
       "fixture-run-sdk-contracts",
       "fixture-session-sdk-contracts",
       "draft-public-sdk-contracts",
-      "running",
+      "waiting",
       "2026-07-20T14:28:00Z",
       "2026-07-20T14:34:12Z",
       14,
@@ -385,6 +626,209 @@ The reviewed patch is ready and waiting for your approval.`,
   };
 }
 
+/**
+ * Builds one completed turn with released reasoning summaries between tool
+ * calls. The renderer uses this development-only fixture to compare the two
+ * activity presentations against identical canonical data.
+ */
+export function buildActivityComparisonFixture(): ChatState {
+  const state = buildOperationsStudioFixture();
+  const current = state.views.get(SELECTED_RUN_ID);
+  if (current === undefined) {
+    throw new Error("The activity comparison fixture requires a selected run.");
+  }
+
+  const usage: TokenUsage = {
+    inputTokens: 3_981,
+    outputTokens: 684,
+    totalTokens: 4_665,
+    cachedInputTokens: 1_024,
+    reasoningTokens: 312,
+  };
+  const updates: RunUpdate[] = [
+    update(1, "2026-08-15T14:42:00Z", {
+      type: "message",
+      message: {
+        sessionId: SESSION_ID,
+        runId: SELECTED_RUN_ID,
+        sequence: 1,
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Review this workspace and identify the safest high-impact next task",
+          },
+        ],
+        createdAt: "2026-08-15T14:42:00Z",
+      },
+    }),
+    update(2, "2026-08-15T14:42:01Z", {
+      type: "reasoning_summary",
+      summary: "Orienting to the workspace",
+    }),
+    update(3, "2026-08-15T14:42:01Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-map",
+        toolName: "repo.map_structure",
+        state: "requested",
+        summary: "Validated repository mapping request",
+        input: '{"depth":3,"include_hidden":false}',
+      },
+    }),
+    update(4, "2026-08-15T14:42:02Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-map",
+        toolName: "repo.map_structure",
+        state: "completed",
+        summary: "Mapped repository structure",
+        preview:
+          '{"root":".","top_level":["proposal","compliance","submission"],"file_count":42}',
+      },
+    }),
+    update(5, "2026-08-15T14:42:03Z", {
+      type: "reasoning_summary",
+      summary: "The proposal package is nearly complete",
+    }),
+    update(6, "2026-08-15T14:42:04Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-read",
+        toolName: "repo.read_many",
+        state: "requested",
+        summary: "Requested six proposal files",
+        input:
+          '{"paths":["README.md","proposal.md","compliance.md","submission/checklist.md","review/notes.md","CHANGELOG.md"]}',
+      },
+    }),
+    update(7, "2026-08-15T14:42:05Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-read",
+        toolName: "repo.read_many",
+        state: "completed",
+        summary: "Inspected 6 proposal files",
+        preview: '{"files_read":6,"required_sections":12,"missing_sections":0}',
+      },
+    }),
+    update(8, "2026-08-15T14:42:06Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-readiness",
+        toolName: "shell.run",
+        state: "requested",
+        summary: "Validated submission readiness command",
+        input: '{"command":"git status --short","cwd":"."}',
+      },
+    }),
+    update(9, "2026-08-15T14:42:07Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-readiness",
+        toolName: "shell.run",
+        state: "completed",
+        summary: "Checked submission readiness",
+        preview: "Working tree clean",
+      },
+    }),
+    update(10, "2026-08-15T14:42:07Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-policy",
+        toolName: "shell.run",
+        state: "requested",
+        summary: "Validated workspace policy command",
+        input: '{"command":"gh pr checks --required","cwd":".","network":true}',
+      },
+    }),
+    update(11, "2026-08-15T14:42:08Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-policy",
+        toolName: "shell.run",
+        state: "failed",
+        summary: "Command denied by workspace policy",
+      },
+    }),
+    update(12, "2026-08-15T14:42:09Z", {
+      type: "reasoning_summary",
+      summary: "Policy blocks shell access; will pivot to read-only analysis",
+    }),
+    update(13, "2026-08-15T14:42:09Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-status",
+        toolName: "repo.search",
+        state: "requested",
+        summary: "Requested released activity and CI summaries",
+        input: '{"query":"submission OR ci status","limit":20}',
+      },
+    }),
+    update(14, "2026-08-15T14:42:11Z", {
+      type: "tool_activity",
+      activity: {
+        callId: "comparison-status",
+        toolName: "repo.search",
+        state: "completed",
+        summary: "Reviewed recent activity and CI status",
+        preview:
+          '{"submission_ready":true,"ci_status":"blocked","blocked_by":"ci:full label"}',
+      },
+    }),
+    update(15, "2026-08-15T14:42:12Z", { type: "usage", usage }),
+  ];
+
+  const run: Run = {
+    ...current.run,
+    title: "Review workspace readiness",
+    role: "primary",
+    status: "completed",
+    createdAt: "2026-08-15T14:42:00Z",
+    updatedAt: "2026-08-15T14:42:12Z",
+    startedAt: "2026-08-15T14:42:00Z",
+    finishedAt: "2026-08-15T14:42:12Z",
+    lastSequence: 15,
+    pendingInteractionCount: 0,
+    terminal: {
+      type: "result",
+      result: {
+        output: "Review complete.",
+        profile: "desktop",
+        modelProfile: "desktop",
+        providerProfile: "fixture-provider",
+        model: "fixture",
+        elapsedSeconds: 12,
+      },
+    },
+  };
+  const view: RunView = {
+    ...current,
+    run,
+    localPrompt: null,
+    output: `The workspace is well-prepared for submission, but one required CI check is blocked by repository policy.
+
+**Safest high-impact next task:** ask a repository writer to apply the required \`ci:full\` label, then validate the proposal package end-to-end without elevating shell access.`,
+    updates,
+    seenSequences: new Set(updates.map(({ sequence }) => sequence)),
+    lastSequence: 15,
+    pendingInteractions: [],
+    usage,
+    streamState: "complete",
+    streamError: null,
+  };
+
+  return {
+    ...state,
+    activeRunId: run.runId,
+    views: new Map([[run.runId, view]]),
+    recentRuns: [
+      run,
+      ...state.recentRuns.filter((candidate) => candidate.runId !== run.runId),
+    ],
+  };
+}
+
 /** Builds a completed Plan Mode turn for the in-chat lifecycle fixture. */
 export function buildPlanWorkflowFixture(): ChatState {
   if (!import.meta.env.DEV) {
@@ -424,6 +868,7 @@ export function buildPlanWorkflowFixture(): ChatState {
     },
     etag: "fixture-etag-plan-workflow",
     selectedSkills: [],
+    archived: false,
   };
   const updates: RunUpdate[] = [
     {

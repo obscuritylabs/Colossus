@@ -1,15 +1,17 @@
 use crate::{
     AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApprovalInteraction,
-    ApprovalRisk, ArtifactClient, ArtifactPurpose, ArtifactReference, ArtifactState, Backend,
-    BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
-    CredentialProvider, DownloadedArtifact, FieldViolation, GetRunRequest, GetRunResponse,
-    InputContentPart, Interaction, InteractionAnswer, InteractionContent, InteractionKind,
-    InteractionStatus, ListRunsRequest, ListRunsResponse, MessageContentPart, MessageRole,
-    OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer,
-    PromptChoice, RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation,
+    ApprovalRisk, ArchiveThreadRequest, ArtifactClient, ArtifactPurpose, ArtifactReference,
+    ArtifactState, Backend, BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest,
+    CreateRunResponse, CredentialProvider, DownloadedArtifact, FieldViolation, GetRunRequest,
+    GetRunResponse, InputContentPart, Interaction, InteractionAnswer, InteractionContent,
+    InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse, MessageContentPart,
+    MessageRole, OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus,
+    PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind, RespondInteractionRequest,
+    RespondInteractionResponse, RestoreThreadRequest, Run, RunBranchContextMode, RunCancellation,
     RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind,
-    RunUpdateStream, SdkError, SdkResult, ServerCapabilities, SessionMessage, TlsFingerprint,
-    TokenUsage, ToolActivity, ToolActivityState, UploadArtifactRequest, WatchRunRequest,
+    RunUpdateStream, SdkError, SdkResult, ServerCapabilities, SessionMessage, ThreadLifecycle,
+    TlsFingerprint, TokenUsage, ToolActivity, ToolActivityState, UploadArtifactRequest,
+    WatchRunRequest,
 };
 use async_trait::async_trait;
 use colossus_api::{RequestId, validate_public_approval_display};
@@ -583,6 +585,7 @@ impl AgentRunClient for GrpcAgentRunClient {
                 session_id: request.session_id,
                 statuses,
                 page,
+                include_archived: request.include_archived,
             })
             .await?;
         let response = self
@@ -663,6 +666,40 @@ impl AgentRunClient for GrpcAgentRunClient {
         Ok(CancelRunResponse {
             run: run_from_proto(required(response.run)?)?,
         })
+    }
+
+    async fn archive_thread(&self, request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
+        validate_identifier(&request.run_id)?;
+        let request = self
+            .request(proto::ArchiveThreadRequest {
+                run_id: request.run_id,
+                idempotency_key: request.idempotency_key.as_str().into(),
+            })
+            .await?;
+        let response = self
+            .client()
+            .archive_thread(request)
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        thread_lifecycle_from_proto(required(response.thread)?)
+    }
+
+    async fn restore_thread(&self, request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
+        validate_identifier(&request.run_id)?;
+        let request = self
+            .request(proto::RestoreThreadRequest {
+                run_id: request.run_id,
+                idempotency_key: request.idempotency_key.as_str().into(),
+            })
+            .await?;
+        let response = self
+            .client()
+            .restore_thread(request)
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        thread_lifecycle_from_proto(required(response.thread)?)
     }
 
     async fn respond_interaction(
@@ -986,6 +1023,25 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
             })
         })
         .transpose()?;
+    let branch = value
+        .branch
+        .map(|branch| {
+            validate_identifier(&branch.source_run_id)?;
+            Ok(proto::RunBranch {
+                source_run_id: branch.source_run_id,
+                source_message_count: branch.source_message_count,
+                context_mode: match branch.context_mode {
+                    RunBranchContextMode::Exact => proto::RunBranchContextMode::Exact as i32,
+                    RunBranchContextMode::Conversation => {
+                        proto::RunBranchContextMode::Conversation as i32
+                    }
+                    RunBranchContextMode::SourceRunConversation => {
+                        proto::RunBranchContextMode::SourceRunConversation as i32
+                    }
+                },
+            })
+        })
+        .transpose()?;
     Ok(proto::CreateRunRequest {
         input,
         session_id: value.session_id,
@@ -996,6 +1052,24 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
         max_turns: value.max_turns,
         idempotency_key: value.idempotency_key.as_str().into(),
         plan_action,
+        branch,
+        research_depth: value.research_depth.map_or(
+            proto::ResearchDepth::Unspecified as i32,
+            |depth| match depth {
+                ResearchDepth::Quick => proto::ResearchDepth::Quick as i32,
+                ResearchDepth::Standard => proto::ResearchDepth::Standard as i32,
+                ResearchDepth::Deep => proto::ResearchDepth::Deep as i32,
+            },
+        ),
+        research_sources: value
+            .research_sources
+            .into_iter()
+            .map(|kind| match kind {
+                ResearchSourceKind::Repo => proto::ResearchSourceKind::Repo as i32,
+                ResearchSourceKind::Web => proto::ResearchSourceKind::Web as i32,
+                ResearchSourceKind::Mcp => proto::ResearchSourceKind::Mcp as i32,
+            })
+            .collect(),
     })
 }
 
@@ -1047,6 +1121,15 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
         terminal,
         etag: value.etag,
         selected_skills: value.selected_skills,
+        archived: value.archived,
+    })
+}
+
+fn thread_lifecycle_from_proto(value: proto::ThreadLifecycle) -> ApiResult<ThreadLifecycle> {
+    validate_identifier(&value.session_id)?;
+    Ok(ThreadLifecycle {
+        session_id: value.session_id,
+        archived: value.archived,
     })
 }
 
@@ -1278,11 +1361,19 @@ fn update_from_proto(value: proto::RunUpdate) -> ApiResult<RunUpdate> {
             validate_identifier(&activity.call_id)?;
             validate_identifier(&activity.tool_name)?;
             validate_text(&activity.summary, MAX_SUMMARY_BYTES)?;
+            if let Some(input) = &activity.input {
+                validate_text(input, MAX_SUMMARY_BYTES)?;
+            }
+            if let Some(preview) = &activity.preview {
+                validate_text(preview, MAX_SUMMARY_BYTES)?;
+            }
             RunUpdateKind::ToolActivity(ToolActivity {
                 call_id: activity.call_id,
                 tool_name: activity.tool_name,
                 state: tool_state_from_proto(activity.state)?,
                 summary: activity.summary,
+                input: activity.input,
+                preview: activity.preview,
             })
         }
         run_update::Update::Usage(usage) => RunUpdateKind::Usage(TokenUsage {
@@ -1420,6 +1511,7 @@ fn proto_run_mode(value: RunMode) -> proto::RunMode {
     match value {
         RunMode::Execute => proto::RunMode::Execute,
         RunMode::Plan => proto::RunMode::Plan,
+        RunMode::Research => proto::RunMode::Research,
     }
 }
 
@@ -1427,6 +1519,7 @@ fn run_mode_from_proto(value: i32) -> ApiResult<RunMode> {
     match proto::RunMode::try_from(value) {
         Ok(proto::RunMode::Execute) => Ok(RunMode::Execute),
         Ok(proto::RunMode::Plan) => Ok(RunMode::Plan),
+        Ok(proto::RunMode::Research) => Ok(RunMode::Research),
         Ok(proto::RunMode::Unspecified) | Err(_) => Err(protocol_error()),
     }
 }
@@ -1466,6 +1559,7 @@ fn tool_state_from_proto(value: i32) -> ApiResult<ToolActivityState> {
         Ok(proto::ToolActivityState::WaitingApproval) => Ok(ToolActivityState::WaitingApproval),
         Ok(proto::ToolActivityState::Started) => Ok(ToolActivityState::Started),
         Ok(proto::ToolActivityState::Completed) => Ok(ToolActivityState::Completed),
+        Ok(proto::ToolActivityState::Cancelled) => Ok(ToolActivityState::Cancelled),
         Ok(proto::ToolActivityState::Failed) => Ok(ToolActivityState::Failed),
         Ok(proto::ToolActivityState::OutcomeUnknown) => Ok(ToolActivityState::OutcomeUnknown),
         Ok(proto::ToolActivityState::Unspecified) | Err(_) => Err(protocol_error()),
@@ -1944,6 +2038,7 @@ mod tests {
             cancellation: None,
             pending_interaction: None,
             etag: "etag-2".into(),
+            archived: false,
         }
     }
 
@@ -2056,6 +2151,7 @@ mod tests {
             })),
             etag: "etag".into(),
             selected_skills: Vec::new(),
+            archived: false,
         };
         assert_eq!(
             run_from_proto(run).expect_err("mismatch").reason,
@@ -2081,6 +2177,7 @@ mod tests {
             terminal: None,
             etag: "etag".into(),
             selected_skills: Vec::new(),
+            archived: false,
         };
 
         assert_eq!(

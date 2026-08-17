@@ -19,6 +19,7 @@ function renderFiles(available: boolean): string {
       listDirectory: vi.fn(),
       readFile: vi.fn(),
       onOpenSettings: vi.fn(),
+      openRequest: null,
     }),
   );
 }

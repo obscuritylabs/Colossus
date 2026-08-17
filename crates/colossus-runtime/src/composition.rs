@@ -1,5 +1,25 @@
 use super::*;
 
+/// The outer research effect contains bounded provider and collection effects that
+/// execute sequentially. Its deadline must contain those inner deadlines; otherwise
+/// the generic sandbox timeout can interrupt a valid research run while an inner
+/// external effect is still active and force an `outcome_unknown` terminal state.
+pub(super) fn research_run_timeout_ms(
+    provider_timeout_ms: u64,
+    sandbox_timeout_ms: u64,
+    max_sources: usize,
+    max_workers: usize,
+) -> u64 {
+    let model_calls = u64::try_from(max_sources)
+        .unwrap_or(u64::MAX)
+        .saturating_add(2); // planning plus synthesis
+    let collection_calls = u64::try_from(max_workers).unwrap_or(u64::MAX);
+    provider_timeout_ms
+        .saturating_mul(model_calls)
+        .saturating_add(sandbox_timeout_ms.saturating_mul(collection_calls))
+        .saturating_add(sandbox_timeout_ms) // bounded orchestration overhead
+}
+
 pub(super) struct StorageComposition {
     pub(super) writer_lease: Option<RedbWriterLease>,
     pub(super) journal: Arc<dyn EventJournal>,
@@ -809,6 +829,20 @@ impl Runtime {
                             .or_insert_with(|| profile.effective_timeout_ms());
                     }
                 }
+                let provider_timeout_ms = provider_action_timeouts
+                    .values()
+                    .copied()
+                    .max()
+                    .unwrap_or(config.sandbox.timeout_ms);
+                provider_action_timeouts.insert(
+                    "research.run",
+                    research_run_timeout_ms(
+                        provider_timeout_ms,
+                        config.sandbox.timeout_ms,
+                        config.research.max_sources,
+                        config.research.max_workers,
+                    ),
+                );
                 for (action, timeout_ms) in provider_action_timeouts {
                     policy = policy.with_action_timeout(action, timeout_ms);
                 }

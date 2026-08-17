@@ -102,12 +102,15 @@ async fn plan_continuation_requires_an_advertised_runtime_capability() {
             end_user_id: None,
             role: "primary".into(),
             mode: RunMode::Execute,
+            research_depth: None,
+            research_sources: Vec::new(),
             selected_skills: Vec::new(),
             plan_action: Some(PlanRunAction::Execute {
                 source_run_id: "run-plan-source".into(),
                 expected_revision: 3,
                 strategy: PlanExecutionStrategy::Direct,
             }),
+            branch: None,
             max_turns: 10,
             idempotency_key: IdempotencyKey::new("plan-continuation-capability")
                 .expect("idempotency key"),
@@ -584,6 +587,7 @@ impl AgentRunClient for CheckedSnapshotClient {
                 }),
                 etag: "snapshot-etag".into(),
                 selected_skills: Vec::new(),
+                archived: false,
             },
             pending_interactions: Vec::new(),
         })
@@ -926,6 +930,7 @@ impl AgentRunClient for TerminalSnapshotWatchClient {
                 })),
                 etag: "terminal-etag".into(),
                 selected_skills: Vec::new(),
+                archived: false,
             },
             pending_interactions: Vec::new(),
         })

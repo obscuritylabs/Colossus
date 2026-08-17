@@ -9,23 +9,25 @@ use crate::{
 };
 use async_trait::async_trait;
 use colossus_api::{
-    AgentRunApi, ApiError, ApiErrorReason, ApiResult, ApplicationPrincipal, ArtifactApi,
-    ArtifactPurpose, ArtifactState, CallerContext, CancelRunRequest, ContentPart, CreateRunRequest,
-    CreateRunResponse, EventSourcedArtifactApi, EventSourcedRunRepository, GetRunRequest,
-    Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun, OutcomeCertainty,
-    PlanExecutionStrategy as PublicPlanExecutionStrategy, PlanRunAction,
-    PlanStatus as PublicPlanStatus, RequestId, RespondInteractionRequest, Run, RunCancellation,
-    RunExecutionRequest, RunFailure, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
-    RunUpdateStream, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest, scopes,
+    AgentRunApi, ApiError, ApiErrorReason, ApiResult, ApplicationPrincipal, ArchiveThreadRequest,
+    ArtifactApi, ArtifactPurpose, ArtifactState, CallerContext, CancelRunRequest, ContentPart,
+    CreateRunRequest, CreateRunResponse, EventSourcedArtifactApi, EventSourcedRunRepository,
+    GetRunRequest, Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun,
+    OutcomeCertainty, PlanExecutionStrategy as PublicPlanExecutionStrategy, PlanRunAction,
+    PlanStatus as PublicPlanStatus, RequestId, ResearchDepth as PublicResearchDepth,
+    ResearchSourceKind as PublicResearchSourceKind, RespondInteractionRequest,
+    RestoreThreadRequest, Run, RunBranchContextMode, RunCancellation, RunExecutionRequest,
+    RunFailure, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind, RunUpdateStream,
+    ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
     ActorType, AgentRunCancellation, AgentRunMode, AgentRunOutcome, AgentRunResult,
     ControlledAgentTerminal, GoalRunOutcome, GoalRunResult, PlanDraftTarget, PlanExecutionOutcome,
-    PlanExecutionStrategy, PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope,
-    RunPhase,
+    PlanExecutionStrategy, PlanRecord, PlanStatus, ProviderEvent, ResearchDepth,
+    ResearchSourceKind, RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
-use colossus_runtime::{Runtime, RuntimeError};
+use colossus_runtime::{ResearchRunContext, Runtime, RuntimeError};
 use futures::FutureExt as _;
 use std::{
     collections::{BTreeMap, btree_map::Entry},
@@ -33,6 +35,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Instant,
 };
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
@@ -41,6 +44,8 @@ const WATCH_PAGE_SIZE: usize = 16;
 const WATCH_CHANNEL_SIZE: usize = 8;
 const MAX_PENDING_RECOVERIES: usize = 256;
 const MAX_RENDERED_INPUT_BYTES: usize = 1_048_576;
+const MAX_TOOL_ACTIVITY_PREVIEW_BYTES: usize = 65_536;
+const TOOL_ACTIVITY_PREVIEW_TRUNCATION: &str = "\n… preview truncated";
 
 #[derive(Clone)]
 struct ActiveRun {
@@ -101,6 +106,12 @@ enum ExecutionAdmission {
 #[derive(Clone)]
 struct PlanSelection {
     plan: PlanRecord,
+}
+
+struct BranchSource {
+    session_id: String,
+    source_message_count: u64,
+    context_mode: RunBranchContextMode,
 }
 
 /// Durable public agent-run facade backed by the real Colossus runtime.
@@ -271,6 +282,101 @@ impl RuntimeAgentRunApi {
             .with_correlation_id(caller.request_id().clone()));
         }
         Ok((session_id.into(), false))
+    }
+
+    fn branch_source_session(
+        &self,
+        caller: &CallerContext,
+        request: &CreateRunRequest,
+    ) -> ApiResult<Option<BranchSource>> {
+        let Some(branch) = request.branch.as_ref() else {
+            return Ok(None);
+        };
+        let source = self
+            .repository
+            .get_run(caller, &branch.source_run_id)?
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    ApiErrorReason::RunNotFound,
+                    "the requested branch source was not found",
+                )
+                .with_correlation_id(caller.request_id().clone())
+            })?;
+        let session = self
+            .runtime
+            .get_session(&source.session_id)
+            .map_err(|error| match error {
+                RuntimeError::Store(store) => ApiError::from_store(&store, caller.request_id()),
+                _ => ApiError::failed_precondition(
+                    ApiErrorReason::InvalidRunTransition,
+                    "the branch source context is unavailable",
+                )
+                .with_correlation_id(caller.request_id().clone()),
+            })?
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    ApiErrorReason::RunNotFound,
+                    "the requested branch source was not found",
+                )
+                .with_correlation_id(caller.request_id().clone())
+            })?;
+        let (source_message_count, context_mode) = match branch.context_mode {
+            RunBranchContextMode::SourceRunConversation => {
+                let source_messages = self.runtime.session_messages(&source.session_id).map_err(
+                    |error| match error {
+                        RuntimeError::Store(store) => {
+                            ApiError::from_store(&store, caller.request_id())
+                        }
+                        _ => ApiError::failed_precondition(
+                            ApiErrorReason::InvalidRunTransition,
+                            "the branch source context is unavailable",
+                        )
+                        .with_correlation_id(caller.request_id().clone()),
+                    },
+                )?;
+                let boundary = source_messages
+                    .iter()
+                    .filter(|message| message.run_id == source.id)
+                    .map(|message| message.sequence)
+                    .max()
+                    .ok_or_else(|| {
+                        ApiError::failed_precondition(
+                            ApiErrorReason::InvalidRunTransition,
+                            "the branch source run has no canonical conversation boundary",
+                        )
+                        .with_correlation_id(caller.request_id().clone())
+                    })?;
+                (boundary, RunBranchContextMode::Conversation)
+            }
+            mode => (branch.source_message_count, mode),
+        };
+        if source_message_count > session.message_count || source_message_count > 512 {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "branch.source_message_count",
+                "branch boundary exceeds canonical source history",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        Ok(Some(BranchSource {
+            session_id: source.session_id,
+            source_message_count,
+            context_mode,
+        }))
+    }
+
+    fn require_research_tools(caller: &CallerContext, request: &CreateRunRequest) -> ApiResult<()> {
+        if request.mode != RunMode::Research {
+            return Ok(());
+        }
+        for source in &request.research_sources {
+            caller.require_tool(match source {
+                PublicResearchSourceKind::Repo => "filesystem.search",
+                PublicResearchSourceKind::Web => "web.search",
+                PublicResearchSourceKind::Mcp => "mcp.call",
+            })?;
+        }
+        Ok(())
     }
 
     async fn rendered_input(
@@ -876,6 +982,54 @@ impl RuntimeAgentRunApi {
         if was_cancelled_before_start {
             return writer.append(cancelled_before_start()).is_ok();
         }
+        let create_session = if request.branch.is_some() {
+            let source = match self.branch_source_session(&caller, &request) {
+                Ok(Some(value)) => value,
+                Ok(None) => return false,
+                Err(error) => {
+                    let _ = writer.append(RunUpdateKind::Failure {
+                        status: RunStatus::Failed,
+                        failure: RunFailure {
+                            code: "branch.context_unavailable".into(),
+                            message: error.message,
+                            outcome: OutcomeCertainty::Known,
+                            recoverable: false,
+                            http_status: None,
+                            retry_after_ms: None,
+                        },
+                    });
+                    return true;
+                }
+            };
+            if self
+                .runtime
+                .ensure_session_branch(
+                    &source.session_id,
+                    source.source_message_count,
+                    source.context_mode,
+                    &run.session_id,
+                    &run.id,
+                    caller.actor(),
+                )
+                .is_err()
+            {
+                let _ = writer.append(RunUpdateKind::Failure {
+                    status: RunStatus::Failed,
+                    failure: RunFailure {
+                        code: "branch.context_unavailable".into(),
+                        message: "the Aside context could not be prepared".into(),
+                        outcome: OutcomeCertainty::Known,
+                        recoverable: false,
+                        http_status: None,
+                        retry_after_ms: None,
+                    },
+                });
+                return true;
+            }
+            false
+        } else {
+            create_session
+        };
         if writer
             .append(RunUpdateKind::State {
                 status: RunStatus::Running,
@@ -921,6 +1075,96 @@ impl RuntimeAgentRunApi {
             .allowed_tools()
             .map(str::to_owned)
             .collect::<Vec<_>>();
+        if request.mode == RunMode::Research {
+            if create_session
+                && self
+                    .runtime
+                    .create_application_session(&run.session_id, Some(&run.title), caller.actor())
+                    .is_err()
+            {
+                let _ = writer.append(invariant_failure());
+                return true;
+            }
+            if self
+                .runtime
+                .append_application_message(
+                    &run.session_id,
+                    &run.id,
+                    colossus_contracts::ModelMessage {
+                        role: colossus_contracts::ModelMessageRole::User,
+                        content: prompt.clone(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    caller.actor(),
+                )
+                .is_err()
+            {
+                let _ = writer.append(invariant_failure());
+                return true;
+            }
+            let depth = match request
+                .research_depth
+                .unwrap_or(PublicResearchDepth::Standard)
+            {
+                PublicResearchDepth::Quick => ResearchDepth::Quick,
+                PublicResearchDepth::Standard => ResearchDepth::Standard,
+                PublicResearchDepth::Deep => ResearchDepth::Deep,
+            };
+            let source_kinds = request
+                .research_sources
+                .iter()
+                .map(|kind| match kind {
+                    PublicResearchSourceKind::Repo => ResearchSourceKind::Repo,
+                    PublicResearchSourceKind::Web => ResearchSourceKind::Web,
+                    PublicResearchSourceKind::Mcp => ResearchSourceKind::Mcp,
+                })
+                .collect();
+            let execution = self.runtime.run_research_as(
+                &run.session_id,
+                &prompt,
+                depth,
+                source_kinds,
+                ResearchRunContext {
+                    actor: caller.actor(),
+                    allowed_tools,
+                    message_run_id: Some(run.id.clone()),
+                },
+            );
+            let kind = match self
+                .interactions
+                .scope(Arc::clone(&writer), execution)
+                .await
+            {
+                Ok(_research) if control.is_cancelled() => RunUpdateKind::Cancellation {
+                    cancellation: RunCancellation {
+                        turn: 0,
+                        message:
+                            "Research was cancelled after the active evidence operation completed."
+                                .into(),
+                        plan_id: None,
+                        plan_revision: None,
+                        plan_status: None,
+                        goal_id: None,
+                    },
+                },
+                Ok(research) => {
+                    for progress in &research.progress {
+                        let phase = format!("{:?}", progress.phase).to_ascii_lowercase();
+                        let status = format!("{:?}", progress.status).to_ascii_lowercase();
+                        let _ = writer.append(RunUpdateKind::Notice {
+                            notice: colossus_api::RunNotice {
+                                reason: format!("research.{phase}.{status}"),
+                                message: progress.message.clone(),
+                            },
+                        });
+                    }
+                    research_result(research)
+                }
+                Err(error) => runtime_failure(&error),
+            };
+            return writer.append(kind).is_ok();
+        }
         let selection = match self.plan_selection(&caller, &request) {
             Ok(selection) => selection,
             Err(error) => {
@@ -1076,7 +1320,9 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 run: self.recover_orphan(caller, replay)?,
             });
         }
+        Self::require_research_tools(caller, &request)?;
         self.plan_selection(caller, &request)?;
+        self.branch_source_session(caller, &request)?;
         self.rendered_input(caller, &request).await?;
         let role = request
             .role
@@ -1220,6 +1466,24 @@ impl AgentRunApi for RuntimeAgentRunApi {
         self.cancel_orphan(caller, &request)
     }
 
+    async fn archive_thread(
+        &self,
+        caller: &CallerContext,
+        request: ArchiveThreadRequest,
+    ) -> ApiResult<ThreadLifecycle> {
+        self.repository
+            .archive_thread(caller, &request.run_id, &request.idempotency_key)
+    }
+
+    async fn restore_thread(
+        &self,
+        caller: &CallerContext,
+        request: RestoreThreadRequest,
+    ) -> ApiResult<ThreadLifecycle> {
+        self.repository
+            .restore_thread(caller, &request.run_id, &request.idempotency_key)
+    }
+
     async fn respond_interaction(
         &self,
         caller: &CallerContext,
@@ -1303,6 +1567,8 @@ fn public_event(event: RunEvent) -> RunUpdateKind {
                     tool_name: name,
                     state: ToolActivityState::Requested,
                     summary: "validated tool call requested".into(),
+                    input: None,
+                    preview: None,
                 },
             },
             ProviderEvent::FinalOutput { .. } => RunUpdateKind::Notice {
@@ -1350,36 +1616,48 @@ fn public_event(event: RunEvent) -> RunUpdateKind {
                 },
             }
         }
-        RunEvent::ToolStarted { turn, call, .. } => RunUpdateKind::ToolActivity {
-            activity: ToolActivity {
-                call_id: call.call_id,
-                tool_name: call.name,
-                state: ToolActivityState::Started,
-                summary: format!("tool execution started at turn {turn}"),
-            },
-        },
-        RunEvent::ToolCompleted { turn, result, .. } => RunUpdateKind::ToolActivity {
-            activity: ToolActivity {
-                call_id: result.call_id,
-                tool_name: result.name,
-                state: if result.exit_code == 0 {
-                    ToolActivityState::Completed
-                } else {
-                    ToolActivityState::Failed
+        RunEvent::ToolStarted { turn, call, .. } => {
+            let input = released_tool_input(&call);
+            RunUpdateKind::ToolActivity {
+                activity: ToolActivity {
+                    call_id: call.call_id,
+                    tool_name: call.name,
+                    state: ToolActivityState::Started,
+                    summary: format!("tool execution started at turn {turn}"),
+                    input,
+                    preview: None,
                 },
-                summary: if result.exit_code == 0 {
-                    format!("tool execution completed at turn {turn}")
-                } else {
-                    format!("tool execution failed at turn {turn}")
+            }
+        }
+        RunEvent::ToolCompleted { turn, result, .. } => {
+            let preview = released_tool_preview(&result);
+            RunUpdateKind::ToolActivity {
+                activity: ToolActivity {
+                    call_id: result.call_id,
+                    tool_name: result.name,
+                    state: if result.exit_code == 0 {
+                        ToolActivityState::Completed
+                    } else {
+                        ToolActivityState::Failed
+                    },
+                    summary: if result.exit_code == 0 {
+                        format!("tool execution completed at turn {turn}")
+                    } else {
+                        format!("tool execution failed at turn {turn}")
+                    },
+                    input: None,
+                    preview,
                 },
-            },
-        },
+            }
+        }
         RunEvent::ToolCancelled { turn, call, .. } => RunUpdateKind::ToolActivity {
             activity: ToolActivity {
                 call_id: call.call_id,
                 tool_name: call.name,
-                state: ToolActivityState::Failed,
+                state: ToolActivityState::Cancelled,
                 summary: format!("tool execution was cancelled before start at turn {turn}"),
+                input: None,
+                preview: None,
             },
         },
         RunEvent::PlanWritten { plan } => RunUpdateKind::Notice {
@@ -1393,16 +1671,52 @@ fn public_event(event: RunEvent) -> RunUpdateKind {
         },
         RunEvent::Error {
             code, recoverable, ..
-        } => RunUpdateKind::Notice {
-            notice: colossus_api::RunNotice {
-                reason: code,
-                message: if recoverable {
-                    "the run encountered a recoverable error and will continue".into()
-                } else {
-                    "the run encountered an error and could not continue".into()
+        } => {
+            let message = released_run_error_notice(&code, recoverable).into();
+            RunUpdateKind::Notice {
+                notice: colossus_api::RunNotice {
+                    reason: code,
+                    message,
                 },
-            },
-        },
+            }
+        }
+    }
+}
+
+fn bounded_tool_activity_text(value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        return None;
+    }
+    if value.len() <= MAX_TOOL_ACTIVITY_PREVIEW_BYTES {
+        return Some(value.to_owned());
+    }
+    let mut end = MAX_TOOL_ACTIVITY_PREVIEW_BYTES - TOOL_ACTIVITY_PREVIEW_TRUNCATION.len();
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut preview = String::with_capacity(MAX_TOOL_ACTIVITY_PREVIEW_BYTES);
+    preview.push_str(&value[..end]);
+    preview.push_str(TOOL_ACTIVITY_PREVIEW_TRUNCATION);
+    Some(preview)
+}
+
+fn released_tool_input(call: &ToolCall) -> Option<String> {
+    bounded_tool_activity_text(&serde_json::to_string(&call.arguments).ok()?)
+}
+
+fn released_tool_preview(result: &ToolResult) -> Option<String> {
+    (result.exit_code == 0)
+        .then(|| bounded_tool_activity_text(&result.output))
+        .flatten()
+}
+
+fn released_run_error_notice(code: &str, recoverable: bool) -> &'static str {
+    if recoverable {
+        "the run encountered a recoverable error and will continue"
+    } else if code == "tool.denied" {
+        "the requested tool was denied before execution; review policy, tool access, and approval settings"
+    } else {
+        "the run encountered an error and could not continue"
     }
 }
 
@@ -1487,6 +1801,32 @@ fn public_result(result: AgentRunResult) -> RunUpdateKind {
             provider_profile: result.provider_profile,
             model: result.model,
             elapsed_seconds: result.elapsed_seconds,
+        },
+    }
+}
+
+fn research_result(result: colossus_contracts::ResearchRun) -> RunUpdateKind {
+    let elapsed_seconds = result
+        .completed_at
+        .as_deref()
+        .and_then(|completed_at| {
+            let started = OffsetDateTime::parse(&result.created_at, &Rfc3339).ok()?;
+            let completed = OffsetDateTime::parse(completed_at, &Rfc3339).ok()?;
+            Some((completed - started).as_seconds_f64().max(0.0))
+        })
+        .unwrap_or(0.0);
+    RunUpdateKind::Result {
+        result: RunResult {
+            output: result.report,
+            plan_id: None,
+            plan_revision: None,
+            plan_status: None,
+            goal_id: None,
+            profile: "research".into(),
+            model_profile: "research".into(),
+            provider_profile: "research".into(),
+            model: "research".into(),
+            elapsed_seconds,
         },
     }
 }
@@ -1738,6 +2078,13 @@ fn released_runtime_failure(error: &RuntimeError) -> RunFailure {
                 OutcomeCertainty::Unknown,
             )
         }
+        RuntimeError::Agent(colossus_agent::AgentError::Tool(
+            colossus_ports::ToolError::Denied(_),
+        )) => generic_failure(
+            "tool.denied",
+            "the requested tool was denied before execution; review policy, tool access, and approval settings",
+            OutcomeCertainty::Known,
+        ),
         RuntimeError::Gateway(error) => released_gateway_failure(error),
         RuntimeError::Agent(colossus_agent::AgentError::MaxTurns { .. }) => generic_failure(
             "agent.max_turns",
@@ -1895,7 +2242,34 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use colossus_contracts::{GoalRecord, GoalStatus, PlanRecord, PlanStatus};
+    use colossus_contracts::{
+        GoalRecord, GoalStatus, PlanRecord, PlanStatus, ResearchRun, ResearchStatus,
+    };
+
+    #[test]
+    fn research_result_reports_canonical_wall_time() {
+        let update = research_result(ResearchRun {
+            id: "research-1".into(),
+            session_id: "session-1".into(),
+            question: "What is Rust ownership?".into(),
+            depth: ResearchDepth::Quick,
+            source_kinds: vec![ResearchSourceKind::Web],
+            status: ResearchStatus::Completed,
+            queries: Vec::new(),
+            lanes: Vec::new(),
+            progress: Vec::new(),
+            limitations: Vec::new(),
+            report: "Report".into(),
+            error: String::new(),
+            created_at: "2026-08-15T17:44:00Z".into(),
+            updated_at: "2026-08-15T17:44:42.250Z".into(),
+            completed_at: Some("2026-08-15T17:44:42.250Z".into()),
+        });
+        let RunUpdateKind::Result { result } = update else {
+            panic!("research must produce a result update");
+        };
+        assert_eq!(result.elapsed_seconds, 42.25);
+    }
 
     fn draft_plan() -> PlanRecord {
         PlanRecord {
@@ -1961,6 +2335,159 @@ mod tests {
         assert_eq!(notice.reason, "provider.failed");
         assert!(!notice.message.contains(private));
         assert!(!notice.message.contains("/private/provider/socket"));
+    }
+
+    #[test]
+    fn denied_public_error_updates_explain_safe_configuration_checks() {
+        let update = public_event(RunEvent::Error {
+            code: "tool.denied".into(),
+            message: "private policy detail".into(),
+            recoverable: false,
+            http_status: None,
+            retry_after_ms: None,
+            turn: Some(1),
+            elapsed_seconds: 0.25,
+        });
+        let RunUpdateKind::Notice { notice } = update else {
+            panic!("error must project to a notice");
+        };
+        assert_eq!(notice.reason, "tool.denied");
+        assert_eq!(
+            notice.message,
+            "the requested tool was denied before execution; review policy, tool access, and approval settings"
+        );
+        assert!(!notice.message.contains("private policy detail"));
+    }
+
+    #[test]
+    fn unstarted_public_tools_are_cancelled_instead_of_failed() {
+        let update = public_event(RunEvent::ToolCancelled {
+            turn: 1,
+            call: ToolCall {
+                call_id: "call-skipped".into(),
+                name: "filesystem.list".into(),
+                arguments: serde_json::json!({"path": "."}),
+            },
+            elapsed_seconds: 0.25,
+        });
+        let RunUpdateKind::ToolActivity { activity } = update else {
+            panic!("cancelled tool must project to tool activity");
+        };
+        assert_eq!(activity.state, ToolActivityState::Cancelled);
+        assert_eq!(activity.tool_name, "filesystem.list");
+        assert!(activity.summary.contains("cancelled before start"));
+        assert_eq!(activity.input, None);
+        assert_eq!(activity.preview, None);
+    }
+
+    #[test]
+    fn started_public_tool_releases_the_validated_execution_input() {
+        let update = public_event(RunEvent::ToolStarted {
+            turn: 1,
+            call: ToolCall {
+                call_id: "call-shell".into(),
+                name: "shell.run".into(),
+                arguments: serde_json::json!({
+                    "command": "git status --short",
+                    "cwd": "."
+                }),
+            },
+            elapsed_seconds: 0.25,
+        });
+        let RunUpdateKind::ToolActivity { activity } = update else {
+            panic!("started tool must project to tool activity");
+        };
+        let input: serde_json::Value =
+            serde_json::from_str(activity.input.as_deref().expect("started tool input"))
+                .expect("valid input JSON");
+        assert_eq!(
+            input,
+            serde_json::json!({"command": "git status --short", "cwd": "."})
+        );
+        assert_eq!(activity.preview, None);
+    }
+
+    #[test]
+    fn successful_public_preview_releases_the_bounded_tool_output() {
+        let output = serde_json::json!({
+            "root": ".",
+            "files": [{
+                "path": "src/main.rs",
+                "bytes": 42,
+                "extension": "rs"
+            }],
+            "file_count": 1,
+            "extension_counts": {"rs": 1},
+            "truncated": false
+        })
+        .to_string();
+        let update = public_event(RunEvent::ToolCompleted {
+            turn: 1,
+            result: ToolResult {
+                call_id: "call-map".into(),
+                name: "repo.map".into(),
+                output: output.clone(),
+                exit_code: 0,
+            },
+            duration_seconds: 0.1,
+            elapsed_seconds: 0.2,
+        });
+        let RunUpdateKind::ToolActivity { activity } = update else {
+            panic!("completed repository map must project to tool activity");
+        };
+        assert_eq!(activity.preview.as_deref(), Some(output.as_str()));
+    }
+
+    #[test]
+    fn public_preview_truncation_is_bounded_marked_and_utf8_safe() {
+        let output = "é".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES);
+        let update = public_event(RunEvent::ToolCompleted {
+            turn: 1,
+            result: ToolResult {
+                call_id: "call-shell".into(),
+                name: "shell.run".into(),
+                output,
+                exit_code: 0,
+            },
+            duration_seconds: 0.1,
+            elapsed_seconds: 0.2,
+        });
+        let RunUpdateKind::ToolActivity { activity } = update else {
+            panic!("completed tool must project to tool activity");
+        };
+        let preview = activity.preview.expect("successful tool preview");
+        assert_eq!(preview.len(), MAX_TOOL_ACTIVITY_PREVIEW_BYTES);
+        assert!(preview.ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION));
+        assert!(preview.is_char_boundary(preview.len()));
+    }
+
+    #[test]
+    fn unsuccessful_and_empty_outputs_do_not_release_a_public_preview() {
+        for result in [
+            ToolResult {
+                call_id: "call-failed".into(),
+                name: "repo.map".into(),
+                output: "failed tool detail".into(),
+                exit_code: 1,
+            },
+            ToolResult {
+                call_id: "call-empty".into(),
+                name: "shell.run".into(),
+                output: " \n ".into(),
+                exit_code: 0,
+            },
+        ] {
+            let update = public_event(RunEvent::ToolCompleted {
+                turn: 1,
+                result,
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            });
+            let RunUpdateKind::ToolActivity { activity } = update else {
+                panic!("completed tool must project to tool activity");
+            };
+            assert_eq!(activity.preview, None);
+        }
     }
 
     #[test]
@@ -2084,6 +2611,24 @@ mod tests {
         assert!(!update.message.contains(private));
         assert!(!update.message.contains("hidden-prompt"));
         assert!(!update.message.contains("/private/provider/socket"));
+    }
+
+    #[test]
+    fn denied_tool_failures_are_typed_without_releasing_policy_details() {
+        let private = "decision=secret path=/private/workspace args=password";
+        let update = released_runtime_failure(&RuntimeError::Agent(
+            colossus_agent::AgentError::Tool(colossus_ports::ToolError::Denied(private.into())),
+        ));
+        assert_eq!(update.code, "tool.denied");
+        assert_eq!(
+            update.message,
+            "the requested tool was denied before execution; review policy, tool access, and approval settings"
+        );
+        assert_eq!(update.outcome, OutcomeCertainty::Known);
+        assert!(!update.recoverable);
+        assert!(!update.message.contains(private));
+        assert!(!update.message.contains("password"));
+        assert!(!update.message.contains("/private/workspace"));
     }
 
     #[test]

@@ -126,6 +126,13 @@ executables for the host target, and opens the Tauri development app. An Externa
 daemon `connection.local.json` is optional. If the file exists, its instance identity
 and certificate pin must be valid; remove it to test Managed Local only.
 
+Debug Desktop uses a keyless plaintext journal in a separate
+`development-plaintext/` Managed Local state partition, so local iteration does not
+prompt for journal keys in the platform keychain. This mode retains the journal hash
+chain but has no payload confidentiality, signed checkpoints, or external rollback
+anchor. Release builds continue to use platform-protected journals and never reuse the
+debug partition.
+
 The pruned release compilation path requires an explicit non-runnable validation
 channel and sentinel:
 

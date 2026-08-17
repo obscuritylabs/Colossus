@@ -98,6 +98,37 @@ resumes the exact session, and selects the Plan using native-validated identifie
 is the complete lifecycle surface for inspection, approval, discard, and Goal resume.
 The main WebView can request this bounded handoff but cannot write arbitrary PTY input.
 
+### Research Mode in Desktop
+
+Managed Local Spaces advertise a dedicated **Research** composer mode. It runs the
+durable research workflow inside the current task, preserving the visible question and
+the citation-bearing report in canonical conversation history. **Standard** depth is
+the default; users can choose Quick, Standard, or Deep and select evidence from the
+current Space, configured web search, and configured MCP Connections.
+New Desktop sessions select **This Space** by default so Research works without an
+external search service and does not silently send queries to external evidence lanes.
+The selected lanes are shown next to **Run controls**; Web and Connections remain
+explicit opt-ins and report a limitation when their operator configuration is absent.
+
+Research uses the ordinary public run lifecycle for queueing, watching, approvals,
+attention, and cancellation requests. Its released planning, collection, extraction,
+and synthesis activity appears in the working-thread timeline. Evidence adapters remain
+policy-bound; unavailable or denied lanes are reported as limitations rather than
+silently replaced with model knowledge. External targets do not expose Research in v1.
+
+Debug Desktop builds also register the repository's credential-free local SearXNG
+profile at `http://127.0.0.1:8888/search` for the `agent` and `research` routes whenever
+the selected execution boundary is not Offline isolated. Start the local service before
+selecting **Web**:
+
+```bash
+docker compose -f docker-compose.searxng.yml up -d --wait
+```
+
+This loopback development convenience is not emitted by release builds. A missing local
+service produces the normal bounded research limitation; it never falls back to another
+search provider.
+
 ## External daemon development
 
 Stop the daemon before one-time application enrollment:

@@ -341,8 +341,11 @@ mod tests {
             end_user_id: None,
             role: Some("assistant".into()),
             mode: RunMode::Execute,
+            research_depth: None,
+            research_sources: Vec::new(),
             skill_ids: Vec::new(),
             plan_action: None,
+            branch: None,
             max_turns: 1,
             idempotency_key: IdempotencyKey::new("create-key").expect("key"),
         };
@@ -480,8 +483,11 @@ mod tests {
             end_user_id: None,
             role: Some("assistant".into()),
             mode: RunMode::Execute,
+            research_depth: None,
+            research_sources: Vec::new(),
             skill_ids: Vec::new(),
             plan_action: None,
+            branch: None,
             max_turns: 1,
             idempotency_key: IdempotencyKey::new("outcome-unknown-create-key").expect("key"),
         };

@@ -29,6 +29,17 @@ pub(super) async fn dispatch(
             }
             Ok(json!({ "approval_mode": mode }))
         }
+        WorkerOperation::InspectThreadDelegate {
+            parent_run_id,
+            job_id,
+        } => Ok(serde_json::to_value(inspect_thread_delegate(
+            runtime,
+            &parent_run_id,
+            &job_id,
+        )?)?),
+        WorkerOperation::InspectSessionMap { session_id } => Ok(serde_json::to_value(
+            inspect_session_map(runtime, &session_id).await?,
+        )?),
         WorkerOperation::AuditVerify => Ok(serde_json::to_value(runtime.journal().verify()?)?),
         WorkerOperation::AuditAnchorStatus => Ok(runtime.audit_anchor_status()?),
         WorkerOperation::AuditRead { from, limit } => {

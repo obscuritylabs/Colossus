@@ -75,6 +75,11 @@ impl Runtime {
         &self.workspace
     }
 
+    /// Canonical repository identity used by repository-scoped memory records.
+    pub fn repository_id(&self) -> &str {
+        &self.memory_executor.repository_id
+    }
+
     /// Effective named sandbox profile used for bounded tool authority.
     pub fn sandbox_profile(&self) -> &str {
         &self.sandbox_profile

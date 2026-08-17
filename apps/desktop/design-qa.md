@@ -1,110 +1,159 @@
-# Interaction Question Design QA
+# Session Workspace And Agent Topology Design QA
 
 ## Evidence
 
-- Current source visual truth:
-  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-228687ba-022b-4353-a20c-2d92eda4d94a.png`
-- Current browser-rendered implementation:
-  `/private/tmp/colossus-interaction-question-aligned.png`
-- Current full-view comparison:
-  `/private/tmp/colossus-interaction-question-alignment-comparison.png`
-- Earlier compact-layout source:
-  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-2ec13c76-e862-4f19-ae81-823a8f83cf82.png`
-- Earlier desktop implementation:
-  `/private/tmp/colossus-question-desktop.png`
-- Selected desktop state:
-  `/private/tmp/colossus-question-desktop-selected.png`
-- Narrow implementation:
-  `/private/tmp/colossus-question-mobile.png`
-- Focused before/after comparison:
-  `/private/tmp/colossus-question-comparison.png`
-- State: pending `user_prompt`; the current source shows a selected six-choice
-  question and the deterministic fixture shows the unselected four-choice state.
-  The current comparison is scoped to the shared card/composer edge alignment, whose
-  geometry is independent of question copy and selection state.
-- Current implementation viewport and pixels: 900 × 940 CSS pixels at device-pixel
-  ratio 1.
-- Current source pixels: 1794 × 870; the screenshot is a double-density app crop.
-- Desktop viewport: 1726 × 768 CSS pixels; browser device pixel ratio 2.
-- Narrow viewport: 480 × 800 CSS pixels.
-- Source pixels: 1726 × 736. The source card was a double-density crop, so its
-  1480 × 502 pixel region was normalized to 740 × 251 for the focused comparison.
-- Desktop implementation pixels: 1726 × 768. The rendered question card measured
-  740 × 211.5 CSS pixels; its 740 × 212 crop was compared at 1:1.
-- Narrow implementation pixels: 480 × 800. The card measured 464 × 297.5 CSS
-  pixels.
+- Selected reference visual:
+  `/Users/alex/.codex/generated_images/01a001d9-b94f-7633-b625-6849323278a2/exec-b4f7357a-42b3-4e67-a8b7-39da8fe9ae56.png`
+- Browser-rendered topology:
+  `/Users/alex/tools/Colossus/apps/desktop/design-qa-session-topology.png`
+- Browser-rendered agent inspector:
+  `/Users/alex/tools/Colossus/apps/desktop/design-qa-session-inspector.png`
+- Reference and implementation viewport: 1487 × 1058 CSS pixels at device-pixel
+  ratio 1. Both were inspected together in the same comparison input.
+- State: deterministic Operations Studio fixture with one selected session,
+  released delegated agents, an approval request, session Topology selected, and
+  a delegated agent opened in the resizable right inspector.
 
 ## Findings
 
 No actionable P0, P1, or P2 findings remain.
 
-- Fonts and typography: the existing Inter/system stack, hierarchy, weights, and
-  line heights remain consistent with the Desktop visual language. Long prompt text
-  can wrap without displacing the response footer.
-- Spacing and layout rhythm: the desktop choices use a balanced 2 × 2 grid and the
-  card is 39.5 CSS pixels shorter than the normalized source. Header, answer body,
-  and footer are visually distinct. At 480px the choices collapse to one column.
-- Colors and visual tokens: existing surface, border, blue, amber, muted-text, and
-  focus tokens are preserved. The selected choice has a clearly visible blue border,
-  background, and native radio state.
-- Card/composer alignment: the source card ended 50 CSS pixels before the composer's
-  right edge because the generic interaction card retained its 740px cap inside a
-  790px dock. The docked card now measures exactly the same left edge, right edge,
-  and width as the composer.
-- Image quality and asset fidelity: this component contains no raster imagery or
-  custom image assets. Existing iconography elsewhere in the screen is unchanged.
-- Copy and content: the original question and choice labels are preserved. Supporting
-  copy is concise: “Select one response” changes to “Ready to send” after selection.
+- Session hierarchy: Conversation, Topology, Plans, Sources, and Resources are peer
+  views under the selected task. Changing views does not change native Space or
+  thread authority.
+- Topology: the primary session appears once, with each follow-up represented as a
+  separate run group. Delegated agents remain attached to the run that released
+  them instead of disappearing when a new prompt starts.
+- Agent inspection: selecting a delegate opens the existing resizable details rail,
+  shows Overview and Activity tabs, and keeps released tool activity, final result,
+  parent run, and related session resources in context.
+- Durable resources: Plans, Sources, and Artifacts are derived only from released
+  run data already available to the renderer. The UI does not invent plans, source
+  bodies, decisions, paths, or child-run access.
+- Visual language: the implementation retains Colossus typography, dark surfaces,
+  blue selection, green completion, amber attention, restrained borders, and Tabler
+  icons while following the selected three-column information model.
+- Intentional data difference: the deterministic fixture contains one run and three
+  delegates. Focused tests cover two-run grouping and delegate persistence across
+  follow-ups; a real task with multiple prompts renders one group per run.
 
 ## Interaction And Accessibility Checks
 
-- All four choices fit without scroll at 1726 × 768: answer body client height and
-  scroll height both measured 101px.
-- All four choices fit without scroll at 480 × 800: answer body client height and
-  scroll height both measured 187px.
-- Selecting “Rust” set the native radio checked state, changed the guidance to
-  “Ready to send,” and enabled the response button.
-- Sending the fixture response removed the pending interaction card.
-- Non-respondable interactions disable every choice and the submit action in unit
-  coverage.
-- Browser console check returned no warnings or errors.
-- Current browser geometry: before the fix the card measured 740px wide while its
-  dock and composer measured 788.40625px. After the fix all three measure
-  788.40625px, with matching 91.796875px left and 880.203125px right edges.
-- Selecting “Rust” in the current fixture updated the guidance to “Ready to send”
-  and enabled the response button.
+- Each session tab is keyboard-addressable and exposes the selected view with
+  `aria-current`.
+- Clicking Builder in Topology selected the row, opened Thread details, and loaded
+  its released filesystem, search, and file-summary actions.
+- The inspector identified the delegated agent's parent as Primary · Run 1 and
+  linked back to Session runs, Plans, Sources, and Artifacts.
+- Plans, Sources, Resources, and Conversation were exercised in sequence; empty
+  states and artifact counts were visible and the prompt composer remained usable.
+- The details rail remained pointer/keyboard resizable and retained the centered,
+  unboxed close control requested for the existing details design.
+- Browser console inspection returned no warnings or errors.
+- TypeScript checking and 17 focused session, component, participant, and resource
+  tests passed after the final changes.
+
+## Visual Comparison
+
+- The implementation matches the reference's three-column information model,
+  session-level tab bar, nested run topology, selected agent row, and contextual
+  right-side inspector.
+- It intentionally retains the existing Colossus task header, approval card,
+  composer, and runtime controls rather than replacing them with illustrative data.
+- The main visible difference is fixture content density: the reference demonstrates
+  two completed runs, while the local fixture truthfully renders its one released
+  run. The same component renders additional run groups from real session history.
+
+final result: passed
+
+---
+
+# Canonical Session Map Design QA
+
+## Evidence
+
+- Source visual truth:
+  `/Users/alex/.codex/generated_images/01a001d9-b94f-7633-b625-6849323278a2/exec-493dfe63-cc7d-4ebb-bfd8-1f52f18d790e.png`
+- Browser-rendered implementation:
+  `/Users/alex/tools/Colossus/apps/desktop/design-qa-session-map.png`
+- Live fixture: `http://127.0.0.1:4173/?fixture=operations-studio`
+- Source pixels: 1376 × 1143. Implementation pixels and CSS viewport: 1160 ×
+  940 at device-pixel ratio 1. The source is a focused design composition; the
+  implementation keeps the real Space sidebar and task header while giving
+  Topology the full content height instead of squeezing the graph above the
+  conversation approval/composer dock.
+- State: Topology selected, Memories expanded, the Rust repository memory selected,
+  and its canonical details open in the right inspector.
+- Both images were opened together in the same comparison input before this report.
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+- Typography: Colossus's existing font stack, weights, muted metadata scale, and
+  compact heading hierarchy preserve the reference's dense operational character.
+  Truncation is limited to graph-card labels; complete values remain available in
+  the inspector.
+- Spacing and layout: the full map preserves the reference's primary → family →
+  record progression. The dedicated tab uses the full available height. When the
+  real details rail reduces a sub-1280-pixel viewport, the map intentionally
+  collapses to family → record so the selected branch and inspector remain visible
+  together; wider windows retain the primary and Layers overview.
+- Colors and tokens: blue agent/research, amber work, purple context, green active,
+  and the existing dark Colossus surface tokens match the source hierarchy without
+  introducing a second visual system.
+- Image and icon fidelity: the design contains no raster product imagery. All
+  visible resource marks use the product's existing Tabler icon dependency with a
+  consistent 1.55–1.65 stroke weight; no placeholder or handcrafted SVG assets were
+  introduced.
+- Copy and content: labels map to canonical Colossus stores—Delegated agents,
+  Goals, Tasks, Plans, Key decisions, Memories, Research, Sources, and Artifacts.
+  The inspector omits illustrative telemetry that the current system cannot prove.
+- Accessibility and behavior: family controls expose `aria-expanded`, layer toggles
+  are native checkboxes, the selected record opens the existing keyboard-resizable
+  details rail, and switching from Conversation to Topology resets the feed to the
+  top instead of inheriting a stale scroll position. Fit restores the graph origin,
+  and opening an inspector preserves the user's vertical map position.
 
 ## Comparison History
 
-### Iteration 1
+- Initial P1: the approval request and composer consumed almost half the Topology
+  tab, leaving only a narrow, partially clipped graph viewport.
+- Fix: made Topology a dedicated full-height workspace; the conversation input and
+  pending-response controls remain available under Conversation, where actions are
+  actually taken.
+- Initial P2: opening the details rail kept the full three-column graph width, so
+  the selected memory record moved outside the visible main pane.
+- Fix: added a sub-1280-pixel, drawer-aware two-column graph layout that hides the
+  overview-only primary/layer controls while retaining the resource family,
+  selected records, and connecting line beside the inspector. Wider windows retain
+  the complete reference composition.
+- Post-fix evidence: `design-qa-session-map.png` shows all three memory records and
+  the selected memory's canonical detail fields visible at the same time.
 
-- Earlier finding: the global text-input rule inflated radio controls, the wide card
-  used a single choice column, and the entire dock could scroll the action out of view.
-- Fixes made: scoped native radio sizing, full-row choice targets, a two-column desktop
-  grid, a one-column narrow layout, and fixed header/footer tracks around a bounded
-  answer body.
-- Post-fix evidence: `/private/tmp/colossus-question-comparison.png`,
-  `/private/tmp/colossus-question-desktop-selected.png`, and
-  `/private/tmp/colossus-question-mobile.png`.
-- Result: all P1/P2 usability and density issues are resolved.
+## Interaction And Browser Checks
 
-### Iteration 2
+- Verified Topology navigation and top-of-view reset.
+- Verified that the dedicated Topology view uses the full content height and does
+  not render the conversation composer.
+- Verified Collapse all, re-expanding Memories, expanding Goals, and opening a
+  Memory record.
+- Verified Space, status, updated time, kind, scope, confidence, source, text, and
+  rationale in the released Memory inspector.
+- Browser console errors: none.
+- Focused renderer/API tests: 208 passed. Desktop security-contract tests: 25
+  passed. Tauri `cargo check` passed.
 
-- Earlier finding: the docked response card inherited the generic 740px maximum
-  width while the composer used the dock's 790px maximum, leaving a 50px shortfall
-  on the card's right edge.
-- Fix made: docked interaction cards now fill the pending-interaction dock and remove
-  the generic card maximum.
-- Post-fix evidence:
-  `/private/tmp/colossus-interaction-question-alignment-comparison.png` and
-  `/private/tmp/colossus-interaction-question-aligned.png`.
-- Regression coverage: the browser acceptance test compares both left and right
-  bounding-box edges at the supported 880 × 640 minimum viewport.
-- Result: the response card and prompt composer share identical horizontal bounds;
-  no P0/P1/P2 alignment findings remain.
+## Focused Region Comparison
 
-Focused region comparison was required because the source screenshot was cropped around
-the pending question rather than showing the complete application. Full-view evidence
-was still used to verify the card’s relationship to the feed and disabled composer.
+A separate crop was not required: both the family/record graph and inspector text
+are legible at 1× in the full implementation screenshot. The responsive inspector
+state received the focused comparison because it was the highest-risk layout.
+
+## Follow-up Polish
+
+- [P3] A future canvas implementation could animate a selected branch into view
+  when opening the inspector. The current drawer-aware layout keeps the same
+  information visible without adding motion or new navigation semantics.
 
 final result: passed
