@@ -807,6 +807,15 @@ export function withBoundedEntry<Key, Value>(
   return next;
 }
 
+export function withoutEntry<Key, Value>(
+  entries: ReadonlyMap<Key, Value>,
+  key: Key,
+): Map<Key, Value> {
+  const next = new Map(entries);
+  next.delete(key);
+  return next;
+}
+
 export function operationFingerprint(parts: readonly unknown[]): string {
   return JSON.stringify(parts);
 }

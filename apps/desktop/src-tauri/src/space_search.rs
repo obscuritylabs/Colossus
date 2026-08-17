@@ -120,7 +120,7 @@ pub(crate) fn search(
         .open_table(THREAD_SUMMARIES)
         .map_err(|_| index_error())?;
     let normalized = query.trim().to_lowercase();
-    let mut results = Vec::new();
+    let mut results_by_thread = BTreeMap::<(String, String), SpaceSearchResultDto>::new();
     for entry in table.iter().map_err(|_| index_error())? {
         let (_, value) = entry.map_err(|_| index_error())?;
         let Ok(record) = serde_json::from_slice::<ThreadSummaryRecord>(value.value()) else {
@@ -143,7 +143,7 @@ pub(crate) fn search(
         if !matches {
             continue;
         }
-        results.push(SpaceSearchResultDto {
+        let result = SpaceSearchResultDto {
             space_id: record.space_id.clone(),
             space_name: space.display_name.clone(),
             target_id: record.space_id,
@@ -156,8 +156,10 @@ pub(crate) fn search(
             updated_at: record.updated_at,
             archived: space.archived,
             thread_archived: record.archived,
-        });
+        };
+        insert_latest_thread_result(&mut results_by_thread, result);
     }
+    let mut results = results_by_thread.into_values().collect::<Vec<_>>();
     results.sort_by(|left, right| {
         right
             .updated_at
@@ -177,6 +179,20 @@ pub(crate) fn search(
             String::new()
         },
     })
+}
+
+fn insert_latest_thread_result(
+    results: &mut BTreeMap<(String, String), SpaceSearchResultDto>,
+    candidate: SpaceSearchResultDto,
+) {
+    let key = (candidate.space_id.clone(), candidate.session_id.clone());
+    let replace = results.get(&key).is_none_or(|current| {
+        (candidate.updated_at.as_str(), candidate.run_id.as_str())
+            > (current.updated_at.as_str(), current.run_id.as_str())
+    });
+    if replace {
+        results.insert(key, candidate);
+    }
 }
 
 pub(crate) fn attention_counts(
@@ -347,5 +363,40 @@ mod tests {
     #[test]
     fn bounded_text_preserves_utf8_boundaries() {
         assert_eq!(bounded_text("abéz", 3), "ab");
+    }
+
+    #[test]
+    fn thread_search_results_keep_only_the_newest_matching_run() {
+        let result = |run_id: &str, session_id: &str, updated_at: &str| SpaceSearchResultDto {
+            space_id: "space-a".into(),
+            space_name: "Space A".into(),
+            target_id: "space-a".into(),
+            run_id: run_id.into(),
+            session_id: session_id.into(),
+            title: run_id.into(),
+            mode: "execute".into(),
+            status: "completed".into(),
+            updated_at: updated_at.into(),
+            archived: false,
+            thread_archived: false,
+            attention: false,
+        };
+        let mut by_thread = BTreeMap::new();
+        for candidate in [
+            result("run-old", "session-a", "2026-08-17T10:00:00Z"),
+            result("run-new", "session-a", "2026-08-17T11:00:00Z"),
+            result("run-other", "session-b", "2026-08-17T09:00:00Z"),
+        ] {
+            insert_latest_thread_result(&mut by_thread, candidate);
+        }
+
+        assert_eq!(by_thread.len(), 2);
+        assert_eq!(
+            by_thread
+                .get(&("space-a".into(), "session-a".into()))
+                .expect("session result")
+                .run_id,
+            "run-new"
+        );
     }
 }

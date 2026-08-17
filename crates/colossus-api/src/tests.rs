@@ -5,6 +5,7 @@ use colossus_contracts::{
 };
 use colossus_ports::{EventJournal, StoreError, VerificationReport};
 use colossus_testkit::InMemoryEventJournal;
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeSet,
     sync::{
@@ -2100,6 +2101,88 @@ fn terminal_threads_archive_restore_and_reject_new_work_while_hidden() {
     repository
         .create_run(&caller, &continued, &new_run)
         .expect("restored thread accepts new work");
+}
+
+#[test]
+fn archiving_a_small_thread_is_independent_of_unrelated_owner_index_growth() {
+    let (journal, repository, caller) = fixture();
+    let request = create_request("archive-small-create", "Archive this small thread");
+    create_run(
+        &repository,
+        &caller,
+        &request,
+        "run-archive-small",
+        "session-archive-small",
+    );
+    repository
+        .append_update(
+            &caller,
+            "run-archive-small",
+            1,
+            RunUpdateKind::State {
+                status: RunStatus::Running,
+            },
+        )
+        .expect("start small thread");
+    repository
+        .append_update(
+            &caller,
+            "run-archive-small",
+            2,
+            RunUpdateKind::Result {
+                result: RunResult {
+                    output: "Done".into(),
+                    plan_id: None,
+                    plan_revision: None,
+                    plan_status: None,
+                    goal_id: None,
+                    profile: "default".into(),
+                    model_profile: "default".into(),
+                    provider_profile: "default-provider".into(),
+                    model: "model".into(),
+                    elapsed_seconds: 1.0,
+                },
+            },
+        )
+        .expect("complete small thread");
+
+    let mut index_hasher = Sha256::new();
+    index_hasher.update(b"colossus-api-run-index-v1\0");
+    index_hasher.update(caller.principal().application_id().as_bytes());
+    let index_stream = format!("api-run-index:{}", hex::encode(index_hasher.finalize()));
+    let actor = caller.actor();
+    let unrelated = (0_u64..4_097)
+        .map(|offset| {
+            let run_id = format!("unrelated-run-{offset}");
+            NewEvent {
+                event_version: 1,
+                stream_id: index_stream.clone(),
+                expected_stream_version: offset.saturating_add(1),
+                classification: EventClassification::System,
+                event_type: "api.run.indexed.v1".into(),
+                actor: actor.clone(),
+                context: ExecutionContext {
+                    correlation_id: "unrelated-owner-growth".into(),
+                    session_id: Some(format!("unrelated-session-{offset}")),
+                    run_id: Some(run_id.clone()),
+                    ..ExecutionContext::default()
+                },
+                payload: serde_json::json!({"run_id": run_id}),
+            }
+        })
+        .collect();
+    journal
+        .append_batch(unrelated)
+        .expect("unrelated owner index growth");
+
+    let archived = repository
+        .archive_thread(
+            &caller,
+            "run-archive-small",
+            &IdempotencyKey::new("archive-small-terminal").expect("idempotency key"),
+        )
+        .expect("unrelated runs must not exhaust the selected thread scan");
+    assert!(archived.archived);
 }
 
 #[test]

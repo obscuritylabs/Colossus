@@ -3,12 +3,16 @@ use colossus_sdk::{
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
     ManagedExecutionBoundary, ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig,
     ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig,
-    NativeSidecarLifecycle, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
-    WorkspaceIdentity, scopes,
+    NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
+    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
-use std::{collections::BTreeMap, path::Path, str::FromStr as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    str::FromStr as _,
+};
 
 use crate::{
     bundle::VerifiedBundle,
@@ -27,6 +31,8 @@ const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
 const SELF_TEST_INSTANCE_ID: &str = "00000000-0000-7000-8000-000000000001";
 const LOCAL_DEV_SEARCH_PROFILE: &str = "local-dev-searxng";
 const LOCAL_DEV_SEARCH_ENDPOINT: &str = "http://127.0.0.1:8888/search";
+const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
+const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
 const PRIMARY_SCOPES: [&str; 6] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
@@ -227,25 +233,8 @@ async fn ensure_managed_capacity(
             state.remove_managed_space_runtime(&target_id).await;
             continue;
         };
-        let active = target
-            .client
-            .list_runs(ListRunsRequest {
-                session_id: None,
-                statuses: vec![
-                    RunStatus::Queued,
-                    RunStatus::Running,
-                    RunStatus::Waiting,
-                    RunStatus::Cancelling,
-                ],
-                page: Some(colossus_sdk::PageRequest {
-                    page_size: 1,
-                    page_token: String::new(),
-                }),
-                include_archived: false,
-            })
-            .await
-            .map_err(CommandErrorDto::from_api)?;
-        candidates.push((last_used, target_id, !active.runs.is_empty()));
+        let active = managed_target_has_active_work(&target.client).await?;
+        candidates.push((last_used, target_id, active));
     }
     let Some(target_id) = idle_lru_candidate(&candidates)? else {
         return Ok(());
@@ -259,6 +248,55 @@ async fn ensure_managed_capacity(
     }
     state.remove_managed_space_runtime(&target_id).await;
     Ok(())
+}
+
+async fn managed_target_has_active_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
+    let mut page_token = String::new();
+    let mut seen_tokens = BTreeSet::new();
+    for _ in 0..MAX_ACTIVE_RUN_PAGES {
+        let response = client
+            .list_runs(ListRunsRequest {
+                session_id: None,
+                statuses: vec![
+                    RunStatus::Queued,
+                    RunStatus::Running,
+                    RunStatus::Waiting,
+                    RunStatus::Cancelling,
+                ],
+                page: Some(PageRequest {
+                    page_size: ACTIVE_RUN_PAGE_SIZE,
+                    page_token,
+                }),
+                include_archived: false,
+            })
+            .await
+            .map_err(CommandErrorDto::from_api)?;
+        if !response.runs.is_empty() {
+            return Ok(true);
+        }
+        match next_active_run_page_token(response.page.as_ref(), &mut seen_tokens) {
+            Ok(Some(next)) => page_token = next,
+            Ok(None) => return Ok(false),
+            Err(()) => return Ok(true),
+        }
+    }
+    Ok(true)
+}
+
+fn next_active_run_page_token(
+    page: Option<&PageResponse>,
+    seen_tokens: &mut BTreeSet<String>,
+) -> Result<Option<String>, ()> {
+    let Some(token) = page.map(|page| page.next_page_token.clone()) else {
+        return Ok(None);
+    };
+    if token.is_empty() {
+        return Ok(None);
+    }
+    if !seen_tokens.insert(token.clone()) {
+        return Err(());
+    }
+    Ok(Some(token))
 }
 
 fn idle_lru_candidate(
@@ -1023,5 +1061,28 @@ mod tests {
         let error = idle_lru_candidate(&candidates).expect_err("all busy");
         assert_eq!(error.code, "busy");
         assert!(error.message.contains("Four Spaces"));
+    }
+
+    #[test]
+    fn active_run_pagination_follows_empty_pages_and_fails_closed_on_replay() {
+        let mut seen = BTreeSet::new();
+        let page = PageResponse {
+            next_page_token: "next-page".into(),
+        };
+        assert_eq!(
+            next_active_run_page_token(Some(&page), &mut seen).expect("next page"),
+            Some("next-page".into())
+        );
+        assert!(next_active_run_page_token(Some(&page), &mut seen).is_err());
+        assert_eq!(
+            next_active_run_page_token(
+                Some(&PageResponse {
+                    next_page_token: String::new(),
+                }),
+                &mut seen,
+            )
+            .expect("terminal page"),
+            None
+        );
     }
 }

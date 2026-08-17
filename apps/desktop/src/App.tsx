@@ -119,6 +119,7 @@ import {
   stableIdempotentAttempt,
   utf8ByteLength,
   withBoundedEntry,
+  withoutEntry,
 } from "./state";
 import type { IdempotentAttempt, RunView } from "./state";
 import {
@@ -3564,6 +3565,10 @@ export default function App() {
         runId: run.runId,
         idempotencyKey: attempt.key,
       });
+      threadLifecycleAttempts.current = withoutEntry(
+        threadLifecycleAttempts.current,
+        attemptKey,
+      );
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }
@@ -3649,6 +3654,10 @@ export default function App() {
         runId: result.runId,
         idempotencyKey: attempt.key,
       });
+      threadLifecycleAttempts.current = withoutEntry(
+        threadLifecycleAttempts.current,
+        attemptKey,
+      );
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }

@@ -10,6 +10,10 @@ const MAX_RECORDS_PER_FAMILY: usize = 32;
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_DETAIL_BYTES: usize = 8 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 16 * 1024;
+// The authenticated control frame base64-encodes its payload. Keeping the raw map
+// below 2 MiB leaves ample room beneath the 4 MiB frame ceiling for that expansion,
+// the signed envelope, and protocol metadata.
+const MAX_SESSION_MAP_JSON_BYTES: usize = 2 * 1024 * 1024;
 const TRUNCATION_MARKER: &str = "\n… truncated by Colossus Desktop";
 
 fn bounded_text(value: &str, limit: usize) -> String {
@@ -131,6 +135,39 @@ fn source_kind(kind: ResearchSourceKind) -> &'static str {
         ResearchSourceKind::Repo => "repo",
         ResearchSourceKind::Web => "web",
         ResearchSourceKind::Mcp => "mcp",
+    }
+}
+
+fn bound_session_map_payload(mut map: WorkerSessionMap) -> Result<WorkerSessionMap, WorkerError> {
+    loop {
+        let encoded = serde_json::to_vec(&map)
+            .map_err(|_| WorkerError::Protocol("session map could not be encoded".into()))?;
+        if encoded.len() <= MAX_SESSION_MAP_JSON_BYTES {
+            return Ok(map);
+        }
+
+        let mut removed = false;
+        macro_rules! pop_extra {
+            ($records:expr) => {
+                if $records.len() > 1 {
+                    $records.pop();
+                    removed = true;
+                }
+            };
+        }
+        pop_extra!(map.delegates);
+        pop_extra!(map.goals);
+        pop_extra!(map.tasks);
+        pop_extra!(map.plans);
+        pop_extra!(map.decisions);
+        pop_extra!(map.memories);
+        pop_extra!(map.research_runs);
+        pop_extra!(map.research_sources);
+        if !removed {
+            return Err(WorkerError::Protocol(
+                "session map exceeds its aggregate release budget".into(),
+            ));
+        }
     }
 }
 
@@ -296,7 +333,7 @@ pub(super) async fn inspect_session_map(
     }
     research_sources.truncate(MAX_RECORDS_PER_FAMILY);
 
-    Ok(WorkerSessionMap {
+    bound_session_map_payload(WorkerSessionMap {
         session_id: session_id.into(),
         delegates,
         goals,
@@ -344,5 +381,66 @@ mod tests {
         assert!(bounded.is_char_boundary(bounded.len()));
         assert!(bounded.len() <= 64);
         assert!(bounded.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn session_map_enforces_an_aggregate_frame_safe_budget() {
+        let detail = "d".repeat(MAX_DETAIL_BYTES);
+        let document = "r".repeat(MAX_DOCUMENT_BYTES);
+        let delegates = (0..MAX_RECORDS_PER_FAMILY)
+            .map(|index| WorkerSessionDelegate {
+                job_id: format!("job-{index}"),
+                parent_run_id: "parent".into(),
+                child_session_id: format!("child-{index}"),
+                child_run_id: Some(format!("run-{index}")),
+                task: detail.clone(),
+                role: "role".into(),
+                status: "completed".into(),
+                final_output: document.clone(),
+                error: detail.clone(),
+                created_at: "2026-08-17T00:00:00Z".into(),
+                updated_at: "2026-08-17T00:00:01Z".into(),
+                started_at: None,
+                completed_at: None,
+            })
+            .collect();
+        let research_runs = (0..MAX_RECORDS_PER_FAMILY)
+            .map(|index| WorkerSessionResearchRun {
+                id: format!("research-{index}"),
+                question: detail.clone(),
+                depth: "deep".into(),
+                source_kinds: Vec::new(),
+                status: "completed".into(),
+                query_count: 1,
+                source_count: 1,
+                limitation_count: 0,
+                report: document.clone(),
+                error: detail.clone(),
+                created_at: "2026-08-17T00:00:00Z".into(),
+                updated_at: "2026-08-17T00:00:01Z".into(),
+                completed_at: None,
+            })
+            .collect();
+        let oversized = WorkerSessionMap {
+            session_id: "session".into(),
+            delegates,
+            goals: Vec::new(),
+            tasks: Vec::new(),
+            plans: Vec::new(),
+            decisions: Vec::new(),
+            memories: Vec::new(),
+            research_runs,
+            research_sources: Vec::new(),
+        };
+        assert!(
+            serde_json::to_vec(&oversized).expect("map JSON").len() > MAX_SESSION_MAP_JSON_BYTES
+        );
+
+        let bounded = bound_session_map_payload(oversized).expect("bounded session map");
+        assert!(
+            serde_json::to_vec(&bounded).expect("bounded JSON").len() <= MAX_SESSION_MAP_JSON_BYTES
+        );
+        assert!(!bounded.delegates.is_empty());
+        assert!(!bounded.research_runs.is_empty());
     }
 }

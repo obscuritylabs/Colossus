@@ -46,7 +46,6 @@ const LIST_CURSOR_HEX_BYTES: usize = LIST_CURSOR_BYTES * 2;
 const MAX_NONTERMINAL_RUN_SEQUENCE: u64 = 4_096;
 const MAX_RELEASED_BYTES_PER_RUN: usize = 16 * 1_048_576;
 const MAX_THREAD_STREAM_EVENTS: u64 = 4_096;
-const MAX_THREAD_RUNS_SCANNED: usize = 4_096;
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -443,15 +442,17 @@ impl EventSourcedRunRepository {
     }
 
     fn ensure_thread_terminal(&self, caller: &CallerContext, session_id: &str) -> ApiResult<()> {
-        let index_stream = Self::run_index_stream(caller);
+        let thread_stream = Self::thread_stream(caller, session_id);
         let mut before_version = None;
         let mut scanned = 0_usize;
         loop {
-            let remaining = MAX_THREAD_RUNS_SCANNED.saturating_sub(scanned);
+            let remaining = usize::try_from(MAX_THREAD_STREAM_EVENTS)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(scanned);
             if remaining == 0 {
                 let has_more = !self
                     .journal
-                    .read_stream_backwards(&index_stream, before_version, 1)
+                    .read_stream_backwards(&thread_stream, before_version, 1)
                     .map_err(|error| ApiError::from_store(&error, caller.request_id()))?
                     .is_empty();
                 if has_more {
@@ -466,23 +467,36 @@ impl EventSourcedRunRepository {
             let read_limit = remaining.min(colossus_ports::MAX_STREAM_READ_BATCH);
             let events = self
                 .journal
-                .read_stream_backwards(&index_stream, before_version, read_limit)
+                .read_stream_backwards(&thread_stream, before_version, read_limit)
                 .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
             if events.is_empty() {
                 return Ok(());
             }
             for event in &events {
-                let indexed = decode_indexed(self.journal.as_ref(), caller, &index_stream, event)?;
+                decode_thread_lifecycle(
+                    self.journal.as_ref(),
+                    caller,
+                    &thread_stream,
+                    session_id,
+                    event,
+                )?;
                 scanned = scanned.saturating_add(1);
                 before_version = Some(event.stream_version);
-                if event.context.session_id.as_deref() != Some(session_id) {
+                if event.event_type != THREAD_ATTACHED_EVENT {
                     continue;
                 }
-                let (run, _) = self
-                    .load_append_state(caller, &indexed.run_id)?
-                    .ok_or_else(|| {
-                        invariant(caller, "the thread index references an absent run")
-                    })?;
+                let run_id = event.context.run_id.as_deref().ok_or_else(|| {
+                    invariant(caller, "the thread membership is missing its run identity")
+                })?;
+                let (run, _) = self.load_append_state(caller, run_id)?.ok_or_else(|| {
+                    invariant(caller, "the thread membership references an absent run")
+                })?;
+                if run.session_id != session_id {
+                    return Err(invariant(
+                        caller,
+                        "the thread membership references another session",
+                    ));
+                }
                 if !run.status.is_terminal() {
                     return Err(ApiError::failed_precondition(
                         ApiErrorReason::InvalidRunTransition,
