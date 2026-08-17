@@ -29,7 +29,7 @@ const ARCHIVE_THREAD_OPERATION: &str = "agent_run.thread.archive.v1";
 const RESTORE_THREAD_OPERATION: &str = "agent_run.thread.restore.v1";
 const IDEMPOTENCY_EVENT: &str = "api.idempotency.claimed.v1";
 const RUN_CREATED_EVENT: &str = "api.run.created.v1";
-const RUN_INDEXED_EVENT: &str = "api.run.indexed.v1";
+pub(crate) const RUN_INDEXED_EVENT: &str = "api.run.indexed.v1";
 const RUN_UPDATE_EVENT: &str = "api.run.update.v1";
 const THREAD_ATTACHED_EVENT: &str = "api.thread.run.attached.v1";
 const THREAD_ARCHIVED_EVENT: &str = "api.thread.archived.v1";
@@ -285,7 +285,7 @@ impl EventSourcedRunRepository {
         format!("api-run:{run_id}")
     }
 
-    fn run_index_stream(caller: &CallerContext) -> String {
+    pub(crate) fn run_index_stream(caller: &CallerContext) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"colossus-api-run-index-v1\0");
         hasher.update(caller.principal().application_id().as_bytes());

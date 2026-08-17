@@ -1,11 +1,11 @@
 use super::*;
+use crate::repository::RUN_INDEXED_EVENT;
 use colossus_contracts::{
     Actor, ActorType, EventClassification, EventEnvelope, ExecutionContext, NewEvent,
     ProjectionWorkItem, SignedCheckpoint,
 };
 use colossus_ports::{EventJournal, StoreError, VerificationReport};
 use colossus_testkit::InMemoryEventJournal;
-use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeSet,
     sync::{
@@ -2146,10 +2146,7 @@ fn archiving_a_small_thread_is_independent_of_unrelated_owner_index_growth() {
         )
         .expect("complete small thread");
 
-    let mut index_hasher = Sha256::new();
-    index_hasher.update(b"colossus-api-run-index-v1\0");
-    index_hasher.update(caller.principal().application_id().as_bytes());
-    let index_stream = format!("api-run-index:{}", hex::encode(index_hasher.finalize()));
+    let index_stream = EventSourcedRunRepository::run_index_stream(&caller);
     let actor = caller.actor();
     let unrelated = (0_u64..4_097)
         .map(|offset| {
@@ -2159,7 +2156,7 @@ fn archiving_a_small_thread_is_independent_of_unrelated_owner_index_growth() {
                 stream_id: index_stream.clone(),
                 expected_stream_version: offset.saturating_add(1),
                 classification: EventClassification::System,
-                event_type: "api.run.indexed.v1".into(),
+                event_type: RUN_INDEXED_EVENT.into(),
                 actor: actor.clone(),
                 context: ExecutionContext {
                     correlation_id: "unrelated-owner-growth".into(),
