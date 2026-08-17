@@ -125,7 +125,7 @@ pub enum WorkerError {
     Busy(String),
 }
 
-/// One operation carried by the authenticated protocol-v12 interactive duplex channel.
+/// One operation carried by the authenticated current-protocol interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
 /// events, and cooperative cancellation remain connection-scoped transport concerns.
@@ -229,6 +229,18 @@ pub enum WorkerOperation {
     SetApprovalMode {
         /// New mode for subsequent approval obligations.
         approval_mode: WorkerApprovalMode,
+    },
+    /// Return bounded released activity for one lineage-validated child run.
+    InspectThreadDelegate {
+        /// Exact public parent run that requested delegation.
+        parent_run_id: String,
+        /// Exact durable child-agent job identifier.
+        job_id: String,
+    },
+    /// Return bounded canonical resources for one native-validated session.
+    InspectSessionMap {
+        /// Exact durable session identifier.
+        session_id: String,
     },
     /// Verify the authoritative journal chain and anchors.
     AuditVerify,
@@ -355,7 +367,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute any protocol-v12 interactive operation with authenticated duplex control.
+    /// Execute any current-protocol interactive operation with authenticated duplex control.
     RunInteractive {
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,

@@ -1,140 +1,159 @@
-# Space Shelves And Finder-Style Disclosure Design QA
+# Session Workspace And Agent Topology Design QA
 
 ## Evidence
 
 - Selected reference visual:
-  `/Users/alex/.codex/generated_images/01a001d9-b94f-7633-b625-6849323278a2/exec-abdfae55-89a6-4c19-956f-6b6f2eb3a80c.png`
-- Browser-rendered implementation:
-  `/private/tmp/colossus-space-shelves-implementation.png`
-- Full-view comparison:
-  `/private/tmp/colossus-space-shelves-comparison.png`
-- Focused sidebar comparison:
-  `/private/tmp/colossus-space-shelves-sidebar-comparison.png`
-- Collapsed-state reference:
-  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-9580d4ca-68fa-4b00-ac69-f3a0fc9ab81f.png`
-- Corrected collapsed implementation:
-  `/private/tmp/colossus-space-shelves-collapsed-pinned.png`
-- Collapsed footer comparison:
-  `/private/tmp/colossus-space-shelves-footer-comparison.png`
-- Finder disclosure interaction reference:
-  `/var/folders/v5/10wplgc941b7wgrx5yvd64540000gp/T/codex-clipboard-ac140343-98e1-4184-bd6a-730d48733272.png`
-- Current expanded-Space implementation:
-  `/Users/alex/tools/Colossus/apps/desktop/design-qa-space-navigation.jpg`
+  `/Users/alex/.codex/generated_images/01a001d9-b94f-7633-b625-6849323278a2/exec-b4f7357a-42b3-4e67-a8b7-39da8fe9ae56.png`
+- Browser-rendered topology:
+  `/Users/alex/tools/Colossus/apps/desktop/design-qa-session-topology.png`
+- Browser-rendered agent inspector:
+  `/Users/alex/tools/Colossus/apps/desktop/design-qa-session-inspector.png`
 - Reference and implementation viewport: 1487 × 1058 CSS pixels at device-pixel
-  ratio 1.
-- Reference pixels: 1487 × 1058.
-- Implementation pixels: 1487 × 1058.
-- State: deterministic Operations Studio fixture with an active Colossus Space,
-  one pinned thread, one attention thread, recent work, three additional Spaces,
-  and an approval waiting in the main workspace. The Finder-style comparison was
-  captured at 1011 × 940 CSS pixels and normalized by the Browser capture surface
-  to a 1011 × 940 image despite a device-pixel ratio of 2. Research Lab and
-  Proposal Studio were expanded simultaneously without changing the active Space.
+  ratio 1. Both were inspected together in the same comparison input.
+- State: deterministic Operations Studio fixture with one selected session,
+  released delegated agents, an approval request, session Topology selected, and
+  a delegated agent opened in the resizable right inspector.
 
 ## Findings
 
-No actionable P0, P1, or P2 findings remain in the sidebar implementation.
+No actionable P0, P1, or P2 findings remain.
 
-- Information hierarchy: Spaces are the first organizing layer. The active Space,
-  compact compose action, runtime health, attention badge, and shelf toggle occupy
-  one row. Search and grouped threads sit directly beneath it; other Spaces and
-  product destinations remain visually separate.
-- Density: the oversized full-width New thread action was removed. The default
-  desktop sidebar width is now 360px, closely matching the 366px reference region
-  while retaining the existing 260–480px drag range and the compact breakpoint.
-- Search: the persistent search field retains Cmd/Ctrl+K and the This Space / All
-  Spaces scope control. The shorter “Search threads” placeholder avoids competing
-  with the scope control.
-- Thread actions: the selected thread exposes its ellipsis without stealing width
-  from the row; other thread menus remain available on hover or keyboard focus.
-- Visual language: the implementation keeps the existing Colossus dark surfaces,
-  blue selection, green health, amber attention, borders, typography, and Tabler
-  icon family. No new raster or approximate CSS-drawn assets were introduced.
-- Responsive behavior: the existing drawer breakpoint and keyboard/pointer resize
-  handle remain intact. The active thread shelf can collapse without hiding other
-  Spaces or product destinations.
-- Space disclosure: inactive Space chevrons now expand bounded, read-only thread
-  metadata in place. Folder/name activation remains a separate action, matching
-  the Finder disclosure model without weakening the selected-Space runtime boundary.
-- Multiple expansion: Research Lab and Proposal Studio can remain open together.
-  The other-Space region scrolls within a bounded height, so product destinations
-  and agent status remain pinned to the bottom.
-- Required fidelity surfaces: typography, spacing, colors, icons, and copy continue
-  to use the existing Colossus components and tokens. Nested threads use the same
-  status icon family and metadata hierarchy as the selected Space list; no new
-  image assets were required.
+- Session hierarchy: Conversation, Topology, Plans, Sources, and Resources are peer
+  views under the selected task. Changing views does not change native Space or
+  thread authority.
+- Topology: the primary session appears once, with each follow-up represented as a
+  separate run group. Delegated agents remain attached to the run that released
+  them instead of disappearing when a new prompt starts.
+- Agent inspection: selecting a delegate opens the existing resizable details rail,
+  shows Overview and Activity tabs, and keeps released tool activity, final result,
+  parent run, and related session resources in context.
+- Durable resources: Plans, Sources, and Artifacts are derived only from released
+  run data already available to the renderer. The UI does not invent plans, source
+  bodies, decisions, paths, or child-run access.
+- Visual language: the implementation retains Colossus typography, dark surfaces,
+  blue selection, green completion, amber attention, restrained borders, and Tabler
+  icons while following the selected three-column information model.
+- Intentional data difference: the deterministic fixture contains one run and three
+  delegates. Focused tests cover two-run grouping and delegate persistence across
+  follow-ups; a real task with multiple prompts renders one group per run.
 
 ## Interaction And Accessibility Checks
 
-- The compact “New thread in Colossus” control opens New work and focuses the
-  prompt composer.
-- The active Space shelf collapses and expands its search/thread stack; its
-  accessible label changes between Collapse and Expand.
-- Manage Spaces opens a keyboard-addressable menu with Add, Rename, Archive, TUI,
-  terminal, and restore actions as supported by the selected Space.
-- Search remains enabled while another Space is starting, and Cmd/Ctrl+K expands
-  the shelf before focusing search.
-- Thread action menus expose Pin/Unpin and Archive while preserving native disabled
-  states for non-terminal work.
-- Browser DOM inspection confirmed Pinned, Needs attention, and Recent groups, the
-  compact compose action, Space attention badges, and scoped search.
+- Each session tab is keyboard-addressable and exposes the selected view with
+  `aria-current`.
+- Clicking Builder in Topology selected the row, opened Thread details, and loaded
+  its released filesystem, search, and file-summary actions.
+- The inspector identified the delegated agent's parent as Primary · Run 1 and
+  linked back to Session runs, Plans, Sources, and Artifacts.
+- Plans, Sources, Resources, and Conversation were exercised in sequence; empty
+  states and artifact counts were visible and the prompt composer remained usable.
+- The details rail remained pointer/keyboard resizable and retained the centered,
+  unboxed close control requested for the existing details design.
 - Browser console inspection returned no warnings or errors.
-- A fresh browser session confirmed that expanding a Space does not activate it,
-  while clicking a nested thread activates that Space before opening the thread.
-- Two inactive Spaces remained expanded simultaneously, with zero horizontal
-  overflow and the footer still 12px from the sidebar edge.
-- Expanded and collapsed DOM measurements both placed the other-Space shelves at
-  615.5px, destinations at 744.5px, and the footer 12px above the sidebar edge.
-- Focused unit tests and TypeScript checks passed after the final visual changes.
+- TypeScript checking and 17 focused session, component, participant, and resource
+  tests passed after the final changes.
+
+## Visual Comparison
+
+- The implementation matches the reference's three-column information model,
+  session-level tab bar, nested run topology, selected agent row, and contextual
+  right-side inspector.
+- It intentionally retains the existing Colossus task header, approval card,
+  composer, and runtime controls rather than replacing them with illustrative data.
+- The main visible difference is fixture content density: the reference demonstrates
+  two completed runs, while the local fixture truthfully renders its one released
+  run. The same component renders additional run groups from real session history.
+
+final result: passed
+
+---
+
+# Canonical Session Map Design QA
+
+## Evidence
+
+- Source visual truth:
+  `/Users/alex/.codex/generated_images/01a001d9-b94f-7633-b625-6849323278a2/exec-493dfe63-cc7d-4ebb-bfd8-1f52f18d790e.png`
+- Browser-rendered implementation:
+  `/Users/alex/tools/Colossus/apps/desktop/design-qa-session-map.png`
+- Live fixture: `http://127.0.0.1:4173/?fixture=operations-studio`
+- Source pixels: 1376 × 1143. Implementation pixels and CSS viewport: 1160 ×
+  940 at device-pixel ratio 1. The source is a focused design composition; the
+  implementation keeps the real Space sidebar and task header while giving
+  Topology the full content height instead of squeezing the graph above the
+  conversation approval/composer dock.
+- State: Topology selected, Memories expanded, the Rust repository memory selected,
+  and its canonical details open in the right inspector.
+- Both images were opened together in the same comparison input before this report.
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+- Typography: Colossus's existing font stack, weights, muted metadata scale, and
+  compact heading hierarchy preserve the reference's dense operational character.
+  Truncation is limited to graph-card labels; complete values remain available in
+  the inspector.
+- Spacing and layout: the full map preserves the reference's primary → family →
+  record progression. The dedicated tab uses the full available height. When the
+  real details rail reduces a sub-1280-pixel viewport, the map intentionally
+  collapses to family → record so the selected branch and inspector remain visible
+  together; wider windows retain the primary and Layers overview.
+- Colors and tokens: blue agent/research, amber work, purple context, green active,
+  and the existing dark Colossus surface tokens match the source hierarchy without
+  introducing a second visual system.
+- Image and icon fidelity: the design contains no raster product imagery. All
+  visible resource marks use the product's existing Tabler icon dependency with a
+  consistent 1.55–1.65 stroke weight; no placeholder or handcrafted SVG assets were
+  introduced.
+- Copy and content: labels map to canonical Colossus stores—Delegated agents,
+  Goals, Tasks, Plans, Key decisions, Memories, Research, Sources, and Artifacts.
+  The inspector omits illustrative telemetry that the current system cannot prove.
+- Accessibility and behavior: family controls expose `aria-expanded`, layer toggles
+  are native checkboxes, the selected record opens the existing keyboard-resizable
+  details rail, and switching from Conversation to Topology resets the feed to the
+  top instead of inheriting a stale scroll position. Fit restores the graph origin,
+  and opening an inspector preserves the user's vertical map position.
 
 ## Comparison History
 
-### Iteration 1
+- Initial P1: the approval request and composer consumed almost half the Topology
+  tab, leaving only a narrow, partially clipped graph viewport.
+- Fix: made Topology a dedicated full-height workspace; the conversation input and
+  pending-response controls remain available under Conversation, where actions are
+  actually taken.
+- Initial P2: opening the details rail kept the full three-column graph width, so
+  the selected memory record moved outside the visible main pane.
+- Fix: added a sub-1280-pixel, drawer-aware two-column graph layout that hides the
+  overview-only primary/layer controls while retaining the resource family,
+  selected records, and connecting line beside the inspector. Wider windows retain
+  the complete reference composition.
+- Post-fix evidence: `design-qa-session-map.png` shows all three memory records and
+  the selected memory's canonical detail fields visible at the same time.
 
-- Finding: the implementation used the previous 320px default, which compressed
-  search and status labels relative to the selected 366px reference sidebar.
-- Fix: increased the normal desktop default to 360px while preserving resize and
-  compact behavior.
+## Interaction And Browser Checks
 
-### Iteration 2
+- Verified Topology navigation and top-of-view reset.
+- Verified that the dedicated Topology view uses the full content height and does
+  not render the conversation composer.
+- Verified Collapse all, re-expanding Memories, expanding Goals, and opening a
+  Memory record.
+- Verified Space, status, updated time, kind, scope, confidence, source, text, and
+  rationale in the released Memory inspector.
+- Browser console errors: none.
+- Focused renderer/API tests: 208 passed. Desktop security-contract tests: 25
+  passed. Tauri `cargo check` passed.
 
-- Finding: the fixture did not demonstrate the intended pinned and attention
-  hierarchy, and the selected thread's action button consumed a separate column.
-- Fix: seeded the active fixture thread as pinned, moved the second fixture thread
-  to Needs attention, and overlaid the selected ellipsis inside the full-width row.
+## Focused Region Comparison
 
-### Iteration 3
+A separate crop was not required: both the family/record graph and inspector text
+are legible at 1× in the full implementation screenshot. The responsive inspector
+state received the focused comparison because it was the highest-risk layout.
 
-- Finding: the scope-aware placeholder was visually redundant with the adjacent
-  scope selector and truncated at the target width.
-- Fix: standardized the placeholder to “Search threads”; scope remains explicit in
-  the folder/globe selector.
+## Follow-up Polish
 
-### Iteration 4
-
-- Finding: collapsing the active Space removed the flexible thread region from
-  layout, allowing other Spaces, destinations, and connection status to rise to
-  the top of a tall sidebar.
-- Fix: the collapsed thread region now remains as the flexible spacer while its
-  interactive contents are visually and accessibly hidden. A browser regression
-  test verifies the footer does not move between expanded and collapsed states.
-
-### Iteration 5
-
-- Finding: inactive Space chevrons visually promised disclosure but invoked the
-  same context-switch action as the Space name.
-- Fix: separated disclosure from activation. Chevrons now lazily load bounded
-  metadata-only thread previews; names activate Spaces; nested thread selection
-  performs the existing activate-then-open flow.
-- Post-fix evidence: the current expanded-Space screenshot shows two independently
-  disclosed folders. Browser interaction confirmed Colossus remained active while
-  browsing, then Research Lab became active only after its name or nested thread
-  was selected.
-
-The existing Colossus reference and implementation were evaluated together at the
-same viewport in full-screen and sidebar-focused comparisons. The Finder crop was
-used only as the disclosure-behavior reference because it depicts another platform,
-not a 1:1 visual target. Remaining differences are fixture content density and live
-runtime state, not structural or usability defects.
+- [P3] A future canvas implementation could animate a selected branch into view
+  when opening the inspector. The current drawer-aware layout keeps the same
+  information visible without adding motion or new navigation semantics.
 
 final result: passed

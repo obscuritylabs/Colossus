@@ -4,6 +4,8 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
     match operation {
         WorkerOperation::Ping => "ping",
         WorkerOperation::SetApprovalMode { .. } => "set_approval_mode",
+        WorkerOperation::InspectThreadDelegate { .. } => "inspect_thread_delegate",
+        WorkerOperation::InspectSessionMap { .. } => "inspect_session_map",
         WorkerOperation::AuditVerify => "audit_verify",
         WorkerOperation::AuditAnchorStatus => "audit_anchor_status",
         WorkerOperation::AuditRead { .. } => "audit_read",

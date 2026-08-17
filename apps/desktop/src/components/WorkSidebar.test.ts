@@ -353,7 +353,10 @@ describe("WorkSidebar", () => {
     });
 
     expect(markup).toContain("All Spaces");
-    expect(markup).toContain('aria-label="Search scope: All Spaces"');
+    expect(markup).toContain('aria-label="Thread search scope"');
+    expect(openingButtonTag(markup, "All Spaces")).toContain(
+      'aria-pressed="true"',
+    );
     expect(openingInputTag(markup, "Search threads")).not.toContain("disabled");
     expect(markup).not.toContain('class="search-scope"');
     expect(markup).toContain("Include archived");

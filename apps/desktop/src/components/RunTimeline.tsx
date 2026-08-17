@@ -6,9 +6,11 @@ import {
   IconCheck,
   IconChevronDown,
   IconCircle,
+  IconCopy,
   IconEdit,
   IconFile,
   IconInfoCircle,
+  IconListDetails,
   IconLoader2,
   IconMessageCircle,
   IconPlayerPlay,
@@ -17,7 +19,7 @@ import {
   IconTargetArrow,
   IconTerminal2,
 } from "@tabler/icons-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
@@ -41,6 +43,7 @@ interface RunTimelineProps {
   planContinuationAvailable?: boolean;
   planWorkflowAvailable?: boolean;
   onOpenPlanWorkflow?: (sessionId: string, planId: string) => void;
+  onInspectPlan?: (sourceRunId: string, planId: string) => void;
   onRevisePlan?: (
     sourceRunId: string,
     planId: string,
@@ -134,6 +137,92 @@ function ContentPart({ part }: { part: MessageContentPart }) {
   );
 }
 
+function messageCopyText(message: SessionMessage): string {
+  return message.content
+    .map((part) =>
+      part.type === "text"
+        ? part.text
+        : `[Attachment: ${part.artifact.fileName}]`,
+    )
+    .join("\n")
+    .trim();
+}
+
+function fallbackCopyText(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  return copied;
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      return fallbackCopyText(text);
+    } catch {
+      return false;
+    }
+  }
+}
+
+function MessageCopyButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const resetTimerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  async function copy() {
+    const copied = await copyText(text);
+    setState(copied ? "copied" : "failed");
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    resetTimerRef.current = window.setTimeout(() => setState("idle"), 1600);
+  }
+
+  const copyLabel =
+    state === "copied"
+      ? `Copied ${label}`
+      : state === "failed"
+        ? `Could not copy ${label}`
+        : `Copy ${label}`;
+  return (
+    <button
+      className={`message-copy-button is-${state}`}
+      type="button"
+      aria-label={copyLabel}
+      title={copyLabel}
+      disabled={text.trim() === ""}
+      onClick={() => void copy()}
+    >
+      {state === "copied" ? (
+        <IconCheck size={13} stroke={2} aria-hidden="true" />
+      ) : (
+        <IconCopy size={13} stroke={1.8} aria-hidden="true" />
+      )}
+      <span>
+        {state === "copied" ? "Copied" : state === "failed" ? "Retry" : "Copy"}
+      </span>
+    </button>
+  );
+}
+
 function ResearchResponse({
   output,
   onOpenSources,
@@ -193,6 +282,9 @@ function Message({ message }: { message: SessionMessage }) {
           {message.content.map((part, index) => (
             <ContentPart key={`${message.sequence}-${index}`} part={part} />
           ))}
+        </div>
+        <div className="message-actions">
+          <MessageCopyButton text={messageCopyText(message)} label="message" />
         </div>
       </div>
     </article>
@@ -833,6 +925,7 @@ function PlanResultCard({
   cancelled,
   continuationAvailable,
   workflowAvailable,
+  onInspect,
   onOpenWorkflow,
   onRevise,
   onExecute,
@@ -843,6 +936,7 @@ function PlanResultCard({
   cancelled: boolean;
   continuationAvailable: boolean;
   workflowAvailable: boolean;
+  onInspect: ((sourceRunId: string, planId: string) => void) | undefined;
   onOpenWorkflow: ((sessionId: string, planId: string) => void) | undefined;
   onRevise:
     | ((sourceRunId: string, planId: string, revision: number) => void)
@@ -998,6 +1092,14 @@ function PlanResultCard({
           <button
             className="button tertiary compact"
             type="button"
+            onClick={() => onInspect?.(sourceRunId, plan.planId)}
+          >
+            <IconListDetails size={15} stroke={1.8} aria-hidden="true" />
+            Read plan
+          </button>
+          <button
+            className="button tertiary compact"
+            type="button"
             disabled={!workflowAvailable}
             title={
               workflowAvailable
@@ -1021,6 +1123,7 @@ export function RunTimeline({
   activityComparison = false,
   planContinuationAvailable = false,
   planWorkflowAvailable = false,
+  onInspectPlan,
   onOpenPlanWorkflow,
   onRevisePlan,
   onExecutePlan,
@@ -1070,6 +1173,9 @@ export function RunTimeline({
               data-aside-selectable="true"
             >
               {view.localPrompt}
+            </div>
+            <div className="message-actions">
+              <MessageCopyButton text={view.localPrompt} label="message" />
             </div>
           </div>
         </article>
@@ -1136,17 +1242,25 @@ export function RunTimeline({
           cancelled={view.run.terminal?.type === "cancellation"}
           continuationAvailable={planContinuationAvailable}
           workflowAvailable={planWorkflowAvailable}
+          onInspect={onInspectPlan}
           onOpenWorkflow={onOpenPlanWorkflow}
           onRevise={onRevisePlan}
           onExecute={onExecutePlan}
         />
       ) : null}
-      {view.usage !== null ? (
-        <p className="usage-summary">
-          {view.usage.totalTokens.toLocaleString()} tokens ·{" "}
-          {view.usage.inputTokens.toLocaleString()} in /{" "}
-          {view.usage.outputTokens.toLocaleString()} out
-        </p>
+      {view.usage !== null || view.output !== "" ? (
+        <div className="response-utilities">
+          {view.usage !== null ? (
+            <p className="usage-summary">
+              {view.usage.totalTokens.toLocaleString()} tokens ·{" "}
+              {view.usage.inputTokens.toLocaleString()} in /{" "}
+              {view.usage.outputTokens.toLocaleString()} out
+            </p>
+          ) : null}
+          {view.output !== "" ? (
+            <MessageCopyButton text={view.output} label="Colossus response" />
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

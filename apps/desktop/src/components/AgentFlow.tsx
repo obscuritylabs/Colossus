@@ -9,7 +9,14 @@ import type { ComponentType } from "react";
 
 export type AgentIcon = "lead" | "builder" | "security" | "writer";
 export type AgentWorkState =
-  "coordinating" | "working" | "reviewing" | "waiting" | "idle";
+  | "coordinating"
+  | "working"
+  | "reviewing"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "idle";
 
 export interface AgentParticipant {
   id: string;
@@ -17,6 +24,20 @@ export interface AgentParticipant {
   role: string;
   state: AgentWorkState;
   icon: AgentIcon;
+  kind: "primary" | "delegate";
+  parentRunId?: string;
+  childSessionId?: string;
+  childRunId?: string;
+  modelRole?: string;
+  task?: string;
+  finalOutput?: string;
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  parentRunIndex?: number;
+  parentRunTitle?: string;
 }
 
 interface AgentFlowProps {

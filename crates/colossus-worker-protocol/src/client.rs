@@ -3,7 +3,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    WorkerApprovalMode, WorkerControlError,
+    WorkerApprovalMode, WorkerControlError, WorkerSessionMap, WorkerThreadDelegateInspection,
     wire::{
         ClientHello, ControlFrameContent, ControlOperation, MAX_CLOCK_SKEW_MS, MAX_FRAME_BYTES,
         MAX_REQUEST_BYTES, PROTOCOL_VERSION, ServerHello, UnsignedFrame, UnsignedRequest,
@@ -73,6 +73,50 @@ impl WorkerControlClient {
             WorkerControlError::Protocol("worker control response omitted approval mode".into())
         })?)
         .map_err(|error| WorkerControlError::Protocol(error.to_string()))
+    }
+
+    /// Return one bounded child-agent inspection after worker-side lineage validation.
+    pub async fn inspect_thread_delegate(
+        &self,
+        parent_run_id: &str,
+        job_id: &str,
+    ) -> Result<WorkerThreadDelegateInspection, WorkerControlError> {
+        if parent_run_id.is_empty()
+            || parent_run_id.len() > 128
+            || job_id.is_empty()
+            || job_id.len() > 128
+        {
+            return Err(WorkerControlError::Protocol(
+                "delegate inspection identifiers are invalid".into(),
+            ));
+        }
+        let result = self
+            .call(ControlOperation::InspectThreadDelegate {
+                parent_run_id: parent_run_id.into(),
+                job_id: job_id.into(),
+            })
+            .await?;
+        serde_json::from_value(result)
+            .map_err(|error| WorkerControlError::Protocol(error.to_string()))
+    }
+
+    /// Return bounded canonical resources after native selected-session validation.
+    pub async fn inspect_session_map(
+        &self,
+        session_id: &str,
+    ) -> Result<WorkerSessionMap, WorkerControlError> {
+        if session_id.is_empty() || session_id.len() > 128 {
+            return Err(WorkerControlError::Protocol(
+                "session map identifier is invalid".into(),
+            ));
+        }
+        let result = self
+            .call(ControlOperation::InspectSessionMap {
+                session_id: session_id.into(),
+            })
+            .await?;
+        serde_json::from_value(result)
+            .map_err(|error| WorkerControlError::Protocol(error.to_string()))
     }
 
     async fn call(

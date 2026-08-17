@@ -30,6 +30,8 @@ import {
   connectColossus,
   createRun,
   desktopReleaseChannel,
+  getSessionMap,
+  getThreadDelegate,
   getRun,
   installDesktopUpdate,
   listWorkspaceDirectory,
@@ -159,6 +161,8 @@ describe("desktop API target routing", () => {
 
     await configureManagedRuntime(request);
     await runManagedSelfTest();
+    await getSessionMap("run-session-map");
+    await getThreadDelegate("run-parent", "agent-child");
     await selectTarget("managed-local");
     await setApprovalMode("risk_auto");
     await setTerminalEnabled(true);
@@ -172,6 +176,11 @@ describe("desktop API target routing", () => {
     expect(tauri.invoke.mock.calls).toEqual([
       ["configure_managed_runtime", { request }],
       ["run_managed_self_test", undefined],
+      ["get_session_map", { sourceRunId: "run-session-map" }],
+      [
+        "get_thread_delegate",
+        { parentRunId: "run-parent", jobId: "agent-child" },
+      ],
       ["select_target", { targetId: "managed-local" }],
       ["set_approval_mode", { approvalMode: "risk_auto" }],
       ["set_terminal_enabled", { enabled: true }],

@@ -105,6 +105,112 @@ test("follow-ups can be queued, edited, deleted, and used to redirect active wor
   ).toBeVisible();
 });
 
+test("conversation follow pauses for reading and resumes on demand or submit", async ({
+  page,
+}) => {
+  const feed = page.locator(".work-feed-scroll");
+  await feed.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+
+  const jumpToLatest = page.getByRole("button", { name: "Jump to latest" });
+  await expect(jumpToLatest).toBeVisible();
+  await jumpToLatest.click();
+  await expect(jumpToLatest).toHaveCount(0);
+  await expect
+    .poll(() =>
+      feed.evaluate(
+        (element) =>
+          element.scrollHeight - element.scrollTop - element.clientHeight,
+      ),
+    )
+    .toBeLessThanOrEqual(2);
+
+  await feed.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(jumpToLatest).toBeVisible();
+  await page.getByLabel("Prompt", { exact: true }).fill("Follow this message");
+  await page.getByRole("button", { name: "Send prompt" }).click();
+  await expect(jumpToLatest).toHaveCount(0);
+});
+
+test("Colossus responses expose copy confirmation", async ({ page }) => {
+  const copyResponse = page
+    .getByRole("button", { name: "Copy Colossus response" })
+    .first();
+  await expect(copyResponse).toBeVisible();
+  await copyResponse.click();
+  await expect(
+    page.getByRole("button", { name: "Copied Colossus response" }).first(),
+  ).toBeVisible();
+});
+
+test("Session Map expands canonical resources and opens their inspector", async ({
+  page,
+}) => {
+  const feed = page.locator(".work-feed-scroll");
+  await feed.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Session map", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("form", { name: "Send a prompt" })).toHaveCount(
+    0,
+  );
+  await expect(page.locator(".session-map-primary")).toBeVisible();
+  await expect
+    .poll(() => feed.evaluate((element) => element.scrollTop))
+    .toBe(0);
+
+  const memories = page.getByRole("button", { name: /Memories 3/u });
+  await expect(memories).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByRole("button", {
+      name: /Use Rust 1\.96 and edition 2024/u,
+    }),
+  ).toBeVisible();
+
+  const goals = page.getByRole("button", { name: /Goals 2/u });
+  await goals.click();
+  await expect(goals).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByRole("button", { name: /Review workspace architecture/u }),
+  ).toBeVisible();
+
+  const stage = page.locator(".session-map-stage");
+  await stage.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+  });
+  await page.getByRole("button", { name: "Fit", exact: true }).click();
+  await expect
+    .poll(() => stage.evaluate((element) => element.scrollLeft))
+    .toBe(0);
+
+  const feedTopBeforeInspection = await feed.evaluate(
+    (element) => element.scrollTop,
+  );
+  await page
+    .getByRole("button", { name: /Use Rust 1\.96 and edition 2024/u })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Use Rust 1.96 and edition 2024 for implementation work.",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("Repository", { exact: true })).toBeVisible();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
+  await expect
+    .poll(() => feed.evaluate((element) => element.scrollTop))
+    .toBe(feedTopBeforeInspection);
+});
+
 test("right-side drawers trap focus, close with Escape, and restore focus", async ({
   page,
 }) => {
@@ -359,26 +465,43 @@ test("search scope is part of the search control", async ({ page }) => {
   const search = navigation.getByRole("searchbox", {
     name: "Search threads",
   });
-  const scopeTrigger = navigation.locator(".search-scope-menu > summary");
+  const scope = navigation.getByLabel("Thread search scope");
 
   await expect(search).toHaveAttribute("placeholder", "Search threads");
-  await expect(scopeTrigger).toHaveAttribute(
-    "aria-label",
-    "Search scope: This Space",
-  );
+  await expect(
+    scope.getByRole("button", { name: "This Space", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
 
-  await scopeTrigger.click();
-  await navigation
-    .locator(".search-scope-popover")
-    .getByRole("button", { name: "All Spaces", exact: true })
-    .click({ force: true });
+  await scope.getByRole("button", { name: "All Spaces", exact: true }).click();
 
-  await expect(search).toHaveAttribute("placeholder", "Search threads");
-  await expect(scopeTrigger).toHaveAttribute(
-    "aria-label",
-    "Search scope: All Spaces",
-  );
+  await expect(
+    scope.getByRole("button", { name: "All Spaces", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    scope.getByRole("button", { name: "This Space", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
   await expect(search).toBeFocused();
+});
+
+test("Thread details lists released participants and returns focus on close", async ({
+  page,
+}) => {
+  const detailsTrigger = page.getByRole("button", {
+    name: "Open thread details",
+  });
+  await detailsTrigger.click();
+
+  const details = page.getByRole("dialog", { name: "Thread details" });
+  await expect(details).toBeVisible();
+  await expect(details).toContainText("Atlas");
+  await expect(details).toContainText("Builder");
+  await expect(details).toContainText("Sentinel");
+  await expect(details).toContainText("Scribe");
+  await expect(details).toContainText("bootstrap.rs");
+
+  await details.getByRole("button", { name: "Close details drawer" }).click();
+  await expect(details).toHaveCount(0);
+  await expect(detailsTrigger).toBeFocused();
 });
 
 test("Space startup keeps search and navigation responsive", async ({

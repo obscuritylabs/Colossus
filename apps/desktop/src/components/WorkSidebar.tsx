@@ -25,7 +25,6 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import colossusMark from "../assets/colossus-mark.svg";
 import {
   presentRunStatus,
   runModeLabel,
@@ -214,8 +213,6 @@ export function WorkSidebar({
   const sidebarRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const searchScopeMenuRef = useRef<HTMLDetailsElement>(null);
-  const searchScopeTriggerRef = useRef<HTMLElement>(null);
   const focusSearchWhenOpened = useRef(false);
   const sidebarResizeRef = useRef<{
     pointerId: number;
@@ -228,6 +225,7 @@ export function WorkSidebar({
   const [renameSpaceId, setRenameSpaceId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [threadShelfOpen, setThreadShelfOpen] = useState(true);
+  const [showAllRecent, setShowAllRecent] = useState(false);
   const [expandedSpaceIds, setExpandedSpaceIds] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -391,7 +389,6 @@ export function WorkSidebar({
 
   function chooseSearchScope(scope: SpaceSearchScope) {
     onSearchScopeChange(scope);
-    searchScopeMenuRef.current?.removeAttribute("open");
     searchRef.current?.focus();
   }
 
@@ -502,14 +499,6 @@ export function WorkSidebar({
       >
         <IconX size={19} stroke={1.8} aria-hidden="true" />
       </button>
-
-      <header className="space-sidebar-brand">
-        <img src={colossusMark} alt="" />
-        <span>
-          <small>Colossus</small>
-          <strong>Operations Studio</strong>
-        </span>
-      </header>
 
       <section className="space-shelves" aria-labelledby="spaces-heading">
         <div className="space-shelves-heading">
@@ -632,6 +621,52 @@ export function WorkSidebar({
           </details>
         </div>
 
+        <div className="work-search">
+          <IconSearch size={17} stroke={1.7} aria-hidden="true" />
+          <input
+            ref={searchRef}
+            type="search"
+            aria-label="Search threads"
+            value={query}
+            placeholder="Search threads"
+            onChange={(event) => onQueryChange(event.target.value)}
+          />
+          <kbd aria-hidden="true">⌘K</kbd>
+        </div>
+        <div className="search-scope-switcher" aria-label="Thread search scope">
+          <button
+            type="button"
+            aria-pressed={searchScope === "all"}
+            onClick={() => chooseSearchScope("all")}
+          >
+            <IconWorld size={13} stroke={1.8} aria-hidden="true" />
+            All Spaces
+          </button>
+          <button
+            type="button"
+            aria-pressed={searchScope === "space"}
+            disabled={selectedSpaceId === null}
+            onClick={() => chooseSearchScope("space")}
+          >
+            <IconFolder size={13} stroke={1.8} aria-hidden="true" />
+            This Space
+          </button>
+        </div>
+        {searchScope === "all" ? (
+          <label className="include-archived-search">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(event) =>
+                onIncludeArchivedChange(event.target.checked)
+              }
+            />
+            Include archived Spaces and threads
+          </label>
+        ) : null}
+      </section>
+
+      <div className="space-tree-scroll">
         {displayedSpace === undefined ? (
           <button
             className="space-empty-add"
@@ -739,507 +774,436 @@ export function WorkSidebar({
             ) : null}
           </div>
         )}
-      </section>
-
-      <div
-        className={`space-thread-stack${threadShelfOpen ? "" : " is-collapsed"}`}
-        aria-hidden={!threadShelfOpen}
-      >
-        <div className="work-search">
-          <IconSearch size={17} stroke={1.7} aria-hidden="true" />
-          <input
-            ref={searchRef}
-            type="search"
-            aria-label="Search threads"
-            value={query}
-            placeholder="Search threads"
-            onChange={(event) => onQueryChange(event.target.value)}
-          />
-          <kbd aria-hidden="true">⌘K</kbd>
-          <details
-            ref={searchScopeMenuRef}
-            className="search-scope-menu"
-            onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) {
-                event.currentTarget.removeAttribute("open");
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.currentTarget.removeAttribute("open");
-                searchScopeTriggerRef.current?.focus();
-              }
-            }}
-          >
-            <summary
-              ref={searchScopeTriggerRef}
-              aria-label={`Search scope: ${
-                searchScope === "space" ? "This Space" : "All Spaces"
-              }`}
-              title="Change search scope"
-            >
-              {searchScope === "space" ? (
-                <IconFolder size={14} stroke={1.8} aria-hidden="true" />
-              ) : (
-                <IconWorld size={14} stroke={1.8} aria-hidden="true" />
-              )}
-              <span>
-                {searchScope === "space" ? "This Space" : "All Spaces"}
-              </span>
-              <IconChevronDown
-                className="search-scope-chevron"
-                size={12}
-                stroke={1.8}
-                aria-hidden="true"
-              />
-            </summary>
-            <div className="search-scope-popover" aria-label="Search scope">
-              <button
-                type="button"
-                aria-pressed={searchScope === "space"}
-                disabled={selectedSpaceId === null}
-                onClick={() => chooseSearchScope("space")}
-              >
-                <IconFolder size={15} stroke={1.8} aria-hidden="true" />
-                <span>This Space</span>
-                {searchScope === "space" ? (
-                  <IconCheck size={14} stroke={2} aria-hidden="true" />
-                ) : null}
-              </button>
-              <button
-                type="button"
-                aria-pressed={searchScope === "all"}
-                onClick={() => chooseSearchScope("all")}
-              >
-                <IconWorld size={15} stroke={1.8} aria-hidden="true" />
-                <span>All Spaces</span>
-                {searchScope === "all" ? (
-                  <IconCheck size={14} stroke={2} aria-hidden="true" />
-                ) : null}
-              </button>
-            </div>
-          </details>
-        </div>
-        {searchScope === "all" ? (
-          <label className="include-archived-search">
-            <input
-              type="checkbox"
-              checked={includeArchived}
-              onChange={(event) =>
-                onIncludeArchivedChange(event.target.checked)
-              }
-            />
-            Include archived Spaces and threads
-          </label>
-        ) : null}
-
-        <nav
-          className="work-list"
-          aria-label="Threads"
-          aria-busy={busy || searchBusy}
+        <div
+          className={`space-thread-stack${threadShelfOpen ? "" : " is-collapsed"}`}
+          aria-hidden={!threadShelfOpen}
         >
-          {searching
-            ? searchResults.map((result) => {
-                const status = presentRunStatus(result.status);
-                const restoring =
-                  threadLifecycleBusySessionId === result.sessionId;
-                return (
-                  <div
-                    className="work-item-row"
-                    key={`${result.spaceId}:${result.runId}`}
-                  >
-                    <button
-                      className="work-item search-result-item"
-                      type="button"
-                      disabled={actionsDisabled || result.threadArchived}
-                      onClick={() => onSelectSearchResult(result)}
+          <nav
+            className="work-list"
+            aria-label="Threads"
+            aria-busy={busy || searchBusy}
+          >
+            {searching
+              ? searchResults.map((result) => {
+                  const status = presentRunStatus(result.status);
+                  const restoring =
+                    threadLifecycleBusySessionId === result.sessionId;
+                  return (
+                    <div
+                      className="work-item-row"
+                      key={`${result.spaceId}:${result.runId}`}
                     >
-                      <span className="work-item-copy">
-                        <strong>{result.title}</strong>
-                        <span>
-                          {result.spaceName} · {runModeLabel(result.mode)} ·{" "}
-                          {result.threadArchived
-                            ? "Archived"
-                            : shortDateLabel(result.updatedAt)}
-                        </span>
-                      </span>
-                      <span
-                        className={`work-item-state tone-${searchResultTone(result)}`}
-                        title={status.copy}
-                      >
-                        {statusIcon(status.tone)}
-                        <span className="sr-only">{status.label}</span>
-                      </span>
-                    </button>
-                    {result.threadArchived ? (
                       <button
-                        className="work-item-action"
+                        className="work-item search-result-item"
                         type="button"
-                        aria-label={`Restore ${result.title}`}
-                        title="Restore thread"
-                        disabled={actionsDisabled || restoring}
-                        onClick={() => onRestoreThread(result)}
+                        disabled={actionsDisabled || result.threadArchived}
+                        onClick={() => onSelectSearchResult(result)}
                       >
-                        {restoring ? (
-                          <IconLoader2 className="spin-icon" size={15} />
-                        ) : (
-                          <IconRestore size={15} stroke={1.8} />
-                        )}
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })
-            : groups.map((group) => (
-                <section className="work-group" key={group.key}>
-                  <div className="work-group-heading">
-                    <h2>
-                      {group.key === "pinned" ? (
-                        <IconPin size={12} stroke={1.8} aria-hidden="true" />
-                      ) : group.key === "attention" ? (
-                        <IconAlertCircle
-                          size={12}
-                          stroke={1.8}
-                          aria-hidden="true"
-                        />
-                      ) : group.key === "active" ? (
-                        <IconPointFilled
-                          size={12}
-                          stroke={1.8}
-                          aria-hidden="true"
-                        />
-                      ) : (
-                        <IconActivity
-                          size={12}
-                          stroke={1.8}
-                          aria-hidden="true"
-                        />
-                      )}
-                      {group.label}
-                    </h2>
-                    <span>{group.items.length}</span>
-                  </div>
-                  <div className="work-group-items">
-                    {group.items.map((item) => {
-                      const run = runsById.get(item.runId);
-                      if (run === undefined) {
-                        return null;
-                      }
-                      const pinned = pinnedSessionIds.has(run.sessionId);
-                      const archiving =
-                        threadLifecycleBusySessionId === run.sessionId;
-                      return (
-                        <div
-                          className={`work-item-row${
-                            activeSessionId === run.sessionId
-                              ? " is-current"
-                              : ""
-                          }`}
-                          key={item.runId}
+                        <span className="work-item-copy">
+                          <strong>{result.title}</strong>
+                          <span>
+                            {result.spaceName} · {runModeLabel(result.mode)} ·{" "}
+                            {result.threadArchived
+                              ? "Archived"
+                              : shortDateLabel(result.updatedAt)}
+                          </span>
+                        </span>
+                        <span
+                          className={`work-item-state tone-${searchResultTone(result)}`}
+                          title={status.copy}
                         >
-                          <button
-                            className="work-item"
-                            type="button"
-                            aria-current={
+                          {statusIcon(status.tone)}
+                          <span className="sr-only">{status.label}</span>
+                        </span>
+                      </button>
+                      {result.threadArchived ? (
+                        <button
+                          className="work-item-action"
+                          type="button"
+                          aria-label={`Restore ${result.title}`}
+                          title="Restore thread"
+                          disabled={actionsDisabled || restoring}
+                          onClick={() => onRestoreThread(result)}
+                        >
+                          {restoring ? (
+                            <IconLoader2 className="spin-icon" size={15} />
+                          ) : (
+                            <IconRestore size={15} stroke={1.8} />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })
+              : groups.map((group) => (
+                  <section className="work-group" key={group.key}>
+                    <div className="work-group-heading">
+                      <h2>
+                        {group.key === "pinned" ? (
+                          <IconPin size={12} stroke={1.8} aria-hidden="true" />
+                        ) : group.key === "attention" ? (
+                          <IconAlertCircle
+                            size={12}
+                            stroke={1.8}
+                            aria-hidden="true"
+                          />
+                        ) : group.key === "active" ? (
+                          <IconPointFilled
+                            size={12}
+                            stroke={1.8}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <IconActivity
+                            size={12}
+                            stroke={1.8}
+                            aria-hidden="true"
+                          />
+                        )}
+                        {group.label}
+                      </h2>
+                      <span>{group.items.length}</span>
+                    </div>
+                    <div className="work-group-items">
+                      {(group.key === "recent" && !showAllRecent
+                        ? group.items.slice(0, 3)
+                        : group.items
+                      ).map((item) => {
+                        const run = runsById.get(item.runId);
+                        if (run === undefined) {
+                          return null;
+                        }
+                        const pinned = pinnedSessionIds.has(run.sessionId);
+                        const archiving =
+                          threadLifecycleBusySessionId === run.sessionId;
+                        return (
+                          <div
+                            className={`work-item-row${
                               activeSessionId === run.sessionId
-                                ? "page"
-                                : undefined
-                            }
-                            disabled={actionsDisabled}
-                            onClick={() => onSelect(run)}
+                                ? " is-current"
+                                : ""
+                            }`}
+                            key={item.runId}
                           >
-                            <span className="work-item-copy">
-                              <strong>{item.title}</strong>
-                              <span>
-                                {item.modeLabel} · {item.updatedLabel}
-                              </span>
-                            </span>
-                            <span
-                              className={`work-item-state tone-${item.statusTone}`}
-                              title={item.statusCopy}
-                            >
-                              {statusIcon(item.statusTone)}
-                              <span className="sr-only">
-                                {item.statusLabel}
-                              </span>
-                            </span>
-                          </button>
-                          <details
-                            className="thread-actions-menu"
-                            onBlur={(event) => {
-                              if (
-                                !event.currentTarget.contains(
-                                  event.relatedTarget,
-                                )
-                              ) {
-                                event.currentTarget.removeAttribute("open");
+                            <button
+                              className="work-item"
+                              type="button"
+                              aria-current={
+                                activeSessionId === run.sessionId
+                                  ? "page"
+                                  : undefined
                               }
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                event.currentTarget.removeAttribute("open");
-                                event.currentTarget
-                                  .querySelector("summary")
-                                  ?.focus();
-                              }
-                            }}
-                          >
-                            <summary
-                              className="work-item-action"
-                              role="button"
-                              aria-haspopup="menu"
-                              aria-label={`Thread actions for ${item.title}`}
-                              title="Thread actions"
+                              disabled={actionsDisabled}
+                              onClick={() => onSelect(run)}
                             >
-                              <IconDots
-                                size={17}
-                                stroke={1.9}
-                                aria-hidden="true"
-                              />
-                            </summary>
-                            <div
-                              className="thread-actions-popover"
-                              aria-label={`Actions for ${item.title}`}
-                            >
-                              <button
-                                type="button"
-                                aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
-                                aria-pressed={pinned}
-                                disabled={actionsDisabled}
-                                onClick={(event) => {
-                                  event.currentTarget
-                                    .closest("details")
-                                    ?.removeAttribute("open");
-                                  onToggleThreadPinned(run);
-                                }}
+                              <span className="work-item-copy">
+                                <strong>{item.title}</strong>
+                                <span>
+                                  {item.modeLabel} · {item.updatedLabel}
+                                </span>
+                              </span>
+                              <span
+                                className={`work-item-state tone-${item.statusTone}`}
+                                title={item.statusCopy}
                               >
-                                <IconPin
-                                  size={15}
-                                  stroke={1.8}
-                                  fill={pinned ? "currentColor" : "none"}
+                                {statusIcon(item.statusTone)}
+                                <span className="sr-only">
+                                  {item.statusLabel}
+                                </span>
+                              </span>
+                            </button>
+                            <details
+                              className="thread-actions-menu"
+                              onBlur={(event) => {
+                                if (
+                                  !event.currentTarget.contains(
+                                    event.relatedTarget,
+                                  )
+                                ) {
+                                  event.currentTarget.removeAttribute("open");
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  event.currentTarget.removeAttribute("open");
+                                  event.currentTarget
+                                    .querySelector("summary")
+                                    ?.focus();
+                                }
+                              }}
+                            >
+                              <summary
+                                className="work-item-action"
+                                role="button"
+                                aria-haspopup="menu"
+                                aria-label={`Thread actions for ${item.title}`}
+                                title="Thread actions"
+                              >
+                                <IconDots
+                                  size={17}
+                                  stroke={1.9}
                                   aria-hidden="true"
                                 />
-                                {pinned ? "Unpin" : "Pin"}
-                              </button>
-                              <button
-                                type="button"
-                                aria-label={`Archive ${item.title}`}
-                                title={
-                                  isTerminalStatus(run.status)
-                                    ? "Archive thread"
-                                    : "Finish or cancel this thread before archiving"
-                                }
-                                disabled={
-                                  actionsDisabled ||
-                                  archiving ||
-                                  !isTerminalStatus(run.status)
-                                }
-                                onClick={(event) => {
-                                  event.currentTarget
-                                    .closest("details")
-                                    ?.removeAttribute("open");
-                                  onArchiveThread(run);
-                                }}
+                              </summary>
+                              <div
+                                className="thread-actions-popover"
+                                aria-label={`Actions for ${item.title}`}
                               >
-                                {archiving ? (
-                                  <IconLoader2
-                                    className="spin-icon"
-                                    size={15}
-                                  />
-                                ) : (
-                                  <IconArchive
+                                <button
+                                  type="button"
+                                  aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
+                                  aria-pressed={pinned}
+                                  disabled={actionsDisabled}
+                                  onClick={(event) => {
+                                    event.currentTarget
+                                      .closest("details")
+                                      ?.removeAttribute("open");
+                                    onToggleThreadPinned(run);
+                                  }}
+                                >
+                                  <IconPin
                                     size={15}
                                     stroke={1.8}
+                                    fill={pinned ? "currentColor" : "none"}
                                     aria-hidden="true"
                                   />
-                                )}
-                                {archiving ? "Archiving…" : "Archive"}
-                              </button>
-                            </div>
-                          </details>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
-          {!busy &&
-          !searchBusy &&
-          (searching ? searchResults.length === 0 : groups.length === 0) ? (
-            <p className="work-list-empty">
-              {searching
-                ? "No threads match this search."
-                : "Threads in this Space will appear here."}
-            </p>
-          ) : null}
-        </nav>
+                                  {pinned ? "Unpin" : "Pin"}
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Archive ${item.title}`}
+                                  title={
+                                    isTerminalStatus(run.status)
+                                      ? "Archive thread"
+                                      : "Finish or cancel this thread before archiving"
+                                  }
+                                  disabled={
+                                    actionsDisabled ||
+                                    archiving ||
+                                    !isTerminalStatus(run.status)
+                                  }
+                                  onClick={(event) => {
+                                    event.currentTarget
+                                      .closest("details")
+                                      ?.removeAttribute("open");
+                                    onArchiveThread(run);
+                                  }}
+                                >
+                                  {archiving ? (
+                                    <IconLoader2
+                                      className="spin-icon"
+                                      size={15}
+                                    />
+                                  ) : (
+                                    <IconArchive
+                                      size={15}
+                                      stroke={1.8}
+                                      aria-hidden="true"
+                                    />
+                                  )}
+                                  {archiving ? "Archiving…" : "Archive"}
+                                </button>
+                              </div>
+                            </details>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {group.key === "recent" && group.items.length > 3 ? (
+                      <button
+                        className="work-group-more"
+                        type="button"
+                        onClick={() => setShowAllRecent((visible) => !visible)}
+                      >
+                        {showAllRecent
+                          ? "Show fewer"
+                          : `View all ${group.items.length} recent threads`}
+                      </button>
+                    ) : null}
+                  </section>
+                ))}
+            {!busy &&
+            !searchBusy &&
+            (searching ? searchResults.length === 0 : groups.length === 0) ? (
+              <p className="work-list-empty">
+                {searching
+                  ? "No threads match this search."
+                  : "Threads in this Space will appear here."}
+              </p>
+            ) : null}
+          </nav>
 
-        <div className="work-list-footer">
-          {busy || searchBusy ? (
-            <span className="loading-copy" role="status">
-              <IconLoader2 className="spin-icon" size={15} aria-hidden="true" />
-              {searching ? "Searching" : "Loading threads"}
-            </span>
-          ) : null}
-          {searching && searchHasMore ? (
-            <button
-              className="text-button"
-              type="button"
-              disabled={searchBusy || actionsDisabled}
-              onClick={onLoadMoreSearch}
-            >
-              More results
-            </button>
-          ) : null}
-          {!searching && hasMore ? (
-            <button
-              className="text-button"
-              type="button"
-              disabled={busy || actionsDisabled}
-              onClick={onLoadMore}
-            >
-              Load more
-            </button>
-          ) : null}
-          {(searching ? searchError : error) !== "" ? (
-            <p className="sidebar-error" role="alert">
-              {searching ? searchError : error}
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      {otherSpaces.length > 0 ? (
-        <nav className="space-shelf-list" aria-label="Other Spaces">
-          {otherSpaces.map((space) => {
-            const starting = spaceStartup?.spaceId === space.spaceId;
-            const expanded = expandedSpaceIds.has(space.spaceId);
-            const previewItems = spaceThreadPreviews.get(space.spaceId);
-            const previewBusy = spaceThreadPreviewBusyIds.has(space.spaceId);
-            const previewError = spaceThreadPreviewErrors.get(space.spaceId);
-            const previewId = `space-thread-preview-${space.spaceId}`;
-            return (
-              <div
-                className={`space-shelf${expanded ? " is-expanded" : ""}`}
-                key={space.spaceId}
+          <div className="work-list-footer">
+            {busy || searchBusy ? (
+              <span className="loading-copy" role="status">
+                <IconLoader2
+                  className="spin-icon"
+                  size={15}
+                  aria-hidden="true"
+                />
+                {searching ? "Searching" : "Loading threads"}
+              </span>
+            ) : null}
+            {searching && searchHasMore ? (
+              <button
+                className="text-button"
+                type="button"
+                disabled={searchBusy || actionsDisabled}
+                onClick={onLoadMoreSearch}
               >
-                <div className="space-shelf-row">
-                  <button
-                    type="button"
-                    className="space-shelf-identity"
-                    aria-current={space.selected ? "true" : undefined}
-                    aria-busy={starting}
-                    disabled={actionsDisabled || space.selected}
-                    title={space.displayPath}
-                    onClick={() => onSelectSpace(space.spaceId)}
-                  >
-                    <span className="space-shelf-folder" aria-hidden="true">
-                      {starting ? (
-                        <IconLoader2
-                          className="spin-icon"
-                          size={17}
-                          stroke={1.8}
-                        />
-                      ) : (
-                        <IconFolder size={17} stroke={1.7} />
-                      )}
-                    </span>
-                    <strong>{space.displayName}</strong>
-                  </button>
-                  <span className="space-shelf-state">
-                    <i
-                      className={`space-health ${
-                        starting
-                          ? "space-health-loading"
-                          : `space-health-${space.state}`
-                      }`}
-                      aria-hidden="true"
-                    />
-                    {starting ? "Starting" : runtimeLabel(space)}
-                  </span>
-                  {space.attentionCount > 0 ? (
-                    <span className="space-attention-badge">
-                      {Math.min(space.attentionCount, 99)}
-                    </span>
-                  ) : null}
-                  <button
-                    className="space-shelf-chevron"
-                    type="button"
-                    aria-label={`${expanded ? "Collapse" : "Expand"} ${space.displayName} threads`}
-                    aria-controls={previewId}
-                    aria-expanded={expanded}
-                    onClick={() => toggleSpacePreview(space.spaceId)}
-                  >
-                    <IconChevronDown
-                      size={16}
-                      stroke={1.8}
-                      aria-hidden="true"
-                    />
-                  </button>
-                </div>
+                More results
+              </button>
+            ) : null}
+            {!searching && hasMore ? (
+              <button
+                className="text-button"
+                type="button"
+                disabled={busy || actionsDisabled}
+                onClick={onLoadMore}
+              >
+                Load more
+              </button>
+            ) : null}
+            {(searching ? searchError : error) !== "" ? (
+              <p className="sidebar-error" role="alert">
+                {searching ? searchError : error}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        {otherSpaces.length > 0 ? (
+          <nav className="space-shelf-list" aria-label="Other Spaces">
+            {otherSpaces.map((space) => {
+              const starting = spaceStartup?.spaceId === space.spaceId;
+              const expanded = expandedSpaceIds.has(space.spaceId);
+              const previewItems = spaceThreadPreviews.get(space.spaceId);
+              const previewBusy = spaceThreadPreviewBusyIds.has(space.spaceId);
+              const previewError = spaceThreadPreviewErrors.get(space.spaceId);
+              const previewId = `space-thread-preview-${space.spaceId}`;
+              return (
                 <div
-                  className="space-thread-preview"
-                  id={previewId}
-                  hidden={!expanded}
-                  aria-busy={previewBusy}
+                  className={`space-shelf${expanded ? " is-expanded" : ""}`}
+                  key={space.spaceId}
                 >
-                  {previewBusy ? (
-                    <span
-                      className="space-thread-preview-message"
-                      role="status"
+                  <div className="space-shelf-row">
+                    <button
+                      type="button"
+                      className="space-shelf-identity"
+                      aria-current={space.selected ? "true" : undefined}
+                      aria-busy={starting}
+                      disabled={actionsDisabled || space.selected}
+                      title={space.displayPath}
+                      onClick={() => onSelectSpace(space.spaceId)}
                     >
-                      <IconLoader2
-                        className="spin-icon"
-                        size={13}
+                      <span className="space-shelf-folder" aria-hidden="true">
+                        {starting ? (
+                          <IconLoader2
+                            className="spin-icon"
+                            size={17}
+                            stroke={1.8}
+                          />
+                        ) : (
+                          <IconFolder size={17} stroke={1.7} />
+                        )}
+                      </span>
+                      <strong>{space.displayName}</strong>
+                    </button>
+                    <span className="space-shelf-state">
+                      <i
+                        className={`space-health ${
+                          starting
+                            ? "space-health-loading"
+                            : `space-health-${space.state}`
+                        }`}
                         aria-hidden="true"
                       />
-                      Loading threads
+                      {starting ? "Starting" : runtimeLabel(space)}
                     </span>
-                  ) : previewError !== undefined ? (
-                    <span className="space-thread-preview-message is-error">
-                      {previewError}
-                    </span>
-                  ) : previewItems !== undefined && previewItems.length > 0 ? (
-                    previewItems.map((result) => {
-                      const status = presentRunStatus(result.status);
-                      return (
-                        <button
-                          className="space-thread-preview-item"
-                          type="button"
-                          key={`${result.spaceId}:${result.runId}`}
-                          aria-label={`Open ${result.title} in ${space.displayName}`}
-                          disabled={actionsDisabled || result.threadArchived}
-                          onClick={() => onSelectSearchResult(result)}
-                        >
-                          <span
-                            className={`space-thread-preview-status tone-${status.tone}`}
-                            title={status.copy}
+                    {space.attentionCount > 0 ? (
+                      <span className="space-attention-badge">
+                        {Math.min(space.attentionCount, 99)}
+                      </span>
+                    ) : null}
+                    <button
+                      className="space-shelf-chevron"
+                      type="button"
+                      aria-label={`${expanded ? "Collapse" : "Expand"} ${space.displayName} threads`}
+                      aria-controls={previewId}
+                      aria-expanded={expanded}
+                      onClick={() => toggleSpacePreview(space.spaceId)}
+                    >
+                      <IconChevronDown
+                        size={16}
+                        stroke={1.8}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
+                  <div
+                    className="space-thread-preview"
+                    id={previewId}
+                    hidden={!expanded}
+                    aria-busy={previewBusy}
+                  >
+                    {previewBusy ? (
+                      <span
+                        className="space-thread-preview-message"
+                        role="status"
+                      >
+                        <IconLoader2
+                          className="spin-icon"
+                          size={13}
+                          aria-hidden="true"
+                        />
+                        Loading threads
+                      </span>
+                    ) : previewError !== undefined ? (
+                      <span className="space-thread-preview-message is-error">
+                        {previewError}
+                      </span>
+                    ) : previewItems !== undefined &&
+                      previewItems.length > 0 ? (
+                      previewItems.map((result) => {
+                        const status = presentRunStatus(result.status);
+                        return (
+                          <button
+                            className="space-thread-preview-item"
+                            type="button"
+                            key={`${result.spaceId}:${result.runId}`}
+                            aria-label={`Open ${result.title} in ${space.displayName}`}
+                            disabled={actionsDisabled || result.threadArchived}
+                            onClick={() => onSelectSearchResult(result)}
                           >
-                            {statusIcon(status.tone)}
-                          </span>
-                          <span className="space-thread-preview-copy">
-                            <strong>{result.title}</strong>
-                            <small>
-                              {runModeLabel(result.mode)} ·{" "}
-                              {shortDateLabel(result.updatedAt)}
-                            </small>
-                          </span>
-                        </button>
-                      );
-                    })
-                  ) : previewItems !== undefined ? (
-                    <span className="space-thread-preview-message">
-                      No recent threads
-                    </span>
-                  ) : null}
+                            <span
+                              className={`space-thread-preview-status tone-${status.tone}`}
+                              title={status.copy}
+                            >
+                              {statusIcon(status.tone)}
+                            </span>
+                            <span className="space-thread-preview-copy">
+                              <strong>{result.title}</strong>
+                              <small>
+                                {runModeLabel(result.mode)} ·{" "}
+                                {shortDateLabel(result.updatedAt)}
+                              </small>
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : previewItems !== undefined ? (
+                      <span className="space-thread-preview-message">
+                        No recent threads
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </nav>
-      ) : null}
+              );
+            })}
+          </nav>
+        ) : null}
+      </div>
 
       <nav className="space-destinations" aria-label="Space destinations">
         {visibleDestinations.map(({ id, label, Icon }) => (

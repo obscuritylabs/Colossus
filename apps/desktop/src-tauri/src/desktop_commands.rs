@@ -1,7 +1,8 @@
 use colossus_sdk::{
-    ApiErrorCode, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest, RunStatus,
-    ServerCapabilities,
+    ApiErrorCode, GetRunRequest, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest,
+    RunStatus, ServerCapabilities,
 };
+use colossus_worker_protocol::{WorkerSessionMap, WorkerThreadDelegateInspection};
 use futures_util::future::join_all;
 use serde::Deserialize;
 use std::{
@@ -1660,6 +1661,127 @@ pub(crate) async fn restart_managed_runtime(
     let settings = store.load()?;
     managed_runtime::start(&state, &store, &settings, true).await?;
     desktop_status_from(&state, &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn get_thread_delegate(
+    state: State<'_, AppState>,
+    parent_run_id: String,
+    job_id: String,
+) -> Result<WorkerThreadDelegateInspection, CommandErrorDto> {
+    if parent_run_id.is_empty() || parent_run_id.len() > 128 {
+        return Err(CommandErrorDto::invalid(
+            "parentRunId",
+            "The parent run identifier is invalid.",
+        ));
+    }
+    if job_id.is_empty() || job_id.len() > 128 {
+        return Err(CommandErrorDto::invalid(
+            "jobId",
+            "The delegated agent identifier is invalid.",
+        ));
+    }
+    let settings = settings_store()?.load()?;
+    let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
+        CommandErrorDto::invalid(
+            "jobId",
+            "Select a Space before inspecting a delegated agent.",
+        )
+    })?;
+    if state.selected_target_id().await.as_deref() != Some(space_id)
+        || !state.managed_lifecycle_ready_for(space_id).await
+    {
+        return Err(CommandErrorDto::local_sanitized(
+            "delegate_inspection_unavailable",
+            "Delegated agent details are available only for the selected Managed Local Space.",
+            false,
+        ));
+    }
+    let worker = state.managed_worker_for(space_id).await.ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "delegate_inspection_unavailable",
+            "Delegated agent details are unavailable. Restart Managed Local and retry.",
+            true,
+        )
+    })?;
+    worker
+        .inspect_thread_delegate(&parent_run_id, &job_id)
+        .await
+        .map_err(|_| {
+            CommandErrorDto::local_sanitized(
+                "delegate_inspection_unavailable",
+                "The delegated agent details could not be loaded for this thread.",
+                true,
+            )
+        })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn get_session_map(
+    state: State<'_, AppState>,
+    source_run_id: String,
+) -> Result<WorkerSessionMap, CommandErrorDto> {
+    if source_run_id.is_empty() || source_run_id.len() > 128 {
+        return Err(CommandErrorDto::invalid(
+            "sourceRunId",
+            "The source run identifier is invalid.",
+        ));
+    }
+    let settings = settings_store()?.load()?;
+    let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
+        CommandErrorDto::invalid(
+            "sourceRunId",
+            "Select a Space before inspecting its session map.",
+        )
+    })?;
+    if !state.managed_lifecycle_ready_for(space_id).await {
+        return Err(CommandErrorDto::local_sanitized(
+            "session_map_unavailable",
+            "The session map is available only for the selected Managed Local Space.",
+            false,
+        ));
+    }
+    let target = state.selected_target(space_id).await.ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "session_map_unavailable",
+            "Select this Managed Local Space before inspecting its session map.",
+            true,
+        )
+    })?;
+    if !state.run_is_bound(&target, &source_run_id).await {
+        return Err(CommandErrorDto::invalid(
+            "sourceRunId",
+            "Refresh this Space's work before inspecting the session map.",
+        ));
+    }
+    let _unary_slot = target.target.try_unary_slot().ok_or_else(|| {
+        CommandErrorDto::busy("The desktop request limit is active. Wait and retry.")
+    })?;
+    let response = target
+        .target
+        .client
+        .get_run(GetRunRequest {
+            run_id: source_run_id,
+        })
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    let worker = state.managed_worker_for(space_id).await.ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "session_map_unavailable",
+            "The session map is unavailable. Restart Managed Local and retry.",
+            true,
+        )
+    })?;
+    worker
+        .inspect_session_map(&response.run.session_id)
+        .await
+        .map_err(|_| {
+            CommandErrorDto::local_sanitized(
+                "session_map_unavailable",
+                "The session map could not be loaded for this thread.",
+                true,
+            )
+        })
 }
 
 #[tauri::command(rename_all = "camelCase")]

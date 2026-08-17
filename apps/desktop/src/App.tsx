@@ -28,6 +28,8 @@ import {
   desktopStatus,
   exportDiagnostics,
   getRun,
+  getSessionMap,
+  getThreadDelegate,
   importCaBundle,
   installDesktopUpdate,
   initializeDesktop,
@@ -55,7 +57,7 @@ import {
   archiveSpace,
   watchRun,
 } from "./api";
-import type { AgentParticipant, AgentWorkState } from "./components/AgentFlow";
+import type { AgentParticipant } from "./components/AgentFlow";
 import type {
   ArtifactPreviewLine,
   ArtifactViewItem,
@@ -80,6 +82,7 @@ import {
   buildActivityComparisonFixture,
   buildOperationsStudioFixture,
   buildPlanWorkflowFixture,
+  buildSessionMapFixture,
 } from "./dev/operations-studio-fixture";
 import { managedOnboardingRequired } from "./onboarding";
 import {
@@ -94,6 +97,7 @@ import {
   REMOTE_PROVIDER_TIMEOUT_MS,
   automaticProviderTimeoutMs,
 } from "./providerTimeout";
+import { selectSessionParticipants } from "./participants";
 import {
   agentRoleLabel,
   safeDisplayLabel,
@@ -149,10 +153,14 @@ import type {
   ResearchDepth,
   ResearchSourceKind,
   Run,
+  RunDetails,
   RunMode,
   RunStatus,
+  RunUpdate,
+  SessionMap,
   SpaceSearchResult,
   TerminalKind,
+  ThreadDelegateInspection,
 } from "./types";
 import { USE_CONFIGURED_MAX_TURNS, isTerminalStatus } from "./types";
 import {
@@ -448,6 +456,7 @@ const DEMO_PARTICIPANTS: readonly AgentParticipant[] = [
     role: "Lead",
     state: "coordinating",
     icon: "lead",
+    kind: "primary",
   },
   {
     id: "builder",
@@ -455,6 +464,14 @@ const DEMO_PARTICIPANTS: readonly AgentParticipant[] = [
     role: "Engineer",
     state: "working",
     icon: "builder",
+    kind: "delegate",
+    parentRunId: "fixture-run-desktop-release",
+    childSessionId: "fixture-session-builder",
+    childRunId: "fixture-run-builder",
+    parentRunIndex: 1,
+    parentRunTitle: "Harden desktop agent bootstrap",
+    modelRole: "builder",
+    task: "Implement the approved desktop changes.",
   },
   {
     id: "sentinel",
@@ -462,6 +479,14 @@ const DEMO_PARTICIPANTS: readonly AgentParticipant[] = [
     role: "Security",
     state: "reviewing",
     icon: "security",
+    kind: "delegate",
+    parentRunId: "fixture-run-desktop-release",
+    childSessionId: "fixture-session-sentinel",
+    childRunId: "fixture-run-sentinel",
+    parentRunIndex: 1,
+    parentRunTitle: "Harden desktop agent bootstrap",
+    modelRole: "security_reviewer",
+    task: "Conduct a read-only security review of process and session boundaries.",
   },
   {
     id: "scribe",
@@ -469,8 +494,134 @@ const DEMO_PARTICIPANTS: readonly AgentParticipant[] = [
     role: "Writer",
     state: "waiting",
     icon: "writer",
+    kind: "delegate",
+    parentRunId: "fixture-run-desktop-release",
+    childSessionId: "fixture-session-scribe",
+    childRunId: "fixture-run-scribe",
+    parentRunIndex: 1,
+    parentRunTitle: "Harden desktop agent bootstrap",
+    modelRole: "writer",
+    task: "Summarize the released implementation and review findings.",
   },
 ];
+
+function buildDelegateFixture(
+  participant: AgentParticipant,
+  parent: Run,
+): { details: RunDetails; updates: readonly RunUpdate[] } {
+  const runId = participant.childRunId ?? `fixture-run-${participant.id}`;
+  const sessionId =
+    participant.childSessionId ?? `fixture-session-${participant.id}`;
+  const startedAt = "2026-07-20T14:35:10Z";
+  const finishedAt = "2026-07-20T14:35:24Z";
+  const output =
+    "No cross-space control path was found. Session ownership remains bound to the selected Space, and the reviewed process boundary does not expose another Space's run authority.";
+  const run: Run = {
+    ...parent,
+    runId,
+    sessionId,
+    title: participant.task ?? participant.role,
+    role: participant.modelRole ?? "subagent_default",
+    status: "completed",
+    createdAt: startedAt,
+    updatedAt: finishedAt,
+    startedAt,
+    finishedAt,
+    lastSequence: 8,
+    pendingInteractionCount: 0,
+    terminal: {
+      type: "result",
+      result: {
+        output,
+        profile: "desktop",
+        modelProfile: "delegated",
+        providerProfile: "fixture-provider",
+        model: "openrouter/auto",
+        elapsedSeconds: 14,
+      },
+    },
+    etag: `fixture-etag-${runId}`,
+    selectedSkills: [],
+    archived: false,
+  };
+  const activities: Array<{
+    sequence: number;
+    createdAt: string;
+    callId: string;
+    toolName: string;
+    state: "started" | "completed";
+    input?: string;
+    preview?: string;
+  }> = [
+    {
+      sequence: 1,
+      createdAt: "2026-07-20T14:35:11.000Z",
+      callId: "delegate-policy",
+      toolName: "filesystem.read",
+      state: "started",
+      input: '{"path":"docs/develop/security-architecture.md"}',
+    },
+    {
+      sequence: 2,
+      createdAt: "2026-07-20T14:35:12.100Z",
+      callId: "delegate-policy",
+      toolName: "filesystem.read",
+      state: "completed",
+      preview: "Released security-boundary documentation.",
+    },
+    {
+      sequence: 3,
+      createdAt: "2026-07-20T14:35:13.000Z",
+      callId: "delegate-session",
+      toolName: "repo.search",
+      state: "started",
+      input: '{"query":"selected Space session boundary"}',
+    },
+    {
+      sequence: 4,
+      createdAt: "2026-07-20T14:35:16.200Z",
+      callId: "delegate-session",
+      toolName: "repo.search",
+      state: "completed",
+      preview: "Matched selected-Space routing and ownership checks.",
+    },
+    {
+      sequence: 5,
+      createdAt: "2026-07-20T14:35:17.000Z",
+      callId: "delegate-dependencies",
+      toolName: "repo.file_summary",
+      state: "started",
+      input: '{"path":"apps/desktop/src-tauri/src/commands.rs"}',
+    },
+    {
+      sequence: 6,
+      createdAt: "2026-07-20T14:35:22.800Z",
+      callId: "delegate-dependencies",
+      toolName: "repo.file_summary",
+      state: "completed",
+      preview: "Renderer requests remain bound to the selected target.",
+    },
+  ];
+  const updates: RunUpdate[] = activities.map((activity) => ({
+    runId,
+    sequence: activity.sequence,
+    createdAt: activity.createdAt,
+    update: {
+      type: "tool_activity",
+      activity: {
+        callId: activity.callId,
+        toolName: activity.toolName,
+        state: activity.state,
+        summary: `tool execution ${activity.state}`,
+        ...(activity.input === undefined ? {} : { input: activity.input }),
+        ...(activity.preview === undefined
+          ? {}
+          : { preview: activity.preview }),
+      },
+    },
+  }));
+  return { details: { run, pendingInteractions: [] }, updates };
+}
 
 const BOOTSTRAP_PREVIEW: readonly ArtifactPreviewLine[] = [
   { number: 74, kind: "context", text: "pub async fn connect_agent(" },
@@ -579,16 +730,6 @@ function isCancelable(status: RunStatus): boolean {
   return status === "queued" || status === "running" || status === "waiting";
 }
 
-function participantState(status: RunStatus): AgentWorkState {
-  if (status === "running" || status === "queued") {
-    return "working";
-  }
-  if (status === "waiting" || status === "cancelling") {
-    return "waiting";
-  }
-  return "idle";
-}
-
 function previewFor(
   fileName: string,
 ): readonly ArtifactPreviewLine[] | undefined {
@@ -653,6 +794,26 @@ export default function App() {
   );
   const chatRef = useRef(chat);
   const [asideChat, dispatchAside] = useReducer(chatReducer, initialChatState);
+  const [delegateChat, dispatchDelegate] = useReducer(
+    chatReducer,
+    initialChatState,
+  );
+  const [selectedDelegateId, setSelectedDelegateId] = useState<string | null>(
+    null,
+  );
+  const [selectedDelegateRunId, setSelectedDelegateRunId] = useState<
+    string | null
+  >(null);
+  const [delegateLoading, setDelegateLoading] = useState(false);
+  const [delegateError, setDelegateError] = useState("");
+  const [delegateInspection, setDelegateInspection] =
+    useState<ThreadDelegateInspection | null>(null);
+  const [sessionMap, setSessionMap] = useState<SessionMap | null>(() =>
+    FIXTURE_MODE ? buildSessionMapFixture() : null,
+  );
+  const [sessionMapLoading, setSessionMapLoading] = useState(false);
+  const [sessionMapError, setSessionMapError] = useState("");
+  const sessionMapRequest = useRef<symbol | null>(null);
   const [asideHistory, setAsideHistory] = useState<readonly Aside[]>([]);
   const [asideBusy, setAsideBusy] = useState(false);
   const [asideError, setAsideError] = useState<CommandError | null>(null);
@@ -742,6 +903,7 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
+  const [conversationFollowRequest, setConversationFollowRequest] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<
     readonly QueuedMessage[]
   >([]);
@@ -753,6 +915,7 @@ export default function App() {
     useState<string | null>(null);
   const watchedRuns = useRef(new Map<string, symbol>());
   const watchedAsides = useRef(new Map<string, symbol>());
+  const delegateRequest = useRef<symbol | null>(null);
   const targetRoutes = useRef<TargetRouteRegistry | null>(null);
   if (targetRoutes.current === null) {
     targetRoutes.current = new TargetRouteRegistry();
@@ -1821,6 +1984,7 @@ export default function App() {
       });
       return;
     }
+    setConversationFollowRequest((current) => current + 1);
     const continuationQueueLength =
       continuationView === undefined
         ? 0
@@ -2037,6 +2201,7 @@ export default function App() {
     if (queued === null) {
       return;
     }
+    setConversationFollowRequest((current) => current + 1);
     if (!(await cancelActiveRun())) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
@@ -3725,10 +3890,78 @@ export default function App() {
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
+  useEffect(() => {
+    delegateRequest.current = null;
+    dispatchDelegate({ type: "reset" });
+    setSelectedDelegateId(null);
+    setSelectedDelegateRunId(null);
+    setDelegateLoading(false);
+    setDelegateError("");
+    setDelegateInspection(null);
+  }, [activeRun?.sessionId, desktop.selectedSpaceId]);
   const activeRoute =
     activeRun === undefined
       ? null
       : (targetRoutes.current?.routeForRun(activeRun.runId) ?? null);
+  useEffect(() => {
+    const run = activeRun;
+    if (run === undefined) {
+      sessionMapRequest.current = null;
+      setSessionMap(null);
+      setSessionMapLoading(false);
+      setSessionMapError("");
+      return;
+    }
+    if (FIXTURE_MODE) {
+      setSessionMap(buildSessionMapFixture());
+      setSessionMapLoading(false);
+      setSessionMapError("");
+      return;
+    }
+    if (activeRoute?.kind !== "managed_local") {
+      sessionMapRequest.current = null;
+      setSessionMap(null);
+      setSessionMapLoading(false);
+      setSessionMapError(
+        "Session resources are available for Managed Local Spaces.",
+      );
+      return;
+    }
+    const request = Symbol(run.runId);
+    sessionMapRequest.current = request;
+    setSessionMapLoading(true);
+    setSessionMapError("");
+    void getSessionMap(run.runId)
+      .then((next) => {
+        if (
+          sessionMapRequest.current === request &&
+          next.sessionId === run.sessionId
+        ) {
+          setSessionMap(next);
+        }
+      })
+      .catch((error: unknown) => {
+        if (sessionMapRequest.current === request) {
+          setSessionMap(null);
+          setSessionMapError(commandError(error).message);
+        }
+      })
+      .finally(() => {
+        if (sessionMapRequest.current === request) {
+          setSessionMapLoading(false);
+        }
+      });
+    return () => {
+      if (sessionMapRequest.current === request) {
+        sessionMapRequest.current = null;
+      }
+    };
+  }, [
+    activeRoute?.generation,
+    activeRoute?.kind,
+    activeRun?.runId,
+    activeRun?.sessionId,
+  ]);
   const activeQueuedMessages = useMemo(
     () =>
       activeRun === undefined || activeRoute === null
@@ -3844,19 +4077,97 @@ export default function App() {
     if (FIXTURE_MODE && activeView !== undefined) {
       return DEMO_PARTICIPANTS;
     }
-    if (activeRun === undefined) {
-      return [];
+    return selectSessionParticipants(conversationViews);
+  }, [activeView, conversationViews]);
+  const delegateView =
+    selectedDelegateRunId === null
+      ? undefined
+      : delegateChat.views.get(selectedDelegateRunId);
+
+  async function openDelegateParticipant(participant: AgentParticipant) {
+    if (participant.kind !== "delegate" || activeRun === undefined) {
+      return;
     }
-    return [
-      {
-        id: activeRun.runId,
-        name: agentRoleLabel(activeRun.role),
-        role: "Primary run",
-        state: participantState(activeRun.status),
-        icon: "lead",
-      },
-    ];
-  }, [activeRun, activeView]);
+    const parentRunId = participant.parentRunId ?? activeRun.runId;
+    const parentView = chat.views.get(parentRunId);
+    if (
+      parentView === undefined ||
+      parentView.run.sessionId !== activeRun.sessionId
+    ) {
+      setDelegateError(
+        "This delegated run is not available in the selected session.",
+      );
+      setDelegateLoading(false);
+      return;
+    }
+    const request = Symbol(`${parentRunId}:${participant.id}`);
+    delegateRequest.current = request;
+    dispatchDelegate({ type: "reset" });
+    setSelectedDelegateId(participant.id);
+    setSelectedDelegateRunId(null);
+    setDelegateLoading(true);
+    setDelegateError("");
+    setDelegateInspection(null);
+
+    if (FIXTURE_MODE) {
+      const fixture = buildDelegateFixture(participant, parentView.run);
+      dispatchDelegate({ type: "hydrate_run", details: fixture.details });
+      for (const update of fixture.updates) {
+        dispatchDelegate({ type: "ingest_update", update });
+      }
+      dispatchDelegate({
+        type: "watch_complete",
+        runId: fixture.details.run.runId,
+      });
+      setSelectedDelegateRunId(fixture.details.run.runId);
+      setDelegateLoading(false);
+      return;
+    }
+
+    const route = targetRoutes.current?.routeForRun(parentRunId) ?? null;
+    if (
+      route === null ||
+      targetRoutes.current?.isCurrent(route) !== true ||
+      (participant.parentRunId !== undefined &&
+        participant.parentRunId !== parentRunId)
+    ) {
+      setDelegateError(
+        "This delegated run is not available in the selected Space.",
+      );
+      setDelegateLoading(false);
+      return;
+    }
+
+    try {
+      const inspection = await getThreadDelegate(parentRunId, participant.id);
+      if (
+        delegateRequest.current !== request ||
+        targetRoutes.current?.isCurrent(route) !== true ||
+        inspection.jobId !== participant.id ||
+        inspection.parentRunId !== parentRunId
+      ) {
+        return;
+      }
+      setDelegateInspection(inspection);
+    } catch (error: unknown) {
+      if (delegateRequest.current === request) {
+        setDelegateError(commandError(error).message);
+      }
+    } finally {
+      if (delegateRequest.current === request) {
+        setDelegateLoading(false);
+      }
+    }
+  }
+
+  function closeDelegateInspector() {
+    delegateRequest.current = null;
+    setSelectedDelegateId(null);
+    setSelectedDelegateRunId(null);
+    setDelegateLoading(false);
+    setDelegateError("");
+    setDelegateInspection(null);
+  }
   const selectedTarget = desktop.targets.find(
     (target) => target.targetId === desktop.selectedTargetId,
   );
@@ -4100,7 +4411,25 @@ export default function App() {
           runLoadError={runLoadError}
           actionError={actionError}
           participants={participants}
+          sessionMap={sessionMap}
+          sessionMapLoading={sessionMapLoading}
+          sessionMapError={sessionMapError}
+          selectedParticipantId={selectedDelegateId}
+          delegateView={delegateView}
+          delegateInspection={delegateInspection}
+          delegateLoading={delegateLoading}
+          delegateError={delegateError}
           artifacts={artifactItems}
+          selectedSpaceName={
+            desktop.spaces.find(
+              (space) => space.spaceId === desktop.selectedSpaceId,
+            )?.displayName ?? "Current Space"
+          }
+          threadPinned={
+            activeRun !== undefined &&
+            pinnedThreadSessionIds.has(activeRun.sessionId)
+          }
+          followRequestSequence={conversationFollowRequest}
           composer={composer}
           filesAvailable={desktop.capabilities.files}
           onOpenWorkspaceFile={(path) => {
@@ -4157,6 +4486,10 @@ export default function App() {
             setPrompt(suggestion);
             requestAnimationFrame(() => composerRef.current?.focus());
           }}
+          onSelectParticipant={(participant) =>
+            void openDelegateParticipant(participant)
+          }
+          onBackToThreadDetails={closeDelegateInspector}
           onSelectArtifact={(artifactId) =>
             void loadArtifactPreview(artifactId)
           }

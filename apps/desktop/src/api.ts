@@ -30,12 +30,14 @@ import type {
   Run,
   RunDetails,
   RunPage,
+  SessionMap,
   TerminalContext,
   TerminalEvent,
   TerminalKind,
   TerminalPlanContext,
   OpenTerminalResponse,
   TerminalSignal,
+  ThreadDelegateInspection,
   ThreadLifecycle,
   ThreadLifecycleRequest,
   WatchEvent,
@@ -275,6 +277,17 @@ export function applyManagedModelConfiguration(
 
 export function restartManagedRuntime(): Promise<DesktopStatus> {
   return call("restart_managed_runtime");
+}
+
+export function getThreadDelegate(
+  parentRunId: string,
+  jobId: string,
+): Promise<ThreadDelegateInspection> {
+  return call("get_thread_delegate", { parentRunId, jobId });
+}
+
+export function getSessionMap(sourceRunId: string): Promise<SessionMap> {
+  return call("get_session_map", { sourceRunId });
 }
 
 export function setApprovalMode(

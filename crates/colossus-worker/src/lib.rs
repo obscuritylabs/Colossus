@@ -9,9 +9,9 @@ use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, AgentRunResult, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
     IntegrationAuth, MemoryScope, MemoryStatus, PlanExecutionStrategy, PlanStatus, PlanStep,
-    PolicyDecision, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope,
-    SandboxBoundaryMode, SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest,
-    UserPromptResponse, WorkflowScheduleMisfirePolicy,
+    PolicyDecision, ResearchDepth, ResearchSourceKind, ResearchStatus, RiskReviewFallbackNotice,
+    RunEventEnvelope, SandboxBoundaryMode, SubagentStatus, TaskStatus, TerminalPreferences,
+    UserPromptRequest, UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -65,6 +65,7 @@ type HmacSha256 = Hmac<Sha256>;
 mod authentication;
 mod authentication_key;
 mod client;
+mod delegate_inspection;
 mod dispatch;
 mod frames;
 mod handshake;
@@ -77,6 +78,7 @@ mod platform;
 mod public_api;
 mod public_credentials;
 mod server;
+mod session_map_inspection;
 
 pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
@@ -95,6 +97,7 @@ pub use server::WorkerServer;
 use authentication::*;
 #[cfg(test)]
 use client::{handshake_failure_outcome, handshake_timeout_error, missing_secret_outcome};
+use delegate_inspection::*;
 use dispatch::*;
 use frames::*;
 use handshake::*;
@@ -103,6 +106,7 @@ use local_artifacts::*;
 use observers::*;
 use operation_names::*;
 use operations::*;
+use session_map_inspection::*;
 
 #[cfg(test)]
 mod tests;

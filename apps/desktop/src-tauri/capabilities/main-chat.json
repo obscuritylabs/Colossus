@@ -28,6 +28,8 @@
     "allow-apply-managed-model-configuration",
     "allow-run-managed-self-test",
     "allow-restart-managed-runtime",
+    "allow-get-thread-delegate",
+    "allow-get-session-map",
     "allow-select-target",
     "allow-set-approval-mode",
     "allow-set-terminal-enabled",

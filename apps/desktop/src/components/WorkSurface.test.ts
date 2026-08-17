@@ -84,7 +84,18 @@ function renderSurface(
         runLoadError: "",
         actionError: null,
         participants: [],
+        selectedParticipantId: null,
+        delegateView: undefined,
+        delegateInspection: null,
+        delegateLoading: false,
+        delegateError: "",
+        sessionMap: null,
+        sessionMapLoading: false,
+        sessionMapError: "",
         artifacts,
+        selectedSpaceName: "Colossus",
+        threadPinned: true,
+        followRequestSequence: 0,
         composer: createElement("div"),
         filesPanel: createElement("div", null, "Workspace file explorer"),
         filesAvailable: capabilities.files,
@@ -105,6 +116,8 @@ function renderSurface(
         onRespond: vi.fn(async () => undefined),
         onResume: vi.fn(),
         onSuggestion: vi.fn(),
+        onSelectParticipant: vi.fn(),
+        onBackToThreadDetails: vi.fn(),
         onSelectArtifact: vi.fn(),
         onOpenPlanWorkflow: vi.fn(),
         onRevisePlan: vi.fn(),
@@ -196,11 +209,40 @@ describe("WorkSurface side panels", () => {
       true,
     );
     expect(liveThreadMarkup).toContain('aria-label="Timeline view"');
+    expect(liveThreadMarkup).toContain('aria-label="Session views"');
+    expect(liveThreadMarkup).toContain("Topology");
+    expect(liveThreadMarkup).toContain("Plans");
+    expect(liveThreadMarkup).toContain("Sources");
+    expect(liveThreadMarkup).toContain("Resources");
     expect(liveThreadMarkup).toContain("Capsule");
     expect(liveThreadMarkup).toContain("Working thread");
     expect(liveThreadMarkup).toContain(
       'data-aside-source-run-id="comparison-run"',
     );
     expect(liveThreadMarkup).not.toContain("data-aside-message-count");
+  });
+
+  it("offers grounded thread details without inventing file paths", () => {
+    const markup = renderSurface(
+      [
+        {
+          id: "bootstrap",
+          fileName: "bootstrap.rs",
+          mediaType: "text/x-rust",
+          sizeLabel: "18 KB",
+          stateLabel: "Available",
+          createdLabel: "Jul 20, 10:30 AM",
+        },
+      ],
+      { files: true, artifacts: true },
+      false,
+      true,
+    );
+
+    expect(markup).toContain('aria-label="Open thread details"');
+    expect(markup).toContain('id="thread-details-title"');
+    expect(markup).toContain("Colossus");
+    expect(markup).toContain("bootstrap.rs");
+    expect(markup).not.toContain("src/bootstrap.rs");
   });
 });

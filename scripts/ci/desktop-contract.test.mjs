@@ -231,6 +231,8 @@ test("main WebView exposes every advanced configuration, Space, Aside, thread li
   for (const permission of [
     "allow-apply-managed-model-configuration",
     "allow-set-approval-mode",
+    "allow-get-thread-delegate",
+    "allow-get-session-map",
     "allow-create-space",
     "allow-list-spaces",
     "allow-select-space",
@@ -253,6 +255,8 @@ test("main WebView exposes every advanced configuration, Space, Aside, thread li
   for (const command of [
     "apply_managed_model_configuration",
     "set_approval_mode",
+    "get_thread_delegate",
+    "get_session_map",
     "create_space",
     "list_spaces",
     "select_space",
@@ -272,6 +276,81 @@ test("main WebView exposes every advanced configuration, Space, Aside, thread li
   }
   assert.doesNotMatch(bridge, /\bopen_workspace_terminal\b/u);
   assert.doesNotMatch(api, /"open_workspace_terminal"/u);
+});
+
+test("delegated-agent inspection is selected-Space scoped and releases only bounded child activity", () => {
+  const command = read("apps/desktop/src-tauri/src/desktop_commands.rs");
+  assert.match(command, /pub\(crate\) async fn get_thread_delegate/u);
+  assert.match(command, /settings\.selected_space_id/u);
+  assert.match(
+    command,
+    /state\.selected_target_id\(\)\.await\.as_deref\(\) != Some\(space_id\)/u,
+  );
+  assert.match(command, /managed_lifecycle_ready_for\(space_id\)/u);
+  assert.match(command, /inspect_thread_delegate\(&parent_run_id, &job_id\)/u);
+
+  const projection = read("crates/colossus-worker/src/delegate_inspection.rs");
+  const productionProjection = projection.slice(
+    0,
+    projection.indexOf("#[cfg(test)]"),
+  );
+  assert.match(projection, /job\.parent_run_id != parent_run_id/u);
+  assert.match(
+    projection,
+    /event\.context\.subagent_id\.as_deref\(\) != Some\(job_id\)/u,
+  );
+  assert.match(projection, /MAX_DELEGATE_ACTIVITIES: usize = 24/u);
+  assert.match(projection, /MAX_ACTIVITY_TEXT_BYTES: usize = 64 \* 1024/u);
+  assert.match(projection, /"tool\.call\.started\.v1"/u);
+  assert.match(projection, /"tool\.call\.completed\.v1"/u);
+  assert.doesNotMatch(
+    productionProjection,
+    /reasoning\.summary|model\.delta|system_message|provider_response/iu,
+  );
+
+  const renderer = read("apps/desktop/src/App.tsx");
+  assert.match(
+    renderer,
+    /const parentRunId = participant\.parentRunId \?\? activeRun\.runId/u,
+  );
+  assert.match(
+    renderer,
+    /parentView\.run\.sessionId !== activeRun\.sessionId/u,
+  );
+  assert.match(renderer, /getThreadDelegate\(parentRunId, participant\.id\)/u);
+  assert.match(renderer, /inspection\.parentRunId !== parentRunId/u);
+  assert.doesNotMatch(renderer, /getRun\([^\n]*childRunId/u);
+});
+
+test("session map inspection is selected-Space scoped and releases bounded canonical records", () => {
+  const command = read("apps/desktop/src-tauri/src/desktop_commands.rs");
+  assert.match(command, /pub\(crate\) async fn get_session_map/u);
+  assert.match(command, /settings\.selected_space_id/u);
+  assert.match(command, /managed_lifecycle_ready_for\(space_id\)/u);
+  assert.match(command, /state\.selected_target\(space_id\)\.await/u);
+  assert.match(
+    command,
+    /state\.run_is_bound\(&target, &source_run_id\)\.await/u,
+  );
+  assert.match(command, /inspect_session_map\(&response\.run\.session_id\)/u);
+
+  const projection = read(
+    "crates/colossus-worker/src/session_map_inspection.rs",
+  );
+  assert.match(projection, /MAX_RECORDS_PER_FAMILY: usize = 32/u);
+  assert.match(projection, /MAX_DOCUMENT_BYTES: usize = 16 \* 1024/u);
+  assert.match(
+    projection,
+    /MemoryScope::Repository\(id\) => id == repository_id/u,
+  );
+  assert.match(projection, /MemoryScope::Session\(id\) => id == session_id/u);
+  assert.match(projection, /list_subagents\(Some\(session_id\)/u);
+  assert.match(projection, /list_tasks\(Some\(session_id\)/u);
+  assert.match(projection, /list_research_runs\(Some\(session_id\)/u);
+
+  const renderer = read("apps/desktop/src/App.tsx");
+  assert.match(renderer, /getSessionMap\(run\.runId\)/u);
+  assert.match(renderer, /next\.sessionId === run\.sessionId/u);
 });
 
 test("Aside context stays canonical, selected-Space scoped, and out of metadata search", () => {
@@ -308,7 +387,10 @@ test("Aside context stays canonical, selected-Space scoped, and out of metadata 
     /pub\(crate\) struct AsideSetting \{(?<record>[\s\S]*?)\n\}/u,
   );
   assert.notEqual(asideRecord, null);
-  assert.doesNotMatch(asideRecord.groups.record, /prompt|quote|message|tool_output/iu);
+  assert.doesNotMatch(
+    asideRecord.groups.record,
+    /prompt|quote|message|tool_output/iu,
+  );
 
   const search = read("apps/desktop/src-tauri/src/space_search.rs");
   assert.match(search, /settings\s*\.asides\s*\.iter\(\)\s*\.any/u);

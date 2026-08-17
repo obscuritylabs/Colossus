@@ -26,10 +26,10 @@ use commands::{
 use desktop_commands::{
     add_external_target, apply_managed_model_configuration, archive_space, choose_workspace,
     configure_managed_runtime, connect_colossus, connection_status, create_space,
-    desktop_release_channel, desktop_status, import_ca_bundle, initialize_desktop, list_spaces,
-    remove_ca_bundle, remove_external_target, rename_space, restart_managed_runtime, restore_space,
-    run_managed_self_test, search_space_threads, select_space, select_target, set_approval_mode,
-    set_terminal_enabled,
+    desktop_release_channel, desktop_status, get_session_map, get_thread_delegate,
+    import_ca_bundle, initialize_desktop, list_spaces, remove_ca_bundle, remove_external_target,
+    rename_space, restart_managed_runtime, restore_space, run_managed_self_test,
+    search_space_threads, select_space, select_target, set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
 use terminal_commands::{
@@ -82,6 +82,8 @@ pub fn run() {
             apply_managed_model_configuration,
             restart_managed_runtime,
             run_managed_self_test,
+            get_thread_delegate,
+            get_session_map,
             select_target,
             set_approval_mode,
             set_terminal_enabled,

@@ -37,6 +37,8 @@ const COMMANDS: &[&str] = &[
     "apply_managed_model_configuration",
     "run_managed_self_test",
     "restart_managed_runtime",
+    "get_thread_delegate",
+    "get_session_map",
     "select_target",
     "set_approval_mode",
     "set_terminal_enabled",
