@@ -1,6 +1,6 @@
-#![cfg(unix)]
-
 //! Native managed-sidecar bootstrap and pinned-gRPC lifecycle acceptance test.
+
+#![cfg(unix)]
 
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{

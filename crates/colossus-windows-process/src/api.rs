@@ -43,6 +43,18 @@ pub struct SandboxedChild {
     _network: Option<crate::windows_impl::NetworkGuard>,
 }
 
+#[cfg(windows)]
+pub(crate) struct SandboxedChildParts {
+    pub(crate) pid: u32,
+    pub(crate) stdin: File,
+    pub(crate) stdout: File,
+    pub(crate) stderr: File,
+    pub(crate) process: crate::windows_impl::OwnedHandle,
+    pub(crate) job: crate::windows_impl::OwnedHandle,
+    pub(crate) completion_port: crate::windows_impl::OwnedHandle,
+    pub(crate) network: Option<crate::windows_impl::NetworkGuard>,
+}
+
 /// Hard Job Object limit observed during execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceLimitViolation {
@@ -74,25 +86,16 @@ pub enum WindowsProcessError {
 
 impl SandboxedChild {
     #[cfg(windows)]
-    pub(crate) fn from_parts(
-        pid: u32,
-        stdin: File,
-        stdout: File,
-        stderr: File,
-        process: crate::windows_impl::OwnedHandle,
-        job: crate::windows_impl::OwnedHandle,
-        completion_port: crate::windows_impl::OwnedHandle,
-        network: Option<crate::windows_impl::NetworkGuard>,
-    ) -> Self {
+    pub(crate) fn from_parts(parts: SandboxedChildParts) -> Self {
         Self {
-            pid,
-            stdin: Some(stdin),
-            stdout: Some(stdout),
-            stderr: Some(stderr),
-            process,
-            job,
-            completion_port,
-            _network: network,
+            pid: parts.pid,
+            stdin: Some(parts.stdin),
+            stdout: Some(parts.stdout),
+            stderr: Some(parts.stderr),
+            process: parts.process,
+            job: parts.job,
+            completion_port: parts.completion_port,
+            _network: parts.network,
         }
     }
 

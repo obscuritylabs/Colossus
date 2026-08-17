@@ -1,17 +1,21 @@
 use super::{
     AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, OCI_PROXY_CONFIG_VARIABLE,
-    ProcessSpec, SandboxJob, SignedSandboxJob, atomic_create, atomic_write, authority,
-    execute_sandbox_job, host_process_limits_apply, inherit_ambient_environment, non_public_ip,
-    normalize_path_arguments, oci_command, oci_proxy_run_arguments, oci_remove_arguments,
-    oci_resource_names, proposed_write_bytes, redact_proxy_credential, resolve_oci_origins,
-    sandbox_helper_budget, search_files, sha256_hex, tls_server_name, validate_process_spec,
+    SandboxJob, SignedSandboxJob, atomic_create, atomic_write, authority,
+    host_process_limits_apply, inherit_ambient_environment, non_public_ip, oci_command,
+    oci_proxy_run_arguments, oci_remove_arguments, oci_resource_names, proposed_write_bytes,
+    redact_proxy_credential, resolve_oci_origins, sandbox_helper_budget, search_files, sha256_hex,
+    tls_server_name, validate_process_spec,
 };
+#[cfg(unix)]
+use super::{ProcessSpec, execute_sandbox_job, normalize_path_arguments};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{native_helper_diagnostics, native_target_pid};
 use base64::Engine as _;
+#[cfg(unix)]
+use colossus_contracts::FilesystemGrant;
 use colossus_contracts::{
-    DecisionOutcome, EffectPhase, EffectRequest, FilesystemGrant, PolicyDecision,
-    PolicyObligations, ResourceAuthority, SandboxBoundaryMode,
+    DecisionOutcome, EffectPhase, EffectRequest, PolicyDecision, PolicyObligations,
+    ResourceAuthority, SandboxBoundaryMode,
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, SandboxBoundaryGate, effect_request,

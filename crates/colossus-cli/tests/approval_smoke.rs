@@ -333,15 +333,20 @@ fn risk_auto_mcp_server() -> (String, thread::JoinHandle<Vec<String>>) {
                 .set_nonblocking(false)
                 .expect("blocking provider stream");
             let request = read_request(&mut stream);
-            match requests.len() {
-                0 => respond_sse(&mut stream, &tool_call),
-                1 => respond_json(&mut stream, &risk_answer),
-                2 => respond_sse(&mut stream, &final_answer),
-                _ => unreachable!("bounded request sequence"),
+            let streaming = request.contains(r#""stream":true"#);
+            let final_response = !requests.is_empty() && streaming;
+            if requests.is_empty() {
+                respond_sse(&mut stream, &tool_call);
+            } else if streaming {
+                respond_sse(&mut stream, &final_answer);
+            } else {
+                respond_json(&mut stream, &risk_answer);
             }
             requests.push(request);
+            if final_response {
+                break;
+            }
         }
-        assert_eq!(requests.len(), 3, "provider request count");
         requests
     });
     (origin, task)
@@ -519,6 +524,13 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
     let workflows = directory.join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
+    let windows_full_access = cfg!(windows);
+    let sandbox_backend = if windows_full_access {
+        "danger_full_access"
+    } else {
+        "native"
+    };
+    let sandbox_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let document = json!({
         "schemaVersion": 2,
         "storage": {
@@ -575,15 +587,16 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
                     "environment": {"MCP_TEST_SECRET": "env:MCP_TEST_SECRET"},
                     "allowedTools": ["*"],
                     "researchTools": [],
-                    "timeoutMs": 5000,
+                    "timeoutMs": sandbox_timeout_ms,
                     "maxOutputBytes": 1048576
                 }
             }
         },
         "sandbox": {
-            "backend": "native",
+            "backend": sandbox_backend,
             "profile": "approval-mcp-v1",
             "allowBrokerFallback": false,
+            "acknowledgeDangerFullAccess": windows_full_access,
             "helperPath": null,
             "ociRuntime": null,
             "ociImage": null,
@@ -592,7 +605,7 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
             "executables": [mcp_server],
             "environment": ["MCP_TEST_SECRET"],
             "networkDestinations": [origin],
-            "timeoutMs": 5000,
+            "timeoutMs": sandbox_timeout_ms,
             "maxOutputBytes": 1048576,
             "maxProcesses": 4,
             "maxMemoryBytes": 67108864,
@@ -854,13 +867,15 @@ fn risk_auto_reviews_exact_mcp_calls_without_prompting_or_disclosing_credentials
         .stdin(Stdio::null())
         .output()
         .expect("risk-auto MCP run");
+    let requests = provider.join().expect("MCP provider");
 
     assert!(
         output.status.success(),
-        "stdout={}\nstderr={}",
+        "stdout={}\nstderr={}\nrequests={requests:#?}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(requests.len(), 3, "provider requests: {requests:#?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let notice = stderr.to_ascii_lowercase();
     assert!(!notice.contains("approval required"), "{stderr}");
@@ -871,7 +886,6 @@ fn risk_auto_reviews_exact_mcp_calls_without_prompting_or_disclosing_credentials
         "{stderr}"
     );
 
-    let requests = provider.join().expect("MCP provider");
     assert!(requests[0].contains(r#""name":"mcp_call""#));
     let review = &requests[1];
     for expected in [

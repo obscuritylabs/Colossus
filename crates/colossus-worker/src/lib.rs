@@ -95,8 +95,10 @@ pub use public_credentials::{
 pub use server::WorkerServer;
 
 use authentication::*;
+#[cfg(all(test, unix))]
+use client::missing_secret_outcome;
 #[cfg(test)]
-use client::{handshake_failure_outcome, handshake_timeout_error, missing_secret_outcome};
+use client::{handshake_failure_outcome, handshake_timeout_error};
 use delegate_inspection::*;
 use dispatch::*;
 use frames::*;

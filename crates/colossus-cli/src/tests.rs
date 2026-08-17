@@ -358,9 +358,19 @@ fn development_config_init_clones_settings_and_isolates_storage() {
 fn development_init_preserves_sparse_source_origin_and_applies_only_explicit_overrides() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let source = directory.path().join("source.yaml");
+    let source_helper =
+        serde_json::to_string(&directory.path().join("source-helper").display().to_string())
+            .expect("helper YAML path");
+    let source_root =
+        serde_json::to_string(&directory.path().join("source-root").display().to_string())
+            .expect("root YAML path");
+    let source_tool =
+        serde_json::to_string(&directory.path().join("source-tool").display().to_string())
+            .expect("tool YAML path");
     fs::write(
         &source,
-        r#"schemaVersion: 2
+        format!(
+            r#"schemaVersion: 2
 storage:
   path: source.redb
 access:
@@ -374,18 +384,19 @@ sandbox:
   backend: danger_full_access
   profile: custom-safe
   acknowledgeDangerFullAccess: true
-  helperPath: /tmp/source-helper
+  helperPath: {source_helper}
   filesystem:
-    - root: /tmp/source-root
+    - root: {source_root}
       mode: write
   executables:
-    - /tmp/source-tool
+    - {source_tool}
   environment:
     - SOURCE_TOKEN
   networkDestinations:
     - https://source.example
   timeoutMs: 45000
-"#,
+"#
+        ),
     )
     .expect("sparse source configuration");
 

@@ -486,15 +486,15 @@ impl WindowsTemporaryGuard {
     }
 
     fn remove(&mut self) -> Result<(), SandboxHelperError> {
-        if let Some(path) = self.0.take() {
-            if let Err(error) = fs::remove_dir_all(&path) {
-                let message = format!(
-                    "remove Windows sandbox temporary directory {}: {error}",
-                    path.display()
-                );
-                self.0 = Some(path);
-                return Err(SandboxHelperError::Execution(message));
-            }
+        if let Some(path) = self.0.take()
+            && let Err(error) = fs::remove_dir_all(&path)
+        {
+            let message = format!(
+                "remove Windows sandbox temporary directory {}: {error}",
+                path.display()
+            );
+            self.0 = Some(path);
+            return Err(SandboxHelperError::Execution(message));
         }
         Ok(())
     }

@@ -3,7 +3,7 @@ use super::{
     PAYLOAD_PROTECTION_KEY, PROJECTION_POSITIONS, PersistedEventEnvelope, PlaintextKeyProvider,
     RedbEventJournal, RedbWriterLease, STREAM_EVENTS, STREAM_EVENTS_INDEX_KEY, STREAM_VERSIONS,
     StaticKeyProvider, adapter_error, cached_platform_secret, persisted_associated_data,
-    persisted_record_hash,
+    persisted_record_hash, platform_secret,
 };
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
@@ -871,6 +871,24 @@ fn platform_secret_cache_does_not_cache_load_failures() {
         [24_u8; 32]
     );
     assert_eq!(loads.load(Ordering::SeqCst), 2);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "writes one temporary Windows Credential Manager entry"]
+fn windows_platform_secret_round_trip() {
+    let service = "com.obscuritylabs.colossus.windows-keyring-test";
+    let account = format!("round-trip:{}", uuid::Uuid::now_v7());
+    let secret = platform_secret(service, &account).expect("create Windows platform secret");
+    assert_ne!(secret, [0; 32]);
+    let entry = keyring::Entry::new(service, &account).expect("open Windows platform secret");
+    assert_eq!(
+        entry.get_secret().expect("read Windows platform secret"),
+        secret
+    );
+    entry
+        .delete_credential()
+        .expect("delete Windows platform secret");
 }
 
 #[test]

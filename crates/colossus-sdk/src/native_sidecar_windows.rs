@@ -45,6 +45,8 @@ const MAX_VERIFIED_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PIPE_NAME_BYTES: usize = 256;
 const PIPE_ENVIRONMENT: &str = "COLOSSUS_WINDOWS_BOOTSTRAP_PIPE_V1";
 const PARENT_ENVIRONMENT: &str = "COLOSSUS_WINDOWS_BOOTSTRAP_PARENT_PID_V1";
+const WINDOWS_TEMP_ENVIRONMENT: &str = "TEMP";
+const WINDOWS_TMP_ENVIRONMENT: &str = "TMP";
 const PIPE_PREFIX: &str = r"\\.\pipe\colossus-managed-";
 const PUBLIC_API_DIRECTORY: &str = "public-api";
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
@@ -219,11 +221,20 @@ async fn launch(
         .env_clear()
         .env(PIPE_ENVIRONMENT, &pipe_name)
         .env(PARENT_ENVIRONMENT, std::process::id().to_string())
+        // `std::env::temp_dir` on Windows derives its result from the process
+        // environment. The managed child intentionally starts with `env_clear`, so
+        // bind both Windows temp selectors to the already verified owner-private
+        // instance instead of inheriting an ambient or system-wide temp directory.
+        .env(WINDOWS_TEMP_ENVIRONMENT, instance.canonical_path())
+        .env(WINDOWS_TMP_ENVIRONMENT, instance.canonical_path())
         .current_dir(instance.canonical_path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
         .kill_on_drop(true);
+    #[cfg(debug_assertions)]
+    command.stderr(Stdio::inherit());
+    #[cfg(not(debug_assertions))]
+    command.stderr(Stdio::null());
     colossus_windows_native::configure_suspended_process(command.as_std_mut());
     let mut child = command.spawn().map_err(|_| SdkError::SidecarFailed)?;
     let (job, process_id) =
@@ -586,6 +597,8 @@ async fn connect_sidecar(
 }
 
 fn map_child_failure(code: FailureCode) -> SdkError {
+    #[cfg(debug_assertions)]
+    eprintln!("Colossus Windows sidecar bootstrap failed: {code:?}");
     match code {
         FailureCode::InvalidBootstrap | FailureCode::InvalidInstanceDirectory => {
             SdkError::IdentityMismatch

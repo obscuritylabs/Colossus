@@ -450,10 +450,9 @@ pub(super) fn resume_suspended_process(process_id: u32) -> Result<(), WindowsNat
     let mut available =
         unsafe { Thread32First(snapshot.as_raw_handle().cast(), &raw mut entry) } != 0;
     while available {
-        if entry.th32OwnerProcessID == process_id {
-            if thread_id.replace(entry.th32ThreadID).is_some() {
-                return Err(WindowsNativeError::IdentityChanged);
-            }
+        if entry.th32OwnerProcessID == process_id && thread_id.replace(entry.th32ThreadID).is_some()
+        {
+            return Err(WindowsNativeError::IdentityChanged);
         }
         // SAFETY: the snapshot and writable entry remain valid for iteration.
         available = unsafe { Thread32Next(snapshot.as_raw_handle().cast(), &raw mut entry) } != 0;

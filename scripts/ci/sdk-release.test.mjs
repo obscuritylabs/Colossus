@@ -116,16 +116,21 @@ test("Python source distributions normalize to reproducible bytes", () => {
   const first = join(root, "first.tar.gz");
   const second = join(root, "second.tar.gz");
   const normalizer = join(import.meta.dirname, "normalize_python_sdist.py");
+  const tar =
+    process.platform === "win32"
+      ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
+      : "tar";
+  const python = process.platform === "win32" ? "python" : "python3";
   mkdirSync(packageRoot, { recursive: true });
   writeFileSync(member, "deterministic contents\n");
   try {
     utimesSync(member, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
-    execFileSync("tar", ["-czf", first, "-C", source, "example-1.2.3"]);
+    execFileSync(tar, ["-czf", first, "-C", source, "example-1.2.3"]);
     utimesSync(member, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
-    execFileSync("tar", ["-czf", second, "-C", source, "example-1.2.3"]);
+    execFileSync(tar, ["-czf", second, "-C", source, "example-1.2.3"]);
     assert.notDeepEqual(readFileSync(first), readFileSync(second));
-    execFileSync("python3", [normalizer, first, "1"]);
-    execFileSync("python3", [normalizer, second, "1"]);
+    execFileSync(python, [normalizer, first, "1"]);
+    execFileSync(python, [normalizer, second, "1"]);
     assert.deepEqual(readFileSync(first), readFileSync(second));
   } finally {
     rmSync(root, { recursive: true, force: true });

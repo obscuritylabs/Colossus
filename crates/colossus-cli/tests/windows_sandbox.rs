@@ -216,7 +216,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &[],
     );
 
-    let doctor = run(binary, &config, &["sandbox", "doctor"]);
+    let doctor = run(binary, &config, ["sandbox", "doctor"]);
     assert!(
         doctor.status.success(),
         "stdout={}\nstderr={}",
@@ -236,7 +236,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let allowed_read = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[("TARGET", target.as_ref())],
@@ -261,7 +261,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let denied_read = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[("TARGET", denied_target.as_ref())],
@@ -282,7 +282,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let traversal_read = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[("TARGET", traversal.as_ref())],
@@ -297,7 +297,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let denied_write = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[("TARGET", denied_marker_target.as_ref())],
@@ -311,7 +311,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let environment = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[("SAFE", "visible")],
@@ -334,7 +334,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let raw_network = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.curl,
             &allowed,
             &[],
@@ -384,7 +384,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let allowed_network = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.curl,
             &allowed,
             &[],
@@ -414,7 +414,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let environment = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[],
@@ -443,7 +443,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let direct_bypass = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.curl,
             &allowed,
             &[],
@@ -468,7 +468,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let wrong_auth = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.curl,
             &allowed,
             &[],
@@ -502,7 +502,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let unlisted_request = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.curl,
             &allowed,
             &[],
@@ -537,7 +537,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let process_limit = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[],
@@ -566,7 +566,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let memory_limit = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.memory_probe,
             &allowed,
             &[],
@@ -610,7 +610,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let timed_out = run(
         binary,
         &config,
-        &process(
+        process(
             &tools.cmd,
             &allowed,
             &[("TARGET", child_marker_target.as_ref())],
