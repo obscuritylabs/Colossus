@@ -239,6 +239,13 @@ jobs:
         id: windows_native
         continue-on-error: true
         run: cargo test --locked -p colossus-windows-native -- --nocapture
+      - name: Test ordinary Windows Managed Local instance paths
+        id: windows_sdk_path
+        continue-on-error: true
+        run: >-
+          cargo test --locked -p colossus-sdk --lib
+          native_sidecar_windows::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity
+          -- --exact --nocapture
       - name: Run Windows Colossus-home acceptance
         id: windows_home
         continue-on-error: true
@@ -275,6 +282,7 @@ jobs:
           CODEX_AUTH_OUTCOME: ${{ steps.windows_codex_auth.outcome }}
           HOME_OUTCOME: ${{ steps.windows_home.outcome }}
           NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
+          SDK_PATH_OUTCOME: ${{ steps.windows_sdk_path.outcome }}
           PREPARE_OUTCOME: ${{ steps.desktop_prepare.outcome }}
           NATIVE_TEST_OUTCOME: ${{ steps.native_tests.outcome }}
           RENDERER_TEST_OUTCOME: ${{ steps.renderer_tests.outcome }}
@@ -288,6 +296,7 @@ jobs:
             "renderer-tests=$RENDERER_TEST_OUTCOME" \
             "renderer-contracts=$CONTRACT_OUTCOME" \
             "windows-native=$NATIVE_OUTCOME" \
+            "windows-sdk-path=$SDK_PATH_OUTCOME" \
             "windows-home=$HOME_OUTCOME" \
             "windows-codex-auth=$CODEX_AUTH_OUTCOME" \
             "worker-and-sandbox=$WORKER_OUTCOME" \

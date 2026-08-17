@@ -778,6 +778,11 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   assert.match(windows, /steps\.renderer_tests\.outcome/u);
   assert.match(windows, /steps\.renderer_contracts\.outcome/u);
   assert.match(windows, /steps\.windows_native\.outcome/u);
+  assert.match(
+    windows,
+    /native_sidecar_windows::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity/u,
+  );
+  assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
   assert.match(windows, /steps\.desktop_prepare\.outcome/u);
   assert.match(windows, /steps\.native_clippy\.outcome/u);

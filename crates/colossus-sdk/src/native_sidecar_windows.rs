@@ -189,11 +189,8 @@ async fn launch(
         .map_err(|_| SdkError::IdentityMismatch)?;
     instance
         .validate_private_owner_dacl()
-        .and_then(|()| instance.revalidate())
         .map_err(|_| SdkError::IdentityMismatch)?;
-    if instance.canonical_path() != options.instance_dir().as_path() {
-        return Err(SdkError::IdentityMismatch);
-    }
+    validate_bound_instance_path(&instance, options.instance_dir().as_path())?;
     let workspace = BoundWorkspace::open(
         bootstrap.workspace(),
         bootstrap.expected_workspace_identity(),
@@ -337,6 +334,22 @@ async fn launch(
         closed: AtomicBool::new(false),
         status,
     })
+}
+
+fn validate_bound_instance_path(instance: &BoundPath, requested: &Path) -> SdkResult<()> {
+    // `std::fs::canonicalize` normally adds the verbatim `\\?\` prefix on Windows.
+    // Desktop intentionally retains an ordinary absolute spelling for its private home,
+    // so compare equivalent canonical spellings rather than rejecting the same retained
+    // directory solely because the caller supplied `C:\\...`.
+    let requested = std::fs::canonicalize(requested).map_err(|_| SdkError::IdentityMismatch)?;
+    instance
+        .revalidate()
+        .map_err(|_| SdkError::IdentityMismatch)?;
+    if instance.canonical_path() == requested {
+        Ok(())
+    } else {
+        Err(SdkError::IdentityMismatch)
+    }
 }
 
 struct MemoryCredentialProvider {
@@ -641,4 +654,25 @@ async fn read_async_frame<T: serde::de::DeserializeOwned>(
         .await
         .map_err(|_| SdkError::SidecarFailed)?;
     decode_payload(payload.as_slice()).map_err(|_| SdkError::SidecarFailed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_windows_instance_path_matches_its_bound_canonical_identity() {
+        let temporary = tempfile::tempdir().expect("temporary instance parent");
+        let canonical = std::fs::canonicalize(temporary.path()).expect("canonical instance path");
+        let canonical_text = canonical.to_string_lossy();
+        let ordinary = canonical_text
+            .strip_prefix(r"\\?\")
+            .map(PathBuf::from)
+            .expect("Windows canonical paths use the verbatim prefix");
+        let binding = BoundPath::open_directory(&ordinary).expect("bind ordinary instance path");
+
+        assert_ne!(binding.canonical_path(), ordinary);
+        validate_bound_instance_path(&binding, &ordinary)
+            .expect("ordinary and verbatim spellings identify the same retained directory");
+    }
 }
