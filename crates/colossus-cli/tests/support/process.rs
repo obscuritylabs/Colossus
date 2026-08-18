@@ -21,6 +21,7 @@ impl IsolatedUserHome {
         self.path.join(".colossus-home")
     }
 
+    #[cfg(windows)]
     pub fn temporary_directory(&self) -> PathBuf {
         self.path.join("tmp")
     }

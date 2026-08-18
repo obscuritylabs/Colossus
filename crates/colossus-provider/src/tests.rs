@@ -19,8 +19,10 @@ use rustls::{
 };
 #[cfg(not(windows))]
 use std::fs;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use tokio::{
