@@ -1,4 +1,6 @@
-use std::{fs, path::Path};
+use std::fs;
+#[cfg(windows)]
+use std::path::Path;
 
 pub(crate) fn private_tempdir() -> tempfile::TempDir {
     #[cfg(windows)]
