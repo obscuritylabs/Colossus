@@ -1437,6 +1437,7 @@ fn valid_private_absolute_path(path: &Path) -> bool {
     }
 }
 
+#[cfg(not(windows))]
 fn display_path(path: &Path) -> String {
     let home = BaseDirs::new().map(|directories| directories.home_dir().to_owned());
     home.as_deref()
@@ -1451,6 +1452,45 @@ fn display_path(path: &Path) -> String {
                 }
             },
         )
+}
+
+#[cfg(windows)]
+fn display_path(path: &Path) -> String {
+    let path = windows_user_display_path(path);
+    let home = BaseDirs::new().map(|directories| windows_user_display_path(directories.home_dir()));
+    home.as_deref()
+        .and_then(|home| strip_windows_display_prefix(&path, home))
+        .map_or(path, |relative| {
+            if relative.is_empty() {
+                "~".into()
+            } else {
+                format!("~/{relative}")
+            }
+        })
+}
+
+#[cfg(windows)]
+fn windows_user_display_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        value.into_owned()
+    }
+}
+
+#[cfg(windows)]
+fn strip_windows_display_prefix(path: &str, prefix: &str) -> Option<String> {
+    if path.len() < prefix.len() || !path[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    let rest = &path[prefix.len()..];
+    if rest.is_empty() {
+        return Some(String::new());
+    }
+    rest.strip_prefix(['\\', '/']).map(str::to_owned)
 }
 
 fn open_workspace_identity(path: &Path) -> Result<(PathBuf, WorkspaceIdentity), CommandErrorDto> {
@@ -2890,6 +2930,19 @@ mod tests {
         assert!(!valid_private_absolute_path(Path::new(
             r"\\?\UNC\server\share\colossus-api"
         )));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_display_path_hides_windows_verbatim_prefixes() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\D:\tools\Test")),
+            r"D:\tools\Test"
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\project")),
+            r"\\server\share\project"
+        );
     }
 
     #[test]
