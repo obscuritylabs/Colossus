@@ -1213,7 +1213,7 @@ fn validate_regular_file(path: &Path, error: TerminalError) -> Result<PathBuf, T
     {
         let binding = colossus_windows_native::BoundPath::open_file(path).map_err(|_| error)?;
         binding.revalidate().map_err(|_| error)?;
-        return Ok(binding.canonical_path().to_path_buf());
+        Ok(binding.canonical_path().to_path_buf())
     }
     #[cfg(not(windows))]
     {

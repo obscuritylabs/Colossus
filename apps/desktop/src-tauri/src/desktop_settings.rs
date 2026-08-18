@@ -1483,10 +1483,11 @@ fn windows_user_display_path(path: &Path) -> String {
 
 #[cfg(windows)]
 fn strip_windows_display_prefix(path: &str, prefix: &str) -> Option<String> {
-    if path.len() < prefix.len() || !path[..prefix.len()].eq_ignore_ascii_case(prefix) {
+    let path_prefix = path.get(..prefix.len())?;
+    if !path_prefix.eq_ignore_ascii_case(prefix) {
         return None;
     }
-    let rest = &path[prefix.len()..];
+    let rest = path.get(prefix.len()..)?;
     if rest.is_empty() {
         return Some(String::new());
     }
@@ -1655,7 +1656,7 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), CommandErrorDto> 
     #[cfg(windows)]
     {
         colossus_windows_native::create_private_file(path, bytes).map_err(|_| storage_error())?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     {
@@ -1805,18 +1806,25 @@ fn storage_error() -> CommandErrorDto {
 fn home_storage_error(error: HomeError) -> CommandErrorDto {
     let message = match error {
         HomeError::HomeDirectoryUnavailable => {
-            "Colossus Desktop could not find your Windows home directory. Set COLOSSUS_HOME to an absolute private directory and restart the desktop app."
+            "Colossus Desktop could not find your home directory. Set COLOSSUS_HOME to an absolute private directory and restart the desktop app."
         }
-        HomeError::HomeMustBeAbsolute(_) => {
+        HomeError::HomeMustBeAbsolute(path) => {
+            drop(path);
             "COLOSSUS_HOME must be an absolute private directory before Colossus Desktop can start."
         }
-        HomeError::UnsafePrivateDirectory(_) | HomeError::UnsafeConfinedPath(_) => {
-            "The selected Colossus home is not private to your Windows account. For desktop development, use %LOCALAPPDATA%\\ColossusDevHome or set COLOSSUS_HOME to another private directory."
+        HomeError::UnsafePrivateDirectory(path) | HomeError::UnsafeConfinedPath(path) => {
+            drop(path);
+            "The selected Colossus home is not private to your account. For desktop development, set COLOSSUS_HOME to an absolute private directory under your user profile."
         }
-        HomeError::Io { .. } => {
+        HomeError::Io { path, source } => {
+            drop((path, source));
             "Colossus Desktop could not create or read its private application storage. Check that COLOSSUS_HOME points to a writable private directory."
         }
-        HomeError::InvalidWorkspace(_) | HomeError::InvalidWorkspaceIdentity => {
+        HomeError::InvalidWorkspace(path) => {
+            drop(path);
+            "Colossus Desktop could not validate its private workspace storage. Choose the workspace again after the app starts."
+        }
+        HomeError::InvalidWorkspaceIdentity => {
             "Colossus Desktop could not validate its private workspace storage. Choose the workspace again after the app starts."
         }
     };
@@ -1874,7 +1882,8 @@ mod tests {
         assert_eq!(error.code, "desktop_storage");
         assert!(error.message.contains("not private"));
         assert!(error.message.contains("COLOSSUS_HOME"));
-        assert!(error.message.contains("%LOCALAPPDATA%\\ColossusDevHome"));
+        assert!(!error.message.contains("Windows"));
+        assert!(!error.message.contains("%LOCALAPPDATA%"));
         let serialized = serde_json::to_string(&error).expect("error serializes");
         assert!(!serialized.contains("C:\\Users\\private"));
 
@@ -2010,7 +2019,7 @@ mod tests {
             let root_guard = PrivateTestRoot::in_target("store");
             let canonical_root = fs::canonicalize(root_guard.path()).expect("canonical store root");
             let store = SettingsStore::open(canonical_root.clone()).expect("store");
-            return (root_guard, canonical_root, store);
+            (root_guard, canonical_root, store)
         }
         #[cfg(not(windows))]
         {
@@ -2030,7 +2039,7 @@ mod tests {
         {
             let guard = PrivateTestRoot::in_target(prefix);
             let path = fs::canonicalize(guard.path()).expect("canonical test directory");
-            return (guard, path);
+            (guard, path)
         }
         #[cfg(not(windows))]
         {
@@ -2943,6 +2952,20 @@ mod tests {
             display_path(Path::new(r"\\?\UNC\server\share\project")),
             r"\\server\share\project"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_display_prefix_checks_utf8_boundaries() {
+        assert_eq!(
+            strip_windows_display_prefix(r"C:\Users\Tester\Project", r"c:\users\tester"),
+            Some("Project".into())
+        );
+        assert_eq!(
+            strip_windows_display_prefix(r"C:\Users\Tester", r"c:\users\tester"),
+            Some(String::new())
+        );
+        assert_eq!(strip_windows_display_prefix("é:\\workspace", "C"), None);
     }
 
     #[test]
