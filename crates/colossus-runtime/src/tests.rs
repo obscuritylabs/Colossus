@@ -16,6 +16,7 @@ use super::{
     recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
     reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
 };
+use crate::test_support::private_tempdir;
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
@@ -56,18 +57,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tempfile::tempdir;
-
-fn private_tempdir() -> tempfile::TempDir {
-    let temporary = tempdir().expect("private temporary root");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
-            .expect("private temporary root permissions");
-    }
-    temporary
-}
 
 #[test]
 fn research_outer_timeout_contains_every_bounded_nested_operation() {
@@ -1272,7 +1261,7 @@ fn storage_location_defaults_to_workspace_for_existing_configurations() {
 #[test]
 fn home_workspace_storage_is_confined_and_resolves_private_paths() {
     let workspace = tempfile::tempdir().expect("workspace");
-    let home_workspace_temporary = tempfile::tempdir().expect("home workspace");
+    let home_workspace_temporary = private_tempdir();
     let home_workspace = home_workspace_temporary
         .path()
         .canonicalize()
@@ -1298,7 +1287,12 @@ fn home_workspace_storage_is_confined_and_resolves_private_paths() {
     };
     assert_eq!(anchor_path, home_workspace.join("secure-anchor.json"));
 
-    for unsafe_path in ["../state.redb", "/tmp/state.redb", "."] {
+    let absolute_unsafe_path = std::env::current_dir()
+        .expect("cwd")
+        .join("state.redb")
+        .display()
+        .to_string();
+    for unsafe_path in ["../state.redb", absolute_unsafe_path.as_str(), "."] {
         config.storage.path = unsafe_path.into();
         assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("unsafe YAML")).is_err());
         assert!(
@@ -2739,7 +2733,10 @@ fn semantic_memory_requires_enabled_index_secure_origins_and_valid_profiles() {
 #[test]
 fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
     let mut config = RuntimeConfig::offline_template("state.redb");
-    let command = std::path::PathBuf::from("/usr/bin/env");
+    let command = std::env::current_exe()
+        .expect("test executable")
+        .canonicalize()
+        .expect("canonical test executable");
     config.sandbox.executables.push(command.clone());
     config.sandbox.filesystem.push(FilesystemGrant {
         root: std::env::current_dir().expect("cwd").display().to_string(),
@@ -3124,9 +3121,15 @@ fn oci_config_requires_cleanup_budget_digest_and_safe_environment_names() {
     );
 
     config.sandbox.timeout_ms = 10_000;
+    #[cfg(not(windows))]
     assert!(
         RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
         "valid networked OCI proxy configuration was rejected"
+    );
+    #[cfg(windows)]
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+        "Windows accepted OCI before live path-mapping acceptance"
     );
 
     config.sandbox.network_destinations.clear();
@@ -3747,7 +3750,13 @@ async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
         .await
         .expect("search");
     let searched: serde_json::Value = serde_json::from_str(&searched.output).expect("search JSON");
-    assert_eq!(searched["matches"][0]["path"], "src/example.rs");
+    assert_eq!(
+        searched["matches"][0]["path"]
+            .as_str()
+            .expect("match path")
+            .replace('\\', "/"),
+        "src/example.rs"
+    );
     assert_eq!(searched["matches"][0]["line"], 1);
 
     let denied = executor
@@ -6085,8 +6094,9 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         .expect("files")
         .iter()
         .filter_map(|file| file["path"].as_str())
+        .map(|path| path.replace('\\', "/"))
         .collect::<Vec<_>>();
-    assert!(mapped_paths.contains(&"src/lib.rs"));
+    assert!(mapped_paths.iter().any(|path| path == "src/lib.rs"));
     assert!(!mapped_paths.iter().any(|path| path.contains(".colossus")));
 
     let symbols = executor
@@ -6178,7 +6188,13 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         .expect("absolute in-workspace file summary");
     let absolute_summary: Value =
         serde_json::from_str(&absolute_summary.output).expect("absolute summary JSON");
-    assert_eq!(absolute_summary["path"], "src/lib.rs");
+    assert_eq!(
+        absolute_summary["path"]
+            .as_str()
+            .expect("summary path")
+            .replace('\\', "/"),
+        "src/lib.rs"
+    );
     assert_eq!(absolute_summary["line_count"], 3);
 
     let absolute_map = executor
@@ -6199,6 +6215,7 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
             .expect("files")
             .iter()
             .filter_map(|file| file["path"].as_str())
+            .map(|path| path.replace('\\', "/"))
             .any(|path| path == "src/lib.rs")
     );
 

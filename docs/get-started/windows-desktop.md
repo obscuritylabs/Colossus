@@ -31,6 +31,12 @@ disable SmartScreen globally.
 - Permission under your organization's policy to run a checksum-verified but unsigned
   preview installer.
 
+The **ChatGPT subscription (Codex)** provider runs the official Codex CLI for account
+operations. When `CODEX_HOME` is not set in the Desktop process environment, the
+preview uses a private Codex credential directory under Desktop application storage.
+If you intentionally launch Desktop with `CODEX_HOME` set, it must be an absolute
+owner-private directory whose `auth.json` can pass Windows DACL validation.
+
 ## Steps
 
 ### 1. Install

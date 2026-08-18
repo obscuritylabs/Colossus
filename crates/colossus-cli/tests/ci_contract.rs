@@ -2,8 +2,40 @@
 
 mod support;
 
-use std::{collections::BTreeSet, fs, process::Command};
+#[cfg(windows)]
+use std::path::PathBuf;
+use std::{collections::BTreeSet, fs, path::Path, process::Command};
 use support::{field, job, jobs, mapping, named_step, repository_root, strings, workflow};
+
+fn script_command(path: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new(git_bash());
+        command.arg(path);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new(path)
+    }
+}
+
+#[cfg(windows)]
+fn git_bash() -> PathBuf {
+    let output = Command::new("git")
+        .arg("--exec-path")
+        .output()
+        .expect("query Git executable path");
+    assert!(output.status.success(), "query Git executable path");
+    let exec_path = String::from_utf8(output.stdout).expect("Git executable path is UTF-8");
+    for ancestor in Path::new(exec_path.trim()).ancestors() {
+        let candidate = ancestor.join("bin").join("bash.exe");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    panic!("Git for Windows Bash is required for shell-script contract tests");
+}
 
 #[test]
 fn workflows_are_split_and_the_catch_all_is_removed() {
@@ -606,7 +638,7 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
 
 #[test]
 fn change_classifier_and_gates_fail_closed() {
-    let status = Command::new(repository_root().join("scripts/ci/test-contracts.sh"))
+    let status = script_command(&repository_root().join("scripts/ci/test-contracts.sh"))
         .status()
         .expect("run CI shell contract tests");
     assert!(status.success());
@@ -919,7 +951,7 @@ fn conventional_commit_checker_remains_python_free() {
         "security!: tighten release policy",
         "Merge branch 'main' into feature",
     ] {
-        let mut child = Command::new(&checker)
+        let mut child = script_command(&checker)
             .arg("--stdin")
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -934,7 +966,7 @@ fn conventional_commit_checker_remains_python_free() {
         assert!(child.wait().expect("wait for checker").success(), "{valid}");
     }
 
-    let mut invalid = Command::new(&checker)
+    let mut invalid = script_command(&checker)
         .arg("--stdin")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

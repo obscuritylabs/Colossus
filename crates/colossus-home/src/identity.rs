@@ -214,11 +214,12 @@ fn detect_platform_workspace_identity(workspace: &Path) -> Result<WorkspaceIdent
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::private_tempdir;
 
     #[test]
     fn identity_is_stable_for_one_workspace_and_differs_for_another() {
-        let first = tempfile::tempdir().expect("first workspace");
-        let second = tempfile::tempdir().expect("second workspace");
+        let first = private_tempdir();
+        let second = private_tempdir();
         let first_identity = detect_workspace_identity(first.path()).expect("first identity");
         assert_eq!(
             first_identity,

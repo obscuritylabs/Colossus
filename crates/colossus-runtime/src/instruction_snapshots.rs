@@ -655,11 +655,12 @@ fn agents_file_error(path: &Path, reason: &str) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::private_tempdir;
     use colossus_testkit::InMemoryEventJournal;
 
     #[test]
     fn capture_orders_all_instruction_layers_with_hash_only_provenance() {
-        let home = tempfile::tempdir().expect("home");
+        let home = private_tempdir();
         let workspace = tempfile::tempdir().expect("workspace");
         let home_path = home.path().canonicalize().expect("canonical home");
         #[cfg(unix)]
@@ -860,7 +861,7 @@ mod tests {
 
     #[test]
     fn durable_runtime_mode_does_not_count_against_exact_agents_boundary() {
-        let home = tempfile::tempdir().expect("home");
+        let home = private_tempdir();
         let workspace = tempfile::tempdir().expect("workspace");
         let home_path = home.path().canonicalize().expect("canonical home");
         #[cfg(unix)]
@@ -942,7 +943,7 @@ mod tests {
 
     #[test]
     fn trusted_diagnostic_capture_suppresses_only_automatic_agents_layers() {
-        let home = tempfile::tempdir().expect("home");
+        let home = private_tempdir();
         let workspace = tempfile::tempdir().expect("workspace");
         let home_path = home.path().canonicalize().expect("canonical home");
         #[cfg(unix)]

@@ -272,7 +272,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         #[cfg(target_os = "windows")]
-        for name in ["SystemRoot", "WINDIR", "LOCALAPPDATA"] {
+        for name in ["SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA"] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }

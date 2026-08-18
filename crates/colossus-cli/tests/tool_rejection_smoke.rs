@@ -3,6 +3,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -14,21 +15,20 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "4545454545454545454545454545454545454545454545454545454545454545";
 const SIGNING_KEY: &str = "5656565656565656565656565656565656565656565656565656565656565656";
 
-fn command(binary: &Path, config: &Path, directory: &Path) -> Command {
+fn command(binary: &Path, config: &Path, directory: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, directory);
+    let isolated_home = process_support::isolate_user_home(&mut command, directory);
     command
         .current_dir(directory)
         .arg("--config")
         .arg(config)
         .env("COLOSSUS_TOOL_REJECTION_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_TOOL_REJECTION_SIGNING_KEY", SIGNING_KEY);
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn read_request(stream: &mut TcpStream) -> String {

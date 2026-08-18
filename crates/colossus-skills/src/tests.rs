@@ -1,9 +1,13 @@
+#[cfg(unix)]
+use super::MAX_SKILL_ROOTS;
 use super::{
-    FilesystemSkillRepository, MAX_SKILL_ROOTS, SkillAuthoringService, SkillComposer,
-    SkillResourceService, SkillRoot, content_hash, split_frontmatter,
+    FilesystemSkillRepository, SkillAuthoringService, SkillComposer, SkillResourceService,
+    SkillRoot, content_hash, split_frontmatter,
 };
 use colossus_contracts::ToolSpec;
-use colossus_ports::{SkillRepository, StoreError};
+use colossus_ports::SkillRepository;
+#[cfg(unix)]
+use colossus_ports::StoreError;
 use std::{fs, sync::Arc};
 use tempfile::tempdir;
 

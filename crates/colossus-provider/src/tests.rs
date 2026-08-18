@@ -17,8 +17,11 @@ use rustls::{
     ServerConfig,
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
+#[cfg(not(windows))]
+use std::fs;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::{
-    fs,
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -304,11 +307,138 @@ fn write_test_codex_auth(path: &Path, expires_at: i64) {
             "refresh_token": "refresh-secret"
         }
     });
-    fs::write(path, serde_json::to_vec(&auth).expect("auth serializes")).expect("auth writes");
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("permissions update");
+        let bytes = serde_json::to_vec(&auth).expect("auth serializes");
+        let parent = path.parent().expect("auth parent");
+        colossus_windows_native::create_private_directory(parent)
+            .expect("private Codex auth fixture directory");
+        colossus_windows_native::create_private_file(path, &bytes)
+            .expect("private Codex auth fixture file");
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::create_dir_all(path.parent().expect("auth parent")).expect("auth parent");
+        fs::write(path, serde_json::to_vec(&auth).expect("auth serializes")).expect("auth writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("permissions update");
+        }
+    }
+}
+
+fn codex_auth_tempdir() -> tempfile::TempDir {
+    #[cfg(windows)]
+    {
+        let directory = tempfile::Builder::new()
+            .prefix("colossus-provider-codex-auth-")
+            .tempdir_in(current_user_profile())
+            .expect("temporary Codex auth parent");
+        make_windows_private_test_home(directory.path());
+        directory
+    }
+
+    #[cfg(not(windows))]
+    {
+        tempfile::tempdir().expect("tempdir")
+    }
+}
+
+#[cfg(windows)]
+fn current_user_profile() -> PathBuf {
+    let account = current_windows_user().0;
+    let user_name = account
+        .rsplit('\\')
+        .next()
+        .filter(|value| !value.is_empty())
+        .expect("current Windows account name");
+    let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let users_root = PathBuf::from(format!("{system_drive}\\Users"));
+    for entry in std::fs::read_dir(&users_root).expect("Windows users directory") {
+        let entry = entry.expect("Windows user profile entry");
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(user_name)
+        {
+            return entry.path();
+        }
+    }
+    panic!("Windows user profile not found for {account}");
+}
+
+#[cfg(windows)]
+fn make_windows_private_test_home(path: &Path) {
+    let current_user_sid = current_windows_user().1;
+    let output = std::process::Command::new("icacls.exe")
+        .arg(path_for_icacls(path))
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("*{current_user_sid}:(OI)(CI)F"))
+        .arg("*S-1-5-18:(OI)(CI)F")
+        .arg("*S-1-5-32-544:(OI)(CI)F")
+        .output()
+        .expect("make isolated Windows Codex auth fixture private");
+    assert!(
+        output.status.success(),
+        "failed to make isolated Windows Codex auth fixture private\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binding =
+        colossus_windows_native::BoundPath::open_directory(Path::new(&path_for_icacls(path)))
+            .expect("bind private Codex auth fixture");
+    binding
+        .validate_namespace_authority()
+        .and_then(|()| binding.validate_private_owner_dacl())
+        .and_then(|()| binding.revalidate())
+        .expect("private Codex auth fixture");
+}
+
+#[cfg(windows)]
+fn current_windows_user() -> (String, String) {
+    let output = std::process::Command::new("whoami.exe")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .expect("query current Windows user SID");
+    assert!(
+        output.status.success(),
+        "failed to query current Windows user SID\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("Windows user SID output is UTF-8");
+    let mut columns = stdout.split(',');
+    let account = columns
+        .next()
+        .map(|value| value.trim().trim_matches('"').to_owned())
+        .filter(|value| !value.is_empty())
+        .expect("Windows account in whoami output");
+    let sid_tail = columns
+        .next()
+        .and_then(|value| value.trim().trim_matches('"').strip_prefix("S-"))
+        .expect("Windows user SID in whoami output");
+    assert!(
+        sid_tail
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-'),
+        "unexpected Windows user SID: S-{sid_tail}"
+    );
+    (account, format!("S-{sid_tail}"))
+}
+
+#[cfg(windows)]
+fn path_for_icacls(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        path.into_owned()
     }
 }
 
@@ -1638,8 +1768,8 @@ async fn codex_provider_uses_chatgpt_account_headers_and_responses_shape() {
         .network_origin()
         .expect("origin")
         .expect("network provider origin");
-    let directory = tempfile::tempdir().expect("tempdir");
-    let auth_path = directory.path().join("auth.json");
+    let directory = codex_auth_tempdir();
+    let auth_path = directory.path().join("private").join("auth.json");
     let expires_at = 4_102_444_800;
     write_test_codex_auth(&auth_path, expires_at);
     let expected_access_token = test_jwt(json!({"exp": expires_at}));
@@ -1716,8 +1846,8 @@ async fn codex_non_stream_effect_uses_sse_transport_and_collects_one_turn() {
         .network_origin()
         .expect("origin")
         .expect("network provider origin");
-    let directory = tempfile::tempdir().expect("tempdir");
-    let auth_path = directory.path().join("auth.json");
+    let directory = codex_auth_tempdir();
+    let auth_path = directory.path().join("private").join("auth.json");
     write_test_codex_auth(&auth_path, 4_102_444_800);
     let executor = ProviderExecutor::new(profile.clone())
         .with_codex_auth_store(CodexAuthStore::at_path(auth_path));
@@ -1767,8 +1897,8 @@ async fn codex_refresh_requires_the_openai_auth_origin_in_the_permit() {
         .network_origin()
         .expect("origin")
         .expect("network provider origin");
-    let directory = tempfile::tempdir().expect("tempdir");
-    let auth_path = directory.path().join("auth.json");
+    let directory = codex_auth_tempdir();
+    let auth_path = directory.path().join("private").join("auth.json");
     write_test_codex_auth(&auth_path, 1);
     let executor = ProviderExecutor::new(profile.clone())
         .with_codex_auth_store(CodexAuthStore::at_path(auth_path));

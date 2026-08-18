@@ -780,7 +780,7 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   assert.match(windows, /steps\.windows_native\.outcome/u);
   assert.match(
     windows,
-    /native_sidecar_windows::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity/u,
+    /cargo test --locked -p colossus-sdk --lib --features sidecar\s+native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity/u,
   );
   assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
@@ -1112,22 +1112,24 @@ test("release manifest writer emits exact final binary digests", () => {
       assert.notEqual(tampered.status, 0);
     }
 
-    rmSync(sidecar);
-    symlinkSync(cli, sidecar);
-    const rejected = spawnSync(process.execPath, [
-      join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
-      "--target",
-      "aarch64-apple-darwin",
-      "--release-channel",
-      "developer_preview",
-      "--sidecar",
-      sidecar,
-      "--cli",
-      cli,
-      "--output",
-      output,
-    ]);
-    assert.notEqual(rejected.status, 0);
+    if (process.platform !== "win32") {
+      rmSync(sidecar);
+      symlinkSync(cli, sidecar);
+      const rejected = spawnSync(process.execPath, [
+        join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
+        "--target",
+        "aarch64-apple-darwin",
+        "--release-channel",
+        "developer_preview",
+        "--sidecar",
+        sidecar,
+        "--cli",
+        cli,
+        "--output",
+        output,
+      ]);
+      assert.notEqual(rejected.status, 0);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

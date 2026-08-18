@@ -1,4 +1,4 @@
-use colossus_home::{ColossusHome, HomeSurface, WorkspaceIdentityRef};
+use colossus_home::{ColossusHome, HomeError, HomeSurface, WorkspaceIdentityRef};
 use colossus_sdk::{
     REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity, default_managed_provider_timeout_ms,
     validate_managed_model_identifier, validate_managed_provider_base_url,
@@ -8,10 +8,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    fs::{self, OpenOptions},
-    io::{Read as _, Write as _},
+    fs,
+    io::Read as _,
     path::{Path, PathBuf},
 };
+#[cfg(not(windows))]
+use std::{fs::OpenOptions, io::Write as _};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -28,8 +30,9 @@ const MANAGED_DIRECTORY: &str = "managed-local";
 const TRUST_DIRECTORY: &str = "trust";
 const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
 const SELF_TEST_DIRECTORY: &str = "self-test";
-const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime";
+const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v2";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
+const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
 const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 const MAX_PROVIDER_SECRET_BYTES: usize = 761;
 pub(crate) const LOCAL_TERMINAL_CONSENT_VERSION: u8 = 1;
@@ -542,7 +545,7 @@ pub(crate) struct ManagedWorkspaceStorage {
 
 impl SettingsStore {
     pub(crate) fn open_application() -> Result<Self, CommandErrorDto> {
-        let home = ColossusHome::resolve_and_ensure().map_err(|_| storage_error())?;
+        let home = ColossusHome::resolve_and_ensure().map_err(home_storage_error)?;
         Self::open_home(home)
     }
 
@@ -731,15 +734,8 @@ impl SettingsStore {
         let temporary = self
             .root
             .join(format!(".{SETTINGS_FILE}.{}.tmp", Uuid::new_v4()));
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options.open(&temporary).map_err(|_| storage_error())?;
+        write_private_file(&temporary, &bytes)?;
         let result = (|| {
-            file.write_all(&bytes).map_err(|_| storage_error())?;
-            file.sync_all().map_err(|_| storage_error())?;
-            drop(file);
             replace_private_file(&temporary, &self.root.join(SETTINGS_FILE))?;
             sync_private_directory(&self.root)
         })();
@@ -878,6 +874,12 @@ impl SettingsStore {
             instance_dir,
             workspace,
         })
+    }
+
+    pub(crate) fn codex_auth_home(&self) -> Result<PathBuf, CommandErrorDto> {
+        let path = self.root.join(CODEX_AUTH_DIRECTORY);
+        ensure_private_directory(&path)?;
+        Ok(path)
     }
 }
 
@@ -1435,6 +1437,7 @@ fn valid_private_absolute_path(path: &Path) -> bool {
     }
 }
 
+#[cfg(not(windows))]
 fn display_path(path: &Path) -> String {
     let home = BaseDirs::new().map(|directories| directories.home_dir().to_owned());
     home.as_deref()
@@ -1449,6 +1452,46 @@ fn display_path(path: &Path) -> String {
                 }
             },
         )
+}
+
+#[cfg(windows)]
+fn display_path(path: &Path) -> String {
+    let path = windows_user_display_path(path);
+    let home = BaseDirs::new().map(|directories| windows_user_display_path(directories.home_dir()));
+    home.as_deref()
+        .and_then(|home| strip_windows_display_prefix(&path, home))
+        .map_or(path, |relative| {
+            if relative.is_empty() {
+                "~".into()
+            } else {
+                format!("~/{relative}")
+            }
+        })
+}
+
+#[cfg(windows)]
+fn windows_user_display_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        value.into_owned()
+    }
+}
+
+#[cfg(windows)]
+fn strip_windows_display_prefix(path: &str, prefix: &str) -> Option<String> {
+    let path_prefix = path.get(..prefix.len())?;
+    if !path_prefix.eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    let rest = path.get(prefix.len()..)?;
+    if rest.is_empty() {
+        return Some(String::new());
+    }
+    rest.strip_prefix(['\\', '/']).map(str::to_owned)
 }
 
 fn open_workspace_identity(path: &Path) -> Result<(PathBuf, WorkspaceIdentity), CommandErrorDto> {
@@ -1610,27 +1653,26 @@ fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), CommandErrorDto> {
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path).map_err(|_| storage_error())?;
-    if file.write_all(bytes).is_err() || file.sync_all().is_err() {
-        drop(file);
-        let _ = fs::remove_file(path);
-        return Err(storage_error());
-    }
-    drop(file);
     #[cfg(windows)]
     {
-        let binding =
-            colossus_windows_native::BoundPath::open_file(path).map_err(|_| storage_error())?;
-        binding
-            .validate_private_owner_dacl()
-            .and_then(|()| binding.revalidate())
-            .map_err(|_| storage_error())?;
+        colossus_windows_native::create_private_file(path, bytes).map_err(|_| storage_error())?;
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(path).map_err(|_| storage_error())?;
+        if file.write_all(bytes).is_err() || file.sync_all().is_err() {
+            drop(file);
+            let _ = fs::remove_file(path);
+            return Err(storage_error());
+        }
+        drop(file);
+        Ok(())
+    }
 }
 
 fn replace_private_file(source: &Path, destination: &Path) -> Result<(), CommandErrorDto> {
@@ -1761,6 +1803,34 @@ fn storage_error() -> CommandErrorDto {
     )
 }
 
+fn home_storage_error(error: HomeError) -> CommandErrorDto {
+    let message = match error {
+        HomeError::HomeDirectoryUnavailable => {
+            "Colossus Desktop could not find your home directory. Set COLOSSUS_HOME to an absolute private directory and restart the desktop app."
+        }
+        HomeError::HomeMustBeAbsolute(path) => {
+            drop(path);
+            "COLOSSUS_HOME must be an absolute private directory before Colossus Desktop can start."
+        }
+        HomeError::UnsafePrivateDirectory(path) | HomeError::UnsafeConfinedPath(path) => {
+            drop(path);
+            "The selected Colossus home is not private to your account. For desktop development, set COLOSSUS_HOME to an absolute private directory under your user profile."
+        }
+        HomeError::Io { path, source } => {
+            drop((path, source));
+            "Colossus Desktop could not create or read its private application storage. Check that COLOSSUS_HOME points to a writable private directory."
+        }
+        HomeError::InvalidWorkspace(path) => {
+            drop(path);
+            "Colossus Desktop could not validate its private workspace storage. Choose the workspace again after the app starts."
+        }
+        HomeError::InvalidWorkspaceIdentity => {
+            "Colossus Desktop could not validate its private workspace storage. Choose the workspace again after the app starts."
+        }
+    };
+    CommandErrorDto::local_sanitized("desktop_storage", message, false)
+}
+
 fn workspace_error() -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "workspace_invalid",
@@ -1803,6 +1873,32 @@ mod tests {
         assert!(!object.contains_key("quote"));
         assert!(!object.contains_key("messages"));
         assert!(!object.contains_key("toolOutput"));
+    }
+
+    #[test]
+    fn home_storage_errors_are_actionable_without_disclosing_paths() {
+        let unsafe_path = PathBuf::from(r"C:\Users\private\.colossus");
+        let error = home_storage_error(HomeError::UnsafePrivateDirectory(unsafe_path));
+        assert_eq!(error.code, "desktop_storage");
+        assert!(error.message.contains("not private"));
+        assert!(error.message.contains("COLOSSUS_HOME"));
+        assert!(!error.message.contains("Windows"));
+        assert!(!error.message.contains("%LOCALAPPDATA%"));
+        let serialized = serde_json::to_string(&error).expect("error serializes");
+        assert!(!serialized.contains("C:\\Users\\private"));
+
+        let relative = home_storage_error(HomeError::HomeMustBeAbsolute(PathBuf::from("relative")));
+        assert!(relative.message.contains("absolute private directory"));
+        assert!(!relative.message.contains("relative"));
+    }
+
+    #[test]
+    fn codex_auth_home_is_app_private_storage() {
+        let (_guard, root, store) = test_store();
+        let auth_home = store.codex_auth_home().expect("Codex auth home");
+
+        assert_eq!(auth_home, root.join(CODEX_AUTH_DIRECTORY));
+        assert!(auth_home.is_dir());
     }
 
     #[test]
@@ -1867,22 +1963,132 @@ mod tests {
         }
     }
 
-    fn test_store() -> (tempfile::TempDir, PathBuf, SettingsStore) {
-        let parent = tempfile::tempdir().expect("store parent");
-        let root = fs::canonicalize(parent.path())
-            .expect("canonical store parent")
-            .join("store");
-        let store = SettingsStore::open(root.clone()).expect("store");
-        let canonical_root = fs::canonicalize(&root).expect("canonical store root");
-        assert_eq!(canonical_root, root);
-        (parent, canonical_root, store)
+    #[cfg(windows)]
+    struct PrivateTestRoot {
+        path: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl PrivateTestRoot {
+        fn in_target(prefix: &str) -> Self {
+            let parent = windows_test_parent();
+            let path = parent.join(format!(
+                "ColossusDesktopSettingsTest-{prefix}-{}",
+                Uuid::now_v7()
+            ));
+            colossus_windows_native::create_private_directory(&path).expect("private test root");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for PrivateTestRoot {
+        fn drop(&mut self) {
+            let expected_parent = windows_test_parent();
+            assert_eq!(self.path.parent(), Some(expected_parent.as_path()));
+            assert!(
+                self.path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("ColossusDesktopSettingsTest-"))
+            );
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_test_parent() -> PathBuf {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .expect("absolute Windows LocalAppData")
+    }
+
+    #[cfg(windows)]
+    type TestStoreGuard = PrivateTestRoot;
+    #[cfg(not(windows))]
+    type TestStoreGuard = tempfile::TempDir;
+
+    fn test_store() -> (TestStoreGuard, PathBuf, SettingsStore) {
+        #[cfg(windows)]
+        {
+            let root_guard = PrivateTestRoot::in_target("store");
+            let canonical_root = fs::canonicalize(root_guard.path()).expect("canonical store root");
+            let store = SettingsStore::open(canonical_root.clone()).expect("store");
+            (root_guard, canonical_root, store)
+        }
+        #[cfg(not(windows))]
+        {
+            let parent = tempfile::tempdir().expect("store parent");
+            let root = fs::canonicalize(parent.path())
+                .expect("canonical store parent")
+                .join("store");
+            let store = SettingsStore::open(root.clone()).expect("store");
+            let canonical_root = fs::canonicalize(&root).expect("canonical store root");
+            assert_eq!(canonical_root, root);
+            (parent, canonical_root, store)
+        }
+    }
+
+    #[cfg(windows)]
+    fn test_directory(prefix: &str) -> (TestStoreGuard, PathBuf) {
+        let guard = PrivateTestRoot::in_target(prefix);
+        let path = fs::canonicalize(guard.path()).expect("canonical test directory");
+        (guard, path)
+    }
+
+    #[cfg(not(windows))]
+    fn test_directory(_prefix: &str) -> (TestStoreGuard, PathBuf) {
+        let guard = tempfile::tempdir().expect("test directory");
+        let path = fs::canonicalize(guard.path()).expect("canonical test directory");
+        (guard, path)
+    }
+
+    #[cfg(windows)]
+    struct DesktopSelfTestHomeGuard {
+        path: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl DesktopSelfTestHomeGuard {
+        fn in_local_app_data() -> Self {
+            let local_app_data = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .expect("absolute Windows LocalAppData");
+            let parent = fs::canonicalize(local_app_data).expect("canonical LocalAppData");
+            let path = parent.join(format!("ColossusDesktopSelfTest-{}", Uuid::now_v7()));
+            Self { path }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for DesktopSelfTestHomeGuard {
+        fn drop(&mut self) {
+            let local_app_data = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .expect("Windows LocalAppData");
+            let parent = fs::canonicalize(local_app_data).expect("canonical LocalAppData");
+            assert_eq!(self.path.parent(), Some(parent.as_path()));
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 
     #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn application_home_uses_desktop_settings_and_workspace_surface_layout() {
-        let parent = tempfile::tempdir().expect("home parent");
-        let parent = fs::canonicalize(parent.path()).expect("canonical home parent");
+        #[cfg(windows)]
+        let parent_guard = PrivateTestRoot::in_target("home-parent");
+        #[cfg(windows)]
+        let parent = parent_guard.path().to_path_buf();
+        #[cfg(not(windows))]
+        let parent_guard = tempfile::tempdir().expect("home parent");
+        #[cfg(not(windows))]
+        let parent = fs::canonicalize(parent_guard.path()).expect("canonical home parent");
         // Represents the former Tauri Application Support root. Fresh shared-home
         // startup never receives this path and therefore must neither migrate nor
         // delete its contents.
@@ -1912,8 +2118,7 @@ mod tests {
             "fresh Desktop startup must ignore legacy application-support data"
         );
 
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let (_workspace_guard, workspace_path) = test_directory("workspace");
         let workspace = validate_workspace(&workspace_path).expect("workspace identity");
         let storage = store
             .managed_workspace_storage(
@@ -1974,7 +2179,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn settings_store_accepts_standard_windows_path_spelling() {
-        let parent = tempfile::tempdir().expect("store parent");
+        let parent = PrivateTestRoot::in_target("standard-path-parent");
         let canonical_parent = fs::canonicalize(parent.path()).expect("canonical store parent");
         assert_ne!(
             canonical_parent,
@@ -2108,8 +2313,7 @@ mod tests {
     #[test]
     fn v4_workspace_migrates_to_the_first_folder_backed_space() {
         let (_root_guard, canonical_root, store) = test_store();
-        let folder = tempfile::tempdir().expect("workspace");
-        let folder = fs::canonicalize(folder.path()).expect("canonical workspace");
+        let (_folder_guard, folder) = test_directory("workspace");
         let workspace = validate_workspace(&folder).expect("workspace identity");
         let mut legacy = configured_settings(
             ProviderKindSetting::Compatible,
@@ -2129,7 +2333,8 @@ mod tests {
             .expect("settings object")
             .remove("selectedSpaceId");
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&encoded).expect("v4 settings")).expect("settings");
+        write_private_file(&path, &serde_json::to_vec(&encoded).expect("v4 settings"))
+            .expect("settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
 
@@ -2149,8 +2354,7 @@ mod tests {
 
     #[test]
     fn spaces_reject_duplicate_folder_identity_and_archive_requires_restore() {
-        let folder = tempfile::tempdir().expect("workspace");
-        let folder = fs::canonicalize(folder.path()).expect("canonical workspace");
+        let (_folder_guard, folder) = test_directory("workspace");
         let workspace = validate_workspace(&folder).expect("workspace identity");
         let mut settings = DesktopSettings::default();
         let space_id = settings.add_space(workspace.clone()).expect("first Space");
@@ -2176,14 +2380,10 @@ mod tests {
             OPENROUTER_BASE_URL,
             Some(credential_id.clone()),
         );
-        let first_folder = tempfile::tempdir().expect("first workspace");
-        let second_folder = tempfile::tempdir().expect("second workspace");
-        let first =
-            validate_workspace(&fs::canonicalize(first_folder.path()).expect("first canonical"))
-                .expect("first identity");
-        let second =
-            validate_workspace(&fs::canonicalize(second_folder.path()).expect("second canonical"))
-                .expect("second identity");
+        let (_first_guard, first_path) = test_directory("first-workspace");
+        let (_second_guard, second_path) = test_directory("second-workspace");
+        let first = validate_workspace(&first_path).expect("first identity");
+        let second = validate_workspace(&second_path).expect("second identity");
         let first_id = settings.add_space(first).expect("first Space");
         let second_id = settings.add_space(second).expect("second Space");
         settings.models[0].model = "space-two-model".into();
@@ -2243,9 +2443,9 @@ mod tests {
             "legacyConnectionMigrated": true,
         });
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(
+        write_private_file(
             &path,
-            serde_json::to_vec(&encoded).expect("legacy settings"),
+            &serde_json::to_vec(&encoded).expect("legacy settings"),
         )
         .expect("settings");
         #[cfg(unix)]
@@ -2283,9 +2483,9 @@ mod tests {
             "legacyConnectionMigrated": true,
         });
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(
+        write_private_file(
             &path,
-            serde_json::to_vec(&encoded).expect("legacy settings"),
+            &serde_json::to_vec(&encoded).expect("legacy settings"),
         )
         .expect("settings");
         #[cfg(unix)]
@@ -2316,7 +2516,8 @@ mod tests {
             .expect("settings object")
             .remove("executionBoundary");
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&encoded).expect("v2 settings")).expect("settings");
+        write_private_file(&path, &serde_json::to_vec(&encoded).expect("v2 settings"))
+            .expect("settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
 
@@ -2352,7 +2553,8 @@ mod tests {
             .expect("settings object")
             .remove("executionBoundary");
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&encoded).expect("v3 settings")).expect("settings");
+        write_private_file(&path, &serde_json::to_vec(&encoded).expect("v3 settings"))
+            .expect("settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
 
@@ -2385,11 +2587,9 @@ mod tests {
     #[test]
     fn managed_state_and_instance_identity_are_isolated_per_workspace() {
         let (_root_guard, _root, store) = test_store();
-        let first_workspace = tempfile::tempdir().expect("first workspace");
-        let second_workspace = tempfile::tempdir().expect("second workspace");
+        let (_first_guard, first_path) = test_directory("first-workspace");
+        let (_second_guard, second_path) = test_directory("second-workspace");
         let seed = Uuid::now_v7().to_string();
-        let first_path = fs::canonicalize(first_workspace.path()).expect("first canonical");
-        let second_path = fs::canonicalize(second_workspace.path()).expect("second canonical");
         let first_identity = open_workspace_identity(&first_path)
             .expect("first identity")
             .1;
@@ -2430,9 +2630,7 @@ mod tests {
     #[test]
     fn path_only_same_path_replacement_requires_reselection_and_preserves_provider() {
         let (_root_guard, root, store) = test_store();
-        let workspace_parent = tempfile::tempdir().expect("workspace parent");
-        let workspace_parent =
-            fs::canonicalize(workspace_parent.path()).expect("canonical workspace parent");
+        let (_workspace_parent_guard, workspace_parent) = test_directory("workspace-parent");
         let workspace = workspace_parent.join("workspace");
         let moved = workspace_parent.join("workspace-moved");
         fs::create_dir(&workspace).expect("workspace");
@@ -2454,7 +2652,7 @@ mod tests {
         let expected_providers = legacy.providers.clone();
         let expected_models = legacy.models.clone();
         let path = root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&legacy).expect("legacy JSON"))
+        write_private_file(&path, &serde_json::to_vec(&legacy).expect("legacy JSON"))
             .expect("legacy settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("file permissions");
@@ -2474,8 +2672,7 @@ mod tests {
     #[test]
     fn v1_inode_only_workspace_identity_requires_explicit_reselection() {
         let (_root_guard, root, store) = test_store();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let (_workspace_guard, workspace) = test_directory("workspace");
         let old_seed = Uuid::now_v7().to_string();
         let legacy = DesktopSettings {
             managed_instance_id: old_seed.clone(),
@@ -2490,7 +2687,7 @@ mod tests {
             ..DesktopSettings::default()
         };
         let path = root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&legacy).expect("legacy JSON"))
+        write_private_file(&path, &serde_json::to_vec(&legacy).expect("legacy JSON"))
             .expect("legacy settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("file permissions");
@@ -2505,8 +2702,7 @@ mod tests {
     #[test]
     fn missing_identity_version_migrates_without_bricking_settings() {
         let (_root_guard, root, store) = test_store();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let (_workspace_guard, workspace) = test_directory("workspace");
         let old_seed = Uuid::now_v7().to_string();
         let legacy = DesktopSettings {
             managed_instance_id: old_seed.clone(),
@@ -2526,7 +2722,7 @@ mod tests {
             .expect("identity object")
             .remove("version");
         let path = root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&encoded).expect("preview JSON"))
+        write_private_file(&path, &serde_json::to_vec(&encoded).expect("preview JSON"))
             .expect("legacy settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("file permissions");
@@ -2556,7 +2752,7 @@ mod tests {
             ..DesktopSettings::default()
         };
         let path = root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&legacy).expect("legacy JSON"))
+        write_private_file(&path, &serde_json::to_vec(&legacy).expect("legacy JSON"))
             .expect("legacy settings");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("file permissions");
@@ -2572,8 +2768,7 @@ mod tests {
     #[test]
     fn replacement_at_same_path_gets_distinct_state_and_rejects_saved_identity() {
         let (_root_guard, _root, store) = test_store();
-        let parent = tempfile::tempdir().expect("workspace parent");
-        let parent = fs::canonicalize(parent.path()).expect("canonical parent");
+        let (_parent_guard, parent) = test_directory("workspace-parent");
         let workspace_path = parent.join("workspace");
         let moved_path = parent.join("workspace-moved");
         fs::create_dir(&workspace_path).expect("workspace");
@@ -2624,6 +2819,45 @@ mod tests {
         assert!(storage.workspace.is_dir());
     }
 
+    #[test]
+    fn offline_self_test_uses_versioned_runtime_and_leaves_legacy_state() {
+        let (_root_guard, _root, store) = test_store();
+        let storage = store.self_test_storage().expect("self-test storage");
+        let legacy_runtime = storage
+            .instance_dir
+            .parent()
+            .expect("self-test root")
+            .join("runtime");
+        ensure_private_directory(&legacy_runtime).expect("legacy runtime");
+
+        assert_eq!(
+            storage
+                .instance_dir
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(SELF_TEST_RUNTIME_DIRECTORY)
+        );
+        assert_ne!(storage.instance_dir, legacy_runtime);
+        assert!(legacy_runtime.is_dir());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires Windows Credential Manager and loopback networking"]
+    async fn offline_self_test_launches_sidecar_and_completes_echo_run() {
+        let home_guard = DesktopSelfTestHomeGuard::in_local_app_data();
+        let home = ColossusHome::ensure_at(&home_guard.path).expect("home");
+        let store = SettingsStore::open_home(home).expect("Desktop store");
+
+        crate::managed_runtime::self_test(
+            &crate::state::AppState::default(),
+            &store,
+            &DesktopSettings::default(),
+        )
+        .await
+        .expect("offline self-test");
+    }
+
     #[cfg(unix)]
     #[test]
     fn settings_store_rejects_group_access() {
@@ -2637,7 +2871,7 @@ mod tests {
     fn persisted_settings_reject_unknown_fields() {
         let (_root_guard, canonical_root, store) = test_store();
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(
+        write_private_file(
             &path,
             br#"{"schemaVersion":1,"managedInstanceId":"00000000-0000-0000-0000-000000000001","workspace":null,"provider":null,"accessProfile":"development","terminalEnabled":false,"selectedTargetId":null,"apiKey":"secret"}"#,
         )
@@ -2666,7 +2900,11 @@ mod tests {
             ..DesktopSettings::default()
         };
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&settings).expect("settings json")).expect("write");
+        write_private_file(
+            &path,
+            &serde_json::to_vec(&settings).expect("settings json"),
+        )
+        .expect("write");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
 
@@ -2702,6 +2940,33 @@ mod tests {
         )));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn workspace_display_path_hides_windows_verbatim_prefixes() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\D:\tools\Test")),
+            r"D:\tools\Test"
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\project")),
+            r"\\server\share\project"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_display_prefix_checks_utf8_boundaries() {
+        assert_eq!(
+            strip_windows_display_prefix(r"C:\Users\Tester\Project", r"c:\users\tester"),
+            Some("Project".into())
+        );
+        assert_eq!(
+            strip_windows_display_prefix(r"C:\Users\Tester", r"c:\users\tester"),
+            Some(String::new())
+        );
+        assert_eq!(strip_windows_display_prefix("é:\\workspace", "C"), None);
+    }
+
     #[test]
     fn persisted_external_targets_reject_directional_spoofing() {
         let (_root_guard, canonical_root, store) = test_store();
@@ -2722,7 +2987,11 @@ mod tests {
             ..DesktopSettings::default()
         };
         let path = canonical_root.join(SETTINGS_FILE);
-        fs::write(&path, serde_json::to_vec(&settings).expect("settings json")).expect("write");
+        write_private_file(
+            &path,
+            &serde_json::to_vec(&settings).expect("settings json"),
+        )
+        .expect("write");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
 

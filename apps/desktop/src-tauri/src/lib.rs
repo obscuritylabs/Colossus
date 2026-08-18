@@ -46,8 +46,10 @@ use workspace_files::{list_workspace_directory, read_workspace_file};
 ///
 /// Panics when Tauri cannot initialize or run the application event loop.
 pub fn run() {
-    desktop_settings::SettingsStore::open_application()
-        .expect("failed to initialize the private Colossus home");
+    if let Err(error) = desktop_settings::SettingsStore::open_application() {
+        eprintln!("Colossus Desktop could not start: {}", error.message);
+        std::process::exit(1);
+    }
     let application = tauri::Builder::default()
         .register_uri_scheme_protocol(terminal_protocol::SCHEME, |context, request| {
             terminal_protocol::respond(&context, &request)

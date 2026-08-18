@@ -4,6 +4,13 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(windows)]
+use std::{
+    env,
+    fs::File,
+    io::{BufRead as _, BufReader},
+};
+
 pub(super) struct Task {
     root: PathBuf,
     program: OsString,
@@ -56,7 +63,7 @@ impl Task {
 
     pub(super) fn run(self) -> Result<(), String> {
         self.print();
-        let mut command = self.command();
+        let mut command = self.command()?;
         if self.quiet_stdout {
             command.stdout(Stdio::null());
         }
@@ -75,8 +82,8 @@ impl Task {
 
     pub(super) fn output(self) -> Result<String, String> {
         self.print();
-        let output = self
-            .command()
+        let mut command = self.command()?;
+        let output = command
             .stderr(Stdio::inherit())
             .output()
             .map_err(|error| format!("could not start {}: {error}", display(&self.program)))?;
@@ -93,8 +100,8 @@ impl Task {
 
     pub(super) fn optional_output(self) -> Result<Option<String>, String> {
         self.print();
-        let output = self
-            .command()
+        let mut command = self.command()?;
+        let output = command
             .stderr(Stdio::null())
             .output()
             .map_err(|error| format!("could not start {}: {error}", display(&self.program)))?;
@@ -106,18 +113,81 @@ impl Task {
             .map_err(|_| format!("{} produced non-UTF-8 output", display(&self.program)))
     }
 
-    fn command(&self) -> Command {
+    fn command(&self) -> Result<Command, String> {
+        #[cfg(windows)]
+        let mut command = if is_posix_shell_script(&self.resolved_program()) {
+            let mut command = Command::new(git_bash()?);
+            command.arg(&self.program);
+            command
+        } else {
+            Command::new(&self.program)
+        };
+        #[cfg(not(windows))]
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
             .current_dir(&self.current_dir)
             .envs(self.env.iter().map(|(key, value)| (key, value)));
-        command
+        Ok(command)
+    }
+
+    #[cfg(windows)]
+    fn resolved_program(&self) -> PathBuf {
+        let program = Path::new(&self.program);
+        if program.is_absolute() {
+            program.to_path_buf()
+        } else {
+            self.current_dir.join(program)
+        }
     }
 
     fn print(&self) {
         eprintln!("+ {}", display_command(&self.program, &self.args));
     }
+}
+
+#[cfg(windows)]
+fn is_posix_shell_script(path: &Path) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let mut first_line = String::new();
+    if BufReader::new(file).read_line(&mut first_line).is_err() {
+        return false;
+    }
+    matches!(
+        first_line.trim_end(),
+        "#!/bin/sh" | "#!/bin/bash" | "#!/usr/bin/env sh" | "#!/usr/bin/env bash"
+    )
+}
+
+#[cfg(windows)]
+fn git_bash() -> Result<PathBuf, String> {
+    if let Ok(output) = Command::new("git").arg("--exec-path").output()
+        && output.status.success()
+        && let Ok(exec_path) = String::from_utf8(output.stdout)
+    {
+        for ancestor in Path::new(exec_path.trim()).ancestors() {
+            let candidate = ancestor.join("bin").join("bash.exe");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            let candidate = directory.join("bash.exe");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err(
+        "could not locate a POSIX shell for repository scripts; install Git for Windows with Git Bash"
+            .to_owned(),
+    )
 }
 
 fn display_command(program: &OsStr, args: &[OsString]) -> String {
@@ -130,4 +200,44 @@ fn display_command(program: &OsStr, args: &[OsString]) -> String {
 
 fn display(value: &OsStr) -> String {
     format!("{value:?}")
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    fn repository_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask repository parent")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn detects_posix_shell_scripts_with_and_without_extensions() {
+        let root = repository_root();
+        assert!(is_posix_shell_script(
+            &root.join("scripts/check_crate_roots.sh")
+        ));
+        assert!(is_posix_shell_script(&root.join("scripts/docs-site")));
+        assert!(!is_posix_shell_script(&root.join("Cargo.toml")));
+    }
+
+    #[test]
+    fn repository_shell_tasks_use_git_bash_on_windows() {
+        let root = repository_root();
+        let task = Task::new(&root, "./scripts/check_crate_roots.sh");
+        let command = task.command().expect("Git Bash command");
+
+        assert_eq!(
+            Path::new(command.get_program())
+                .file_name()
+                .and_then(OsStr::to_str),
+            Some("bash.exe")
+        );
+        assert_eq!(
+            command.get_args().next(),
+            Some(OsStr::new("./scripts/check_crate_roots.sh"))
+        );
+    }
 }

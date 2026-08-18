@@ -3,13 +3,13 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
     path::Path,
     process::{Command, Stdio},
 };
-use tempfile::tempdir;
 
 const JOURNAL_SECRET: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const SIGNING_SECRET: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -18,15 +18,18 @@ const PROVIDER_SECRET: &str =
 const RAW_CONFIG_SECRET: &str =
     "raw-config-secret-444444444444444444444444444444444444444444444444";
 
-fn command(binary: &Path, config: &Path) -> Command {
+fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .args(["--config", config.to_str().expect("config path")])
         .env("COLOSSUS_CONFIG_DISPLAY_JOURNAL_SECRET", JOURNAL_SECRET)
         .env("COLOSSUS_CONFIG_DISPLAY_SIGNING_SECRET", SIGNING_SECRET)
         .env("COLOSSUS_CONFIG_DISPLAY_PROVIDER_SECRET", PROVIDER_SECRET);
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn config_document(root: &Path) -> Value {

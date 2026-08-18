@@ -114,6 +114,7 @@ impl ToolExecutor for WorkspaceBoundToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use colossus_testkit::InMemoryEventJournal;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -131,8 +132,10 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct RecordingTool(AtomicBool);
 
+    #[cfg(unix)]
     #[async_trait]
     impl ToolExecutor for RecordingTool {
         async fn execute(
@@ -150,12 +153,14 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct RecordingSkillRepository {
         list_called: AtomicBool,
         get_called: AtomicBool,
         duplicates_called: AtomicBool,
     }
 
+    #[cfg(unix)]
     impl RecordingSkillRepository {
         fn new() -> Self {
             Self {
@@ -166,6 +171,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl SkillRepository for RecordingSkillRepository {
         fn list_skills(&self) -> Result<Vec<SkillRecord>, StoreError> {
             self.list_called.store(true, Ordering::SeqCst);

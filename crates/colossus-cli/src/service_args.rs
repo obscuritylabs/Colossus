@@ -3,6 +3,9 @@ use super::*;
 #[derive(Args)]
 pub(super) struct CodexCommand {
     /// Official Codex CLI executable used for the account flow.
+    ///
+    /// Defaults to COLOSSUS_CODEX_BIN, a runnable Codex executable on PATH, or the
+    /// local OpenAI Codex install when the value remains `codex`.
     #[arg(long, default_value = "codex")]
     pub(super) codex_bin: PathBuf,
     #[command(subcommand)]

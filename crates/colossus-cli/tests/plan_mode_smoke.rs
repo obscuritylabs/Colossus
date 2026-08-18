@@ -3,6 +3,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -13,7 +14,6 @@ use std::{
     thread,
     time::Duration,
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "8989898989898989898989898989898989898989898989898989898989898989";
 const SIGNING_KEY: &str = "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
@@ -72,7 +72,7 @@ fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<String
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output {
     let root = config.parent().expect("config parent");
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, root);
+    let _isolated_home = process_support::isolate_user_home(&mut command, root);
     command
         .current_dir(root)
         .arg("--config")

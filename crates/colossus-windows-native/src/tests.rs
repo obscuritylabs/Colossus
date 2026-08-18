@@ -4,6 +4,199 @@ use super::*;
 const CONTROL_C_EXIT: u32 = 0xC000_013A;
 
 #[cfg(windows)]
+const BOOTSTRAP_PIPE_FIXTURE_ENVIRONMENT: &str =
+    "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PIPE_FIXTURE_V1";
+
+#[cfg(windows)]
+const BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT: &str =
+    "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PARENT_FIXTURE_V1";
+
+#[cfg(windows)]
+fn local_app_data_tempdir(prefix: &str) -> tempfile::TempDir {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("absolute Windows LocalAppData");
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(local_app_data)
+        .expect("temporary directory under LocalAppData")
+}
+
+#[cfg(windows)]
+#[test]
+fn named_pipe_bootstrap_fixture_process() {
+    use std::io::Read as _;
+
+    let Some(pipe_name) = std::env::var_os(BOOTSTRAP_PIPE_FIXTURE_ENVIRONMENT) else {
+        return;
+    };
+    let parent_process = std::env::var(BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT)
+        .expect("bootstrap parent fixture environment")
+        .parse::<u32>()
+        .expect("bootstrap parent fixture PID");
+    let mut pipe = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_name)
+        .unwrap_or_else(|error| panic!("open bootstrap pipe: {error:?}"));
+    validate_named_pipe_server(&pipe, parent_process).unwrap_or_else(|_| std::process::exit(11));
+    install_bootstrap_pipe_as_standard_io(&pipe).unwrap_or_else(|_| std::process::exit(12));
+
+    let mut release = [0_u8; 1];
+    pipe.read_exact(&mut release)
+        .unwrap_or_else(|_| std::process::exit(13));
+    assert_eq!(release, [1]);
+}
+
+#[cfg(windows)]
+#[test]
+fn named_pipe_bootstrap_authenticates_the_exact_processes() {
+    use tokio::io::AsyncWriteExt as _;
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let executable = std::fs::canonicalize(std::env::current_exe().expect("test executable"))
+        .expect("canonical test executable");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let pipe_name = format!(
+        r"\\.\pipe\colossus-windows-native-test-{}-{nonce:x}",
+        std::process::id()
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Tokio runtime");
+    let runtime_guard = runtime.enter();
+    let mut server = ServerOptions::new()
+        .first_pipe_instance(true)
+        .reject_remote_clients(true)
+        .access_inbound(true)
+        .access_outbound(true)
+        .create(&pipe_name)
+        .expect("bootstrap named-pipe server");
+    drop(runtime_guard);
+    let mut child = std::process::Command::new(executable)
+        .args([
+            "--exact",
+            "tests::named_pipe_bootstrap_fixture_process",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env(BOOTSTRAP_PIPE_FIXTURE_ENVIRONMENT, &pipe_name)
+        .env(
+            BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT,
+            std::process::id().to_string(),
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("spawn bootstrap fixture");
+    let child_process = child.id();
+
+    let connection = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), server.connect()).await
+    });
+    if connection.is_err() {
+        let status = child.wait().expect("wait for failed bootstrap fixture");
+        panic!("bootstrap fixture connection timeout; child status: {status}");
+    }
+    connection
+        .expect("bootstrap fixture connection timeout")
+        .expect("bootstrap fixture connection");
+    runtime.block_on(async {
+        validate_named_pipe_client(&server, child_process)
+            .expect("authenticate bootstrap fixture process");
+        server
+            .write_all(&[1])
+            .await
+            .expect("release bootstrap fixture");
+    });
+
+    assert!(child.wait().expect("wait for bootstrap fixture").success());
+}
+
+#[cfg(windows)]
+#[test]
+fn suspended_job_bound_bootstrap_authenticates_the_exact_processes() {
+    use tokio::io::AsyncWriteExt as _;
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let executable = std::fs::canonicalize(std::env::current_exe().expect("test executable"))
+        .expect("canonical test executable");
+    let executable_binding = BoundPath::open_file(&executable).expect("bind test executable");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let pipe_name = format!(
+        r"\\.\pipe\colossus-windows-native-suspended-test-{}-{nonce:x}",
+        std::process::id()
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Tokio runtime");
+
+    runtime.block_on(async {
+        let mut server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .reject_remote_clients(true)
+            .access_inbound(true)
+            .access_outbound(true)
+            .create(&pipe_name)
+            .expect("bootstrap named-pipe server");
+        let mut command = tokio::process::Command::new(&executable);
+        command
+            .args([
+                "--exact",
+                "tests::named_pipe_bootstrap_fixture_process",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(BOOTSTRAP_PIPE_FIXTURE_ENVIRONMENT, &pipe_name)
+            .env(
+                BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT,
+                std::process::id().to_string(),
+            )
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true);
+        configure_suspended_process(command.as_std_mut());
+        let mut child = command.spawn().expect("spawn suspended bootstrap fixture");
+        let (job, child_process) = KillOnCloseJob::assign_tokio_child_verify_and_resume(
+            &child,
+            executable_binding.identity(),
+        )
+        .expect("bind, verify, and resume bootstrap fixture");
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), server.connect())
+            .await
+            .expect("bootstrap fixture connection timeout")
+            .expect("bootstrap fixture connection");
+        validate_named_pipe_client(&server, child_process)
+            .expect("authenticate suspended bootstrap fixture process");
+        server
+            .write_all(&[1])
+            .await
+            .expect("release suspended bootstrap fixture");
+
+        assert!(
+            child
+                .wait()
+                .await
+                .expect("wait for bootstrap fixture")
+                .success()
+        );
+        drop(job);
+    });
+}
+
+#[cfg(windows)]
 #[test]
 fn retained_file_handle_can_read_and_revalidate() {
     use std::io::Read as _;
@@ -70,7 +263,7 @@ fn directories_directly_beneath_the_volume_root_retain_and_validate_the_root() {
 #[cfg(windows)]
 #[test]
 fn private_directory_creation_protects_the_directory_and_children() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = local_app_data_tempdir("colossus-native-private-directory-");
     let directory = parent.path().join("private");
 
     create_private_directory(&directory).expect("create private directory");
@@ -115,7 +308,7 @@ fn untrusted_ancestor_delete_child_authority_is_rejected() {
 #[cfg(windows)]
 #[test]
 fn private_file_creation_is_exclusive_and_owner_private() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = local_app_data_tempdir("colossus-native-private-file-");
     let path = parent.path().join("secret");
 
     create_private_file(&path, b"colossus").expect("create private file");
@@ -132,7 +325,7 @@ fn private_file_creation_is_exclusive_and_owner_private() {
 #[cfg(windows)]
 #[test]
 fn private_file_replacement_is_atomic_and_preserves_private_access() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = local_app_data_tempdir("colossus-native-private-replace-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");

@@ -89,13 +89,13 @@ function openingButtonTag(markup: string, label: string): string {
 }
 
 describe("OnboardingSurface", () => {
-  it("starts with folder selection and keeps offline verification disabled", () => {
+  it("starts with folder selection and allows offline verification", () => {
     const markup = renderOnboarding(null);
 
     expect(markup).toContain("Add your first Space");
     expect(markup).toContain("Add Space from folder");
     expect(markup).not.toContain("provider-setup-form");
-    expect(openingButtonTag(markup, "Run offline self-test")).toContain(
+    expect(openingButtonTag(markup, "Run offline self-test")).not.toContain(
       "disabled",
     );
   });

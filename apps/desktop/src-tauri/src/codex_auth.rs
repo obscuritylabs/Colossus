@@ -1,6 +1,8 @@
 //! Operator-only ChatGPT/Codex sign-in commands for Managed Local.
 
-use colossus_codex_auth::{CodexAuthError, CodexAuthStore, CodexCliAction, run_codex_cli};
+use colossus_codex_auth::{
+    CodexAuthError, CodexAuthStore, CodexCliAction, run_codex_cli_with_environment,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
@@ -9,6 +11,11 @@ use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKin
 use crate::dto::CommandErrorDto;
 
 static CODEX_AUTH_OPERATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct DesktopCodexAuthStore {
+    store: CodexAuthStore,
+    home: PathBuf,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,7 +90,10 @@ pub(crate) async fn codex_auth_logout(
 }
 
 pub(crate) fn current_status() -> CodexAuthStatusDto {
-    let loaded = CodexAuthStore::from_environment().and_then(|store| store.load());
+    let Ok(store) = desktop_codex_auth_store() else {
+        return unavailable_status();
+    };
+    let loaded = store.store.load();
     status_from_load(&loaded)
 }
 
@@ -118,9 +128,11 @@ fn unavailable_status() -> CodexAuthStatusDto {
     }
 }
 
-fn preflight_environment_store(action: CodexCliAction) -> Result<CodexAuthStore, CommandErrorDto> {
-    let store = CodexAuthStore::from_environment().map_err(|_| preflight_error(action))?;
-    verify_account_precondition(&store, action)?;
+fn preflight_environment_store(
+    action: CodexCliAction,
+) -> Result<DesktopCodexAuthStore, CommandErrorDto> {
+    let store = desktop_codex_auth_store().map_err(|_| preflight_error(action))?;
+    verify_account_precondition(&store.store, action)?;
     Ok(store)
 }
 
@@ -146,17 +158,17 @@ fn verify_account_precondition(
 }
 
 async fn run_verified_account_operation(
-    store: &CodexAuthStore,
+    store: &DesktopCodexAuthStore,
     executable: &Path,
     action: CodexCliAction,
 ) -> Result<CodexAuthStatusDto, CommandErrorDto> {
     // Repeat the preflight immediately before spawning. The native confirmation can
     // remain open while another process changes the Codex-owned credential file.
-    verify_account_precondition(store, action)?;
-    run_codex_cli(executable, action)
+    verify_account_precondition(&store.store, action)?;
+    run_codex_cli_with_environment(executable, action, [("CODEX_HOME", store.home.as_os_str())])
         .await
         .map_err(|_| cli_operation_error(action))?;
-    verify_account_postcondition(store, action)
+    verify_account_postcondition(&store.store, action)
 }
 
 fn verify_account_postcondition(
@@ -175,7 +187,7 @@ fn verify_account_postcondition(
                 )),
                 Err(CodexAuthError::Storage(_) | CodexAuthError::Cli(_)) => Err(auth_error(
                     operation_error_code(action),
-                    "The official Codex CLI completed, but its credential store could not be validated safely.",
+                    unsafe_store_message(),
                     false,
                 )),
             }
@@ -197,17 +209,17 @@ fn verify_account_postcondition(
 }
 
 fn preflight_error(action: CodexCliAction) -> CommandErrorDto {
-    auth_error(
-        operation_error_code(action),
-        "The official Codex credential store is unavailable or unsafe. CODEX_HOME must be absolute and the file-backed credential must be private.",
-        false,
-    )
+    auth_error(operation_error_code(action), unsafe_store_message(), false)
+}
+
+fn unsafe_store_message() -> &'static str {
+    "The official Codex credential store is unavailable or unsafe. Desktop uses a private CODEX_HOME under its application storage unless CODEX_HOME is set. If set, CODEX_HOME must be absolute, and CODEX_HOME\\auth.json must be private to your Windows account. For desktop development, rerun scripts\\desktop-dev.ps1 to repair the dev credential ACL."
 }
 
 fn cli_operation_error(action: CodexCliAction) -> CommandErrorDto {
     let message = match action {
         CodexCliAction::Login | CodexCliAction::LoginDeviceCode => {
-            "The official Codex CLI could not complete ChatGPT sign-in. Install Codex on PATH and retry."
+            "The official Codex CLI could not complete ChatGPT sign-in. Set COLOSSUS_CODEX_BIN to a runnable codex.exe or install Codex on PATH and retry."
         }
         CodexCliAction::Status => {
             "The official Codex CLI could not validate the current ChatGPT sign-in."
@@ -226,21 +238,42 @@ const fn operation_error_code(action: CodexCliAction) -> &'static str {
 }
 
 pub(crate) fn require_codex_auth_path() -> Result<PathBuf, CommandErrorDto> {
-    let store = CodexAuthStore::from_environment().map_err(|_| {
+    let store = desktop_codex_auth_store().map_err(|_| {
         auth_error(
             "codex_auth",
             "The official Codex credential store is unavailable. Sign in with ChatGPT and retry.",
             false,
         )
     })?;
-    store.load().map_err(|_| {
+    store.store.load().map_err(|_| {
         auth_error(
             "codex_auth",
             "ChatGPT sign-in is unavailable or expired. Sign in with ChatGPT and retry.",
             false,
         )
     })?;
-    Ok(store.path().to_path_buf())
+    Ok(store.store.path().to_path_buf())
+}
+
+fn desktop_codex_auth_store() -> Result<DesktopCodexAuthStore, CommandErrorDto> {
+    if let Some(home) = std::env::var_os("CODEX_HOME").filter(|home| !home.is_empty()) {
+        let home = PathBuf::from(home);
+        let store = CodexAuthStore::from_environment().map_err(|_| {
+            auth_error(
+                "codex_auth",
+                "The official Codex credential store is unavailable. CODEX_HOME must be absolute.",
+                false,
+            )
+        })?;
+        return Ok(DesktopCodexAuthStore { store, home });
+    }
+
+    let settings_store = crate::desktop_settings::SettingsStore::open_application()?;
+    let home = settings_store.codex_auth_home()?;
+    Ok(DesktopCodexAuthStore {
+        store: CodexAuthStore::at_path(home.join("auth.json")),
+        home,
+    })
 }
 
 fn codex_executable() -> PathBuf {
@@ -250,13 +283,12 @@ fn codex_executable() -> PathBuf {
             return path;
         }
     }
-    if let Some(paths) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&paths) {
-            let candidate = directory.join(codex_executable_name());
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
+    if let Some(path) = codex_executable_from_path() {
+        return path;
+    }
+    #[cfg(windows)]
+    if let Some(path) = local_openai_codex_executable() {
+        return path;
     }
     #[cfg(target_os = "macos")]
     for candidate in ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"] {
@@ -265,6 +297,57 @@ fn codex_executable() -> PathBuf {
         }
     }
     PathBuf::from(codex_executable_name())
+}
+
+fn codex_executable_from_path() -> Option<PathBuf> {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&paths) {
+            let candidate = directory.join(codex_executable_name());
+            if candidate.is_file() && !protected_windows_app_package_path(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn local_openai_codex_executable() -> Option<PathBuf> {
+    let root = PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+        .join("OpenAI")
+        .join("Codex")
+        .join("bin");
+    local_openai_codex_executable_in(&root)
+}
+
+#[cfg(windows)]
+fn local_openai_codex_executable_in(root: &Path) -> Option<PathBuf> {
+    let mut candidates = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path().join(codex_executable_name());
+            let modified = path
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()?;
+            path.is_file().then_some((modified, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left, _), (right, _)| right.cmp(left));
+    candidates.into_iter().map(|(_, path)| path).next()
+}
+
+#[cfg(windows)]
+fn protected_windows_app_package_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains(r"\program files\windowsapps\")
+}
+
+#[cfg(not(windows))]
+fn protected_windows_app_package_path(_path: &Path) -> bool {
+    false
 }
 
 const fn codex_executable_name() -> &'static str {
@@ -353,7 +436,7 @@ mod tests {
         fs::write(
             &executable,
             format!(
-                "#!/bin/sh\nif [ \"${{1:-}}\" != \"-c\" ]; then exit 64; fi\n: > {}\n{mutation}\nexit 0\n",
+                "#!/bin/sh\nif [ \"${{1:-}}\" != \"-c\" ]; then exit 64; fi\nprintf '%s' \"$CODEX_HOME\" > {}\n{mutation}\nexit 0\n",
                 shell_path(marker)
             ),
         )
@@ -363,10 +446,57 @@ mod tests {
         executable
     }
 
+    #[cfg(unix)]
+    fn desktop_store_at_path(path: &Path) -> DesktopCodexAuthStore {
+        DesktopCodexAuthStore {
+            store: CodexAuthStore::at_path(path),
+            home: path.parent().expect("auth parent").to_path_buf(),
+        }
+    }
+
     #[test]
     fn fallback_executable_is_fixed_and_argument_free() {
         assert!(matches!(codex_executable_name(), "codex" | "codex.exe"));
         assert!(!codex_executable_name().contains(char::is_whitespace));
+    }
+
+    #[test]
+    fn login_cli_error_names_explicit_codex_binary_override() {
+        let error = cli_operation_error(CodexCliAction::Login);
+        assert_eq!(error.code, "codex_login_failed");
+        assert!(error.message.contains("COLOSSUS_CODEX_BIN"));
+        assert!(error.message.contains("codex.exe"));
+    }
+
+    #[test]
+    fn unsafe_codex_store_error_names_private_auth_file_repair() {
+        let error = preflight_error(CodexCliAction::Login);
+        assert_eq!(error.code, "codex_login_failed");
+        assert!(error.message.contains("CODEX_HOME\\auth.json"));
+        assert!(error.message.contains("private"));
+        assert!(error.message.contains("scripts\\desktop-dev.ps1"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_codex_resolution_skips_protected_package_aliases() {
+        assert!(protected_windows_app_package_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__test\app\resources\codex.exe"
+        )));
+        assert!(!protected_windows_app_package_path(Path::new(
+            r"C:\Users\tester\AppData\Local\OpenAI\Codex\bin\abc\codex.exe"
+        )));
+
+        let root = tempfile::tempdir().expect("codex bin root");
+        let directory = root.path().join("abc");
+        std::fs::create_dir_all(&directory).expect("codex version directory");
+        let executable = directory.join("codex.exe");
+        std::fs::write(&executable, b"test").expect("codex executable placeholder");
+
+        assert_eq!(
+            local_openai_codex_executable_in(root.path()),
+            Some(executable)
+        );
     }
 
     #[cfg(unix)]
@@ -382,13 +512,10 @@ mod tests {
             write_auth(&auth, 0o644);
             let marker = root.path().join("codex-invoked");
             let executable = fake_codex(root.path(), &marker, "");
-            let error = run_verified_account_operation(
-                &CodexAuthStore::at_path(&auth),
-                &executable,
-                action,
-            )
-            .await
-            .expect_err("unsafe auth must fail");
+            let store = desktop_store_at_path(&auth);
+            let error = run_verified_account_operation(&store, &executable, action)
+                .await
+                .expect_err("unsafe auth must fail");
 
             assert_eq!(error.code, operation_error_code(action));
             assert!(!marker.exists(), "unsafe auth spawned {action:?}");
@@ -409,36 +536,35 @@ mod tests {
             write_auth(&auth, 0o600);
             let marker = root.path().join("codex-invoked");
             let executable = fake_codex(root.path(), &marker, "");
-            let status = run_verified_account_operation(
-                &CodexAuthStore::at_path(&auth),
-                &executable,
-                action,
-            )
-            .await
-            .expect("usable auth passes");
+            let store = desktop_store_at_path(&auth);
+            let status = run_verified_account_operation(&store, &executable, action)
+                .await
+                .expect("usable auth passes");
 
             assert_eq!(status.state, CodexAuthStateDto::SignedIn);
             assert!(marker.is_file());
+            assert_eq!(
+                fs::read_to_string(&marker).expect("marker content"),
+                auth.parent().expect("auth parent").to_string_lossy()
+            );
         }
 
         let root = tempfile::tempdir().expect("test root");
         let auth = root.path().join("missing-codex-home/auth.json");
         let marker = root.path().join("codex-invoked");
         let executable = fake_codex(root.path(), &marker, "");
-        let error = run_verified_account_operation(
-            &CodexAuthStore::at_path(&auth),
-            &executable,
-            CodexCliAction::Login,
-        )
-        .await
-        .expect_err("successful CLI without auth must fail login");
+        let store = desktop_store_at_path(&auth);
+        let error = run_verified_account_operation(&store, &executable, CodexCliAction::Login)
+            .await
+            .expect_err("successful CLI without auth must fail login");
         assert_eq!(error.code, "codex_login_failed");
         assert!(marker.is_file(), "login should reach its postcondition");
 
         let status_marker = root.path().join("status-invoked");
         let status_executable = fake_codex(root.path(), &status_marker, "");
+        let status_store = desktop_store_at_path(&auth);
         let error = run_verified_account_operation(
-            &CodexAuthStore::at_path(&auth),
+            &status_store,
             &status_executable,
             CodexCliAction::Status,
         )
@@ -456,13 +582,10 @@ mod tests {
         write_auth(&remaining_auth, 0o600);
         let remaining_marker = remaining.path().join("codex-invoked");
         let noop = fake_codex(remaining.path(), &remaining_marker, "");
-        let error = run_verified_account_operation(
-            &CodexAuthStore::at_path(&remaining_auth),
-            &noop,
-            CodexCliAction::Logout,
-        )
-        .await
-        .expect_err("remaining auth must fail logout");
+        let remaining_store = desktop_store_at_path(&remaining_auth);
+        let error = run_verified_account_operation(&remaining_store, &noop, CodexCliAction::Logout)
+            .await
+            .expect_err("remaining auth must fail logout");
         assert_eq!(error.code, "codex_logout_failed");
         assert!(error.message.contains("usable credential remains"));
 
@@ -475,13 +598,10 @@ mod tests {
             &unsafe_marker,
             &format!("/bin/chmod 0644 {}", shell_path(&unsafe_auth)),
         );
-        let error = run_verified_account_operation(
-            &CodexAuthStore::at_path(&unsafe_auth),
-            &chmod,
-            CodexCliAction::Logout,
-        )
-        .await
-        .expect_err("unsafe remaining auth must fail logout");
+        let unsafe_store = desktop_store_at_path(&unsafe_auth);
+        let error = run_verified_account_operation(&unsafe_store, &chmod, CodexCliAction::Logout)
+            .await
+            .expect_err("unsafe remaining auth must fail logout");
         assert_eq!(error.code, "codex_logout_failed");
         assert!(error.message.contains("could not be verified safely"));
 
@@ -494,13 +614,11 @@ mod tests {
             &removed_marker,
             &format!("/bin/rm -f -- {}", shell_path(&removed_auth)),
         );
-        let status = run_verified_account_operation(
-            &CodexAuthStore::at_path(&removed_auth),
-            &removal_cli,
-            CodexCliAction::Logout,
-        )
-        .await
-        .expect("removed auth verifies logout");
+        let removed_store = desktop_store_at_path(&removed_auth);
+        let status =
+            run_verified_account_operation(&removed_store, &removal_cli, CodexCliAction::Logout)
+                .await
+                .expect("removed auth verifies logout");
         assert_eq!(status.state, CodexAuthStateDto::SignedOut);
         assert!(!removed_auth.exists());
     }

@@ -28,6 +28,7 @@ base64.workspace = true
 colossus-ports.workspace = true
 colossus-testkit.workspace = true
 colossus-tools.workspace = true
+colossus-windows-native.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true

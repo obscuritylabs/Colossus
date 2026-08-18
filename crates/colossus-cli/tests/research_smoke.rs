@@ -3,6 +3,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::Value;
 use std::{
     fs,
@@ -13,14 +14,13 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
 
 fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, workspace);
+    let _isolated_home = process_support::isolate_user_home(&mut command, workspace);
     command
         .current_dir(workspace)
         .arg("--config")

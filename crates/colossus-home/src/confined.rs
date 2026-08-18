@@ -755,18 +755,7 @@ fn validate_directory_platform(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn private_tempdir() -> tempfile::TempDir {
-        let temporary = tempfile::tempdir().expect("private temporary root");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
-                .expect("private temporary root permissions");
-        }
-        temporary
-    }
+    use crate::test_support::private_tempdir;
 
     #[cfg(windows)]
     #[test]

@@ -5,6 +5,7 @@
 mod process_support;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use process_support::tempdir;
 use serde_json::Value;
 use std::{
     fs,
@@ -19,7 +20,6 @@ use std::{
     thread,
     time::Duration,
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const SIGNING_KEY: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -32,7 +32,10 @@ fn colossus_binary() -> std::path::PathBuf {
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let _isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .arg("--config")
         .arg(config)
@@ -45,7 +48,7 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
 
 fn run_in_workspace(binary: &Path, workspace: &Path, config: &Path, arguments: &[&str]) -> Output {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, workspace);
+    let _isolated_home = process_support::isolate_user_home(&mut command, workspace);
     command
         .arg("--workspace")
         .arg(workspace)

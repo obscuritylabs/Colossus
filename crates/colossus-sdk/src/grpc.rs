@@ -1843,7 +1843,9 @@ fn protocol_error() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ApiMajor, Colossus, InstanceId};
+    #[cfg(unix)]
+    use crate::Colossus;
+    use crate::{ApiMajor, InstanceId};
     use async_trait::async_trait;
     use colossus_api::{
         AgentRunApi as CoreAgentRunApi, ApiScope, ApplicationKind, CallerContext,
@@ -1857,9 +1859,13 @@ mod tests {
     };
     use colossus_api_proto::google_rpc::Status as RichStatus;
     use colossus_grpc::{
-        ApplicationGrant, BoundPublicGrpcServer, CredentialAuthenticator, EndpointDescriptor,
-        FixedReadiness, InMemoryCredentialRepository, SystemMetadata, SystemServiceAdapter,
-        TlsIdentity, TlsKeySeed, write_endpoint_certificate, write_endpoint_descriptor,
+        ApplicationGrant, BoundPublicGrpcServer, CredentialAuthenticator, FixedReadiness,
+        InMemoryCredentialRepository, SystemMetadata, SystemServiceAdapter, TlsIdentity,
+        TlsKeySeed,
+    };
+    #[cfg(unix)]
+    use colossus_grpc::{
+        EndpointDescriptor, write_endpoint_certificate, write_endpoint_descriptor,
     };
     use colossus_testkit::InMemoryEventJournal;
     use prost_types::Any;

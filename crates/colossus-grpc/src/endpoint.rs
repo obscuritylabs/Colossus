@@ -611,7 +611,124 @@ mod native {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+mod native {
+    use super::*;
+    use colossus_windows_native::{BoundPath, create_private_file, replace_private_file};
+    use std::io::Read as _;
+
+    pub(super) fn write_atomic_owner_only(
+        path: &Path,
+        descriptor: &EndpointDescriptor,
+    ) -> io::Result<()> {
+        let mut contents = serde_json::to_vec(descriptor)
+            .map_err(|_| invalid_data("descriptor encoding failed"))?;
+        contents.push(b'\n');
+        if contents.len() > MAX_DESCRIPTOR_BYTES {
+            return Err(invalid_data("descriptor exceeds the maximum size"));
+        }
+        write_bytes_atomic_owner_only(path, &contents)
+    }
+
+    pub(super) fn write_certificate_atomic_owner_only(
+        path: &Path,
+        certificate_pem: &[u8],
+    ) -> io::Result<()> {
+        validate_endpoint_certificate_pem(certificate_pem)
+            .map_err(|_| invalid_data("public certificate PEM is invalid"))?;
+        write_bytes_atomic_owner_only(path, certificate_pem)
+    }
+
+    fn write_bytes_atomic_owner_only(path: &Path, contents: &[u8]) -> io::Result<()> {
+        let parent_path = path
+            .parent()
+            .ok_or_else(|| invalid_data("discovery file has no parent directory"))?;
+        let parent = BoundPath::open_directory(parent_path).map_err(native_error)?;
+        parent
+            .validate_ancestor_namespace_authority()
+            .and_then(|()| parent.validate_private_owner_dacl())
+            .and_then(|()| parent.revalidate())
+            .map_err(native_error)?;
+        validate_existing_destination(path)?;
+
+        let temporary_path = parent_path.join(format!(".colossus-endpoint-{}.tmp", Uuid::now_v7()));
+        create_private_file(&temporary_path, contents).map_err(native_error)?;
+        let result = (|| {
+            parent.revalidate().map_err(native_error)?;
+            validate_existing_destination(path)?;
+            replace_private_file(&temporary_path, path).map_err(native_error)?;
+            validate_file(path)?;
+            parent.revalidate().map_err(native_error)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary_path);
+        }
+        result
+    }
+
+    pub(super) fn read_owner_only(path: &Path, maximum_bytes: usize) -> io::Result<Vec<u8>> {
+        let binding = validate_file(path)?;
+        let mut file = binding.try_clone_file().map_err(native_error)?;
+        let length = file.metadata()?.len();
+        if length > maximum_bytes as u64 {
+            return Err(invalid_data("discovery file exceeds the maximum size"));
+        }
+        let mut encoded = Vec::with_capacity(length as usize);
+        file.by_ref()
+            .take(maximum_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut encoded)?;
+        binding.revalidate().map_err(native_error)?;
+        if encoded.len() > maximum_bytes {
+            return Err(invalid_data("discovery file exceeds the maximum size"));
+        }
+        Ok(encoded)
+    }
+
+    fn validate_existing_destination(path: &Path) -> io::Result<()> {
+        match validate_file(path) {
+            Ok(_) => Ok(()),
+            Err(validation_error) => match std::fs::symlink_metadata(path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                _ => Err(validation_error),
+            },
+        }
+    }
+
+    fn validate_file(path: &Path) -> io::Result<BoundPath> {
+        let parent_path = path
+            .parent()
+            .ok_or_else(|| invalid_data("discovery file has no parent directory"))?;
+        let parent = BoundPath::open_directory(parent_path).map_err(native_error)?;
+        parent
+            .validate_ancestor_namespace_authority()
+            .and_then(|()| parent.validate_private_owner_dacl())
+            .and_then(|()| parent.revalidate())
+            .map_err(native_error)?;
+        let binding = BoundPath::open_file(path).map_err(native_error)?;
+        binding
+            .validate_ancestor_namespace_authority()
+            .and_then(|()| binding.validate_private_owner_dacl())
+            .and_then(|()| binding.revalidate())
+            .map_err(native_error)?;
+        if binding.link_count().map_err(native_error)? != 1 {
+            return Err(invalid_data(
+                "discovery file must be a single-link owner-only regular file",
+            ));
+        }
+        parent.revalidate().map_err(native_error)?;
+        Ok(binding)
+    }
+
+    fn native_error(error: colossus_windows_native::WindowsNativeError) -> io::Error {
+        io::Error::other(error)
+    }
+
+    fn invalid_data(message: &'static str) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, message)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 mod native {
     use super::*;
 

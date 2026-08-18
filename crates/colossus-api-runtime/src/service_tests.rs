@@ -24,6 +24,8 @@ use colossus_runtime::{KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_testkit::InMemoryEventJournal;
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::{
     env, fs,
     process::Command,
@@ -39,6 +41,100 @@ use uuid::Uuid;
 struct RuntimeFixture {
     runtime: Arc<Runtime>,
     _directory: TempDir,
+}
+
+fn runtime_tempdir() -> TempDir {
+    #[cfg(windows)]
+    {
+        let directory = tempfile::Builder::new()
+            .prefix("colossus-api-runtime-")
+            .tempdir_in(current_user_profile())
+            .expect("runtime directory");
+        make_windows_private_directory(directory.path());
+        directory
+    }
+
+    #[cfg(not(windows))]
+    {
+        tempfile::tempdir().expect("runtime directory")
+    }
+}
+
+#[cfg(windows)]
+fn current_user_profile() -> PathBuf {
+    let (account, _) = current_windows_user();
+    let user_name = account
+        .rsplit('\\')
+        .next()
+        .filter(|value| !value.is_empty())
+        .expect("current Windows account name");
+    let system_drive = env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let users_root = PathBuf::from(format!("{system_drive}\\Users"));
+    for entry in fs::read_dir(&users_root).expect("Windows users directory") {
+        let entry = entry.expect("Windows user profile entry");
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(user_name)
+        {
+            return entry.path();
+        }
+    }
+    panic!("Windows user profile not found for {account}");
+}
+
+#[cfg(windows)]
+fn make_windows_private_directory(path: &Path) {
+    let (_, current_user_sid) = current_windows_user();
+    let path = path.to_string_lossy();
+    let grant_current_user = format!("*{current_user_sid}:(OI)(CI)F");
+    let output = Command::new("icacls.exe")
+        .arg(path.as_ref())
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(grant_current_user)
+        .arg("*S-1-5-18:(OI)(CI)F")
+        .arg("*S-1-5-32-544:(OI)(CI)F")
+        .output()
+        .expect("make isolated Windows runtime directory private");
+    assert!(
+        output.status.success(),
+        "failed to make isolated Windows runtime directory private\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+fn current_windows_user() -> (String, String) {
+    let output = Command::new("whoami.exe")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .expect("query current Windows user SID");
+    assert!(
+        output.status.success(),
+        "failed to query current Windows user SID\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("Windows user SID output is UTF-8");
+    let mut columns = stdout.split(',');
+    let account = columns
+        .next()
+        .map(|value| value.trim().trim_matches('"').to_owned())
+        .filter(|value| !value.is_empty())
+        .expect("Windows account in whoami output");
+    let sid_tail = columns
+        .next()
+        .and_then(|value| value.trim().trim_matches('"').strip_prefix("S-"))
+        .expect("Windows user SID in whoami output");
+    assert!(
+        sid_tail
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-'),
+        "unexpected Windows user SID: S-{sid_tail}"
+    );
+    (account, format!("S-{sid_tail}"))
 }
 
 struct TestPublicApprovalMode {
@@ -186,7 +282,7 @@ impl EventJournal for PostCommitReconciliationGapJournal {
 }
 
 fn runtime_fixture() -> RuntimeFixture {
-    let directory = tempfile::tempdir().expect("runtime directory");
+    let directory = runtime_tempdir();
     // Keep every absolute fixture root in the same canonical namespace as
     // RuntimeOpenOptions. On macOS, tempfile may expose `/var/...` while the native
     // workspace picker/runtime identity resolves the same object as `/private/var/...`;

@@ -658,6 +658,11 @@ mod tests {
         ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal)
     }
 
+    #[cfg(windows)]
+    const TEST_WORKSPACE: &str = r"C:\private\colossus-sdk-sidecar-workspace";
+    #[cfg(not(windows))]
+    const TEST_WORKSPACE: &str = "/tmp/colossus-sdk-sidecar-workspace";
+
     #[test]
     fn approval_broker_scope_and_tools_are_fixed_by_type() {
         let broker =
@@ -671,7 +676,7 @@ mod tests {
     #[test]
     fn worker_ipc_authentication_is_exact_and_redacted() {
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -685,7 +690,7 @@ mod tests {
         );
 
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -714,7 +719,7 @@ mod tests {
             "/private/app/trust/company-ca.pem"
         };
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -727,7 +732,7 @@ mod tests {
         assert!(!debug.contains(path));
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -745,7 +750,7 @@ mod tests {
             "/private/codex/auth.json"
         };
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -758,7 +763,7 @@ mod tests {
         assert!(!debug.contains(path));
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -776,7 +781,7 @@ mod tests {
             "/private/.colossus"
         };
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -789,7 +794,7 @@ mod tests {
         assert!(!debug.contains(path));
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -802,7 +807,7 @@ mod tests {
     #[test]
     fn diagnostic_bootstrap_suppression_is_explicit_and_defaults_off() {
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -817,7 +822,7 @@ mod tests {
     #[test]
     fn plaintext_development_journal_is_explicit_and_defaults_off() {
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -840,7 +845,7 @@ mod tests {
         let accepted_identity = v1_identity.clone();
         #[cfg(unix)]
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -862,7 +867,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -873,7 +878,7 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -884,7 +889,7 @@ mod tests {
         #[cfg(not(unix))]
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -897,7 +902,7 @@ mod tests {
         malformed.version = u16::MAX;
         assert!(
             SidecarBootstrapConfig::new(
-                "/tmp/colossus-sdk-sidecar-workspace",
+                TEST_WORKSPACE,
                 runtime(),
                 primary_grant(&[scopes::RUNS_READ]),
             )
@@ -910,7 +915,7 @@ mod tests {
     #[test]
     fn approval_broker_must_match_and_not_widen_the_primary_grant() {
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[
                 scopes::RUNS_EXECUTE,
@@ -927,7 +932,7 @@ mod tests {
             .expect("bounded broker");
 
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ]),
         )
@@ -942,7 +947,7 @@ mod tests {
         );
 
         let bootstrap = SidecarBootstrapConfig::new(
-            "/tmp/colossus-sdk-sidecar-workspace",
+            TEST_WORKSPACE,
             runtime(),
             primary_grant(&[scopes::RUNS_READ, scopes::APPROVALS_RESPOND]),
         )

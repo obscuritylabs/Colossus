@@ -201,6 +201,12 @@ impl CommandErrorDto {
                 false,
                 false,
             ),
+            SdkError::PlatformEnvironment(_) => Self::local(
+                "platform_environment",
+                "The local OS environment required by Colossus is unavailable. Start Colossus from a normal desktop session and try again.",
+                false,
+                false,
+            ),
             SdkError::OutcomeUnknown => Self::local(
                 "outcome_unknown",
                 "The operation outcome is unknown. Do not retry automatically.",

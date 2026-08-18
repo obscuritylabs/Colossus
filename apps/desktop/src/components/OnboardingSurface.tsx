@@ -417,9 +417,7 @@ export function OnboardingSurface({
           <button
             className="button secondary"
             type="button"
-            disabled={
-              busy || desktop.workspace === null || selfTest.state === "running"
-            }
+            disabled={busy || selfTest.state === "running"}
             onClick={() => void runOfflineSelfTest(onRunSelfTest, setSelfTest)}
           >
             {selfTest.state === "running"

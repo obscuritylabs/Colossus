@@ -9,6 +9,7 @@ use colossus_worker_protocol::{
     PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint,
 };
 use hmac::{Hmac, Mac as _};
+use process_support::tempdir;
 use serde_json::Value;
 use sha2::Sha256;
 #[cfg(unix)]
@@ -21,7 +22,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
@@ -34,6 +34,12 @@ const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(windows))]
+const WORKER_SANDBOX_MAX_PROCESSES: u32 = 4;
+// The Windows broker helper and AppContainer job setup are part of this smoke
+// path; strict low-limit enforcement is covered by windows_sandbox.rs.
+#[cfg(windows)]
+const WORKER_SANDBOX_MAX_PROCESSES: u32 = 16;
 
 struct ChildGuard(Child);
 
@@ -46,9 +52,12 @@ impl Drop for ChildGuard {
     }
 }
 
-fn command(binary: &Path, config: &Path) -> Command {
+fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .arg("--config")
         .arg(config)
@@ -59,7 +68,7 @@ fn command(binary: &Path, config: &Path) -> Command {
             "COLOSSUS_THEME_DIR",
             config.parent().expect("config parent").join("themes"),
         );
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn webhook_timestamp() -> String {
@@ -269,7 +278,7 @@ sandbox:
   networkDestinations: []
   timeoutMs: 5000
   maxOutputBytes: 1048576
-  maxProcesses: 4
+  maxProcesses: {max_processes}
   maxMemoryBytes: 67108864
   maxConcurrency: 1
 "#,
@@ -278,6 +287,7 @@ sandbox:
             workflows = workflows_yaml,
             workspace = workspace_yaml,
             process_executable = process_executable_yaml,
+            max_processes = WORKER_SANDBOX_MAX_PROCESSES,
         ),
     )
     .expect("config");

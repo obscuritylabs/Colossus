@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use super::platform_secret;
 use super::{
     DisabledCheckpointSigner, EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX,
     PAYLOAD_PROTECTION_KEY, PROJECTION_POSITIONS, PersistedEventEnvelope, PlaintextKeyProvider,
@@ -871,6 +873,24 @@ fn platform_secret_cache_does_not_cache_load_failures() {
         [24_u8; 32]
     );
     assert_eq!(loads.load(Ordering::SeqCst), 2);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "writes one temporary Windows Credential Manager entry"]
+fn windows_platform_secret_round_trip() {
+    let service = "com.obscuritylabs.colossus.windows-keyring-test";
+    let account = format!("round-trip:{}", uuid::Uuid::now_v7());
+    let secret = platform_secret(service, &account).expect("create Windows platform secret");
+    assert_ne!(secret, [0; 32]);
+    let entry = keyring::Entry::new(service, &account).expect("open Windows platform secret");
+    assert_eq!(
+        entry.get_secret().expect("read Windows platform secret"),
+        secret
+    );
+    entry
+        .delete_credential()
+        .expect("delete Windows platform secret");
 }
 
 #[test]

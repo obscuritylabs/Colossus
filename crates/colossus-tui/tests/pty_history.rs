@@ -663,8 +663,8 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         "cursor visibility was not restored"
     );
     assert!(
-        !raw.windows(b"\x1b[?1000h".len())
-            .any(|window| window == b"\x1b[?1000h"),
+        !raw_contains(raw.as_slice(), b"\x1b[?1000h")
+            && !raw_contains(raw.as_slice(), b"\x1b[?1003;1006h"),
         "inline mode must preserve native mouse scrollback"
     );
 }
@@ -706,6 +706,8 @@ fn submitted_input_history_traverses_repeatedly_and_completion_keeps_key_precede
     });
     let mut writer = pair.master.take_writer().expect("PTY writer");
 
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
     writer.write_all(b"/").expect("open slash completion");
     writer
@@ -725,9 +727,13 @@ fn submitted_input_history_traverses_repeatedly_and_completion_keeps_key_precede
     writer.flush().expect("flush skill completion navigation");
     wait_for_screen(&output, 24, 80, "Skills");
     assert!(!screen_contents(&output, 24, 80).contains("third prompt"));
+    writer.write_all(&[27]).expect("dismiss skill completion");
+    writer.flush().expect("flush skill completion dismissal");
+    thread::sleep(Duration::from_millis(50));
     writer
-        .write_all(&[27, 127, 127])
-        .expect("dismiss and clear skill completion");
+        .write_all(&[127; 16])
+        .expect("clear skill completion draft");
+    writer.flush().expect("flush skill completion draft clear");
 
     writer.write_all(b"unsent draft").expect("type draft");
     writer.write_all(b"\x1b[A").expect("recall newest history");
@@ -1432,6 +1438,8 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     });
     let mut writer = pair.master.take_writer().expect("PTY writer");
 
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
     wait_for_screen(&output, 24, 80, "durable-row-01");
     writer.write_all(b"/to\t").expect("type completion");
     writer.flush().expect("flush completion");
@@ -1477,19 +1485,32 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     reader_thread.join().expect("reader thread");
     let raw = output.lock().expect("output");
     assert!(
-        raw.windows(b"\x1b[?1000h".len())
-            .any(|window| window == b"\x1b[?1000h"),
+        raw_contains(raw.as_slice(), b"\x1b[?1000h")
+            || raw_contains(raw.as_slice(), b"\x1b[?1003;1006h"),
         "alternate-screen mouse capture was not enabled"
     );
     assert!(
-        raw.windows(b"\x1b[?1000l".len())
-            .any(|window| window == b"\x1b[?1000l"),
+        raw_contains(raw.as_slice(), b"\x1b[?1000l")
+            || raw_contains(raw.as_slice(), b"\x1b[?1003;1006l"),
         "alternate-screen mouse capture was not restored"
     );
 }
 
 fn wait_for_raw(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8]) {
     wait_for_raw_count(output, needle, 1);
+}
+
+fn raw_contains(raw: &[u8], needle: &[u8]) -> bool {
+    raw.windows(needle.len()).any(|window| window == needle)
+}
+
+#[cfg(windows)]
+fn answer_cursor_position_query(output: &Arc<Mutex<Vec<u8>>>, writer: &mut dyn std::io::Write) {
+    wait_for_raw(output, b"\x1b[6n");
+    writer
+        .write_all(b"\x1b[1;1R")
+        .expect("answer cursor-position query");
+    writer.flush().expect("flush cursor-position answer");
 }
 
 fn wait_for_raw_count(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8], expected: usize) {
@@ -1513,9 +1534,15 @@ fn wait_for_screen(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16, needle: &
     if screen_contains_within(output, rows, cols, needle, Duration::from_secs(10)) {
         return;
     }
+    let bytes = output.lock().expect("output").clone();
+    let tail_start = bytes.len().saturating_sub(4_096);
+    let tail = String::from_utf8_lossy(&bytes[tail_start..])
+        .escape_debug()
+        .to_string();
     panic!(
-        "screen never contained {needle}: {}",
-        screen_contents(output, rows, cols)
+        "screen never contained {needle}: {}\nraw bytes: {}\nraw tail: {tail}",
+        screen_contents(output, rows, cols),
+        bytes.len()
     );
 }
 

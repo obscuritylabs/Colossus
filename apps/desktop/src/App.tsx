@@ -24,7 +24,7 @@ import {
   connectColossus,
   createSpace,
   createRun,
-  desktopReleaseChannel,
+  desktopReleaseMetadata,
   desktopStatus,
   exportDiagnostics,
   getRun,
@@ -148,6 +148,7 @@ import type {
   ConfigureManagedRuntimeRequest,
   ConnectionStatus,
   CreateRunRequest,
+  DesktopReleaseMetadata,
   DesktopStatus,
   Interaction,
   InteractionAnswer,
@@ -348,6 +349,14 @@ const INITIAL_DESKTOP: DesktopStatus = {
     agentWorkflows: false,
     attachments: false,
   },
+};
+
+const INITIAL_RELEASE_METADATA: DesktopReleaseMetadata = {
+  platform: "unsupported",
+  architecture: "unknown",
+  channel: INITIAL_DESKTOP.releaseChannel,
+  bundleIntegrity: "failed",
+  codeSigning: "unsupported",
 };
 
 const FIXTURE_SPACE_THREAD_PREVIEWS: ReadonlyMap<
@@ -840,6 +849,8 @@ export default function App() {
   const [releaseChannel, setReleaseChannel] = useState(
     INITIAL_DESKTOP.releaseChannel,
   );
+  const [releaseMetadata, setReleaseMetadata] =
+    useState<DesktopReleaseMetadata>(INITIAL_RELEASE_METADATA);
   const desktopRef = useRef(desktop);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
@@ -1281,6 +1292,10 @@ export default function App() {
       desktopRef.current = status;
       setDesktop(status);
       setReleaseChannel(status.releaseChannel);
+      setReleaseMetadata((current) => ({
+        ...current,
+        channel: status.releaseChannel,
+      }));
       const requiresOnboarding = managedOnboardingRequired(status);
       setShowOnboarding((current) => current || requiresOnboarding);
       if (
@@ -1401,10 +1416,11 @@ export default function App() {
     let cancelled = false;
     connectingRef.current = true;
     setConnecting(true);
-    void desktopReleaseChannel()
-      .then((channel) => {
+    void desktopReleaseMetadata()
+      .then((metadata) => {
         if (!cancelled) {
-          setReleaseChannel(channel);
+          setReleaseMetadata(metadata);
+          setReleaseChannel(metadata.channel);
         }
       })
       .catch(() => {
@@ -4309,7 +4325,10 @@ export default function App() {
       <a className="skip-link" href="#primary-workspace">
         Skip to workspace
       </a>
-      <ReleaseChannelBanner releaseChannel={releaseChannel} />
+      <ReleaseChannelBanner
+        releaseChannel={releaseChannel}
+        releaseMetadata={releaseMetadata}
+      />
       <ExecutionBoundaryBanner
         active={managedRuntimeBoundaryActive(desktop.managedState)}
         boundary={desktop.executionBoundary}

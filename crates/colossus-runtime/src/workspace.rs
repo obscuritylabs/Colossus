@@ -104,6 +104,7 @@ impl RuntimeOpenOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::private_tempdir;
 
     #[test]
     fn workspace_options_canonicalize_existing_directories() {
@@ -134,7 +135,7 @@ mod tests {
     #[test]
     fn workspace_options_accept_an_explicit_non_ambient_colossus_home() {
         let workspace = tempfile::tempdir().expect("workspace");
-        let home = tempfile::tempdir().expect("home");
+        let home = private_tempdir();
         let home_path = home.path().canonicalize().expect("canonical home");
         #[cfg(unix)]
         {

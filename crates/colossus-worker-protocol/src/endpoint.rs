@@ -1,9 +1,13 @@
+#[cfg(unix)]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest as _, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use crate::WorkerControlError;
 
+#[cfg(unix)]
 const SHORT_ENDPOINT_DOMAIN: &[u8] = b"colossus-worker-ipc-v2\0";
 
 /// Derive the platform worker endpoint from one absolute canonical state path.
@@ -61,12 +65,25 @@ pub(crate) fn shortened_endpoint_root() -> PathBuf {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn short_state_paths_keep_the_adjacent_endpoint_contract() {
         assert_eq!(
             worker_ipc_endpoint(Path::new("/tmp/workspace/state.redb")).expect("endpoint"),
             "/tmp/workspace/state.redb.worker.sock"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_state_paths_use_a_stable_named_pipe_endpoint() {
+        let state = Path::new(r"C:\Users\colossus\state.redb");
+        let first = worker_ipc_endpoint(state).expect("first endpoint");
+        let second = worker_ipc_endpoint(state).expect("second endpoint");
+
+        assert_eq!(first, second);
+        assert!(first.starts_with(r"\\.\pipe\colossus-"));
+        assert_eq!(first.len(), r"\\.\pipe\colossus-".len() + 32);
     }
 
     #[cfg(unix)]

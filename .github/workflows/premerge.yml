@@ -243,8 +243,8 @@ jobs:
         id: windows_sdk_path
         continue-on-error: true
         run: >-
-          cargo test --locked -p colossus-sdk --lib
-          native_sidecar_windows::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity
+          cargo test --locked -p colossus-sdk --lib --features sidecar
+          native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity
           -- --exact --nocapture
       - name: Run Windows Colossus-home acceptance
         id: windows_home

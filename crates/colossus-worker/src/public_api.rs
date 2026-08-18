@@ -470,6 +470,14 @@ mod tests {
     use colossus_grpc::TlsKeySeed;
     use colossus_testkit::InMemoryEventJournal;
 
+    fn api_path(name: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"C:\colossus-worker\{name}"))
+        } else {
+            PathBuf::from(format!("/tmp/{name}"))
+        }
+    }
+
     #[test]
     fn host_options_reject_public_network_and_path_aliases() {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -479,8 +487,8 @@ mod tests {
         let error = PublicApiHostOptions::new(
             "0.0.0.0:0".parse().expect("bind"),
             Uuid::now_v7(),
-            "/tmp/colossus-api.json",
-            "/tmp/colossus-api.json",
+            api_path("colossus-api.json"),
+            api_path("colossus-api.json"),
             tls,
             &credentials,
         )
@@ -499,8 +507,8 @@ mod tests {
         let options = PublicApiHostOptions::new(
             "127.0.0.1:0".parse().expect("bind"),
             Uuid::now_v7(),
-            "/tmp/colossus-api.json",
-            "/tmp/colossus-api.pem",
+            api_path("colossus-api.json"),
+            api_path("colossus-api.pem"),
             tls,
             &credentials,
         )
@@ -528,8 +536,8 @@ mod tests {
         let options = PublicApiHostOptions::new(
             "127.0.0.1:0".parse().expect("bind"),
             Uuid::now_v7(),
-            "/tmp/colossus-sidecar-api.json",
-            "/tmp/colossus-sidecar-api.pem",
+            api_path("colossus-sidecar-api.json"),
+            api_path("colossus-sidecar-api.pem"),
             tls,
             &credentials,
         )

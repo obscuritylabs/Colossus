@@ -1,13 +1,14 @@
-#![cfg(unix)]
-
 //! Native managed-sidecar bootstrap and pinned-gRPC lifecycle acceptance test.
+
+#![cfg(unix)]
 
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{
-    ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, InputContentPart,
-    InstanceId, ManagedAccessProfile, ManagedRuntimeConfig, NativeSidecarLifecycle,
-    NativeSidecarStatus, RunMode, Secret, Sha256Digest, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarOptions, VerifiedExecutable,
+    ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,
+    InputContentPart, InstanceId, ManagedAccessProfile, ManagedRuntimeConfig,
+    NativeSidecarLifecycle, NativeSidecarStatus, RunMode, RunStatus, Secret, Sha256Digest,
+    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarOptions,
+    VerifiedExecutable,
 };
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -15,6 +16,7 @@ use std::{
     io::Read as _,
     os::unix::fs::PermissionsExt as _,
     path::Path,
+    time::Duration,
 };
 use uuid::Uuid;
 
@@ -92,6 +94,33 @@ fn executable_digest(path: &Path) -> [u8; 32] {
         digest.update(&buffer[..read]);
     }
     digest.finalize().into()
+}
+
+async fn wait_for_terminal_run(client: &Colossus, run_id: &str) -> RunStatus {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let run = client
+                .get_run(GetRunRequest {
+                    run_id: run_id.to_owned(),
+                })
+                .await
+                .expect("get run")
+                .run;
+            if matches!(
+                run.status,
+                RunStatus::Completed
+                    | RunStatus::Failed
+                    | RunStatus::Cancelled
+                    | RunStatus::Interrupted
+                    | RunStatus::OutcomeUnknown
+            ) {
+                return run.status;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("run terminal timeout")
 }
 
 /// Live acceptance requires a usable platform credential store and loopback sockets.
@@ -173,7 +202,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
             session_id: None,
             end_user_id: None,
             role: "primary".into(),
-            mode: RunMode::Plan,
+            mode: RunMode::Execute,
             research_depth: None,
             research_sources: Vec::new(),
             selected_skills: Vec::new(),
@@ -185,7 +214,12 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         })
         .await
         .expect("create run");
-    assert!(!created.run.run_id.is_empty());
+    let run_id = created.run.run_id;
+    assert!(!run_id.is_empty());
+    assert_eq!(
+        wait_for_terminal_run(&client, &run_id).await,
+        RunStatus::Completed
+    );
     client.close().await.expect("graceful close");
     assert_eq!(lifecycle.status(), NativeSidecarStatus::Stopping);
 }

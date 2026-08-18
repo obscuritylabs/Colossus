@@ -663,13 +663,116 @@ mod tests {
     use super::*;
     use crate::{Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions};
     use colossus_policy::DenyApproval;
+    #[cfg(windows)]
+    use std::process::Command;
     use std::sync::Arc;
+
+    fn private_tempdir() -> tempfile::TempDir {
+        #[cfg(windows)]
+        {
+            let directory = tempfile::Builder::new()
+                .prefix("colossus-runtime-lease-")
+                .tempdir_in(current_user_profile())
+                .expect("private temporary root");
+            make_windows_private_directory(directory.path());
+            directory
+        }
+
+        #[cfg(not(windows))]
+        {
+            let directory = tempfile::tempdir().expect("private temporary root");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("private temporary root permissions");
+            }
+            directory
+        }
+    }
+
+    #[cfg(windows)]
+    fn current_user_profile() -> PathBuf {
+        let (account, _) = current_windows_user();
+        let user_name = account
+            .rsplit('\\')
+            .next()
+            .filter(|value| !value.is_empty())
+            .expect("current Windows account name");
+        let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        let users_root = PathBuf::from(format!("{system_drive}\\Users"));
+        for entry in fs::read_dir(&users_root).expect("Windows users directory") {
+            let entry = entry.expect("Windows user profile entry");
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(user_name)
+            {
+                return entry.path();
+            }
+        }
+        panic!("Windows user profile not found for {account}");
+    }
+
+    #[cfg(windows)]
+    fn make_windows_private_directory(path: &Path) {
+        let (_, current_user_sid) = current_windows_user();
+        let grant_current_user = format!("*{current_user_sid}:(OI)(CI)F");
+        let output = Command::new("icacls.exe")
+            .arg(path)
+            .arg("/inheritance:r")
+            .arg("/grant:r")
+            .arg(grant_current_user)
+            .arg("*S-1-5-18:(OI)(CI)F")
+            .arg("*S-1-5-32-544:(OI)(CI)F")
+            .output()
+            .expect("make isolated Windows runtime lease directory private");
+        assert!(
+            output.status.success(),
+            "failed to make isolated Windows runtime lease directory private\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    fn current_windows_user() -> (String, String) {
+        let output = Command::new("whoami.exe")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .expect("query current Windows user SID");
+        assert!(
+            output.status.success(),
+            "failed to query current Windows user SID\nstdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("Windows user SID output is UTF-8");
+        let mut columns = stdout.split(',');
+        let account = columns
+            .next()
+            .map(|value| value.trim().trim_matches('"').to_owned())
+            .filter(|value| !value.is_empty())
+            .expect("Windows account in whoami output");
+        let sid_tail = columns
+            .next()
+            .and_then(|value| value.trim().trim_matches('"').strip_prefix("S-"))
+            .expect("Windows user SID in whoami output");
+        assert!(
+            sid_tail
+                .chars()
+                .all(|character| character.is_ascii_digit() || character == '-'),
+            "unexpected Windows user SID: S-{sid_tail}"
+        );
+        (account, format!("S-{sid_tail}"))
+    }
 
     #[test]
     fn same_workspace_conflicts_independently_of_runtime_state_path() {
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace = private_tempdir();
         let first = WorkspaceOwnershipLease::acquire_at(workspace.path(), &lease_root)
             .expect("first owner");
 
@@ -684,10 +787,10 @@ mod tests {
 
     #[test]
     fn distinct_workspaces_have_independent_ownership() {
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let first_workspace = tempfile::tempdir().expect("first workspace");
-        let second_workspace = tempfile::tempdir().expect("second workspace");
+        let first_workspace = private_tempdir();
+        let second_workspace = private_tempdir();
         let _first = WorkspaceOwnershipLease::acquire_at(first_workspace.path(), &lease_root)
             .expect("first owner");
         let _second = WorkspaceOwnershipLease::acquire_at(second_workspace.path(), &lease_root)
@@ -697,9 +800,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn renamed_workspace_inode_remains_owned() {
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let parent = tempfile::tempdir().expect("workspace parent");
+        let parent = private_tempdir();
         let original = parent.path().join("original");
         let renamed = parent.path().join("renamed");
         fs::create_dir(&original).expect("workspace");
@@ -719,9 +822,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn renamed_workspace_with_replacement_fails_identity_revalidation() {
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let parent = tempfile::tempdir().expect("workspace parent");
+        let parent = private_tempdir();
         let original = parent.path().join("workspace");
         let renamed = parent.path().join("workspace-old");
         fs::create_dir(&original).expect("workspace");
@@ -744,7 +847,7 @@ mod tests {
 
     #[test]
     fn runtime_composition_rejects_an_existing_workspace_owner_before_state_open() {
-        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace = private_tempdir();
         let _owner = WorkspaceOwnershipLease::acquire(workspace.path()).expect("workspace owner");
         let config = RuntimeConfig::offline_template(workspace.path().join("independent.redb"));
         let result = Runtime::open_with_options(
@@ -765,9 +868,9 @@ mod tests {
     fn expected_identity_is_compared_to_the_retained_open_directory() {
         use std::os::unix::fs::MetadataExt as _;
 
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let parent = tempfile::tempdir().expect("workspace parent");
+        let parent = private_tempdir();
         let workspace = parent.path().join("workspace");
         let moved = parent.path().join("workspace-moved");
         fs::create_dir(&workspace).expect("workspace");
@@ -798,9 +901,9 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn home_partition_identity_binds_runtime_acquisition_to_the_same_object() {
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let parent = tempfile::tempdir().expect("workspace parent");
+        let parent = private_tempdir();
         let workspace = parent.path().join("workspace");
         let moved = parent.path().join("workspace-moved");
         fs::create_dir(&workspace).expect("workspace");
@@ -838,9 +941,9 @@ mod tests {
     fn unsafe_shared_lease_directory_fails_closed() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().expect("lease root");
+        let root = private_tempdir();
         let lease_root = root.path().join("leases");
-        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace = private_tempdir();
         fs::create_dir(&lease_root).expect("lease directory");
         fs::set_permissions(&lease_root, fs::Permissions::from_mode(0o770))
             .expect("shared permissions");

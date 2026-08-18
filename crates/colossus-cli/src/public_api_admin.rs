@@ -246,7 +246,9 @@ pub(super) struct PublicApiEnvironment {
     directory: PathBuf,
     namespace_service: String,
     authentication_root: Zeroizing<[u8; 32]>,
+    #[cfg(unix)]
     tls_seed: Zeroizing<[u8; 32]>,
+    #[cfg(unix)]
     instance_seed: Zeroizing<[u8; 32]>,
     _lease: File,
     #[cfg(unix)]
@@ -260,7 +262,7 @@ impl PublicApiEnvironment {
         #[cfg(not(unix))]
         {
             let _ = (path, store);
-            return Err(PublicApiAdminError::UnsupportedPlatform);
+            Err(PublicApiAdminError::UnsupportedPlatform)
         }
 
         #[cfg(unix)]
@@ -303,7 +305,7 @@ impl PublicApiEnvironment {
         #[cfg(not(unix))]
         {
             let _ = credentials;
-            return Err(PublicApiAdminError::UnsupportedPlatform);
+            Err(PublicApiAdminError::UnsupportedPlatform)
         }
 
         #[cfg(unix)]
@@ -1115,6 +1117,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn stable_material_uses_path_specific_namespaces_and_redacted_debug() {
         let directory = tempfile::tempdir().expect("directory");

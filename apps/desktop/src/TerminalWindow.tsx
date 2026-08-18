@@ -84,7 +84,7 @@ const TERMINAL_PRESENTATION: Record<
   shell: {
     title: "Shell",
     banner:
-      "Local Shell — runs as your macOS user; outside Colossus policy and audit",
+      "Local Shell — runs as your signed-in OS user; outside Colossus policy and audit",
   },
 };
 
