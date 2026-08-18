@@ -12,6 +12,18 @@ const BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT: &str =
     "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PARENT_FIXTURE_V1";
 
 #[cfg(windows)]
+fn local_app_data_tempdir(prefix: &str) -> tempfile::TempDir {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("absolute Windows LocalAppData");
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(local_app_data)
+        .expect("temporary directory under LocalAppData")
+}
+
+#[cfg(windows)]
 #[test]
 fn named_pipe_bootstrap_fixture_process() {
     use std::io::Read as _;
@@ -251,7 +263,7 @@ fn directories_directly_beneath_the_volume_root_retain_and_validate_the_root() {
 #[cfg(windows)]
 #[test]
 fn private_directory_creation_protects_the_directory_and_children() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = local_app_data_tempdir("colossus-native-private-directory-");
     let directory = parent.path().join("private");
 
     create_private_directory(&directory).expect("create private directory");
@@ -296,7 +308,7 @@ fn untrusted_ancestor_delete_child_authority_is_rejected() {
 #[cfg(windows)]
 #[test]
 fn private_file_creation_is_exclusive_and_owner_private() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = local_app_data_tempdir("colossus-native-private-file-");
     let path = parent.path().join("secret");
 
     create_private_file(&path, b"colossus").expect("create private file");
@@ -313,7 +325,7 @@ fn private_file_creation_is_exclusive_and_owner_private() {
 #[cfg(windows)]
 #[test]
 fn private_file_replacement_is_atomic_and_preserves_private_access() {
-    let parent = tempfile::tempdir().expect("temporary parent");
+    let parent = local_app_data_tempdir("colossus-native-private-replace-");
     let directory = parent.path().join("private");
     create_private_directory(&directory).expect("create private directory");
     let destination = directory.join("settings.json");

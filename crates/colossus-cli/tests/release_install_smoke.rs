@@ -3,13 +3,13 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "7171717171717171717171717171717171717171717171717171717171717171";
 const SIGNING_KEY: &str = "8282828282828282828282828282828282828282828282828282828282828282";
@@ -131,10 +131,10 @@ fn installed_binary(prefix: &Path) -> PathBuf {
     }
 }
 
-fn offline_command(binary: &Path, working_directory: &Path) -> Command {
+fn offline_command(binary: &Path, working_directory: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
     command.current_dir(working_directory).env_clear();
-    process_support::isolate_user_home(&mut command, working_directory);
+    let isolated_home = process_support::isolate_user_home(&mut command, working_directory);
     command
         .env("COLOSSUS_RELEASE_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_RELEASE_SIGNING_KEY", SIGNING_KEY);
@@ -144,7 +144,7 @@ fn offline_command(binary: &Path, working_directory: &Path) -> Command {
             command.env(name, value);
         }
     }
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 #[test]

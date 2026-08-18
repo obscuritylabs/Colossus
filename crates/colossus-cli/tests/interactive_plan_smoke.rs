@@ -4,6 +4,7 @@
 mod process_support;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -15,7 +16,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
 
 const JOURNAL_KEY: &str = "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc";
 const SIGNING_KEY: &str = "dededededededededededededededededededededededededededededededede";
@@ -58,9 +59,10 @@ struct Fixture {
     config: PathBuf,
 }
 
-fn command(binary: &Path, config: &Path) -> Command {
+fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config parent"));
+    let isolated_home =
+        process_support::isolate_user_home(&mut command, config.parent().expect("config parent"));
     command
         .current_dir(config.parent().expect("config parent"))
         .arg("--config")
@@ -71,10 +73,14 @@ fn command(binary: &Path, config: &Path) -> Command {
             "COLOSSUS_THEME_DIR",
             config.parent().expect("config parent").join("themes"),
         );
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
-fn interactive_command(binary: &Path, config: &Path, host: RuntimeHost) -> Command {
+fn interactive_command(
+    binary: &Path,
+    config: &Path,
+    host: RuntimeHost,
+) -> process_support::IsolatedCommand {
     let mut command = command(binary, config);
     if matches!(host, RuntimeHost::Embedded) {
         command.arg("--approval-mode").arg("full-access");
@@ -645,9 +651,10 @@ fn run_full_screen_lifecycle(
         })
         .expect("open PTY");
     let mut process = CommandBuilder::new(binary);
-    let user_home = fs::canonicalize(config.parent().expect("config parent"))
-        .expect("canonical isolated test home");
-    process.cwd(&user_home);
+    let workspace = config.parent().expect("config parent");
+    let isolated_home = process_support::isolated_user_home(workspace);
+    let user_home = isolated_home.path();
+    process.cwd(workspace);
     process.arg("--config");
     process.arg(config);
     if matches!(host, RuntimeHost::Embedded) {
@@ -660,14 +667,15 @@ fn run_full_screen_lifecycle(
     process.arg(session_id);
     process.env("COLOSSUS_INTERACTIVE_PLAN_JOURNAL_KEY", JOURNAL_KEY);
     process.env("COLOSSUS_INTERACTIVE_PLAN_SIGNING_KEY", SIGNING_KEY);
-    process.env("HOME", &user_home);
-    process.env("COLOSSUS_HOME", user_home.join(".colossus-home"));
+    process.env("HOME", user_home);
+    process.env("COLOSSUS_HOME", isolated_home.colossus_home());
     #[cfg(windows)]
-    process.env("USERPROFILE", &user_home);
-    process.env(
-        "COLOSSUS_THEME_DIR",
-        config.parent().expect("config parent").join("themes"),
-    );
+    {
+        process.env("USERPROFILE", user_home);
+        process.env("TEMP", isolated_home.temporary_directory());
+        process.env("TMP", isolated_home.temporary_directory());
+    }
+    process.env("COLOSSUS_THEME_DIR", workspace.join("themes"));
     process.env("TERM", "xterm-256color");
     let mut child = pair
         .slave
@@ -691,6 +699,13 @@ fn run_full_screen_lifecycle(
         }
     });
     let mut writer = pair.master.take_writer().expect("PTY writer");
+    #[cfg(windows)]
+    {
+        writer
+            .write_all(b"\x1b[1;1R")
+            .expect("write cursor position response");
+        writer.flush().expect("flush cursor position response");
+    }
 
     let booted = wait_for_screen(&output, ROWS, COLS, "mode=execute");
     if booted {
@@ -731,12 +746,15 @@ fn run_full_screen_lifecycle(
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("PTY reader thread");
+    let raw_output = String::from_utf8_lossy(&output.lock().expect("PTY output")).into_owned();
 
     assert!(
         booted,
-        "{} TUI did not boot: {}",
+        "{} TUI did not boot: status={:?}; screen={}; raw={:?}",
         host.label(),
-        approved_screen
+        status,
+        approved_screen,
+        raw_output
     );
     assert!(
         approved,

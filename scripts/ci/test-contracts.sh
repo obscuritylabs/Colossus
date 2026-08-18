@@ -133,5 +133,5 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
-node --test "$script_dir/sdk-release.test.mjs"
-node --test "$script_dir/homebrew-formula.test.mjs"
+"${NODE:-node}" --test "$script_dir/sdk-release.test.mjs"
+"${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"

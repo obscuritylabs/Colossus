@@ -12,11 +12,11 @@ function render(releaseChannel: DesktopReleaseChannel): string {
 }
 
 describe("ReleaseChannelBanner", () => {
-  it("clearly labels the non-notarized developer preview", () => {
+  it("clearly labels the unsigned developer preview", () => {
     const markup = render("developer_preview");
 
     expect(markup).toContain("Developer Preview");
-    expect(markup).toContain("Ad-hoc signed and not Apple-notarized");
+    expect(markup).toContain("Unsigned preview build for local testing");
   });
 
   it.each(["development", "stable", "validation_only"] as const)(

@@ -1112,22 +1112,24 @@ test("release manifest writer emits exact final binary digests", () => {
       assert.notEqual(tampered.status, 0);
     }
 
-    rmSync(sidecar);
-    symlinkSync(cli, sidecar);
-    const rejected = spawnSync(process.execPath, [
-      join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
-      "--target",
-      "aarch64-apple-darwin",
-      "--release-channel",
-      "developer_preview",
-      "--sidecar",
-      sidecar,
-      "--cli",
-      cli,
-      "--output",
-      output,
-    ]);
-    assert.notEqual(rejected.status, 0);
+    if (process.platform !== "win32") {
+      rmSync(sidecar);
+      symlinkSync(cli, sidecar);
+      const rejected = spawnSync(process.execPath, [
+        join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
+        "--target",
+        "aarch64-apple-darwin",
+        "--release-channel",
+        "developer_preview",
+        "--sidecar",
+        sidecar,
+        "--cli",
+        cli,
+        "--output",
+        output,
+      ]);
+      assert.notEqual(rejected.status, 0);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

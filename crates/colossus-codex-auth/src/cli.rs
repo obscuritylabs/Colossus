@@ -1,5 +1,5 @@
 use crate::CodexAuthError;
-use std::{path::Path, process::Stdio};
+use std::{ffi::OsStr, path::Path, process::Stdio};
 use tokio::{io::copy, process::Command};
 
 const FILE_CREDENTIAL_STORE_OVERRIDE: &str = "cli_auth_credentials_store=\"file\"";
@@ -25,6 +25,21 @@ pub async fn run_codex_cli(
     executable: &Path,
     action: CodexCliAction,
 ) -> Result<(), CodexAuthError> {
+    run_codex_cli_with_environment(executable, action, std::iter::empty::<(&OsStr, &OsStr)>()).await
+}
+
+/// Run an account operation through the official Codex CLI with extra child-only
+/// environment variables.
+pub async fn run_codex_cli_with_environment<I, K, V>(
+    executable: &Path,
+    action: CodexCliAction,
+    environment: I,
+) -> Result<(), CodexAuthError>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
     if executable.as_os_str().is_empty() {
         return Err(CodexAuthError::Cli(
             "Codex executable path cannot be empty".into(),
@@ -33,6 +48,7 @@ pub async fn run_codex_cli(
     let mut command = Command::new(executable);
     command
         .args(codex_cli_arguments(action))
+        .envs(environment)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

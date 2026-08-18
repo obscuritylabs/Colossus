@@ -614,9 +614,7 @@ mod native {
 #[cfg(windows)]
 mod native {
     use super::*;
-    use colossus_windows_native::{
-        BoundPath, create_private_file, replace_private_file,
-    };
+    use colossus_windows_native::{BoundPath, create_private_file, replace_private_file};
     use std::io::Read as _;
 
     pub(super) fn write_atomic_owner_only(
@@ -653,10 +651,7 @@ mod native {
             .map_err(native_error)?;
         validate_existing_destination(path)?;
 
-        let temporary_path = parent_path.join(format!(
-            ".colossus-endpoint-{}.tmp",
-            Uuid::now_v7()
-        ));
+        let temporary_path = parent_path.join(format!(".colossus-endpoint-{}.tmp", Uuid::now_v7()));
         create_private_file(&temporary_path, contents).map_err(native_error)?;
         let result = (|| {
             parent.revalidate().map_err(native_error)?;

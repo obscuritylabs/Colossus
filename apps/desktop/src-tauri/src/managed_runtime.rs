@@ -8,6 +8,7 @@ use colossus_sdk::{
     SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -28,8 +29,10 @@ use crate::{
 
 const APPLICATION_ID: &str = "app:colossus-desktop-managed";
 const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
-const SELF_TEST_INSTANCE_ID: &str = "00000000-0000-7000-8000-000000000001";
+const SELF_TEST_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-self-test-instance-v2\0";
+#[cfg(debug_assertions)]
 const LOCAL_DEV_SEARCH_PROFILE: &str = "local-dev-searxng";
+#[cfg(debug_assertions)]
 const LOCAL_DEV_SEARCH_ENDPOINT: &str = "http://127.0.0.1:8888/search";
 const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
@@ -341,9 +344,7 @@ pub(crate) async fn self_test(
             bundle.macos_code_signing_requirement,
         )
         .map_err(CommandErrorDto::from_terminal)?;
-    let instance_id = InstanceId::from_str(SELF_TEST_INSTANCE_ID).map_err(|_| {
-        CommandErrorDto::local_sanitized("internal", "The offline self-test is unavailable.", false)
-    })?;
+    let instance_id = self_test_instance_id(&storage.instance_dir)?;
     let options = SidecarOptions::new(
         instance_id,
         AppPrivateInstanceDir::new(storage.instance_dir).map_err(CommandErrorDto::from_sdk)?,
@@ -369,11 +370,47 @@ pub(crate) async fn self_test(
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     let client = Colossus::start_sidecar(&lifecycle, options)
         .await
-        .map_err(CommandErrorDto::from_sdk)?;
+        .map_err(classify_self_test_sdk)?;
     let probe = probe_offline_echo(&client).await;
     let close = client.close().await.map_err(CommandErrorDto::from_sdk);
     probe?;
     close
+}
+
+fn self_test_instance_id(instance_dir: &Path) -> Result<InstanceId, CommandErrorDto> {
+    let canonical = std::fs::canonicalize(instance_dir).map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "desktop_storage",
+            "The offline self-test runtime is unavailable.",
+            false,
+        )
+    })?;
+    let encoded = canonical.to_str().ok_or_else(|| {
+        CommandErrorDto::local_sanitized(
+            "desktop_storage",
+            "The offline self-test runtime is unavailable.",
+            false,
+        )
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(SELF_TEST_INSTANCE_DOMAIN);
+    digest.update(encoded.as_bytes());
+    let digest = digest.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // RFC 9562 UUIDv8 provides a stable custom namespace for this per-home
+    // diagnostic runtime without sharing Windows Credential Manager anchors globally.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let instance_id = InstanceId::from_uuid(uuid::Uuid::from_bytes(bytes));
+    if instance_id.as_uuid().is_nil() {
+        return Err(CommandErrorDto::local_sanitized(
+            "internal",
+            "The offline self-test is unavailable.",
+            false,
+        ));
+    }
+    Ok(instance_id)
 }
 
 async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
@@ -381,20 +418,7 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
         IdempotencyKey::new(format!("desktop-self-test-{}", uuid::Uuid::now_v7()))
             .map_err(CommandErrorDto::from_api)?;
     let run = client
-        .create_run(CreateRunRequest {
-            input: vec![InputContentPart::Text("offline self-test".into())],
-            session_id: None,
-            end_user_id: None,
-            role: "primary".into(),
-            mode: RunMode::Plan,
-            research_depth: None,
-            research_sources: Vec::new(),
-            selected_skills: Vec::new(),
-            plan_action: None,
-            branch: None,
-            max_turns: 1,
-            idempotency_key,
-        })
+        .create_run(offline_self_test_request(idempotency_key))
         .await
         .map_err(CommandErrorDto::from_api)?
         .run;
@@ -432,11 +456,32 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
     if terminal == RunStatus::Completed {
         Ok(())
     } else {
+        let message = format!(
+            "The offline Colossus self-test ended with status {} before producing an echo result.",
+            run_status_name(terminal)
+        );
         Err(CommandErrorDto::local_sanitized(
             "self_test_failed",
-            "The offline Colossus self-test did not complete successfully.",
+            &message,
             false,
         ))
+    }
+}
+
+fn offline_self_test_request(idempotency_key: IdempotencyKey) -> CreateRunRequest {
+    CreateRunRequest {
+        input: vec![InputContentPart::Text("offline self-test".into())],
+        session_id: None,
+        end_user_id: None,
+        role: "primary".into(),
+        mode: RunMode::Execute,
+        research_depth: None,
+        research_sources: Vec::new(),
+        selected_skills: Vec::new(),
+        plan_action: None,
+        branch: None,
+        max_turns: 1,
+        idempotency_key,
     }
 }
 
@@ -888,6 +933,7 @@ fn classify_sdk(
         SdkError::WorkspaceIdentityChanged => RuntimeFailureCodeDto::Permission,
         SdkError::Authentication => RuntimeFailureCodeDto::Authentication,
         SdkError::Busy => RuntimeFailureCodeDto::WorkspaceBusy,
+        SdkError::PlatformEnvironment(_) => RuntimeFailureCodeDto::Configuration,
         SdkError::Transport | SdkError::Unavailable | SdkError::CloseFailed => {
             RuntimeFailureCodeDto::Transport
         }
@@ -912,14 +958,96 @@ fn classify_sdk(
             "The selected workspace changed. Choose the workspace again.",
             false,
         ),
+        SdkError::PlatformEnvironment(_) => CommandErrorDto::local_sanitized(
+            "platform_environment",
+            platform_environment_message(),
+            false,
+        ),
         SdkError::Authentication => CommandErrorDto::local_sanitized(
             "runtime_authentication",
-            "Managed Local could not establish its private authenticated connection.",
+            runtime_authentication_message(),
+            false,
+        ),
+        SdkError::LaunchFailed | SdkError::SidecarFailed | SdkError::EmbeddedOpenFailed => {
+            CommandErrorDto::local_sanitized(
+                "runtime_launch_failed",
+                runtime_launch_failed_message(),
+                false,
+            )
+        }
+        SdkError::Transport | SdkError::Unavailable => CommandErrorDto::local_sanitized(
+            "runtime_transport",
+            "Managed Local could not reach its private local API after launch. Restart the runtime and try again.",
             false,
         ),
         other => CommandErrorDto::from_sdk(other),
     };
     (projected, failure_code)
+}
+
+fn classify_self_test_sdk(error: SdkError) -> CommandErrorDto {
+    match error {
+        SdkError::PlatformEnvironment(_) => CommandErrorDto::local_sanitized(
+            "platform_environment",
+            "The offline self-test could not read a trusted Windows system directory from SystemRoot or WINDIR, so the bundled runtime cannot start.",
+            false,
+        ),
+        SdkError::Authentication => CommandErrorDto::local_sanitized(
+            "runtime_authentication",
+            "The offline self-test could not create or activate its private local API credentials. Restart desktop development and retry with a private COLOSSUS_HOME.",
+            false,
+        ),
+        SdkError::LaunchFailed | SdkError::SidecarFailed | SdkError::EmbeddedOpenFailed => {
+            CommandErrorDto::local_sanitized(
+                "runtime_launch_failed",
+                offline_self_test_runtime_launch_failed_message(),
+                false,
+            )
+        }
+        other => CommandErrorDto::from_sdk(other),
+    }
+}
+
+fn run_status_name(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Queued => "queued",
+        RunStatus::Running => "running",
+        RunStatus::Waiting => "waiting",
+        RunStatus::Cancelling => "cancelling",
+        RunStatus::Completed => "completed",
+        RunStatus::Failed => "failed",
+        RunStatus::Cancelled => "cancelled",
+        RunStatus::Interrupted => "interrupted",
+        RunStatus::OutcomeUnknown => "outcome_unknown",
+    }
+}
+
+fn platform_environment_message() -> &'static str {
+    "Managed Local could not read a trusted Windows system directory from SystemRoot or WINDIR, so the bundled runtime cannot start."
+}
+
+fn runtime_authentication_message() -> &'static str {
+    "Managed Local could not create or activate its private local API credentials. Restart the runtime and try again."
+}
+
+#[cfg(debug_assertions)]
+fn runtime_launch_failed_message() -> &'static str {
+    "Managed Local could not start the bundled runtime. Run cargo xtask desktop prepare --profile debug, then restart desktop development."
+}
+
+#[cfg(not(debug_assertions))]
+fn runtime_launch_failed_message() -> &'static str {
+    "Managed Local could not start the bundled runtime. Reinstall a signed desktop build and try again."
+}
+
+#[cfg(debug_assertions)]
+fn offline_self_test_runtime_launch_failed_message() -> &'static str {
+    "The offline self-test could not start the bundled runtime. Run cargo xtask desktop prepare --profile debug, then restart desktop development."
+}
+
+#[cfg(not(debug_assertions))]
+fn offline_self_test_runtime_launch_failed_message() -> &'static str {
+    "The offline self-test could not start the bundled runtime. Reinstall a signed desktop build and try again."
 }
 
 fn classified(
@@ -1021,6 +1149,42 @@ mod tests {
     }
 
     #[test]
+    fn offline_self_test_probe_uses_executable_echo_run() {
+        let request = offline_self_test_request(
+            IdempotencyKey::new("desktop-self-test-unit").expect("idempotency key"),
+        );
+        assert_eq!(
+            request.input,
+            vec![InputContentPart::Text("offline self-test".into())]
+        );
+        assert_eq!(request.role, "primary");
+        assert_eq!(request.mode, RunMode::Execute);
+        assert_eq!(request.max_turns, 1);
+        assert!(request.plan_action.is_none());
+        assert!(request.selected_skills.is_empty());
+    }
+
+    #[test]
+    fn offline_self_test_instance_id_is_namespaced_to_runtime_directory() {
+        let root = tempfile::tempdir().expect("self-test root");
+        let first = root.path().join("first").join("runtime");
+        let second = root.path().join("second").join("runtime");
+        std::fs::create_dir_all(&first).expect("first runtime");
+        std::fs::create_dir_all(&second).expect("second runtime");
+
+        let first_id = self_test_instance_id(&first).expect("first instance");
+        let first_alias =
+            self_test_instance_id(&first.join("..").join("runtime")).expect("first alias instance");
+        let second_id = self_test_instance_id(&second).expect("second instance");
+
+        assert_eq!(first_id, first_alias);
+        assert_ne!(first_id, second_id);
+        let encoded = first_id.to_string();
+        assert_eq!(&encoded[14..15], "8");
+        assert!(matches!(&encoded[19..20], "8" | "9" | "a" | "b"));
+    }
+
+    #[test]
     fn workspace_drift_prompts_reselection_without_mislabeling_bundle_integrity() {
         let (error, failure_code) = classify_sdk(
             SdkError::WorkspaceIdentityChanged,
@@ -1035,6 +1199,64 @@ mod tests {
             classify_sdk(SdkError::IdentityMismatch, RuntimeFailureCodeDto::Internal);
         assert_eq!(failure_code, RuntimeFailureCodeDto::Integrity);
         assert_eq!(integrity.code, "runtime_integrity");
+    }
+
+    #[test]
+    fn managed_launch_errors_explain_the_next_development_step() {
+        let (launch, _) = classify_sdk(SdkError::SidecarFailed, RuntimeFailureCodeDto::Internal);
+        assert_eq!(launch.code, "runtime_launch_failed");
+        assert!(launch.message.contains("bundled runtime"));
+        #[cfg(debug_assertions)]
+        assert!(
+            launch
+                .message
+                .contains("cargo xtask desktop prepare --profile debug")
+        );
+
+        let (environment, failure_code) = classify_sdk(
+            SdkError::PlatformEnvironment("windows_system_root_unavailable"),
+            RuntimeFailureCodeDto::Internal,
+        );
+        assert_eq!(failure_code, RuntimeFailureCodeDto::Configuration);
+        assert_eq!(environment.code, "platform_environment");
+        assert!(environment.message.contains("SystemRoot"));
+        assert!(environment.message.contains("WINDIR"));
+
+        let (authentication, failure_code) =
+            classify_sdk(SdkError::Authentication, RuntimeFailureCodeDto::Internal);
+        assert_eq!(failure_code, RuntimeFailureCodeDto::Authentication);
+        assert_eq!(authentication.code, "runtime_authentication");
+        assert!(
+            authentication
+                .message
+                .contains("private local API credentials")
+        );
+    }
+
+    #[test]
+    fn offline_self_test_errors_are_specific_to_the_probe_path() {
+        let launch = classify_self_test_sdk(SdkError::SidecarFailed);
+        assert_eq!(launch.code, "runtime_launch_failed");
+        assert!(launch.message.contains("offline self-test"));
+        #[cfg(debug_assertions)]
+        assert!(
+            launch
+                .message
+                .contains("cargo xtask desktop prepare --profile debug")
+        );
+
+        let environment = classify_self_test_sdk(SdkError::PlatformEnvironment(
+            "windows_system_root_unavailable",
+        ));
+        assert_eq!(environment.code, "platform_environment");
+        assert!(environment.message.contains("SystemRoot"));
+        assert!(environment.message.contains("WINDIR"));
+
+        assert_eq!(run_status_name(RunStatus::Failed), "failed");
+        assert_eq!(
+            run_status_name(RunStatus::OutcomeUnknown),
+            "outcome_unknown"
+        );
     }
 
     #[test]

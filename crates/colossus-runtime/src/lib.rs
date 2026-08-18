@@ -176,6 +176,9 @@ mod workspace;
 mod workspace_binding;
 mod workspace_lease;
 
+#[cfg(test)]
+mod test_support;
+
 pub use colossus_contracts::{ModelCapabilities, ReasoningEffort};
 pub use colossus_observability::{
     JournalPayloadMode, LogSignalConfig, MetricSignalConfig, ObservabilityConfig, OtlpConfig,

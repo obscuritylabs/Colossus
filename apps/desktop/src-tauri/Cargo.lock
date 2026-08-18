@@ -768,6 +768,7 @@ dependencies = [
  "colossus-contracts",
  "colossus-observability",
  "colossus-ports",
+ "colossus-windows-native",
  "futures",
  "getrandom 0.4.3",
  "hmac",

@@ -162,6 +162,23 @@ fn make_owner_private(path: &std::path::Path, mode: u32) {
 #[cfg(not(unix))]
 fn make_owner_private(_path: &std::path::Path, _mode: u32) {}
 
+#[cfg(windows)]
+fn state_tempdir() -> tempfile::TempDir {
+    let profile = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("absolute USERPROFILE");
+    tempfile::Builder::new()
+        .prefix("colossus-update-")
+        .tempdir_in(profile)
+        .expect("state directory")
+}
+
+#[cfg(not(windows))]
+fn state_tempdir() -> tempfile::TempDir {
+    tempdir().expect("state directory")
+}
+
 fn installed_executable(root: &std::path::Path) -> PathBuf {
     let directory = fs::canonicalize(root).expect("canonical installation root");
     let bin = directory.join("bin");
@@ -494,27 +511,35 @@ fn package_manager_marker_is_advisory_and_cannot_claim_direct_ownership() {
 
 #[test]
 fn filesystem_state_is_bounded_strict_and_atomic() {
-    let directory = tempdir().expect("state directory");
+    let directory = state_tempdir();
     let root = fs::canonicalize(directory.path()).expect("canonical state directory");
     let receipt = root.join("data/install.json");
     let cache_path = root.join("cache/update-check.json");
+    #[cfg(windows)]
+    colossus_windows_native::create_private_directory(receipt.parent().unwrap())
+        .expect("receipt directory");
+    #[cfg(not(windows))]
     fs::create_dir_all(receipt.parent().unwrap()).expect("receipt directory");
     let binary_name = if cfg!(windows) {
         "colossus.exe"
     } else {
         "colossus"
     };
-    fs::write(
-        &receipt,
-        format!(
-            "{{\"schemaVersion\":1,\"channel\":\"stable\",\"version\":\"{}\",\"target\":\"{}\",\"prefix\":\"{}\",\"binaryPath\":\"{}\",\"distributionOrigin\":\"https://github.com/obscuritylabs/Colossus/releases\",\"installerKind\":\"direct\"}}",
-            env!("CARGO_PKG_VERSION"),
-            current_release_target().unwrap_or(TARGET),
-            root.display(),
-            root.join("bin").join(binary_name).display(),
-        ),
-    )
-    .expect("receipt");
+    let receipt_bytes = serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 1,
+        "channel": "stable",
+        "version": env!("CARGO_PKG_VERSION"),
+        "target": current_release_target().unwrap_or(TARGET),
+        "prefix": root.display().to_string(),
+        "binaryPath": root.join("bin").join(binary_name).display().to_string(),
+        "distributionOrigin": "https://github.com/obscuritylabs/Colossus/releases",
+        "installerKind": "direct",
+    }))
+    .expect("receipt JSON");
+    #[cfg(windows)]
+    colossus_windows_native::create_private_file(&receipt, &receipt_bytes).expect("receipt");
+    #[cfg(not(windows))]
+    fs::write(&receipt, receipt_bytes).expect("receipt");
     make_owner_private(receipt.parent().expect("receipt directory"), 0o700);
     make_owner_private(&receipt, 0o600);
     let state = FilesystemUpdateState::new(receipt, cache_path.clone());

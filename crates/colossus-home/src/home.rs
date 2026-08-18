@@ -272,18 +272,7 @@ pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), HomeError> {
 mod tests {
     use super::*;
     use crate::detect_workspace_identity;
-
-    fn private_tempdir() -> tempfile::TempDir {
-        let temporary = tempfile::tempdir().expect("private temporary root");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
-                .expect("private temporary root permissions");
-        }
-        temporary
-    }
+    use crate::test_support::private_tempdir;
 
     #[test]
     fn explicit_home_builds_isolated_stable_workspace_surfaces() {

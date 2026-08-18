@@ -9,6 +9,7 @@ use colossus_worker_protocol::{
     PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint,
 };
 use hmac::{Hmac, Mac as _};
+use process_support::tempdir;
 use serde_json::Value;
 use sha2::Sha256;
 #[cfg(unix)]
@@ -21,7 +22,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
@@ -46,9 +46,12 @@ impl Drop for ChildGuard {
     }
 }
 
-fn command(binary: &Path, config: &Path) -> Command {
+fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .arg("--config")
         .arg(config)
@@ -59,7 +62,7 @@ fn command(binary: &Path, config: &Path) -> Command {
             "COLOSSUS_THEME_DIR",
             config.parent().expect("config parent").join("themes"),
         );
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn webhook_timestamp() -> String {

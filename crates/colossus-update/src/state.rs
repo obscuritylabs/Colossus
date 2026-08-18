@@ -5,8 +5,8 @@ use crate::{
 use serde::Deserialize;
 use std::{
     env,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
+    fs::{self, File},
+    io::Read as _,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -217,26 +217,41 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), UpdateStateError> {
         TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(&temporary)
-            .map_err(|_| UpdateStateError::Unavailable)?;
-        file.write_all(bytes)
-            .and_then(|()| file.write_all(b"\n"))
-            .and_then(|()| file.sync_all())
-            .map_err(|_| UpdateStateError::Unavailable)?;
+        let mut payload = Vec::with_capacity(bytes.len().saturating_add(1));
+        payload.extend_from_slice(bytes);
+        payload.push(b'\n');
+        write_temporary_file(&temporary, &payload)?;
         replace_file(&temporary, path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(windows)]
+fn write_temporary_file(path: &Path, bytes: &[u8]) -> Result<(), UpdateStateError> {
+    colossus_windows_native::create_private_file(path, bytes)
+        .map_err(|_| UpdateStateError::Unavailable)
+}
+
+#[cfg(not(windows))]
+fn write_temporary_file(path: &Path, bytes: &[u8]) -> Result<(), UpdateStateError> {
+    use std::io::Write as _;
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|_| UpdateStateError::Unavailable)?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| UpdateStateError::Unavailable)
 }
 
 #[cfg(unix)]

@@ -1,16 +1,114 @@
 use super::*;
 use std::collections::BTreeSet;
 
-fn private_tempdir() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().expect("private temporary directory");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+struct PrivateTempDir {
+    #[cfg(windows)]
+    path: PathBuf,
+    #[cfg(not(windows))]
+    directory: tempfile::TempDir,
+}
 
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-            .expect("private temporary directory permissions");
+impl PrivateTempDir {
+    fn path(&self) -> &Path {
+        #[cfg(windows)]
+        {
+            &self.path
+        }
+        #[cfg(not(windows))]
+        {
+            self.directory.path()
+        }
     }
-    directory
+}
+
+#[cfg(windows)]
+impl Drop for PrivateTempDir {
+    fn drop(&mut self) {
+        let parent = fs::canonicalize(current_user_profile()).expect("canonical Windows profile");
+        assert_eq!(self.path.parent(), Some(parent.as_path()));
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn private_tempdir() -> PrivateTempDir {
+    #[cfg(windows)]
+    {
+        let parent = fs::canonicalize(current_user_profile()).expect("canonical Windows profile");
+        let path = parent.join(format!("ColossusCliTest-{}", uuid::Uuid::now_v7()));
+        colossus_windows_native::create_private_directory(&path).expect("private test directory");
+        PrivateTempDir { path }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let directory = {
+            let directory = tempfile::tempdir().expect("private temporary directory");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("private temporary directory permissions");
+            }
+            directory
+        };
+        PrivateTempDir { directory }
+    }
+}
+
+#[cfg(windows)]
+fn current_user_profile() -> PathBuf {
+    let (account, _) = current_windows_user();
+    let user_name = account
+        .rsplit('\\')
+        .next()
+        .filter(|value| !value.is_empty())
+        .expect("current Windows account name");
+    let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let users_root = PathBuf::from(format!("{system_drive}\\Users"));
+    for entry in fs::read_dir(&users_root).expect("Windows users directory") {
+        let entry = entry.expect("Windows user profile entry");
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(user_name)
+        {
+            return entry.path();
+        }
+    }
+    panic!("Windows user profile not found for {account}");
+}
+
+#[cfg(windows)]
+fn current_windows_user() -> (String, String) {
+    let output = std::process::Command::new("whoami.exe")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .expect("query current Windows user SID");
+    assert!(
+        output.status.success(),
+        "failed to query current Windows user SID\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("Windows user SID output is UTF-8");
+    let mut columns = stdout.split(',');
+    let account = columns
+        .next()
+        .map(|value| value.trim().trim_matches('"').to_owned())
+        .filter(|value| !value.is_empty())
+        .expect("Windows account in whoami output");
+    let sid_tail = columns
+        .next()
+        .and_then(|value| value.trim().trim_matches('"').strip_prefix("S-"))
+        .expect("Windows user SID in whoami output");
+    assert!(
+        sid_tail
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-'),
+        "unexpected Windows user SID: S-{sid_tail}"
+    );
+    (account, format!("S-{sid_tail}"))
 }
 
 #[test]

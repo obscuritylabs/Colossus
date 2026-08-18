@@ -15,6 +15,7 @@ use colossus_sidecar_protocol::{
 use colossus_windows_native::{BoundPath, FileIdentity, KillOnCloseJob};
 use sha2::{Digest as _, Sha256};
 use std::{
+    ffi::OsString,
     fmt,
     fs::File,
     io::{Read as _, Seek as _, SeekFrom},
@@ -45,8 +46,11 @@ const MAX_VERIFIED_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PIPE_NAME_BYTES: usize = 256;
 const PIPE_ENVIRONMENT: &str = "COLOSSUS_WINDOWS_BOOTSTRAP_PIPE_V1";
 const PARENT_ENVIRONMENT: &str = "COLOSSUS_WINDOWS_BOOTSTRAP_PARENT_PID_V1";
+const WINDOWS_SYSTEM_ROOT_ENVIRONMENT: &str = "SystemRoot";
+const WINDOWS_WINDIR_ENVIRONMENT: &str = "WINDIR";
 const WINDOWS_TEMP_ENVIRONMENT: &str = "TEMP";
 const WINDOWS_TMP_ENVIRONMENT: &str = "TMP";
+const WINDOWS_SYSTEM_ROOT_UNAVAILABLE: &str = "windows_system_root_unavailable";
 const PIPE_PREFIX: &str = r"\\.\pipe\colossus-managed-";
 const PUBLIC_API_DIRECTORY: &str = "public-api";
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
@@ -203,6 +207,7 @@ async fn launch(
         workspace.identity.clone(),
     )?;
     let executable = verify_executable(options.executable())?;
+    let system_root = windows_system_root_environment()?;
 
     let pipe_name = format!("{PIPE_PREFIX}{}", Uuid::now_v7());
     if pipe_name.len() > MAX_PIPE_NAME_BYTES {
@@ -221,6 +226,11 @@ async fn launch(
         .env_clear()
         .env(PIPE_ENVIRONMENT, &pipe_name)
         .env(PARENT_ENVIRONMENT, std::process::id().to_string())
+        // Winsock provider initialization consults the Windows system root while
+        // loading its catalog. Preserve only these non-secret OS selectors, keeping
+        // PATH, profile roots, and every user-supplied value out of the sidecar.
+        .env(WINDOWS_SYSTEM_ROOT_ENVIRONMENT, &system_root)
+        .env(WINDOWS_WINDIR_ENVIRONMENT, &system_root)
         // `std::env::temp_dir` on Windows derives its result from the process
         // environment. The managed child intentionally starts with `env_clear`, so
         // bind both Windows temp selectors to the already verified owner-private
@@ -361,6 +371,35 @@ fn validate_bound_instance_path(instance: &BoundPath, requested: &Path) -> SdkRe
     } else {
         Err(SdkError::IdentityMismatch)
     }
+}
+
+fn windows_system_root_environment() -> SdkResult<OsString> {
+    let root = std::env::var_os(WINDOWS_SYSTEM_ROOT_ENVIRONMENT)
+        .or_else(|| std::env::var_os(WINDOWS_WINDIR_ENVIRONMENT))
+        .ok_or_else(windows_system_root_error)?;
+    validate_windows_system_root_environment(root)
+}
+
+fn validate_windows_system_root_environment(root: OsString) -> SdkResult<OsString> {
+    let root_path = PathBuf::from(&root);
+    let canonical = std::fs::canonicalize(&root_path).map_err(|_| windows_system_root_error())?;
+    if !root_path.is_absolute()
+        || !canonical.is_dir()
+        || canonical
+            .parent()
+            .is_none_or(|parent| parent.parent().is_some())
+    {
+        return Err(windows_system_root_error());
+    }
+    let binding = BoundPath::open_directory(&canonical).map_err(|_| windows_system_root_error())?;
+    binding
+        .validate_namespace_authority()
+        .map_err(|_| windows_system_root_error())?;
+    Ok(root)
+}
+
+fn windows_system_root_error() -> SdkError {
+    SdkError::PlatformEnvironment(WINDOWS_SYSTEM_ROOT_UNAVAILABLE)
 }
 
 struct MemoryCredentialProvider {
@@ -597,8 +636,6 @@ async fn connect_sidecar(
 }
 
 fn map_child_failure(code: FailureCode) -> SdkError {
-    #[cfg(debug_assertions)]
-    eprintln!("Colossus Windows sidecar bootstrap failed: {code:?}");
     match code {
         FailureCode::InvalidBootstrap | FailureCode::InvalidInstanceDirectory => {
             SdkError::IdentityMismatch
@@ -687,5 +724,28 @@ mod tests {
         assert_ne!(binding.canonical_path(), ordinary);
         validate_bound_instance_path(&binding, &ordinary)
             .expect("ordinary and verbatim spellings identify the same retained directory");
+    }
+
+    #[test]
+    fn windows_system_root_environment_is_validated_before_child_launch() {
+        let root = windows_system_root_environment().expect("validated Windows system root");
+        let path = PathBuf::from(root);
+        assert!(path.is_absolute());
+        assert!(
+            std::fs::canonicalize(path)
+                .expect("canonical Windows system root")
+                .is_dir()
+        );
+    }
+
+    #[test]
+    fn windows_system_root_validation_reports_platform_environment_without_paths() {
+        let error = validate_windows_system_root_environment(OsString::from("relative"))
+            .expect_err("relative system root rejected");
+        assert!(matches!(
+            error,
+            SdkError::PlatformEnvironment(WINDOWS_SYSTEM_ROOT_UNAVAILABLE)
+        ));
+        assert!(!format!("{error}").contains("relative"));
     }
 }

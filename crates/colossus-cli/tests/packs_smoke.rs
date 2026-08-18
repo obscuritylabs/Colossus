@@ -8,17 +8,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{BundleFileEntry, BundleManifest, PackSignature};
 use colossus_packs::canonical_bundle_signing_bytes;
 use ed25519_dalek::{Signer as _, SigningKey};
+use process_support::tempdir;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use std::{fs, path::Path, process::Command};
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "9999999999999999999999999999999999999999999999999999999999999999";
 const SIGNING_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, workspace);
+    let _isolated_home = process_support::isolate_user_home(&mut command, workspace);
     command
         .current_dir(workspace)
         .arg("--config")

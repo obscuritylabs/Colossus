@@ -5,20 +5,23 @@ mod audit_support;
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::Value;
 use std::{
     fs,
     path::Path,
     process::{Command, Output},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let _isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .arg("--config")
         .arg(config)

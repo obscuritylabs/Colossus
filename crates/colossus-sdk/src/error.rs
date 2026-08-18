@@ -42,6 +42,9 @@ pub enum SdkError {
     /// An isolated sidecar could not be bootstrapped or supervised.
     #[error("Colossus sidecar launch failed")]
     SidecarFailed,
+    /// A required local OS environment selector is missing or unsafe.
+    #[error("Colossus platform environment is unavailable")]
+    PlatformEnvironment(&'static str),
     /// An isolated embedded runtime could not acquire its writer lease.
     #[error("Colossus embedded runtime could not be opened")]
     EmbeddedOpenFailed,

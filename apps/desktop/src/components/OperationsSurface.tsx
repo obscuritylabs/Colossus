@@ -865,9 +865,9 @@ function SettingsView({
               <p className="eyebrow">Advanced local feature</p>
               <h3>Local terminal</h3>
               <p>
-                The embedded shell runs as your macOS user outside Colossus
-                policy and audit. The separate Colossus TUI tab uses the
-                verified bundled CLI and retains normal policy and audit
+                The embedded shell runs as your signed-in OS user outside
+                Colossus policy and audit. The separate Colossus TUI tab uses
+                the verified bundled CLI and retains normal policy and audit
                 behavior.
               </p>
             </div>

@@ -253,11 +253,10 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     )
     .map_err(|_| FailureCode::PublicApiSetup)?
     .with_deployment_mode(PublicApiDeploymentMode::Sidecar);
-    let server = server.enable_public_api(options).await.map_err(|error| {
-        #[cfg(debug_assertions)]
-        eprintln!("Colossus Windows public API setup failed: {error}");
-        FailureCode::PublicApiSetup
-    })?;
+    let server = server
+        .enable_public_api(options)
+        .await
+        .map_err(|_| FailureCode::PublicApiSetup)?;
     let metadata = server
         .public_api_ready_metadata()
         .ok_or(FailureCode::PublicApiSetup)?;

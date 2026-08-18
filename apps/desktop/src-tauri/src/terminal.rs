@@ -27,6 +27,11 @@ const TERMINAL_OWNER: &str = "terminal";
 const TUI_AUTHENTICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(target_os = "macos")]
 const MACOS_SYSTEM_SHELL: &str = "/bin/zsh";
+#[cfg(debug_assertions)]
+const PROGRAM_UNAVAILABLE_MESSAGE: &str = "The bundled Colossus CLI is unavailable or out of date. Run cargo xtask desktop prepare --profile debug, then restart desktop development.";
+#[cfg(not(debug_assertions))]
+const PROGRAM_UNAVAILABLE_MESSAGE: &str =
+    "The bundled Colossus CLI is unavailable or out of date. Reinstall a signed desktop build.";
 
 /// Fixed process types the native desktop is allowed to open in a PTY.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -337,7 +342,7 @@ impl TerminalError {
             }
             Self::InvalidWorkspace => "The selected local workspace is unavailable.",
             Self::InvalidConfiguration => "The managed Colossus configuration is unavailable.",
-            Self::ProgramUnavailable => "The requested bundled terminal program is unavailable.",
+            Self::ProgramUnavailable => PROGRAM_UNAVAILABLE_MESSAGE,
             Self::InvalidSize => "The requested terminal size is outside the allowed bounds.",
             Self::InputTooLarge => "The terminal input exceeds the per-request limit.",
             Self::InputBackpressure => {
@@ -1204,15 +1209,24 @@ fn validate_regular_file(path: &Path, error: TerminalError) -> Result<PathBuf, T
     if !path.is_absolute() {
         return Err(error);
     }
-    let link_metadata = fs::symlink_metadata(path).map_err(|_| error)?;
-    if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
-        return Err(error);
+    #[cfg(windows)]
+    {
+        let binding = colossus_windows_native::BoundPath::open_file(path).map_err(|_| error)?;
+        binding.revalidate().map_err(|_| error)?;
+        return Ok(binding.canonical_path().to_path_buf());
     }
-    let canonical = fs::canonicalize(path).map_err(|_| error)?;
-    if canonical != path {
-        return Err(error);
+    #[cfg(not(windows))]
+    {
+        let link_metadata = fs::symlink_metadata(path).map_err(|_| error)?;
+        if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+            return Err(error);
+        }
+        let canonical = fs::canonicalize(path).map_err(|_| error)?;
+        if canonical != path {
+            return Err(error);
+        }
+        Ok(canonical)
     }
-    Ok(canonical)
 }
 
 #[derive(Default)]
@@ -1318,6 +1332,36 @@ mod tests {
             ),
             Err(TerminalError::InputTooLarge)
         );
+    }
+
+    #[test]
+    fn bundled_terminal_program_error_is_actionable() {
+        let message = TerminalError::ProgramUnavailable.message();
+        assert!(message.contains("bundled Colossus CLI"));
+        #[cfg(debug_assertions)]
+        assert!(message.contains("cargo xtask desktop prepare --profile debug"));
+        assert!(!message.contains("requested bundled terminal program"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_regular_file_accepts_standard_absolute_path_spelling() {
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .expect("absolute LocalAppData");
+        let directory = local_app_data.join(format!("ColossusTerminalTest-{}", Uuid::now_v7()));
+        colossus_windows_native::create_private_directory(&directory)
+            .expect("private test directory");
+        let file = directory.join("colossus.exe");
+        colossus_windows_native::create_private_file(&file, b"test executable")
+            .expect("private test file");
+
+        let canonical =
+            validate_regular_file(&file, TerminalError::ProgramUnavailable).expect("regular file");
+
+        assert_eq!(canonical, fs::canonicalize(&file).expect("canonical file"));
+        fs::remove_dir_all(&directory).expect("remove test directory");
     }
 
     #[test]

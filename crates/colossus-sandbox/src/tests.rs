@@ -1,10 +1,12 @@
+#[cfg(unix)]
+use super::host_process_limits_apply;
 use super::{
     AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, OCI_PROXY_CONFIG_VARIABLE,
     SandboxJob, SignedSandboxJob, atomic_create, atomic_write, authority,
-    host_process_limits_apply, inherit_ambient_environment, non_public_ip, oci_command,
-    oci_proxy_run_arguments, oci_remove_arguments, oci_resource_names, proposed_write_bytes,
-    redact_proxy_credential, resolve_oci_origins, sandbox_helper_budget, search_files, sha256_hex,
-    tls_server_name, validate_process_spec,
+    inherit_ambient_environment, non_public_ip, oci_command, oci_proxy_run_arguments,
+    oci_remove_arguments, oci_resource_names, proposed_write_bytes, redact_proxy_credential,
+    resolve_oci_origins, sandbox_helper_budget, search_files, sha256_hex, tls_server_name,
+    validate_process_spec,
 };
 #[cfg(unix)]
 use super::{ProcessSpec, execute_sandbox_job, normalize_path_arguments};
@@ -514,6 +516,18 @@ fn tls_client_hello(server_name: &str) -> Vec<u8> {
 #[test]
 fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
     let directory = tempdir().expect("directory");
+    let runtime_path = |name: &str| {
+        let executable_name = if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        };
+        directory.path().join("oci-bin").join(executable_name)
+    };
+    let docker_runtime = runtime_path("docker");
+    let podman_runtime = runtime_path("podman");
+    let podman_remote_runtime = runtime_path("podman-remote");
+    let unknown_runtime = runtime_path("unknown");
     let mut obligations = PolicyObligations {
         sandbox_backend: "oci".into(),
         sandbox_profile: "test".into(),
@@ -538,7 +552,7 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
             mode: "execute".into(),
         });
     obligations.allowed_environment.push("TOKEN".into());
-    let mut job = SandboxJob {
+    let job = SandboxJob {
         schema_version: 1,
         job_id: "018f0f9b-7b6e-7cc0-8000-000000000002".into(),
         request_id: "request".into(),
@@ -559,7 +573,7 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         timeout_ms: 1000,
         proxy_port: None,
         proxy_credential: None,
-        oci_runtime: Some(PathBuf::from("/usr/bin/docker")),
+        oci_runtime: Some(docker_runtime.clone()),
         oci_image: Some(format!("example@sha256:{}", "a".repeat(64))),
         oci_proxy_image: None,
         temporary_root: None,
@@ -576,55 +590,20 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
     assert!(
         validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,).is_err()
     );
-    let command = oci_command(&job, None).expect("OCI command");
-    let args = command
-        .get_args()
-        .map(|value| value.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    assert!(args.contains(&"--network=none".into()));
-    assert!(args.contains(&"--pull=never".into()));
-    assert!(args.contains(&"--read-only".into()));
-    assert!(args.contains(&"--cap-drop=ALL".into()));
-    assert!(args.contains(&"--user".into()));
-    assert!(!args.contains(&"--userns=keep-id".into()));
-    assert!(args.contains(&"--pids-limit=2".into()));
-    assert!(args.contains(&format!("--memory={}", 64 * 1024 * 1024)));
-    assert!(!host_process_limits_apply("oci"));
-    assert!(host_process_limits_apply("native"));
-    assert!(host_process_limits_apply("broker"));
-    assert!(host_process_limits_apply("external"));
-    assert!(host_process_limits_apply("danger_full_access"));
-    assert!(args.contains(&"--entrypoint".into()));
-    assert!(args.contains(&"colossus-018f0f9b7b6e7cc08000000000000002".into()));
-    assert!(
-        !args
-            .iter()
-            .any(|argument| argument.contains("secret-value"))
-    );
-    assert!(command.get_envs().any(|(name, value)| {
-        name == "TOKEN" && value.is_some_and(|value| value == "secret-value")
-    }));
-    assert!(
-        command.get_envs().any(|(name, value)| {
-            name == "PATH" && value.is_some_and(|value| value == "/usr/bin")
-        })
-    );
     assert_eq!(
-        oci_remove_arguments(PathBuf::from("/usr/bin/docker").as_path(), "job")
-            .expect("Docker cleanup"),
+        oci_remove_arguments(docker_runtime.as_path(), "job").expect("Docker cleanup"),
         ["container", "rm", "--force", "job"]
     );
     assert_eq!(
-        oci_remove_arguments(PathBuf::from("/usr/bin/podman").as_path(), "job")
-            .expect("Podman cleanup"),
+        oci_remove_arguments(podman_runtime.as_path(), "job").expect("Podman cleanup"),
         ["container", "rm", "--force", "--time", "0", "job"]
     );
     assert_eq!(
-        oci_remove_arguments(PathBuf::from("/usr/bin/podman-remote").as_path(), "job")
+        oci_remove_arguments(podman_remote_runtime.as_path(), "job")
             .expect("Podman remote cleanup"),
         ["container", "rm", "--force", "--time", "0", "job"]
     );
-    assert!(oci_remove_arguments(PathBuf::from("/usr/bin/unknown").as_path(), "job").is_none());
+    assert!(oci_remove_arguments(unknown_runtime.as_path(), "job").is_none());
 
     let names = oci_resource_names(&job.job_id);
     let proxy_image = format!("sha256:{}", "b".repeat(64));
@@ -633,40 +612,89 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
     assert!(!docker_proxy.contains(&"--userns=keep-id".into()));
     assert!(!docker_proxy.contains(&"--user".into()));
 
-    job.oci_runtime = Some(PathBuf::from("/usr/bin/podman"));
-    let podman = oci_command(&job, None).expect("Podman command");
-    assert!(
-        podman
-            .get_args()
-            .any(|argument| argument == "--userns=keep-id")
-    );
-    assert!(
-        podman.get_envs().any(|(name, value)| {
-            name == "PATH" && value.is_some_and(|value| value == "/usr/bin")
-        })
-    );
-    let podman_proxy =
-        oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Podman proxy arguments");
-    assert!(!podman_proxy.contains(&"--userns=keep-id".into()));
-    assert!(!podman_proxy.contains(&"--user".into()));
+    #[cfg(not(unix))]
+    {
+        let error = oci_command(&job, None).expect_err("OCI unavailable");
+        assert!(
+            error
+                .to_string()
+                .contains("OCI execution is unavailable on this platform")
+        );
+    }
 
-    job.obligations
-        .network_destinations
-        .push("https://example.com".into());
-    job.oci_proxy_image = Some(format!("sha256:{}", "b".repeat(64)));
-    let proxy_address = SocketAddr::from(([10, 88, 0, 2], super::OCI_PROXY_PORT));
-    let command = oci_command(&job, Some(proxy_address)).expect("networked OCI command");
-    let args = command
-        .get_args()
-        .map(|value| value.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    assert!(!args.contains(&"--network=none".into()));
-    assert!(args.contains(&"--dns=127.0.0.1".into()));
-    assert!(args.contains(&super::oci_resource_names(&job.job_id).internal_network));
-    assert!(!args.iter().any(|argument| argument.contains("10.88.0.2")));
-    assert!(command.get_envs().any(|(name, value)| {
-        name == "HTTPS_PROXY" && value.is_some_and(|value| value == "http://10.88.0.2:18080")
-    }));
+    #[cfg(unix)]
+    {
+        let docker_search_path = docker_runtime
+            .parent()
+            .expect("Docker runtime parent")
+            .as_os_str()
+            .to_owned();
+        let mut job = job;
+        let command = oci_command(&job, None).expect("OCI command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--network=none".into()));
+        assert!(args.contains(&"--pull=never".into()));
+        assert!(args.contains(&"--read-only".into()));
+        assert!(args.contains(&"--cap-drop=ALL".into()));
+        assert!(args.contains(&"--user".into()));
+        assert!(!args.contains(&"--userns=keep-id".into()));
+        assert!(args.contains(&"--pids-limit=2".into()));
+        assert!(args.contains(&format!("--memory={}", 64 * 1024 * 1024)));
+        assert!(!host_process_limits_apply("oci"));
+        assert!(host_process_limits_apply("native"));
+        assert!(host_process_limits_apply("broker"));
+        assert!(host_process_limits_apply("external"));
+        assert!(host_process_limits_apply("danger_full_access"));
+        assert!(args.contains(&"--entrypoint".into()));
+        assert!(args.contains(&"colossus-018f0f9b7b6e7cc08000000000000002".into()));
+        assert!(
+            !args
+                .iter()
+                .any(|argument| argument.contains("secret-value"))
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "TOKEN" && value.is_some_and(|value| value == "secret-value")
+        }));
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "PATH" && value.is_some_and(|value| value == docker_search_path)
+        }));
+
+        job.oci_runtime = Some(podman_runtime.clone());
+        let podman = oci_command(&job, None).expect("Podman command");
+        assert!(
+            podman
+                .get_args()
+                .any(|argument| argument == "--userns=keep-id")
+        );
+        assert!(podman.get_envs().any(|(name, value)| {
+            name == "PATH" && value.is_some_and(|value| value == docker_search_path)
+        }));
+        let podman_proxy =
+            oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Podman proxy arguments");
+        assert!(!podman_proxy.contains(&"--userns=keep-id".into()));
+        assert!(!podman_proxy.contains(&"--user".into()));
+
+        job.obligations
+            .network_destinations
+            .push("https://example.com".into());
+        job.oci_proxy_image = Some(format!("sha256:{}", "b".repeat(64)));
+        let proxy_address = SocketAddr::from(([10, 88, 0, 2], super::OCI_PROXY_PORT));
+        let command = oci_command(&job, Some(proxy_address)).expect("networked OCI command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--network=none".into()));
+        assert!(args.contains(&"--dns=127.0.0.1".into()));
+        assert!(args.contains(&super::oci_resource_names(&job.job_id).internal_network));
+        assert!(!args.iter().any(|argument| argument.contains("10.88.0.2")));
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "HTTPS_PROXY" && value.is_some_and(|value| value == "http://10.88.0.2:18080")
+        }));
+    }
 }
 
 #[tokio::test]
@@ -1013,7 +1041,11 @@ async fn filesystem_search_is_bounded_utf8_only_and_skips_control_state() {
         .await
         .expect("search");
     let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");
-    assert_eq!(value["matches"][0]["path"], "src/example.rs");
+    let match_path = value["matches"][0]["path"]
+        .as_str()
+        .expect("match path")
+        .replace('\\', "/");
+    assert_eq!(match_path, "src/example.rs");
     assert_eq!(value["matches"][0]["line"], 2);
     assert_eq!(value["matches"][0]["column"], 1);
     assert_eq!(value["truncated"], true);

@@ -7,6 +7,7 @@ use colossus_access::builtin_action_descriptors;
 use colossus_runtime::RuntimeConfig;
 use colossus_tools::builtin_specs;
 use colossus_workflow::validate_definition;
+use process_support::tempdir;
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -14,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-use tempfile::tempdir;
 
 const LEGACY_PUBLIC_SIGNATURES: &[&str] = &[
     "uv run colossus",
@@ -1256,7 +1256,7 @@ fn documented_command_families_are_real_clap_routes() {
     ];
     for route in routes {
         let mut command = Command::new(binary);
-        process_support::isolate_user_home(&mut command, isolated_home.path());
+        let _isolated_home = process_support::isolate_user_home(&mut command, isolated_home.path());
         let output = command
             .args(*route)
             .arg("--help")

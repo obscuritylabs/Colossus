@@ -4,6 +4,7 @@
 mod process_support;
 
 use colossus_packs::current_release_target;
+use process_support::tempdir;
 use serde_json::Value;
 use std::{
     fs,
@@ -11,16 +12,15 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "9191919191919191919191919191919191919191919191919191919191919191";
 const CHECKPOINT_KEY: &str = "9292929292929292929292929292929292929292929292929292929292929292";
 const SIGNING_SEED: &str = "9393939393939393939393939393939393939393939393939393939393939393";
 
-fn command(binary: &Path, root: &Path) -> Command {
+fn command(binary: &Path, root: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
     command.current_dir(root).env_clear();
-    process_support::isolate_user_home(&mut command, root);
+    let isolated_home = process_support::isolate_user_home(&mut command, root);
     command
         .env("COLOSSUS_BUNDLE_TEST_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_BUNDLE_TEST_CHECKPOINT_KEY", CHECKPOINT_KEY)
@@ -32,7 +32,7 @@ fn command(binary: &Path, root: &Path) -> Command {
             command.env(name, value);
         }
     }
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn assert_success(output: &Output) {

@@ -2083,7 +2083,7 @@ async fn confirm_local_terminal_access(app: &AppHandle) -> Result<bool, CommandE
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .message(
-                "The embedded shell runs as your macOS user and can read, change, or delete anything that user can access. Shell commands are outside Colossus policy and audit, and deliberately detached processes may outlive the app.\n\nOnly enable this on a trusted Colossus Desktop installation.",
+                "The embedded shell runs as your signed-in OS user and can read, change, or delete anything that user can access. Shell commands are outside Colossus policy and audit, and deliberately detached processes may outlive the app.\n\nOnly enable this on a trusted Colossus Desktop installation.",
             )
             .title("Enable local terminal access?")
             .kind(MessageDialogKind::Warning)

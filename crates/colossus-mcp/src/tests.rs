@@ -758,6 +758,8 @@ async fn encrypted_oauth_store_is_ciphertext_at_rest_and_reencrypts_after_rotati
             .expect("endpoint load")
             .is_none()
     );
+    drop(store);
+    drop(factory);
     let at_rest = fs::read(&path).expect("database bytes");
     assert!(
         !at_rest
@@ -766,6 +768,13 @@ async fn encrypted_oauth_store_is_ciphertext_at_rest_and_reencrypts_after_rotati
     );
 
     *keys.active.lock().expect("active key") = "key-2".into();
+    let factory = OAuthStoreFactory::encrypted_state(
+        &path,
+        keys.clone() as Arc<dyn KeyProvider>,
+        "repository-1".into(),
+    )
+    .expect("store");
+    let store = factory.store("splunk", "https://splunk.example.com/services/mcp");
     let loaded = store.load().await.expect("load").expect("credentials");
     assert_eq!(
         serde_json::to_value(loaded).expect("loaded JSON"),
@@ -811,6 +820,8 @@ async fn plaintext_oauth_store_round_trips_in_owner_private_state() {
         serde_json::to_value(loaded).expect("loaded JSON"),
         serde_json::to_value(credentials).expect("expected JSON")
     );
+    drop(store);
+    drop(factory);
     assert!(
         fs::read(&path)
             .expect("state bytes")
@@ -829,6 +840,9 @@ async fn plaintext_oauth_store_round_trips_in_owner_private_state() {
             0o600
         );
     }
+    let factory =
+        OAuthStoreFactory::plaintext_state(&path, "repository-1".into()).expect("plaintext store");
+    let store = factory.store("splunk", "https://splunk.example.com/services/mcp");
     store.clear().await.expect("clear");
     assert!(store.load().await.expect("load after clear").is_none());
 }

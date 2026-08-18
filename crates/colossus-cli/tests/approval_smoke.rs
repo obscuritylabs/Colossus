@@ -3,6 +3,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -13,22 +14,24 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 const MCP_SECRET: &str = "risk-auto-mcp-secret-value";
 
-fn command(binary: &Path, config: &Path) -> Command {
+fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .arg("--config")
         .arg(config)
         .env("COLOSSUS_APPROVAL_TEST_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_APPROVAL_TEST_SIGNING_KEY", SIGNING_KEY)
         .env("MCP_TEST_SECRET", MCP_SECRET);
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn read_request(stream: &mut TcpStream) -> String {

@@ -3,9 +3,9 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 const SIGNING_KEY: &str = "4444444444444444444444444444444444444444444444444444444444444444";
@@ -13,7 +13,7 @@ const SIGNING_KEY: &str = "44444444444444444444444444444444444444444444444444444
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output {
     let root = config.parent().expect("config directory");
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, root);
+    let _isolated_home = process_support::isolate_user_home(&mut command, root);
     command
         .current_dir(root)
         .arg("--config")

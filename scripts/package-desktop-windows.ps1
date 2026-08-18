@@ -9,6 +9,13 @@ function Fail([string]$Message) {
     throw "package-desktop-windows: $Message"
 }
 
+function Invoke-CheckedCommand([string]$Label, [string]$Command, [string[]]$Arguments) {
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        Fail "$Label failed"
+    }
+}
+
 function Detach-Executable([string]$Path) {
     $Detached = "$Path.colossus-detached"
     if (Test-Path -LiteralPath $Detached) {
@@ -69,6 +76,8 @@ $StagedSidecar = Join-Path $Native "binaries/colossus-sidecar-$Target.exe"
 $StagedCli = Join-Path $Native "binaries/colossus-$Target.exe"
 $Manifest = Join-Path $Native "binaries/colossus-bundle-manifest.json"
 $Tauri = Join-Path $Desktop "node_modules/.bin/tauri.cmd"
+$TypeScript = Join-Path $Desktop "node_modules/.bin/tsc.cmd"
+$Vite = Join-Path $Desktop "node_modules/.bin/vite.cmd"
 $TauriOverridePath = Join-Path `
     ([IO.Path]::GetTempPath()) `
     "colossus-tauri-override-$([Guid]::NewGuid().ToString('N')).json"
@@ -76,8 +85,17 @@ $TauriOverridePath = Join-Path `
 if (-not (Test-Path -LiteralPath $Tauri -PathType Leaf)) {
     Fail "run npm ci in apps/desktop before packaging"
 }
+if (-not (Test-Path -LiteralPath $TypeScript -PathType Leaf)) {
+    Fail "run npm ci in apps/desktop before packaging"
+}
+if (-not (Test-Path -LiteralPath $Vite -PathType Leaf)) {
+    Fail "run npm ci in apps/desktop before packaging"
+}
 
 $TauriOverride = [ordered]@{
+    build = [ordered]@{
+        beforeBuildCommand = "cmd /C echo Colossus desktop renderer build completed by package-desktop-windows.ps1"
+    }
     bundle = [ordered]@{
         createUpdaterArtifacts = $false
     }
@@ -96,6 +114,19 @@ Push-Location $Repository
 try {
     cargo xtask desktop prepare --profile release --target $Target
     if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
+
+    Push-Location $Desktop
+    try {
+        Invoke-CheckedCommand "renderer TypeScript app check" $TypeScript @("--noEmit", "-p", "tsconfig.app.json")
+        Invoke-CheckedCommand "renderer TypeScript node check" $TypeScript @("--noEmit", "-p", "tsconfig.node.json")
+        Invoke-CheckedCommand "renderer Vite build" $Vite @("build")
+        Invoke-CheckedCommand `
+            "renderer bundle size check" `
+            "node" `
+            @((Join-Path $Repository "scripts/check-desktop-renderer-bundle.mjs"), ".")
+    } finally {
+        Pop-Location
+    }
 
     Push-Location $Desktop
     try {

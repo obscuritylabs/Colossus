@@ -18,7 +18,7 @@ export function ReleaseChannelBanner({
     >
       <strong>Developer Preview</strong>
       <span aria-hidden="true">•</span>
-      <span>Ad-hoc signed and not Apple-notarized</span>
+      <span>Unsigned preview build for local testing</span>
     </aside>
   );
 }

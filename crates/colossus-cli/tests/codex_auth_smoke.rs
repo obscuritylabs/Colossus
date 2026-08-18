@@ -5,6 +5,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -13,7 +14,6 @@ use std::{
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const TEST_REFRESH_TOKEN: &str = "codex-readiness-test-refresh-token";
 const TEST_ID_TOKEN: &str = "header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiY29kZXgtcmVhZGluZXNzLXRlc3QtYWNjb3VudCJ9fQ.signature";
@@ -85,7 +85,7 @@ fn run_codex(
 ) -> Output {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, root);
+    let _isolated_home = process_support::isolate_user_home(&mut command, root);
     command
         .current_dir(root)
         .env("CODEX_HOME", codex_home)
@@ -200,7 +200,7 @@ fn status_rejects_an_auth_fifo_without_blocking() {
     let executable = fake_codex(directory.path(), false);
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, directory.path());
+    let _isolated_home = process_support::isolate_user_home(&mut command, directory.path());
     let mut child = command
         .current_dir(directory.path())
         .env("CODEX_HOME", &codex_home)

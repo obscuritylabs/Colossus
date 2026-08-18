@@ -26,7 +26,7 @@ const SEALED_RELEASE_MANIFEST: &str = "colossus-bundle-manifest.json";
 const EXPECTED_RELEASE_TEAM_ID: &str = env!("COLOSSUS_DESKTOP_TEAM_ID");
 #[cfg(not(debug_assertions))]
 const EXPECTED_RELEASE_CHANNEL: &str = env!("COLOSSUS_DESKTOP_RELEASE_CHANNEL");
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
 const DESKTOP_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop";
 #[cfg(not(debug_assertions))]
 const SIDECAR_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.sidecar";
@@ -390,10 +390,11 @@ fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
     {
         return Err(integrity_error());
     }
+    let app_root = std::fs::canonicalize(app_root).map_err(|_| integrity_error())?;
     let executable = std::env::current_exe().map_err(|_| integrity_error())?;
     let binding = colossus_windows_native::BoundPath::open_file(&executable)
         .map_err(|_| integrity_error())?;
-    if binding.canonical_path().parent() == Some(app_root) {
+    if binding.canonical_path().parent() == Some(app_root.as_path()) {
         Ok(())
     } else {
         Err(integrity_error())
@@ -505,7 +506,7 @@ fn expected_release_team_identifier() -> Result<&'static str, CommandErrorDto> {
         .ok_or_else(integrity_error)
 }
 
-#[cfg(any(test, not(debug_assertions)))]
+#[cfg(any(test, all(not(debug_assertions), target_os = "macos")))]
 fn release_team_identifier(release_channel: ReleaseChannel, configured_team: &str) -> Option<&str> {
     match release_channel {
         ReleaseChannel::Stable if canonical_apple_team_id(configured_team) => Some(configured_team),
@@ -517,7 +518,7 @@ fn release_team_identifier(release_channel: ReleaseChannel, configured_team: &st
     }
 }
 
-#[cfg(any(test, not(debug_assertions)))]
+#[cfg(any(test, all(not(debug_assertions), target_os = "macos")))]
 fn canonical_apple_team_id(value: &str) -> bool {
     value.len() == 10
         && value
@@ -526,11 +527,17 @@ fn canonical_apple_team_id(value: &str) -> bool {
 }
 
 fn integrity_error() -> CommandErrorDto {
-    CommandErrorDto::local_sanitized(
-        "runtime_integrity",
-        "The bundled Colossus runtime could not be verified.",
-        false,
-    )
+    CommandErrorDto::local_sanitized("runtime_integrity", runtime_integrity_message(), false)
+}
+
+#[cfg(debug_assertions)]
+fn runtime_integrity_message() -> &'static str {
+    "The bundled Colossus runtime could not be verified. Run cargo xtask desktop prepare --profile debug, then restart desktop development."
+}
+
+#[cfg(not(debug_assertions))]
+fn runtime_integrity_message() -> &'static str {
+    "The bundled Colossus runtime could not be verified. Reinstall a signed desktop build."
 }
 
 #[cfg(test)]
@@ -586,6 +593,19 @@ mod tests {
             MacosCodeSigningRequirement::AdHocDeveloperPreview
         );
         assert!(bundle_code_signing_requirement(ReleaseChannel::ValidationOnly).is_err());
+    }
+
+    #[test]
+    fn integrity_error_points_development_builds_to_prepare_step() {
+        let error = integrity_error();
+        assert_eq!(error.code, "runtime_integrity");
+        assert!(error.message.contains("bundled Colossus runtime"));
+        #[cfg(debug_assertions)]
+        assert!(
+            error
+                .message
+                .contains("cargo xtask desktop prepare --profile debug")
+        );
     }
 
     #[test]

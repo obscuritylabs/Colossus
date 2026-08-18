@@ -1040,6 +1040,7 @@ async fn networked_oci_process_reserves_proxy_and_container_cleanup_time() {
 }
 
 #[tokio::test]
+#[cfg(not(windows))]
 async fn oci_executable_identity_is_an_exact_normalized_image_path() {
     let directory = tempfile::tempdir().expect("directory");
     let policy = BuiltInPolicy::offline_default()
@@ -1136,10 +1137,13 @@ async fn network_origins_not_in_obligations_never_reach_adapters() {
 
 #[tokio::test]
 async fn approval_is_reevaluated_before_execution() {
+    let directory = tempfile::tempdir().expect("directory");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let target = root.join("x");
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let policy = BuiltInPolicy::offline_default()
         .with_action("filesystem.write", DecisionOutcome::RequireApproval)
-        .with_filesystem_root("/tmp", "write");
+        .with_filesystem_root(root.display().to_string(), "write");
     let gateway = EffectGateway::new(
         Arc::clone(&journal),
         Arc::new(policy),
@@ -1157,7 +1161,7 @@ async fn approval_is_reevaluated_before_execution() {
             effect_request(
                 system_actor("test"),
                 "filesystem.write",
-                "/tmp/x",
+                target.display().to_string(),
                 serde_json::json!({"content":"x"}),
             ),
             &executor,

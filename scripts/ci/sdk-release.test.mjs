@@ -120,7 +120,7 @@ test("Python source distributions normalize to reproducible bytes", () => {
     process.platform === "win32"
       ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
       : "tar";
-  const python = process.platform === "win32" ? "python" : "python3";
+  const python = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
   mkdirSync(packageRoot, { recursive: true });
   writeFileSync(member, "deterministic contents\n");
   try {

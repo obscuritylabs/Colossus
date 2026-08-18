@@ -4,6 +4,8 @@ mod confined;
 mod error;
 mod home;
 mod identity;
+#[cfg(test)]
+mod test_support;
 
 pub use confined::{ConfinedFile, ConfinedRoot};
 pub use error::HomeError;

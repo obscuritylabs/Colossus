@@ -6,6 +6,7 @@
 mod process_support;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use process_support::tempdir;
 use serde_json::Value;
 use std::{
     env, fs,
@@ -14,14 +15,16 @@ use std::{
     thread,
     time::Duration,
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 const SIGNING_KEY: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(&mut command, config.parent().expect("config directory"));
+    let _isolated_home = process_support::isolate_user_home(
+        &mut command,
+        config.parent().expect("config directory"),
+    );
     command
         .arg("--config")
         .arg(config)

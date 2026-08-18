@@ -4,14 +4,15 @@
 
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{
-    ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, InputContentPart,
-    InstanceId, ManagedAccessProfile, ManagedExecutionBoundary, ManagedRuntimeConfig,
-    NativeSidecarLifecycle, NativeSidecarStatus, RunMode, Sha256Digest, SidecarApplicationGrant,
-    SidecarBootstrapConfig, SidecarOptions, VerifiedExecutable, WorkspaceIdentity,
+    ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,
+    InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
+    ManagedRuntimeConfig, NativeSidecarLifecycle, NativeSidecarStatus, RunMode, RunStatus,
+    Sha256Digest, SidecarApplicationGrant, SidecarBootstrapConfig, SidecarOptions,
+    VerifiedExecutable, WorkspaceIdentity,
 };
 use colossus_windows_native::{BoundPath, create_private_directory};
 use sha2::{Digest as _, Sha256};
-use std::{fs::File, io::Read as _, path::Path};
+use std::{fs::File, io::Read as _, path::Path, time::Duration};
 use uuid::Uuid;
 
 const KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.managed-runtime";
@@ -30,8 +31,7 @@ impl PrivateDirectory {
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_absolute())
             .expect("absolute Windows user profile");
-        let path = user_profile
-            .join(format!(".colossus-windows-test-{}", Uuid::now_v7()));
+        let path = user_profile.join(format!(".colossus-windows-test-{}", Uuid::now_v7()));
         create_private_directory(&path).expect("private instance directory");
         Self { path }
     }
@@ -80,6 +80,33 @@ fn workspace_identity(path: &Path) -> WorkspaceIdentity {
     let identity = binding.identity();
     WorkspaceIdentity::from_windows_parts(identity.volume_serial_number, identity.file_id)
         .expect("workspace identity")
+}
+
+async fn wait_for_terminal_run(client: &Colossus, run_id: &str) -> RunStatus {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let run = client
+                .get_run(GetRunRequest {
+                    run_id: run_id.to_owned(),
+                })
+                .await
+                .expect("get run")
+                .run;
+            if matches!(
+                run.status,
+                RunStatus::Completed
+                    | RunStatus::Failed
+                    | RunStatus::Cancelled
+                    | RunStatus::Interrupted
+                    | RunStatus::OutcomeUnknown
+            ) {
+                return run.status;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("run terminal timeout")
 }
 
 /// Live acceptance requires Windows Credential Manager and loopback sockets.
@@ -147,7 +174,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
             session_id: None,
             end_user_id: None,
             role: "primary".into(),
-            mode: RunMode::Plan,
+            mode: RunMode::Execute,
             research_depth: None,
             research_sources: Vec::new(),
             selected_skills: Vec::new(),
@@ -159,6 +186,11 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
         })
         .await
         .expect("create run");
-    assert!(!created.run.run_id.is_empty());
+    let run_id = created.run.run_id;
+    assert!(!run_id.is_empty());
+    assert_eq!(
+        wait_for_terminal_run(&client, &run_id).await,
+        RunStatus::Completed
+    );
     client.close().await.expect("graceful close");
 }

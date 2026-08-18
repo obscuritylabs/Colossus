@@ -3,6 +3,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -13,7 +14,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "abababababababababababababababababababababababababababababababab";
 const SIGNING_KEY: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
@@ -29,9 +29,9 @@ impl Drop for ChildGuard {
     }
 }
 
-fn command(binary: &Path, config: &Path) -> Command {
+fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    process_support::isolate_user_home(
+    let isolated_home = process_support::isolate_user_home(
         &mut command,
         config.parent().expect("provider test workspace"),
     );
@@ -42,7 +42,7 @@ fn command(binary: &Path, config: &Path) -> Command {
         .env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY)
         .env("COLOSSUS_PROVIDER_TERMINAL_API_KEY", "terminal-secret");
-    command
+    process_support::IsolatedCommand::new(command, isolated_home)
 }
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output {
