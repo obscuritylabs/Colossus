@@ -7254,11 +7254,14 @@ textarea {
 }
 
 .offline-self-test-row strong,
-.offline-self-test-row span {
+.offline-self-test-row span,
+.external-setup-row strong,
+.external-setup-row span {
   display: block;
 }
 
-.offline-self-test-row strong {
+.offline-self-test-row strong,
+.external-setup-row strong {
   margin-bottom: 4px;
   color: var(--text);
   font-size: 0.74rem;
