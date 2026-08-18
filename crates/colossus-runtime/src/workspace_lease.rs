@@ -663,7 +663,9 @@ mod tests {
     use super::*;
     use crate::{Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions};
     use colossus_policy::DenyApproval;
-    use std::{process::Command, sync::Arc};
+    #[cfg(windows)]
+    use std::process::Command;
+    use std::sync::Arc;
 
     fn private_tempdir() -> tempfile::TempDir {
         #[cfg(windows)]

@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 
 pub(crate) fn private_tempdir() -> tempfile::TempDir {

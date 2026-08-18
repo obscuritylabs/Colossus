@@ -24,9 +24,10 @@ use colossus_runtime::{KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_testkit::InMemoryEventJournal;
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::{
     env, fs,
-    path::{Path, PathBuf},
     process::Command,
     sync::{
         Arc, Barrier,
