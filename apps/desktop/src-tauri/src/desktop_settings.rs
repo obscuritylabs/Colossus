@@ -2034,19 +2034,18 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     fn test_directory(prefix: &str) -> (TestStoreGuard, PathBuf) {
-        #[cfg(windows)]
-        {
-            let guard = PrivateTestRoot::in_target(prefix);
-            let path = fs::canonicalize(guard.path()).expect("canonical test directory");
-            (guard, path)
-        }
-        #[cfg(not(windows))]
-        {
-            let guard = tempfile::tempdir().expect("test directory");
-            let path = fs::canonicalize(guard.path()).expect("canonical test directory");
-            (guard, path)
-        }
+        let guard = PrivateTestRoot::in_target(prefix);
+        let path = fs::canonicalize(guard.path()).expect("canonical test directory");
+        (guard, path)
+    }
+
+    #[cfg(not(windows))]
+    fn test_directory(_prefix: &str) -> (TestStoreGuard, PathBuf) {
+        let guard = tempfile::tempdir().expect("test directory");
+        let path = fs::canonicalize(guard.path()).expect("canonical test directory");
+        (guard, path)
     }
 
     #[cfg(windows)]
