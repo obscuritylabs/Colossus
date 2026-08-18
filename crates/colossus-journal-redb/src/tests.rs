@@ -1,9 +1,11 @@
+#[cfg(windows)]
+use super::platform_secret;
 use super::{
     DisabledCheckpointSigner, EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX,
     PAYLOAD_PROTECTION_KEY, PROJECTION_POSITIONS, PersistedEventEnvelope, PlaintextKeyProvider,
     RedbEventJournal, RedbWriterLease, STREAM_EVENTS, STREAM_EVENTS_INDEX_KEY, STREAM_VERSIONS,
     StaticKeyProvider, adapter_error, cached_platform_secret, persisted_associated_data,
-    persisted_record_hash, platform_secret,
+    persisted_record_hash,
 };
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
