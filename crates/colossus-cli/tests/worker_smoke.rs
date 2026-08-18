@@ -34,6 +34,12 @@ const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(windows))]
+const WORKER_SANDBOX_MAX_PROCESSES: u32 = 4;
+// The Windows broker helper and AppContainer job setup are part of this smoke
+// path; strict low-limit enforcement is covered by windows_sandbox.rs.
+#[cfg(windows)]
+const WORKER_SANDBOX_MAX_PROCESSES: u32 = 16;
 
 struct ChildGuard(Child);
 
@@ -272,7 +278,7 @@ sandbox:
   networkDestinations: []
   timeoutMs: 5000
   maxOutputBytes: 1048576
-  maxProcesses: 4
+  maxProcesses: {max_processes}
   maxMemoryBytes: 67108864
   maxConcurrency: 1
 "#,
@@ -281,6 +287,7 @@ sandbox:
             workflows = workflows_yaml,
             workspace = workspace_yaml,
             process_executable = process_executable_yaml,
+            max_processes = WORKER_SANDBOX_MAX_PROCESSES,
         ),
     )
     .expect("config");
