@@ -2732,6 +2732,34 @@ async fn oversized_request_is_audited_and_fails_closed() {
     assert_eq!(names, vec!["effect.requested.v1", "effect.denied.v1"]);
 }
 
+#[test]
+fn default_post_effect_policy_input_limit_covers_encoded_max_output() {
+    const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+    let encoded_length = MAX_OUTPUT_BYTES.div_ceil(3) * 4;
+    let kernel = SafetyKernel::new([]);
+    let mut request = effect_request(
+        system_actor("test"),
+        "network.http",
+        "https://example.com",
+        serde_json::json!({
+            "media_type": "application/octet-stream",
+            "size": MAX_OUTPUT_BYTES,
+            "content_base64": "x".repeat(encoded_length),
+        }),
+    );
+    request.phase = colossus_contracts::EffectPhase::PostEffect;
+    kernel
+        .prepare(&request)
+        .expect("default post-effect input must carry the encoded output ceiling");
+
+    request.phase = colossus_contracts::EffectPhase::PreEffect;
+    assert!(matches!(
+        kernel.prepare(&request),
+        Err(GatewayError::Policy(PolicyError::InputTooLarge { limit }))
+            if limit == 1024 * 1024
+    ));
+}
+
 fn one_shot_opa(response: serde_json::Value) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("OPA test listener");
     let address = listener.local_addr().expect("OPA test address");

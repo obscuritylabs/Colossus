@@ -77,7 +77,9 @@ may narrow either configured ceiling and never widen it.
 - Workflow schedule cadence is 60 seconds through 31 days.
 - The TUI queues at most eight future turns.
 - The TUI loads at most 1,000 submitted-history entries.
-- OPA logical policy input is bounded at 1 MiB.
+- Pre-effect logical policy input is bounded at 1 MiB. Post-effect policy input is
+  bounded at 8 MiB so the base64 envelope for a permitted 4 MiB result remains
+  inspectable without widening the pre-effect request boundary.
 - Workflow conditions are non-executable and bounded by size, token, recursion, and
   boolean-composition limits.
 

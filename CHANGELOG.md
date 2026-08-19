@@ -11,7 +11,10 @@ include breaking changes while the public API is still settling.
 ### Changed
 
 - Raised the default sandbox output ceiling from 1 MiB to 4 MiB and the process-tree
-  memory ceiling from 256 MiB to 1 GiB while preserving explicit deployment overrides.
+  memory ceiling from 256 MiB to 1 GiB while preserving explicit deployment overrides;
+  the bounded post-effect policy input and worker protocol v15 response frame capacities
+  also rise so permitted large results survive policy inspection and authenticated IPC
+  encoding.
 
 ## [0.10.10-preview.2] - 2026-08-18
 

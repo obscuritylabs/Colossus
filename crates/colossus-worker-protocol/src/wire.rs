@@ -8,12 +8,14 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 14 adds a selected-session, bounded canonical resource-map operation for
-/// trusted native Desktop clients. Older workers cannot validate that request shape,
-/// so both sides must reject the mismatch and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 14;
+/// Version 15 raises the bounded response frame capacity so a default-permitted
+/// 4 MiB effect result still fits after the authenticated protocol's nested base64
+/// encoding. Older workers retain the smaller response bound, so both sides must
+/// reject the mismatch and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 15;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
-pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum serialized authenticated response frame accepted by worker clients.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 type HmacSha256 = Hmac<Sha256>;
 

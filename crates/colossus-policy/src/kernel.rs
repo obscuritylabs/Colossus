@@ -1,6 +1,7 @@
 use super::*;
 
 const DEFAULT_POLICY_INPUT_LIMIT: usize = 1024 * 1024;
+const DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT: usize = 8 * 1024 * 1024;
 pub(super) const PERMIT_LIFETIME_MS: i128 = 30_000;
 
 /// Minimum timeout that leaves the OCI helper enough time to confirm container cleanup.
@@ -474,6 +475,7 @@ impl SandboxBoundaryGate {
 pub struct SafetyKernel {
     known_capabilities: BTreeSet<String>,
     policy_input_limit: usize,
+    post_effect_policy_input_limit: usize,
     sandbox_boundary_gate: Option<Arc<SandboxBoundaryGate>>,
 }
 
@@ -483,6 +485,7 @@ impl SafetyKernel {
         Self {
             known_capabilities: known_capabilities.into_iter().collect(),
             policy_input_limit: DEFAULT_POLICY_INPUT_LIMIT,
+            post_effect_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
             sandbox_boundary_gate: None,
         }
     }
@@ -490,6 +493,7 @@ impl SafetyKernel {
     /// Override the disclosure cap for bounded tests or stricter deployments.
     pub fn with_policy_input_limit(mut self, bytes: usize) -> Self {
         self.policy_input_limit = bytes;
+        self.post_effect_policy_input_limit = bytes;
         self
     }
 
@@ -537,10 +541,13 @@ impl SafetyKernel {
         let mut prepared = request.clone();
         redact_hard_secrets(&mut prepared.content);
         let size = canonical_bytes(&prepared)?.len();
-        if size > self.policy_input_limit {
-            return Err(GatewayError::Policy(PolicyError::InputTooLarge {
-                limit: self.policy_input_limit,
-            }));
+        let limit = if prepared.phase == EffectPhase::PostEffect {
+            self.post_effect_policy_input_limit
+        } else {
+            self.policy_input_limit
+        };
+        if size > limit {
+            return Err(GatewayError::Policy(PolicyError::InputTooLarge { limit }));
         }
         Ok(prepared)
     }
