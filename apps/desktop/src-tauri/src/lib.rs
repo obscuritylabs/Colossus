@@ -9,6 +9,7 @@ mod diagnostics;
 mod dto;
 mod managed_runtime;
 mod provider_enrollment;
+mod run_list;
 mod space_search;
 mod state;
 mod terminal;

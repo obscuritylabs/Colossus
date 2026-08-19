@@ -33,4 +33,6 @@ This file is the short map. Keep deeper details in `docs/`.
   when `sccache` is unavailable.
 - Use `cargo xtask check rust` from the repository root before declaring implementation
   complete. It owns the formatting, structure, locked metadata, Clippy, workspace-test,
-  and fuzz-harness gates used by PR validation.
+  and fuzz-harness gates used by PR validation. For now, run this command with permission
+  to bind local loopback sockets: several integration tests start temporary local servers,
+  and sandboxed runs otherwise fail with `Operation not permitted` after substantial work.

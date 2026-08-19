@@ -30,7 +30,7 @@ use crate::{
         revalidate_workspace, store_provider_secret, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
-    managed_runtime, provider_enrollment, space_search,
+    managed_runtime, provider_enrollment, run_list, space_search,
     state::{AppState, ExternalHealth, ManagedHealth, TargetConsentContext, TargetHandle},
 };
 
@@ -407,12 +407,14 @@ async fn create_space_from_picker(
     let store = settings_store()?;
     let mut settings = store.load()?;
     let previous_settings = settings.clone();
-    if let Some(existing) = workspace
+    let identity_match = workspace
         .identity
         .as_ref()
         .and_then(|identity| settings.space_for_workspace_identity(identity))
-        .cloned()
-    {
+        .cloned();
+    let path_match = settings.space_for_workspace_path(&workspace.path).cloned();
+    let mut rebound_space_id = None;
+    if let Some(existing) = identity_match {
         if !existing.archived {
             return Err(CommandErrorDto::invalid(
                 "workspace",
@@ -430,6 +432,28 @@ async fn create_space_from_picker(
             space.archived = false;
         }
         settings.activate_space(&existing.id)?;
+    } else if let Some(existing) = path_match {
+        if existing.archived && !confirm_restore_space(app, &existing.display_name).await? {
+            return Ok(None);
+        }
+        reject_active_managed_runs_for(state, &existing.id).await?;
+        if settings.selected_space_id.as_deref() == Some(existing.id.as_str())
+            && state.terminal_session_active()
+        {
+            return Err(CommandErrorDto::busy(
+                "Close this Space's terminal sessions before selecting its folder again.",
+            ));
+        }
+        settings.rebind_space_workspace(&existing.id, workspace.clone())?;
+        if let Some(space) = settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == existing.id)
+        {
+            space.archived = false;
+        }
+        settings.activate_space(&existing.id)?;
+        rebound_space_id = Some(existing.id);
     } else {
         settings.add_space(workspace.clone())?;
     }
@@ -437,6 +461,14 @@ async fn create_space_from_picker(
         .selected_space_id
         .clone()
         .ok_or_else(CommandErrorDto::not_configured)?;
+    if let Some(rebound_space_id) = rebound_space_id.as_deref() {
+        if let Some(target) = state.remove_target(rebound_space_id).await {
+            target.client.close().await.map_err(|_| {
+                CommandErrorDto::busy("The previous Space runtime is still stopping.")
+            })?;
+        }
+        state.remove_managed_space_runtime(rebound_space_id).await;
+    }
     store.save(&settings)?;
     state.select_target(None).await;
     if settings.managed_configured() {
@@ -577,15 +609,18 @@ async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSet
                 let remaining = SPACE_SUMMARY_REFRESH_TIMEOUT.checked_sub(started.elapsed())?;
                 let response = tokio::time::timeout(
                     remaining,
-                    target.client.list_runs(ListRunsRequest {
-                        session_id: None,
-                        statuses: Vec::new(),
-                        page: Some(PageRequest {
-                            page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
-                            page_token,
-                        }),
-                        include_archived: false,
-                    }),
+                    run_list::list_runs(
+                        &target.client,
+                        ListRunsRequest {
+                            session_id: None,
+                            statuses: Vec::new(),
+                            page: Some(PageRequest {
+                                page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
+                                page_token,
+                            }),
+                            include_archived: false,
+                        },
+                    ),
                 )
                 .await
                 .ok()?
@@ -1277,9 +1312,9 @@ async fn reject_active_managed_runs_for(
     if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
         return Ok(());
     }
-    let runs = target
-        .client
-        .list_runs(ListRunsRequest {
+    let runs = run_list::list_runs(
+        &target.client,
+        ListRunsRequest {
             session_id: None,
             statuses: vec![
                 RunStatus::Queued,
@@ -1292,9 +1327,10 @@ async fn reject_active_managed_runs_for(
                 page_token: String::new(),
             }),
             include_archived: false,
-        })
-        .await
-        .map_err(CommandErrorDto::from_api)?;
+        },
+    )
+    .await
+    .map_err(CommandErrorDto::from_api)?;
     if runs.runs.is_empty() {
         Ok(())
     } else {
@@ -2221,7 +2257,7 @@ async fn probe_connected_external(
         // The permit lives with the actual request task. If the health deadline
         // expires, a non-cancellable platform-keychain read remains globally bounded.
         let _permit = permit;
-        existing.client.list_runs(request).await
+        run_list::list_runs(&existing.client, request).await
     });
     let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, &mut probe).await;
     let health = match result {

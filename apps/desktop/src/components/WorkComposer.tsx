@@ -1,12 +1,16 @@
 import {
   IconAdjustmentsHorizontal,
   IconAt,
+  IconCheck,
   IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
+  IconPlugConnected,
   IconRouteAltLeft,
   IconSend2,
   IconShieldCheck,
+  IconWorld,
+  IconX,
 } from "@tabler/icons-react";
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
 
@@ -21,6 +25,33 @@ import type {
 import { USE_CONFIGURED_MAX_TURNS } from "../types";
 import type { QueuedMessage } from "../message-queue";
 import { NextUpQueue } from "./NextUpQueue";
+
+const RESEARCH_DEPTH_OPTIONS = [
+  { value: "quick", label: "Quick" },
+  { value: "standard", label: "Standard" },
+  { value: "deep", label: "Deep" },
+] as const;
+
+const RESEARCH_SOURCE_OPTIONS = [
+  {
+    value: "repo",
+    label: "This Space",
+    description: "Search across your workspace",
+    Icon: IconFolder,
+  },
+  {
+    value: "web",
+    label: "Web",
+    description: "Search the public web",
+    Icon: IconWorld,
+  },
+  {
+    value: "mcp",
+    label: "Connections",
+    description: "Search your connected apps",
+    Icon: IconPlugConnected,
+  },
+] as const;
 
 interface WorkComposerProps {
   formRef: RefObject<HTMLFormElement | null>;
@@ -193,7 +224,16 @@ export function WorkComposer({
             </select>
           </label>
         ) : null}
-        <details className="run-controls">
+        <details
+          className="run-controls"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.currentTarget.removeAttribute("open");
+              event.currentTarget.querySelector("summary")?.focus();
+            }
+          }}
+        >
           <summary
             className={roleMissing ? "run-controls-invalid" : undefined}
             aria-label={
@@ -215,47 +255,92 @@ export function WorkComposer({
                 ? "Role required"
                 : "Run controls"}
           </summary>
-          <div className="run-controls-popover">
+          <div
+            className={`run-controls-popover${mode === "research" ? " is-research" : ""}`}
+          >
             {mode === "research" ? (
               <>
-                <label>
-                  <span>Research depth</span>
-                  <select
-                    value={researchDepth}
-                    disabled={submitting}
-                    onChange={(event) =>
-                      onResearchDepthChange(event.target.value as ResearchDepth)
-                    }
+                <header className="research-settings-header">
+                  <h3>Research settings</h3>
+                  <button
+                    className="research-settings-close"
+                    type="button"
+                    aria-label="Close research settings"
+                    onClick={(event) => {
+                      const controls = event.currentTarget.closest("details");
+                      controls?.removeAttribute("open");
+                      controls?.querySelector("summary")?.focus();
+                    }}
                   >
-                    <option value="quick">Quick</option>
-                    <option value="standard">Standard</option>
-                    <option value="deep">Deep</option>
-                  </select>
-                </label>
+                    <IconX size={17} stroke={1.8} aria-hidden="true" />
+                  </button>
+                </header>
+                <fieldset className="research-depth-controls">
+                  <legend>Research depth</legend>
+                  <div className="research-depth-options">
+                    {RESEARCH_DEPTH_OPTIONS.map((option) => (
+                      <label
+                        className="research-depth-option"
+                        key={option.value}
+                      >
+                        <input
+                          type="radio"
+                          name="research-depth"
+                          value={option.value}
+                          checked={researchDepth === option.value}
+                          disabled={submitting}
+                          onChange={() => onResearchDepthChange(option.value)}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
                 <fieldset className="research-source-controls">
                   <legend>Evidence sources</legend>
-                  {(["repo", "web", "mcp"] as const).map((source) => (
-                    <label key={source}>
-                      <input
-                        type="checkbox"
-                        checked={researchSources.includes(source)}
-                        disabled={submitting}
-                        onChange={(event) => {
-                          const next = event.target.checked
-                            ? [...researchSources, source]
-                            : researchSources.filter((item) => item !== source);
-                          onResearchSourcesChange(next);
-                        }}
-                      />
-                      <span>
-                        {source === "repo"
-                          ? "This Space"
-                          : source === "web"
-                            ? "Web"
-                            : "Connections"}
-                      </span>
-                    </label>
-                  ))}
+                  <div className="research-source-options">
+                    {RESEARCH_SOURCE_OPTIONS.map((option) => {
+                      const selected = researchSources.includes(option.value);
+                      return (
+                        <label
+                          className={`research-source-option${selected ? " is-selected" : ""}`}
+                          key={option.value}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            disabled={submitting}
+                            onChange={(event) => {
+                              const next = event.target.checked
+                                ? [...researchSources, option.value]
+                                : researchSources.filter(
+                                    (item) => item !== option.value,
+                                  );
+                              onResearchSourcesChange(next);
+                            }}
+                          />
+                          <span
+                            className="research-source-icon"
+                            aria-hidden="true"
+                          >
+                            <option.Icon size={19} stroke={1.7} />
+                          </span>
+                          <span className="research-source-copy">
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                          <span
+                            className="research-source-checkbox"
+                            aria-hidden="true"
+                          >
+                            {selected ? (
+                              <IconCheck size={14} stroke={2.4} />
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </fieldset>
               </>
             ) : (

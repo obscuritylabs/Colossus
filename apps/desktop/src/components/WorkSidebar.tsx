@@ -49,6 +49,11 @@ import type { WorkspaceSurface } from "./ProductRail";
 
 export type SpaceSearchScope = "space" | "all";
 
+export interface SpaceActionFeedback {
+  tone: "progress" | "success" | "error";
+  message: string;
+}
+
 export interface SpaceStartup {
   spaceId: string | null;
   displayName: string;
@@ -77,6 +82,7 @@ interface WorkSidebarProps {
   spaceThreadPreviewErrors: ReadonlyMap<string, string>;
   busy: boolean;
   error: string;
+  spaceActionFeedback: SpaceActionFeedback | null;
   hasMore: boolean;
   disabled: boolean;
   spaceStartup: SpaceStartup | null;
@@ -178,6 +184,7 @@ export function WorkSidebar({
   spaceThreadPreviewErrors,
   busy,
   error,
+  spaceActionFeedback,
   hasMore,
   disabled,
   spaceStartup,
@@ -233,6 +240,7 @@ export function WorkSidebar({
     () => selectRecentWork(runs, { query: "", pinnedSessionIds }),
     [pinnedSessionIds, runs],
   );
+  const hasRecentGroup = groups.some((group) => group.key === "recent");
   const runsById = useMemo(
     () => new Map(runs.map((run) => [run.runId, run])),
     [runs],
@@ -621,6 +629,27 @@ export function WorkSidebar({
           </details>
         </div>
 
+        {spaceActionFeedback !== null ? (
+          <p
+            className={`space-action-feedback is-${spaceActionFeedback.tone}`}
+            role={spaceActionFeedback.tone === "error" ? "alert" : "status"}
+          >
+            {spaceActionFeedback.tone === "progress" ? (
+              <IconLoader2
+                className="spin-icon"
+                size={14}
+                stroke={1.8}
+                aria-hidden="true"
+              />
+            ) : spaceActionFeedback.tone === "success" ? (
+              <IconCheck size={14} stroke={2} aria-hidden="true" />
+            ) : (
+              <IconAlertCircle size={14} stroke={1.9} aria-hidden="true" />
+            )}
+            <span>{spaceActionFeedback.message}</span>
+          </p>
+        ) : null}
+
         <div className="work-search">
           <IconSearch size={17} stroke={1.7} aria-hidden="true" />
           <input
@@ -699,16 +728,6 @@ export function WorkSidebar({
                 </span>
                 <strong>{displayedSpace.displayName}</strong>
               </button>
-              <button
-                className="space-compose-action"
-                type="button"
-                aria-label={`New thread in ${displayedSpace.displayName}`}
-                title={`New thread in ${displayedSpace.displayName}`}
-                disabled={actionsDisabled || selectedSpace === undefined}
-                onClick={onNewWork}
-              >
-                <IconPencilPlus size={17} stroke={1.8} aria-hidden="true" />
-              </button>
               <span className="space-shelf-state">
                 <i
                   className={`space-health ${
@@ -735,6 +754,16 @@ export function WorkSidebar({
                 onClick={() => setThreadShelfOpen((open) => !open)}
               >
                 <IconChevronDown size={16} stroke={1.8} aria-hidden="true" />
+              </button>
+              <button
+                className="space-compose-action"
+                type="button"
+                aria-label={`New thread in ${displayedSpace.displayName}`}
+                title={`New thread in ${displayedSpace.displayName}`}
+                disabled={actionsDisabled || selectedSpace === undefined}
+                onClick={onNewWork}
+              >
+                <IconPencilPlus size={17} stroke={1.8} aria-hidden="true" />
               </button>
             </div>
             {renameSpaceId === displayedSpace.spaceId ? (
@@ -915,13 +944,12 @@ export function WorkSidebar({
                             <details
                               className="thread-actions-menu"
                               onBlur={(event) => {
-                                if (
-                                  !event.currentTarget.contains(
-                                    event.relatedTarget,
-                                  )
-                                ) {
-                                  event.currentTarget.removeAttribute("open");
-                                }
+                                const menu = event.currentTarget;
+                                window.requestAnimationFrame(() => {
+                                  if (!menu.contains(document.activeElement)) {
+                                    menu.removeAttribute("open");
+                                  }
+                                });
                               }}
                               onKeyDown={(event) => {
                                 if (event.key === "Escape") {
@@ -954,7 +982,7 @@ export function WorkSidebar({
                                   type="button"
                                   aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
                                   aria-pressed={pinned}
-                                  disabled={actionsDisabled}
+                                  disabled={spaceStartup !== null}
                                   onClick={(event) => {
                                     event.currentTarget
                                       .closest("details")
@@ -1010,15 +1038,30 @@ export function WorkSidebar({
                         );
                       })}
                     </div>
-                    {group.key === "recent" && group.items.length > 3 ? (
+                    {group.key === "recent" &&
+                    (group.items.length > 3 || hasMore) ? (
                       <button
                         className="work-group-more"
                         type="button"
-                        onClick={() => setShowAllRecent((visible) => !visible)}
+                        disabled={busy || actionsDisabled}
+                        onClick={() => {
+                          if (!showAllRecent && group.items.length > 3) {
+                            setShowAllRecent(true);
+                            return;
+                          }
+                          if (hasMore) {
+                            setShowAllRecent(true);
+                            onLoadMore();
+                            return;
+                          }
+                          setShowAllRecent(false);
+                        }}
                       >
-                        {showAllRecent
-                          ? "Show fewer"
-                          : `View all ${group.items.length} recent threads`}
+                        {!showAllRecent && group.items.length > 3
+                          ? `View ${group.items.length - 3} more recent ${group.items.length - 3 === 1 ? "thread" : "threads"}`
+                          : hasMore
+                            ? "Load older threads"
+                            : "Show fewer"}
                       </button>
                     ) : null}
                   </section>
@@ -1055,14 +1098,14 @@ export function WorkSidebar({
                 More results
               </button>
             ) : null}
-            {!searching && hasMore ? (
+            {!searching && hasMore && !hasRecentGroup ? (
               <button
                 className="text-button"
                 type="button"
                 disabled={busy || actionsDisabled}
                 onClick={onLoadMore}
               >
-                Load more
+                Load older threads
               </button>
             ) : null}
             {(searching ? searchError : error) !== "" ? (

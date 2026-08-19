@@ -23,6 +23,7 @@ use crate::{
         ReasoningEffortSetting, SettingsStore, load_provider_secret, revalidate_workspace,
     },
     dto::CommandErrorDto,
+    run_list,
     state::{AppState, MAX_LIVE_MANAGED_SPACES, ManagedHealth},
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
 };
@@ -257,8 +258,9 @@ async fn managed_target_has_active_work(client: &Colossus) -> Result<bool, Comma
     let mut page_token = String::new();
     let mut seen_tokens = BTreeSet::new();
     for _ in 0..MAX_ACTIVE_RUN_PAGES {
-        let response = client
-            .list_runs(ListRunsRequest {
+        let response = run_list::list_runs(
+            client,
+            ListRunsRequest {
                 session_id: None,
                 statuses: vec![
                     RunStatus::Queued,
@@ -271,9 +273,10 @@ async fn managed_target_has_active_work(client: &Colossus) -> Result<bool, Comma
                     page_token,
                 }),
                 include_archived: false,
-            })
-            .await
-            .map_err(CommandErrorDto::from_api)?;
+            },
+        )
+        .await
+        .map_err(CommandErrorDto::from_api)?;
         if !response.runs.is_empty() {
             return Ok(true);
         }

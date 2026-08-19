@@ -392,6 +392,109 @@ impl DesktopSettings {
             .find(|space| space.workspace.identity.as_ref() == Some(identity))
     }
 
+    pub(crate) fn space_for_workspace_path(&self, path: &Path) -> Option<&WorkspaceProfile> {
+        self.spaces
+            .iter()
+            .find(|space| space.workspace.path == path)
+    }
+
+    pub(crate) fn rebind_space_workspace(
+        &mut self,
+        space_id: &str,
+        mut workspace: WorkspaceSetting,
+    ) -> Result<(), CommandErrorDto> {
+        self.sync_selected_space_projection()?;
+        let identity = workspace.identity.as_ref().ok_or_else(workspace_error)?;
+        if self
+            .space_for_workspace_identity(identity)
+            .is_some_and(|space| space.id != space_id)
+        {
+            return Err(CommandErrorDto::invalid(
+                "workspace",
+                "That folder already belongs to another Space.",
+            ));
+        }
+        let space = self
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == space_id)
+            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        workspace.id.clone_from(&space.workspace.id);
+        space.workspace = workspace.clone();
+        if self.selected_space_id.as_deref() == Some(space_id) {
+            self.workspace = Some(workspace);
+        }
+        Ok(())
+    }
+
+    fn archive_stale_same_path_spaces(&mut self) -> bool {
+        let mut spaces_by_path = BTreeMap::<PathBuf, Vec<usize>>::new();
+        for (index, space) in self.spaces.iter().enumerate() {
+            spaces_by_path
+                .entry(space.workspace.path.clone())
+                .or_default()
+                .push(index);
+        }
+
+        let mut repairs = Vec::<(String, Vec<String>)>::new();
+        for (path, indexes) in spaces_by_path {
+            if indexes.len() < 2 {
+                continue;
+            }
+            let Ok((canonical, current_identity)) = open_workspace_identity(&path) else {
+                continue;
+            };
+            if canonical != path {
+                continue;
+            }
+            let matching = indexes
+                .iter()
+                .copied()
+                .filter(|index| {
+                    self.spaces[*index].workspace.identity.as_ref() == Some(&current_identity)
+                        && !self.spaces[*index].archived
+                })
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                continue;
+            }
+            let winner = self.spaces[matching[0]].id.clone();
+            let stale = indexes
+                .into_iter()
+                .filter(|index| *index != matching[0] && !self.spaces[*index].archived)
+                .map(|index| self.spaces[index].id.clone())
+                .collect::<Vec<_>>();
+            if !stale.is_empty() {
+                repairs.push((winner, stale));
+            }
+        }
+
+        let mut changed = false;
+        for (winner, stale) in repairs {
+            for space in &mut self.spaces {
+                if stale.iter().any(|space_id| space_id == &space.id) {
+                    space.archived = true;
+                    changed = true;
+                }
+            }
+            if self
+                .selected_space_id
+                .as_ref()
+                .is_some_and(|space_id| stale.iter().any(|stale_id| stale_id == space_id))
+            {
+                self.selected_space_id = Some(winner.clone());
+            }
+            if self
+                .selected_target_id
+                .as_ref()
+                .is_some_and(|target_id| stale.iter().any(|stale_id| stale_id == target_id))
+            {
+                self.selected_target_id = Some(winner);
+            }
+        }
+        changed
+    }
+
     pub(crate) fn add_space(
         &mut self,
         workspace: WorkspaceSetting,
@@ -669,6 +772,7 @@ impl SettingsStore {
             )
         };
         migrated_settings |= settings.migrate_workspace_to_space();
+        migrated_settings |= settings.archive_stale_same_path_spaces();
         settings.project_selected_space();
         let legacy_workspace_requires_reselection =
             settings.workspace.as_ref().is_some_and(|workspace| {
@@ -2370,6 +2474,96 @@ mod tests {
             .expect("Space")
             .archived = true;
         assert!(settings.activate_space(&space_id).is_err());
+    }
+
+    #[test]
+    fn explicit_same_path_reselection_rebinds_the_existing_space_without_duplication() {
+        let (_parent_guard, parent) = test_directory("workspace-reselection-parent");
+        let workspace_path = parent.join("workspace");
+        let replaced_path = parent.join("workspace-replaced");
+        fs::create_dir(&workspace_path).expect("workspace");
+
+        let original = validate_workspace(&workspace_path).expect("original workspace");
+        let original_workspace_id = original.id.clone();
+        let original_identity = original.identity.clone();
+        let mut settings = DesktopSettings::default();
+        let space_id = settings.add_space(original).expect("Space");
+        settings.spaces[0].display_name = "Renamed Space".into();
+
+        fs::rename(&workspace_path, &replaced_path).expect("move original workspace");
+        fs::create_dir(&workspace_path).expect("replacement workspace");
+        let replacement = validate_workspace(&workspace_path).expect("replacement workspace");
+        assert_ne!(replacement.identity, original_identity);
+        assert_eq!(
+            settings
+                .space_for_workspace_path(&replacement.path)
+                .map(|space| space.id.as_str()),
+            Some(space_id.as_str())
+        );
+
+        settings
+            .rebind_space_workspace(&space_id, replacement.clone())
+            .expect("explicit rebind");
+        settings
+            .activate_space(&space_id)
+            .expect("reactivate Space");
+
+        assert_eq!(settings.spaces.len(), 1);
+        assert_eq!(settings.spaces[0].id, space_id);
+        assert_eq!(settings.spaces[0].display_name, "Renamed Space");
+        assert_eq!(settings.spaces[0].workspace.id, original_workspace_id);
+        assert_eq!(settings.spaces[0].workspace.path, replacement.path);
+        assert_eq!(settings.spaces[0].workspace.identity, replacement.identity);
+        assert_eq!(
+            settings.selected_space_id.as_deref(),
+            Some(space_id.as_str())
+        );
+    }
+
+    #[test]
+    fn loading_archives_stale_same_path_duplicates_and_selects_the_valid_space() {
+        let (_root_guard, _root, store) = test_store();
+        let (_parent_guard, parent) = test_directory("duplicate-repair-parent");
+        let workspace_path = parent.join("workspace");
+        let replaced_path = parent.join("workspace-replaced");
+        fs::create_dir(&workspace_path).expect("workspace");
+
+        let original = validate_workspace(&workspace_path).expect("original workspace");
+        let mut settings = DesktopSettings::default();
+        let stale_space_id = settings.add_space(original).expect("stale Space");
+
+        fs::rename(&workspace_path, &replaced_path).expect("move original workspace");
+        fs::create_dir(&workspace_path).expect("replacement workspace");
+        let replacement = validate_workspace(&workspace_path).expect("replacement workspace");
+        let valid_space_id = settings.add_space(replacement).expect("valid Space");
+        settings
+            .activate_space(&stale_space_id)
+            .expect("select stale Space before persistence");
+        store.save(&settings).expect("save duplicated Spaces");
+
+        let repaired = store.load().expect("repair duplicated Spaces");
+        assert_eq!(repaired.spaces.len(), 2);
+        assert!(
+            repaired
+                .space(&stale_space_id)
+                .expect("stale Space retained")
+                .archived
+        );
+        assert!(
+            !repaired
+                .space(&valid_space_id)
+                .expect("valid Space retained")
+                .archived
+        );
+        assert_eq!(
+            repaired.selected_space_id.as_deref(),
+            Some(valid_space_id.as_str())
+        );
+        assert_eq!(
+            repaired.selected_target_id.as_deref(),
+            Some(valid_space_id.as_str())
+        );
+        assert_eq!(store.load().expect("persisted repair"), repaired);
     }
 
     #[test]

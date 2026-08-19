@@ -53,7 +53,6 @@ import type { ArtifactViewItem } from "./ArtifactWorkspace";
 import { ArtifactWorkspace } from "./ArtifactWorkspace";
 import { InteractionCard } from "./InteractionCard";
 import { PlanDetailsPanel } from "./PlanDetailsPanel";
-import type { ActivityPresentation } from "./RunTimeline";
 import { RunTimeline } from "./RunTimeline";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
 import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
@@ -143,48 +142,6 @@ const STARTERS = [
   "Coordinate an implementation and security review",
 ];
 
-const ACTIVITY_PRESENTATION_STORAGE_KEY =
-  "colossus.desktop.activity-presentation.v1";
-
-function initialActivityPresentation(): ActivityPresentation {
-  try {
-    return window.localStorage?.getItem(ACTIVITY_PRESENTATION_STORAGE_KEY) ===
-      "capsule"
-      ? "capsule"
-      : "thread";
-  } catch {
-    return "thread";
-  }
-}
-
-function ActivityViewSwitcher({
-  presentation,
-  onChange,
-}: {
-  presentation: ActivityPresentation;
-  onChange: (presentation: ActivityPresentation) => void;
-}) {
-  return (
-    <div className="activity-layout-switcher" aria-label="Timeline view">
-      <span>Timeline</span>
-      <button
-        type="button"
-        aria-pressed={presentation === "thread"}
-        onClick={() => onChange("thread")}
-      >
-        Working thread
-      </button>
-      <button
-        type="button"
-        aria-pressed={presentation === "capsule"}
-        onClick={() => onChange("capsule")}
-      >
-        Capsule
-      </button>
-    </div>
-  );
-}
-
 export function WorkSurface({
   title,
   view,
@@ -243,8 +200,6 @@ export function WorkSurface({
   onRespondAside,
   onCloseAside,
 }: WorkSurfaceProps) {
-  const [activityPresentation, setActivityPresentation] =
-    useState<ActivityPresentation>(initialActivityPresentation);
   const [sessionWorkspaceView, setSessionWorkspaceView] =
     useState<SessionWorkspaceView>("conversation");
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
@@ -792,18 +747,6 @@ export function WorkSurface({
     restoreFeedPosition(feedPosition);
   }
 
-  function chooseActivityPresentation(presentation: ActivityPresentation) {
-    setActivityPresentation(presentation);
-    try {
-      window.localStorage?.setItem(
-        ACTIVITY_PRESENTATION_STORAGE_KEY,
-        presentation,
-      );
-    } catch {
-      // The view still changes for this session when browser storage is unavailable.
-    }
-  }
-
   function previewAsideWidth(width: number): number {
     const layoutWidth = workLayoutRef.current?.getBoundingClientRect().width;
     if (layoutWidth === undefined || layoutWidth <= 0) {
@@ -1132,10 +1075,6 @@ export function WorkSurface({
                 />
               ) : (
                 <>
-                  <ActivityViewSwitcher
-                    presentation={activityPresentation}
-                    onChange={chooseActivityPresentation}
-                  />
                   <div className="conversation-timeline" id="work-activity">
                     {conversationViews.map((conversationView) => (
                       <div
@@ -1145,7 +1084,6 @@ export function WorkSurface({
                       >
                         <RunTimeline
                           view={conversationView}
-                          activityPresentation={activityPresentation}
                           activityComparison={activityComparisonEnabled}
                           planContinuationAvailable={planContinuationAvailable}
                           planWorkflowAvailable={planWorkflowAvailable}

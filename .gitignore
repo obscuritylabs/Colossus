@@ -2,6 +2,15 @@ target/
 dist/
 site/
 output/playwright/
+.DS_Store
+design-qa.md
+design-qa-*.png
+design-qa-*.jpg
+apps/desktop/design-qa.md
+apps/desktop/design-qa-*.png
+apps/desktop/design-qa-*.jpg
+apps/desktop/research-settings-qa/
+apps/desktop/artifact-audit/
 .env
 .colossus/config.yaml
 .colossus/config.dev.yaml
