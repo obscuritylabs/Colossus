@@ -9,20 +9,29 @@ import {
   IconCopy,
   IconEdit,
   IconFile,
+  IconFolderOpen,
   IconInfoCircle,
   IconListDetails,
   IconLoader2,
   IconMessageCircle,
+  IconPencil,
   IconPlayerPlay,
   IconPlayerStop,
+  IconSearch,
   IconSparkles,
   IconTargetArrow,
   IconTerminal2,
+  IconWorld,
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
+import {
+  presentNotice,
+  presentToolActivity,
+  type ActivityLabelKind,
+} from "../activity-labels";
 import type { RunView } from "../state";
 import type {
   MessageContentPart,
@@ -38,7 +47,6 @@ import { researchSources } from "./ResearchSourcesPanel";
 
 interface RunTimelineProps {
   view: RunView;
-  activityPresentation?: ActivityPresentation;
   activityComparison?: boolean;
   planContinuationAvailable?: boolean;
   planWorkflowAvailable?: boolean;
@@ -57,8 +65,6 @@ interface RunTimelineProps {
   ) => Promise<void>;
   onOpenResearchSources?: () => void;
 }
-
-export type ActivityPresentation = "capsule" | "thread";
 
 type ToolActivityUpdate = RunUpdate & {
   update: Extract<RunUpdate["update"], { type: "tool_activity" }>;
@@ -364,6 +370,16 @@ function compactTimelineItems(updates: readonly RunUpdate[]): TimelineItem[] {
       continue;
     }
     if (item.update.type !== "tool_activity") {
+      const previous = items.at(-1);
+      if (
+        item.update.type === "notice" &&
+        previous?.type === "update" &&
+        previous.update.update.type === "notice" &&
+        previous.update.update.reason === item.update.reason &&
+        previous.update.update.message === item.update.message
+      ) {
+        continue;
+      }
       items.push({ type: "update", update: item });
       continue;
     }
@@ -391,14 +407,34 @@ function formatToolActivityText(value: string): string {
   }
 }
 
-function toolActivityInput(group: ToolActivityGroup): string | null {
+function toolActivityInputValue(group: ToolActivityGroup): string | null {
   for (let index = group.updates.length - 1; index >= 0; index -= 1) {
     const input = group.updates[index]?.update.activity.input;
     if (input?.trim()) {
-      return formatToolActivityText(input);
+      return input;
     }
   }
   return null;
+}
+
+function ToolActivityIcon({ kind }: { kind: ActivityLabelKind }) {
+  switch (kind) {
+    case "read":
+      return <IconBooks size={16} stroke={1.7} />;
+    case "search":
+      return <IconSearch size={16} stroke={1.7} />;
+    case "list":
+      return <IconFolderOpen size={16} stroke={1.7} />;
+    case "write":
+      return <IconPencil size={16} stroke={1.7} />;
+    case "web":
+      return <IconWorld size={16} stroke={1.7} />;
+    case "delegate":
+      return <IconArrowRight size={16} stroke={1.8} />;
+    case "run":
+    case "generic":
+      return <IconTerminal2 size={16} stroke={1.7} />;
+  }
 }
 
 function toolActivityPreview(activity: ToolActivity): string {
@@ -424,35 +460,27 @@ function toolActivityPreview(activity: ToolActivity): string {
   }
 }
 
-function ToolActivityItem({
-  group,
-  presentation,
-}: {
-  group: ToolActivityGroup;
-  presentation: ActivityPresentation;
-}) {
+function ToolActivityItem({ group }: { group: ToolActivityGroup }) {
   const latest = group.updates.at(-1);
   if (latest === undefined || latest.update.type !== "tool_activity") {
     return null;
   }
   const activity = latest.update.activity;
-  const complete = activity.state === "completed";
-  const input = toolActivityInput(group);
+  const releasedInput = toolActivityInputValue(group);
+  const input =
+    releasedInput === null ? null : formatToolActivityText(releasedInput);
+  const label = presentToolActivity(activity, releasedInput);
   return (
     <details
-      className={`compact-tool-activity activity-tool-${presentation} activity-state-${activity.state}`}
+      className={`compact-tool-activity activity-tool-thread activity-state-${activity.state} activity-kind-${label.kind}`}
     >
       <summary>
         <span className="feed-marker" aria-hidden="true">
-          {complete ? (
-            <IconCheck size={16} stroke={2} />
-          ) : (
-            <IconTerminal2 size={16} stroke={1.7} />
-          )}
+          <ToolActivityIcon kind={label.kind} />
         </span>
         <span className="compact-tool-copy">
           <span className="compact-tool-heading">
-            <strong>{activity.summary}</strong>
+            <strong>{label.title}</strong>
             <span className="compact-tool-name">{activity.toolName}</span>
             <span className={`event-state tool-state-${activity.state}`}>
               {readable(activity.state)}
@@ -591,15 +619,9 @@ function ActivityThought({ item }: { item: RunUpdate }) {
   );
 }
 
-function ActivityItem({
-  item,
-  presentation,
-}: {
-  item: TimelineItem;
-  presentation: ActivityPresentation;
-}) {
+function ActivityItem({ item }: { item: TimelineItem }) {
   if (item.type === "tool_activity") {
-    return <ToolActivityItem group={item.group} presentation={presentation} />;
+    return <ToolActivityItem group={item.group} />;
   }
   if (item.update.update.type === "reasoning_summary") {
     return <ActivityThought item={item.update} />;
@@ -610,12 +632,10 @@ function ActivityItem({
 function RunActivity({
   view,
   items,
-  presentation,
   comparison,
 }: {
   view: RunView;
   items: readonly TimelineItem[];
-  presentation: ActivityPresentation;
   comparison: boolean;
 }) {
   const toolActionCount = items.filter(
@@ -654,7 +674,7 @@ function RunActivity({
 
   return (
     <details
-      className={`run-activity run-activity-${presentation} run-state-${view.run.status}`}
+      className={`run-activity run-activity-thread run-state-${view.run.status}`}
       open={comparison || active || failedActionCount > 0}
     >
       <summary className="run-activity-summary">
@@ -662,16 +682,10 @@ function RunActivity({
           <IconChevronDown size={16} stroke={1.9} />
         </span>
         <span className="run-activity-mark" aria-hidden="true">
-          {presentation === "capsule" ? (
-            <IconBrain size={17} stroke={1.7} />
-          ) : (
-            <img src={colossusMark} alt="" />
-          )}
+          <img src={colossusMark} alt="" />
         </span>
         <span className="run-activity-title">
-          <strong>
-            {presentation === "capsule" ? view.run.title : "Colossus"}
-          </strong>
+          <strong>Colossus</strong>
           <small>{summaryParts.join(" · ")}</small>
         </span>
         <span className={`run-activity-status tone-${status.tone}`}>
@@ -693,7 +707,6 @@ function RunActivity({
         {items.map((item) => (
           <ActivityItem
             item={item}
-            presentation={presentation}
             key={
               item.type === "tool_activity"
                 ? `tool-${item.group.key}`
@@ -764,24 +777,28 @@ function FeedItem({ item }: { item: RunUpdate }): ReactNode {
     case "tool_activity":
       return null;
     case "notice": {
-      const handoff = update.reason.includes("handoff");
+      const label = presentNotice(update.reason, update.message);
       return (
-        <article className="feed-entry process-row notice-row">
+        <article
+          className={`feed-entry process-row notice-row notice-kind-${label.kind}`}
+        >
           <div className="feed-marker" aria-hidden="true">
-            {handoff ? (
+            {label.kind === "handoff" ? (
               <IconArrowRight size={17} stroke={1.8} />
+            ) : label.kind === "research" ? (
+              <IconSearch size={17} stroke={1.7} />
             ) : (
               <IconInfoCircle size={17} stroke={1.7} />
             )}
           </div>
           <div className="feed-entry-content">
             <header className="feed-entry-heading">
-              <strong>{readable(update.reason)}</strong>
+              <strong>{label.title}</strong>
               <time dateTime={item.createdAt}>
                 {compactTime(item.createdAt)}
               </time>
             </header>
-            <p>{update.message}</p>
+            <p>{label.detail}</p>
           </div>
         </article>
       );
@@ -1119,7 +1136,6 @@ function PlanResultCard({
 
 export function RunTimeline({
   view,
-  activityPresentation = "thread",
   activityComparison = false,
   planContinuationAvailable = false,
   planWorkflowAvailable = false,
@@ -1189,7 +1205,6 @@ export function RunTimeline({
         <RunActivity
           view={view}
           items={activityItems}
-          presentation={activityPresentation}
           comparison={activityComparison}
         />
       ) : null}

@@ -44,6 +44,80 @@ test("minimum layout and capability-driven controls remain accessible", async ({
   expect(blockingViolations).toEqual([]);
 });
 
+test("Space archive and restore update the sidebar and confirm the outcome", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  await page.getByRole("button", { name: "Manage Spaces" }).click();
+  await page.getByRole("button", { name: "Archive Colossus" }).click();
+
+  await expect(page.getByRole("status")).toContainText("Archived Colossus.");
+  await expect(
+    page.locator(".space-shelf.is-active", { hasText: "Colossus" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".space-shelf.is-active")).toContainText(
+    "Research Lab",
+  );
+
+  await page.getByRole("button", { name: "Manage Spaces" }).click();
+  const restore = page.getByRole("button", { name: "Restore Colossus" });
+  await expect(restore).toBeVisible();
+  await restore.click();
+
+  await expect(page.getByRole("status")).toContainText(
+    "Restored Colossus. Select it when you’re ready.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Restore Colossus" }),
+  ).toHaveCount(0);
+});
+
+test("Research settings expose depth and evidence choices and restore focus", async ({
+  page,
+}) => {
+  const researchMode = page.getByRole("radio", { name: "Research" });
+  await page
+    .locator(".mode-switch")
+    .getByText("Research", { exact: true })
+    .click();
+  await expect(researchMode).toBeChecked();
+
+  const settingsTrigger = page.getByLabel(
+    "Research controls, sources This Space",
+  );
+  await settingsTrigger.click();
+
+  await expect(
+    page.getByRole("heading", { name: "Research settings" }),
+  ).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Standard" })).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: /This Space/u }),
+  ).toBeChecked();
+
+  await page.locator(".research-depth-option", { hasText: "Deep" }).click();
+  await page.locator(".research-source-option", { hasText: "Web" }).click();
+  await expect(page.getByRole("radio", { name: "Deep" })).toBeChecked();
+  await expect(
+    page.getByLabel("Research controls, sources This Space, Web"),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Close research settings" }).click();
+  const updatedTrigger = page.getByLabel(
+    "Research controls, sources This Space, Web",
+  );
+  await expect(updatedTrigger).toBeFocused();
+
+  await updatedTrigger.click();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("heading", { name: "Research settings" }),
+  ).toHaveCount(0);
+  await expect(updatedTrigger).toBeFocused();
+});
+
 test("required response card lines up with the prompt composer", async ({
   page,
 }) => {
@@ -393,6 +467,29 @@ test("Space folders disclose thread summaries without switching context", async 
   ).toBeVisible();
 });
 
+test("selected Space keeps its create action on the trailing edge", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(FIXTURE);
+
+  const activeSpace = page.locator(".space-shelf.is-active");
+  const disclosure = activeSpace.getByRole("button", {
+    name: "Collapse Colossus threads",
+  });
+  const create = activeSpace.getByRole("button", {
+    name: "New thread in Colossus",
+  });
+  const [disclosureBox, createBox] = await Promise.all([
+    disclosure.boundingBox(),
+    create.boundingBox(),
+  ]);
+
+  expect(disclosureBox).not.toBeNull();
+  expect(createBox).not.toBeNull();
+  expect(createBox!.x).toBeGreaterThan(disclosureBox!.x + disclosureBox!.width);
+});
+
 test("terminal threads can be archived from the Space sidebar", async ({
   page,
 }) => {
@@ -456,6 +553,76 @@ test("threads can be pinned, persisted, and returned to their normal group", asy
   await page.getByRole("button", { name: "Unpin Audit ipc boundary" }).click();
   await expect(pinned).toContainText("Harden desktop agent bootstrap");
   await expect(pinned).not.toContainText("Audit ipc boundary");
+
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Harden desktop agent bootstrap",
+    })
+    .click();
+  await page
+    .getByRole("button", { name: "Unpin Harden desktop agent bootstrap" })
+    .click();
+  await expect(pinned).toHaveCount(0);
+
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Pinned", exact: true }),
+  ).toHaveCount(0);
+});
+
+test("pinning remains available while the startup connection settles", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.goto(`${FIXTURE}&connecting=1`);
+
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
+  const pin = page.getByRole("button", { name: "Pin Audit ipc boundary" });
+  await expect(pin).toBeEnabled();
+  await pin.click();
+
+  const pinned = page.locator(".work-group").filter({
+    has: page.getByRole("heading", { name: "Pinned", exact: true }),
+  });
+  await expect(pinned).toContainText("Audit ipc boundary");
+});
+
+test("thread actions survive a WebKit blur without a related target", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+
+  const actions = page.getByRole("button", {
+    name: "Thread actions for Audit ipc boundary",
+  });
+  await actions.click();
+  const pin = page.getByRole("button", { name: "Pin Audit ipc boundary" });
+  await pin.evaluate((button) => {
+    const menu = button.closest("details");
+    const summary = menu?.querySelector("summary") ?? null;
+    if (menu === null || summary === null) {
+      throw new Error("thread actions menu is unavailable");
+    }
+    summary.dispatchEvent(
+      new FocusEvent("blur", { bubbles: true, relatedTarget: null }),
+    );
+    button.focus();
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  );
+
+  await expect(pin).toBeVisible();
+  await pin.click();
+  const pinned = page.locator(".work-group").filter({
+    has: page.getByRole("heading", { name: "Pinned", exact: true }),
+  });
+  await expect(pinned).toContainText("Audit ipc boundary");
 });
 
 test("search scope is part of the search control", async ({ page }) => {

@@ -26,16 +26,14 @@ use crate::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ExternalTargetSetting,
         LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
         ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        SettingsStore, delete_provider_secret, load_provider_secret, provider_base_url,
-        revalidate_workspace, store_provider_secret, validate_workspace,
+        SettingsStore, WorkspaceSetting, delete_provider_secret, load_provider_secret,
+        provider_base_url, revalidate_workspace, store_provider_secret, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
-    managed_runtime, provider_enrollment, space_search,
+    managed_runtime, provider_enrollment, run_list, space_search,
     state::{AppState, ExternalHealth, ManagedHealth, TargetConsentContext, TargetHandle},
 };
 
-#[cfg(test)]
-use crate::desktop_settings::WorkspaceSetting;
 const EXTERNAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SPACE_SUMMARY_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
 const SPACE_SEARCH_INDEX_PAGE_SIZE: u32 = 100;
@@ -395,24 +393,79 @@ async fn create_space_from_picker(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<Option<(WorkspaceSummaryDto, DesktopStatusDto)>, CommandErrorDto> {
-    let selected = app.dialog().file().blocking_pick_folder();
-    let Some(path) = selected else {
+    let Some(workspace) = pick_workspace_from_dialog(app)? else {
+        return Ok(None);
+    };
+    let _guard = connect_guard(state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let previous_settings = settings.clone();
+    let rebound_space_id =
+        apply_workspace_picker_selection(app, state, &mut settings, workspace.clone()).await?;
+    let space_id = selected_space_id(&settings)?;
+    let rebound_runtime_was_connected =
+        rebound_runtime_was_connected(state, rebound_space_id.as_deref()).await;
+
+    stop_rebound_runtime_for_selection(
+        state,
+        &store,
+        &previous_settings,
+        rebound_space_id.as_deref(),
+        rebound_runtime_was_connected,
+    )
+    .await?;
+    save_space_selection(
+        state,
+        &store,
+        &settings,
+        &previous_settings,
+        rebound_space_id.as_deref(),
+        rebound_runtime_was_connected,
+    )
+    .await?;
+    start_selected_space_runtime(
+        state,
+        &store,
+        &settings,
+        &previous_settings,
+        rebound_space_id.as_deref(),
+        rebound_runtime_was_connected,
+        &space_id,
+    )
+    .await?;
+
+    state.select_target(Some(space_id.clone())).await;
+    state.activate_managed_terminal_for(&space_id).await;
+    let status = desktop_status_from(state, &settings).await?;
+    Ok(Some((WorkspaceSummaryDto::from(&workspace), status)))
+}
+
+fn pick_workspace_from_dialog(
+    app: &AppHandle,
+) -> Result<Option<WorkspaceSetting>, CommandErrorDto> {
+    let Some(path) = app.dialog().file().blocking_pick_folder() else {
         return Ok(None);
     };
     let path = path.into_path().map_err(|_| {
         CommandErrorDto::invalid("workspace", "The selected folder is unavailable.")
     })?;
-    let workspace = validate_workspace(&path)?;
-    let _guard = connect_guard(state)?;
-    let store = settings_store()?;
-    let mut settings = store.load()?;
-    let previous_settings = settings.clone();
-    if let Some(existing) = workspace
+    Ok(Some(validate_workspace(&path)?))
+}
+
+async fn apply_workspace_picker_selection(
+    app: &AppHandle,
+    state: &AppState,
+    settings: &mut DesktopSettings,
+    workspace: WorkspaceSetting,
+) -> Result<Option<String>, CommandErrorDto> {
+    let identity_match = workspace
         .identity
         .as_ref()
         .and_then(|identity| settings.space_for_workspace_identity(identity))
-        .cloned()
-    {
+        .cloned();
+    let path_match = settings.space_for_workspace_path(&workspace.path).cloned();
+    let mut rebound_space_id = None;
+    if let Some(existing) = identity_match {
         if !existing.archived {
             return Err(CommandErrorDto::invalid(
                 "workspace",
@@ -430,31 +483,133 @@ async fn create_space_from_picker(
             space.archived = false;
         }
         settings.activate_space(&existing.id)?;
+    } else if let Some(existing) = path_match {
+        if existing.archived && !confirm_restore_space(app, &existing.display_name).await? {
+            return Ok(None);
+        }
+        reject_active_managed_runs_for(state, &existing.id).await?;
+        if settings.selected_space_id.as_deref() == Some(existing.id.as_str())
+            && state.terminal_session_active()
+        {
+            return Err(CommandErrorDto::busy(
+                "Close this Space's terminal sessions before selecting its folder again.",
+            ));
+        }
+        settings.rebind_space_workspace(&existing.id, workspace.clone())?;
+        if let Some(space) = settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == existing.id)
+        {
+            space.archived = false;
+        }
+        settings.activate_space(&existing.id)?;
+        rebound_space_id = Some(existing.id);
     } else {
-        settings.add_space(workspace.clone())?;
+        settings.add_space(workspace)?;
     }
-    let space_id = settings
+    Ok(rebound_space_id)
+}
+
+fn selected_space_id(settings: &DesktopSettings) -> Result<String, CommandErrorDto> {
+    settings
         .selected_space_id
         .clone()
-        .ok_or_else(CommandErrorDto::not_configured)?;
-    store.save(&settings)?;
+        .ok_or_else(CommandErrorDto::not_configured)
+}
+
+async fn rebound_runtime_was_connected(state: &AppState, rebound_space_id: Option<&str>) -> bool {
+    if let Some(rebound_space_id) = rebound_space_id {
+        state.connected(rebound_space_id).await
+    } else {
+        false
+    }
+}
+
+async fn stop_rebound_runtime_for_selection(
+    state: &AppState,
+    store: &SettingsStore,
+    previous_settings: &DesktopSettings,
+    rebound_space_id: Option<&str>,
+    rebound_runtime_was_connected: bool,
+) -> Result<(), CommandErrorDto> {
+    let Some(rebound_space_id) = rebound_space_id else {
+        return Ok(());
+    };
+    if let Some(target) = state.target(rebound_space_id).await
+        && target.client.close().await.is_err()
+    {
+        let close_error = CommandErrorDto::busy("The previous Space runtime is still stopping.");
+        restore_space_rebind_after_failure(
+            state,
+            store,
+            previous_settings,
+            rebound_space_id,
+            rebound_runtime_was_connected,
+        )
+        .await?;
+        return Err(close_error);
+    }
+    state.remove_target(rebound_space_id).await;
+    state.remove_managed_space_runtime(rebound_space_id).await;
+    Ok(())
+}
+
+async fn save_space_selection(
+    state: &AppState,
+    store: &SettingsStore,
+    settings: &DesktopSettings,
+    previous_settings: &DesktopSettings,
+    rebound_space_id: Option<&str>,
+    rebound_runtime_was_connected: bool,
+) -> Result<(), CommandErrorDto> {
+    if let Err(error) = store.save(settings) {
+        let settings_restore_result = store.save(previous_settings);
+        let runtime_restore_result = restore_rebound_runtime_after_failure(
+            state,
+            store,
+            previous_settings,
+            rebound_space_id,
+            rebound_runtime_was_connected,
+        )
+        .await;
+        settings_restore_result?;
+        runtime_restore_result?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn start_selected_space_runtime(
+    state: &AppState,
+    store: &SettingsStore,
+    settings: &DesktopSettings,
+    previous_settings: &DesktopSettings,
+    rebound_space_id: Option<&str>,
+    rebound_runtime_was_connected: bool,
+    space_id: &str,
+) -> Result<(), CommandErrorDto> {
     state.select_target(None).await;
     if settings.managed_configured() {
-        if let Err(error) = managed_runtime::start(state, &store, &settings, false).await {
-            store.save(&previous_settings)?;
-            state
-                .select_target(previous_settings.selected_target_id.clone())
-                .await;
-            if let Some(previous_space_id) = previous_settings.selected_space_id.as_deref() {
-                state.activate_managed_terminal_for(previous_space_id).await;
-            }
+        if let Err(error) = managed_runtime::start(state, store, settings, false).await {
+            let settings_restore_result = store.save(previous_settings);
+            let runtime_restore_result = restore_runtime_after_start_failure(
+                state,
+                store,
+                previous_settings,
+                rebound_space_id,
+                rebound_runtime_was_connected,
+            )
+            .await;
+            settings_restore_result?;
+            runtime_restore_result?;
             return Err(error);
         }
     } else {
         state.clear_terminal_workspace().await;
         state
             .set_managed_health_for(
-                &space_id,
+                space_id,
                 ManagedHealth {
                     state: ManagedRuntimeStateDto::NeedsProvider,
                     message: "Configure a provider to start this Space.".into(),
@@ -463,10 +618,105 @@ async fn create_space_from_picker(
             )
             .await;
     }
-    state.select_target(Some(space_id.clone())).await;
-    state.activate_managed_terminal_for(&space_id).await;
-    let status = desktop_status_from(state, &settings).await?;
-    Ok(Some((WorkspaceSummaryDto::from(&workspace), status)))
+    Ok(())
+}
+
+async fn restore_rebound_runtime_after_failure(
+    state: &AppState,
+    store: &SettingsStore,
+    previous_settings: &DesktopSettings,
+    rebound_space_id: Option<&str>,
+    rebound_runtime_was_connected: bool,
+) -> Result<(), CommandErrorDto> {
+    if let Some(rebound_space_id) = rebound_space_id {
+        restore_space_rebind_after_failure(
+            state,
+            store,
+            previous_settings,
+            rebound_space_id,
+            rebound_runtime_was_connected,
+        )
+        .await
+    } else {
+        Ok(())
+    }
+}
+
+async fn restore_runtime_after_start_failure(
+    state: &AppState,
+    store: &SettingsStore,
+    previous_settings: &DesktopSettings,
+    rebound_space_id: Option<&str>,
+    rebound_runtime_was_connected: bool,
+) -> Result<(), CommandErrorDto> {
+    if rebound_space_id.is_some() {
+        restore_rebound_runtime_after_failure(
+            state,
+            store,
+            previous_settings,
+            rebound_space_id,
+            rebound_runtime_was_connected,
+        )
+        .await
+    } else {
+        restore_previous_space_selection(state, previous_settings).await;
+        Ok(())
+    }
+}
+
+fn rebound_runtime_rollback_settings(
+    previous_settings: &DesktopSettings,
+    rebound_space_id: &str,
+) -> Result<Option<DesktopSettings>, CommandErrorDto> {
+    if previous_settings
+        .space(rebound_space_id)
+        .is_none_or(|space| space.archived)
+    {
+        return Ok(None);
+    }
+    let mut rollback_settings = previous_settings.clone();
+    rollback_settings.activate_space(rebound_space_id)?;
+    Ok(Some(rollback_settings))
+}
+
+async fn restore_space_rebind_after_failure(
+    state: &AppState,
+    store: &SettingsStore,
+    previous_settings: &DesktopSettings,
+    rebound_space_id: &str,
+    runtime_was_connected: bool,
+) -> Result<(), CommandErrorDto> {
+    let runtime_restore_result = async {
+        if runtime_was_connected && !state.connected(rebound_space_id).await {
+            state.remove_target(rebound_space_id).await;
+            state.remove_managed_space_runtime(rebound_space_id).await;
+            match rebound_runtime_rollback_settings(previous_settings, rebound_space_id)? {
+                Some(rollback_settings) if has_managed_configuration(&rollback_settings) => {
+                    state.select_target(Some(rebound_space_id.to_owned())).await;
+                    managed_runtime::start(state, store, &rollback_settings, true).await
+                }
+                Some(rollback_settings) => {
+                    set_unstarted_health(state, &rollback_settings).await;
+                    Ok(())
+                }
+                None => Ok(()),
+            }
+        } else {
+            Ok(())
+        }
+    }
+    .await;
+    restore_previous_space_selection(state, previous_settings).await;
+    runtime_restore_result
+}
+
+async fn restore_previous_space_selection(state: &AppState, settings: &DesktopSettings) {
+    state
+        .select_target(settings.selected_target_id.clone())
+        .await;
+    if let Some(previous_space_id) = settings.selected_space_id.as_deref() {
+        state.activate_managed_terminal_for(previous_space_id).await;
+    }
 }
 
 async fn confirm_restore_space(app: &AppHandle, name: &str) -> Result<bool, CommandErrorDto> {
@@ -577,15 +827,18 @@ async fn refresh_live_space_search_index(state: &AppState, settings: &DesktopSet
                 let remaining = SPACE_SUMMARY_REFRESH_TIMEOUT.checked_sub(started.elapsed())?;
                 let response = tokio::time::timeout(
                     remaining,
-                    target.client.list_runs(ListRunsRequest {
-                        session_id: None,
-                        statuses: Vec::new(),
-                        page: Some(PageRequest {
-                            page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
-                            page_token,
-                        }),
-                        include_archived: false,
-                    }),
+                    run_list::list_runs(
+                        &target.client,
+                        ListRunsRequest {
+                            session_id: None,
+                            statuses: Vec::new(),
+                            page: Some(PageRequest {
+                                page_size: SPACE_SEARCH_INDEX_PAGE_SIZE,
+                                page_token,
+                            }),
+                            include_archived: false,
+                        },
+                    ),
                 )
                 .await
                 .ok()?
@@ -1277,9 +1530,9 @@ async fn reject_active_managed_runs_for(
     if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
         return Ok(());
     }
-    let runs = target
-        .client
-        .list_runs(ListRunsRequest {
+    let runs = run_list::list_runs(
+        &target.client,
+        ListRunsRequest {
             session_id: None,
             statuses: vec![
                 RunStatus::Queued,
@@ -1292,9 +1545,10 @@ async fn reject_active_managed_runs_for(
                 page_token: String::new(),
             }),
             include_archived: false,
-        })
-        .await
-        .map_err(CommandErrorDto::from_api)?;
+        },
+    )
+    .await
+    .map_err(CommandErrorDto::from_api)?;
     if runs.runs.is_empty() {
         Ok(())
     } else {
@@ -2221,7 +2475,7 @@ async fn probe_connected_external(
         // The permit lives with the actual request task. If the health deadline
         // expires, a non-cancellable platform-keychain read remains globally bounded.
         let _permit = permit;
-        existing.client.list_runs(request).await
+        run_list::list_runs(&existing.client, request).await
     });
     let result = tokio::time::timeout(EXTERNAL_PROBE_TIMEOUT, &mut probe).await;
     let health = match result {
@@ -3036,6 +3290,85 @@ mod tests {
         settings.models.clear();
         settings.model_roles.clear();
         assert!(!has_managed_configuration(&settings));
+    }
+
+    #[test]
+    fn space_rebind_rollback_reactivates_the_previous_runtime_configuration() {
+        let mut settings = settings_with_provider(&Uuid::now_v7().to_string());
+        let selected_space_id = Uuid::now_v7().to_string();
+        settings
+            .add_space(WorkspaceSetting {
+                id: selected_space_id.clone(),
+                path: "/tmp/selected-workspace".into(),
+                identity: Some(test_workspace_identity()),
+                display_name: "selected-workspace".into(),
+                display_path: "/tmp/selected-workspace".into(),
+            })
+            .expect("selected Space");
+        let rebound_space_id = Uuid::now_v7().to_string();
+        let rebound_workspace = WorkspaceSetting {
+            id: rebound_space_id.clone(),
+            path: "/tmp/rebound-workspace".into(),
+            identity: Some(
+                colossus_sdk::WorkspaceIdentity::from_macos_parts(3, 4, 1_700_000_001, 0)
+                    .expect("rebound workspace identity"),
+            ),
+            display_name: "rebound-workspace".into(),
+            display_path: "/tmp/rebound-workspace".into(),
+        };
+        settings
+            .add_space(rebound_workspace.clone())
+            .expect("rebound Space");
+        settings
+            .activate_space(&selected_space_id)
+            .expect("restore original selection");
+
+        let rollback = rebound_runtime_rollback_settings(&settings, &rebound_space_id)
+            .expect("rollback settings")
+            .expect("active rebound Space");
+
+        assert_eq!(
+            rollback.selected_space_id.as_deref(),
+            Some(rebound_space_id.as_str())
+        );
+        assert_eq!(
+            rollback.selected_target_id.as_deref(),
+            Some(rebound_space_id.as_str())
+        );
+        assert_eq!(rollback.workspace.as_ref(), Some(&rebound_workspace));
+        assert!(has_managed_configuration(&rollback));
+        assert_eq!(
+            settings.selected_space_id.as_deref(),
+            Some(selected_space_id.as_str()),
+            "building rollback settings must not disturb the durable selection"
+        );
+    }
+
+    #[test]
+    fn space_rebind_rollback_does_not_restart_an_archived_space() {
+        let mut settings = settings_with_provider(&Uuid::now_v7().to_string());
+        let rebound_space_id = Uuid::now_v7().to_string();
+        settings
+            .add_space(WorkspaceSetting {
+                id: rebound_space_id.clone(),
+                path: "/tmp/archived-workspace".into(),
+                identity: Some(test_workspace_identity()),
+                display_name: "archived-workspace".into(),
+                display_path: "/tmp/archived-workspace".into(),
+            })
+            .expect("archived Space");
+        settings
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == rebound_space_id)
+            .expect("Space profile")
+            .archived = true;
+
+        assert!(
+            rebound_runtime_rollback_settings(&settings, &rebound_space_id)
+                .expect("rollback decision")
+                .is_none()
+        );
     }
 
     #[test]

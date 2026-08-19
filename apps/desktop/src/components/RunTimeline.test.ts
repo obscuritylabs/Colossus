@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RunView, StreamState } from "../state";
 import type { Run, RunStatus, RunUpdate } from "../types";
-import type { ActivityPresentation } from "./RunTimeline";
 import { RunTimeline } from "./RunTimeline";
 
 function renderOutput(
@@ -14,7 +13,6 @@ function renderOutput(
   updates: RunUpdate[] = [],
   runOverrides: Partial<Run> = {},
   planContinuationAvailable = true,
-  activityPresentation: ActivityPresentation = "thread",
 ): string {
   const run: Run = {
     runId: "run-markdown-test",
@@ -51,7 +49,6 @@ function renderOutput(
   return renderToStaticMarkup(
     createElement(RunTimeline, {
       view,
-      activityPresentation,
       activityComparison: true,
       planContinuationAvailable,
       planWorkflowAvailable: true,
@@ -371,9 +368,10 @@ describe("RunTimeline assistant output", () => {
 
     expect(
       markup.match(
-        /<details class="compact-tool-activity activity-tool-thread activity-state-completed">/g,
+        /<details class="compact-tool-activity activity-tool-thread activity-state-completed activity-kind-list">/g,
       ),
     ).toHaveLength(1);
+    expect(markup).toContain("Mapped repository structure");
     expect(markup).toContain("repo.map");
     expect(markup).toContain("requested");
     expect(markup).toContain("started");
@@ -431,7 +429,6 @@ describe("RunTimeline assistant output", () => {
       updates,
       {},
       true,
-      "thread",
     );
 
     expect(markup).toContain("run-activity-thread");
@@ -469,14 +466,13 @@ describe("RunTimeline assistant output", () => {
       ],
       {},
       true,
-      "thread",
     );
 
     expect(markup).toContain("run-state-running");
     expect(markup).toContain("activity-state-started");
   });
 
-  it("renders the same canonical activity as a single run capsule", () => {
+  it("renders failed canonical activity in the working timeline", () => {
     const updates: RunUpdate[] = [
       {
         runId: "run-markdown-test",
@@ -511,10 +507,10 @@ describe("RunTimeline assistant output", () => {
       updates,
       {},
       true,
-      "capsule",
     );
 
-    expect(markup).toContain("run-activity-capsule");
+    expect(markup).toContain("run-activity-thread");
+    expect(markup).not.toContain("run-activity-capsule");
     expect(markup).toContain("1 action");
     expect(markup).toContain("1 note");
     expect(markup).toContain("Command denied by workspace policy");
@@ -613,9 +609,67 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain('aria-label="Tool input"');
     expect(markup).toContain("Input");
     expect(markup).toContain("git status --short");
+    expect(markup).toContain("Running git status --short");
     expect(markup).toContain(
       "No preview is available while the tool is still running.",
     );
+  });
+
+  it("uses a concrete filename for a released file action", () => {
+    const markup = renderOutput("Done", "completed", "complete", [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "tool_activity",
+          activity: {
+            callId: "call-write",
+            toolName: "filesystem.write",
+            state: "completed",
+            summary: "tool execution completed at turn 1",
+            input: '{"path":"notes/sample.txt","mode":"create"}',
+          },
+        },
+      },
+    ]);
+
+    expect(markup).toContain("Created sample.txt");
+    expect(markup).toContain("activity-kind-write");
+  });
+
+  it("uses friendly Research labels and collapses adjacent duplicate notices", () => {
+    const skipped: RunUpdate = {
+      runId: "run-markdown-test",
+      sequence: 2,
+      createdAt: "2026-07-21T12:00:01Z",
+      update: {
+        type: "notice",
+        reason: "research.collecting.skipped",
+        message: "bounded research worker or source budget exhausted",
+      },
+    };
+    const markup = renderOutput("Report", "completed", "complete", [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-07-21T12:00:00Z",
+        update: {
+          type: "notice",
+          reason: "research.collecting.completed",
+          message: "released 20 repository source(s)",
+        },
+      },
+      skipped,
+      { ...skipped, sequence: 3, createdAt: "2026-07-21T12:00:02Z" },
+    ]);
+
+    expect(markup).toContain("Gathered sources");
+    expect(markup).toContain("Added 20 repository sources.");
+    expect(markup.match(/Source search skipped/g)).toHaveLength(1);
+    expect(markup).toContain("Source or worker limit reached.");
+    expect(markup).not.toContain("research.collecting.skipped");
+    expect(markup).not.toContain("source(s)");
   });
 
   it("counts Research progress as steps and uses its canonical duration", () => {

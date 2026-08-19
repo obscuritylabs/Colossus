@@ -8,6 +8,29 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.2] - 2026-08-18
+
+### Changed
+
+- Committed Desktop activity to one timeline view and replaced generic tool and research
+  event names with concise, task-oriented labels.
+- Refined the Space sidebar with a trailing new-thread action, persistent local pinning
+  during startup, and one contextual control for loading older threads.
+- Reworked Research settings into a compact, accessible popover with persistent depth
+  and evidence-source selections.
+
+### Fixed
+
+- Rebound explicitly reselected folders to their existing Space and repaired stale
+  same-path duplicates after a folder object is replaced.
+- Made Space archive and restore visible and functional in the Desktop development
+  fixture, selected the next active Space after archiving the current one, and surfaced
+  native lifecycle failures beside the Space controls.
+- Retried bounded transient run-list admission failures during Desktop startup and
+  background Space inspection instead of exposing a spurious empty or failed state.
+- Kept thread action menus usable across WebKit focus transitions and preserved pin
+  changes across reloads.
+
 ## [0.10.10-preview.1] - 2026-08-16
 
 ### Added

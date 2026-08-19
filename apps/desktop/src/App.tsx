@@ -74,7 +74,11 @@ import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
-import type { SpaceSearchScope, SpaceStartup } from "./components/WorkSidebar";
+import type {
+  SpaceActionFeedback,
+  SpaceSearchScope,
+  SpaceStartup,
+} from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
@@ -127,6 +131,7 @@ import {
   readStoredWorkSidebarWidth,
   storeWorkSidebarWidth,
 } from "./sidebar-width";
+import { projectSpaceArchived, projectSpaceRestored } from "./space-lifecycle";
 import {
   pinnedThreadIdsForSpace,
   readStoredThreadPins,
@@ -180,6 +185,9 @@ const FIXTURE_MODE =
     FIXTURE_SCENARIO === "plan-workflow");
 const FIXTURE_SPACE_STARTUP =
   FIXTURE_MODE && FIXTURE_QUERY.get("spaceStartup") === "1";
+const FIXTURE_CONNECTION_STARTUP =
+  FIXTURE_MODE &&
+  (FIXTURE_SPACE_STARTUP || FIXTURE_QUERY.get("connecting") === "1");
 
 const INITIAL_CONNECTION: ConnectionStatus = FIXTURE_MODE
   ? {
@@ -832,20 +840,24 @@ export default function App() {
   const [initialWorkSidebarWidth] = useState(readStoredWorkSidebarWidth);
   const workSidebarWidthRef = useRef(initialWorkSidebarWidth);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
-  const [storedThreadPins, setStoredThreadPins] =
-    useState(readStoredThreadPins);
-  const pinnedThreadSessionIds = useMemo(() => {
-    const pinned = new Set(
-      pinnedThreadIdsForSpace(storedThreadPins, desktop.selectedSpaceId),
-    );
-    if (FIXTURE_MODE && chat.activeRunId !== null) {
-      const fixtureSessionId = chat.views.get(chat.activeRunId)?.run.sessionId;
-      if (fixtureSessionId !== undefined) {
-        pinned.add(fixtureSessionId);
-      }
-    }
-    return pinned;
-  }, [chat.activeRunId, chat.views, desktop.selectedSpaceId, storedThreadPins]);
+  const [storedThreadPins, setStoredThreadPins] = useState(() => {
+    const fixtureSessionId =
+      FIXTURE_MODE && chat.activeRunId !== null
+        ? chat.views.get(chat.activeRunId)?.run.sessionId
+        : undefined;
+    const fixtureDefaults =
+      desktop.selectedSpaceId !== null && fixtureSessionId !== undefined
+        ? setThreadPinned([], desktop.selectedSpaceId, fixtureSessionId, true)
+        : [];
+    return readStoredThreadPins(fixtureDefaults);
+  });
+  const pinnedThreadSessionIds = useMemo(
+    () =>
+      new Set(
+        pinnedThreadIdsForSpace(storedThreadPins, desktop.selectedSpaceId),
+      ),
+    [desktop.selectedSpaceId, storedThreadPins],
+  );
   const [releaseChannel, setReleaseChannel] = useState(
     INITIAL_DESKTOP.releaseChannel,
   );
@@ -885,7 +897,7 @@ export default function App() {
   const spaceThreadPreviewRequests = useRef(new Set<string>());
   const connection = desktop.connection;
   const [connecting, setConnecting] = useState(
-    !FIXTURE_MODE || FIXTURE_SPACE_STARTUP,
+    !FIXTURE_MODE || FIXTURE_CONNECTION_STARTUP,
   );
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
@@ -920,6 +932,8 @@ export default function App() {
     readonly QueuedMessage[]
   >([]);
   const [actionError, setActionError] = useState<CommandError | null>(null);
+  const [spaceActionFeedback, setSpaceActionFeedback] =
+    useState<SpaceActionFeedback | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
   const [cancelling, setCancelling] = useState(false);
@@ -1410,7 +1424,7 @@ export default function App() {
 
   useEffect(() => {
     if (FIXTURE_MODE) {
-      setConnecting(FIXTURE_SPACE_STARTUP);
+      setConnecting(FIXTURE_CONNECTION_STARTUP);
       return;
     }
     let cancelled = false;
@@ -3397,8 +3411,27 @@ export default function App() {
     connectingRef.current = true;
     setConnecting(true);
     setActionError(null);
+    const displayName =
+      desktopRef.current.spaces.find((space) => space.spaceId === spaceId)
+        ?.displayName ?? "Space";
+    setSpaceActionFeedback({
+      tone: "progress",
+      message: `Archiving ${displayName}…`,
+    });
     try {
       if (FIXTURE_MODE) {
+        const wasSelected = desktopRef.current.selectedSpaceId === spaceId;
+        const status = projectSpaceArchived(desktopRef.current, spaceId);
+        desktopRef.current = status;
+        setDesktop(status);
+        if (wasSelected) {
+          invalidateTargetRoute();
+          dispatch({ type: "reset" });
+        }
+        setSpaceActionFeedback({
+          tone: "success",
+          message: `Archived ${displayName}.`,
+        });
         return;
       }
       const wasSelected = desktopRef.current.selectedSpaceId === spaceId;
@@ -3408,8 +3441,14 @@ export default function App() {
       const status = await archiveSpace(spaceId);
       await acceptDesktopStatus(status, wasSelected);
       setShowOnboarding(managedOnboardingRequired(status));
+      setSpaceActionFeedback({
+        tone: "success",
+        message: `Archived ${displayName}.`,
+      });
     } catch (error: unknown) {
-      setActionError(commandError(error));
+      const failure = commandError(error);
+      setActionError(failure);
+      setSpaceActionFeedback({ tone: "error", message: failure.message });
       await resyncDesktopAfterFailedMutation();
     } finally {
       connectingRef.current = false;
@@ -3424,12 +3463,29 @@ export default function App() {
     connectingRef.current = true;
     setConnecting(true);
     setActionError(null);
+    const displayName =
+      desktopRef.current.spaces.find((space) => space.spaceId === spaceId)
+        ?.displayName ?? "Space";
+    setSpaceActionFeedback({
+      tone: "progress",
+      message: `Restoring ${displayName}…`,
+    });
     try {
-      if (!FIXTURE_MODE) {
+      if (FIXTURE_MODE) {
+        const status = projectSpaceRestored(desktopRef.current, spaceId);
+        desktopRef.current = status;
+        setDesktop(status);
+      } else {
         await acceptDesktopStatus(await restoreSpace(spaceId), false);
       }
+      setSpaceActionFeedback({
+        tone: "success",
+        message: `Restored ${displayName}. Select it when you’re ready.`,
+      });
     } catch (error: unknown) {
-      setActionError(commandError(error));
+      const failure = commandError(error);
+      setActionError(failure);
+      setSpaceActionFeedback({ tone: "error", message: failure.message });
       await resyncDesktopAfterFailedMutation();
     } finally {
       connectingRef.current = false;
@@ -4368,6 +4424,7 @@ export default function App() {
           spaceThreadPreviewErrors={spaceThreadPreviewErrors}
           busy={listBusy}
           error={listError}
+          spaceActionFeedback={spaceActionFeedback}
           hasMore={chat.nextPageToken !== ""}
           disabled={submitting || (connecting && spaceStartup === null)}
           spaceStartup={spaceStartup}

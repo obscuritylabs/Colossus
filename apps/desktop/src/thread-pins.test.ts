@@ -4,6 +4,7 @@ import {
   MAX_PINNED_THREADS_PER_SPACE,
   parseStoredThreadPins,
   pinnedThreadIdsForSpace,
+  readStoredThreadPins,
   setThreadPinned,
 } from "./thread-pins";
 
@@ -52,5 +53,11 @@ describe("thread pins", () => {
       MAX_PINNED_THREADS_PER_SPACE,
     );
     expect(pinnedThreadIdsForSpace(pins, "space-a")[0]).toBe("session-35");
+  });
+
+  it("uses a caller-provided default only when stored pins are absent", () => {
+    const fallback = [{ spaceId: "space-a", sessionIds: ["session-a"] }];
+
+    expect(readStoredThreadPins(fallback)).toEqual(fallback);
   });
 });

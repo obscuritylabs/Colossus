@@ -76,6 +76,7 @@ const BASE_PROPS: ComponentProps<typeof WorkSidebar> = {
   spaceThreadPreviewErrors: new Map(),
   busy: false,
   error: "",
+  spaceActionFeedback: null,
   hasMore: false,
   disabled: false,
   spaceStartup: null,
@@ -132,6 +133,44 @@ describe("WorkSidebar", () => {
     expect(markup).toContain('aria-valuemin="260"');
     expect(markup).toContain('aria-valuemax="480"');
     expect(markup).not.toContain("<strong>Primary</strong>");
+  });
+
+  it("keeps the selected Space create action at the trailing edge", () => {
+    const markup = renderSidebar();
+    const shelfStart = markup.indexOf('class="space-shelf is-active"');
+    const shelfEnd = markup.indexOf("</div>", shelfStart);
+    const shelfRow = markup.slice(shelfStart, shelfEnd);
+
+    expect(shelfRow.indexOf('class="space-shelf-state"')).toBeLessThan(
+      shelfRow.indexOf('class="space-shelf-chevron"'),
+    );
+    expect(shelfRow.indexOf('class="space-shelf-chevron"')).toBeLessThan(
+      shelfRow.indexOf('class="space-compose-action"'),
+    );
+  });
+
+  it("surfaces Space lifecycle progress and failures beside the Space controls", () => {
+    const progress = renderSidebar({
+      spaceActionFeedback: {
+        tone: "progress",
+        message: "Archiving Colossus…",
+      },
+    });
+    const failure = renderSidebar({
+      spaceActionFeedback: {
+        tone: "error",
+        message: "Finish active runs before archiving this Space.",
+      },
+    });
+
+    expect(progress).toContain('class="space-action-feedback is-progress"');
+    expect(progress).toContain('role="status"');
+    expect(progress).toContain("Archiving Colossus…");
+    expect(failure).toContain('class="space-action-feedback is-error"');
+    expect(failure).toContain('role="alert"');
+    expect(failure).toContain(
+      "Finish active runs before archiving this Space.",
+    );
   });
 
   it("keeps catalog destinations stable when the selected Space reports no entries", () => {
@@ -244,6 +283,36 @@ describe("WorkSidebar", () => {
     expect(markup.indexOf(">Active<")).toBeLessThan(markup.indexOf(">Recent<"));
   });
 
+  it("shows one contextual pagination control for recent threads", () => {
+    const completedRuns = Array.from({ length: 4 }, (_, index) => ({
+      ...RUN,
+      runId: `completed-${index}`,
+      sessionId: `completed-${index}`,
+      title: `Completed thread ${index + 1}`,
+      status: "completed" as const,
+      finishedAt: RUN.updatedAt,
+    }));
+    const markup = renderSidebar({ runs: completedRuns, hasMore: true });
+
+    expect(markup).toContain("View 1 more recent thread");
+    expect(markup).not.toContain(">Load more<");
+    expect(markup).not.toContain(">Load older threads<");
+  });
+
+  it("uses the recent group as the single older-thread pagination surface", () => {
+    const completedRuns = Array.from({ length: 3 }, (_, index) => ({
+      ...RUN,
+      runId: `completed-${index}`,
+      sessionId: `completed-${index}`,
+      title: `Completed thread ${index + 1}`,
+      status: "completed" as const,
+      finishedAt: RUN.updatedAt,
+    }));
+    const markup = renderSidebar({ runs: completedRuns, hasMore: true });
+
+    expect(markup.match(/Load older threads/g)).toHaveLength(1);
+  });
+
   it("offers persistent pin controls and groups pinned threads first", () => {
     const markup = renderSidebar({
       pinnedSessionIds: new Set([RUN.sessionId]),
@@ -268,6 +337,17 @@ describe("WorkSidebar", () => {
     expect(markup).toContain(
       'aria-label="Thread actions for Improve the Work sidebar"',
     );
+  });
+
+  it("keeps local pin controls available while the app connects", () => {
+    const markup = renderSidebar({ disabled: true });
+
+    expect(
+      openingButtonTag(markup, "Pin Improve the Work sidebar"),
+    ).not.toContain("disabled");
+    expect(
+      openingButtonTag(markup, "Archive Improve the Work sidebar"),
+    ).toContain("disabled");
   });
 
   it("offers archiving only after a thread reaches a terminal state", () => {

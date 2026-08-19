@@ -199,23 +199,21 @@ describe("WorkSurface side panels", () => {
     expect(markup).not.toContain('id="work-side-drawer"');
   });
 
-  it("shows the timeline view switch on live threads", () => {
-    expect(renderSurface([])).not.toContain('aria-label="Timeline view"');
-
+  it("renders live activity directly in the working timeline", () => {
     const liveThreadMarkup = renderSurface(
       [],
       { files: true, artifacts: true },
       false,
       true,
     );
-    expect(liveThreadMarkup).toContain('aria-label="Timeline view"');
     expect(liveThreadMarkup).toContain('aria-label="Session views"');
     expect(liveThreadMarkup).toContain("Topology");
     expect(liveThreadMarkup).toContain("Plans");
     expect(liveThreadMarkup).toContain("Sources");
     expect(liveThreadMarkup).toContain("Resources");
-    expect(liveThreadMarkup).toContain("Capsule");
-    expect(liveThreadMarkup).toContain("Working thread");
+    expect(liveThreadMarkup).not.toContain('aria-label="Timeline view"');
+    expect(liveThreadMarkup).not.toContain("Capsule");
+    expect(liveThreadMarkup).not.toContain("Working thread");
     expect(liveThreadMarkup).toContain(
       'data-aside-source-run-id="comparison-run"',
     );

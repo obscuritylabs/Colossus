@@ -96,14 +96,19 @@ export function setThreadPinned(
     : [{ spaceId, sessionIds }, ...otherSpaces];
 }
 
-export function readStoredThreadPins(): readonly StoredThreadPins[] {
+export function readStoredThreadPins(
+  absentFallback: readonly StoredThreadPins[] = [],
+): readonly StoredThreadPins[] {
   if (typeof window === "undefined") {
-    return [];
+    return absentFallback;
   }
   try {
-    return parseStoredThreadPins(window.localStorage.getItem(STORAGE_KEY));
+    const serialized = window.localStorage.getItem(STORAGE_KEY);
+    return serialized === null
+      ? absentFallback
+      : parseStoredThreadPins(serialized);
   } catch {
-    return [];
+    return absentFallback;
   }
 }
 
