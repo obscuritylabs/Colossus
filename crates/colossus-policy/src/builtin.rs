@@ -1,5 +1,8 @@
 use super::*;
 
+const DEFAULT_MAX_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
+const DEFAULT_MAX_MEMORY_BYTES: u64 = 1024 * 1024 * 1024;
+
 pub(super) fn default_obligations() -> PolicyObligations {
     PolicyObligations {
         sandbox_backend: "broker".into(),
@@ -11,9 +14,9 @@ pub(super) fn default_obligations() -> PolicyObligations {
         allowed_environment: Vec::new(),
         allow_sandbox_downgrade: false,
         timeout_ms: 30_000,
-        max_output_bytes: 1024 * 1024,
+        max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
         max_processes: 1,
-        max_memory_bytes: 256 * 1024 * 1024,
+        max_memory_bytes: DEFAULT_MAX_MEMORY_BYTES,
         max_concurrency: 1,
         required_redactions: Vec::new(),
         require_post_effect: false,

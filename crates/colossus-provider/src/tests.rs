@@ -795,13 +795,29 @@ async fn one_tls_response_server(
 }
 
 async fn one_sse_server(body: String) -> (String, tokio::task::JoinHandle<String>) {
-    one_sse_server_with_content_type(body, Some("text/event-stream")).await
+    one_sse_server_with_options(body, Some("text/event-stream"), 17).await
 }
 
 async fn one_sse_server_with_content_type(
     body: String,
     content_type: Option<&'static str>,
 ) -> (String, tokio::task::JoinHandle<String>) {
+    one_sse_server_with_options(body, content_type, 17).await
+}
+
+async fn one_sse_server_with_chunk_size(
+    body: String,
+    chunk_size: usize,
+) -> (String, tokio::task::JoinHandle<String>) {
+    one_sse_server_with_options(body, Some("text/event-stream"), chunk_size).await
+}
+
+async fn one_sse_server_with_options(
+    body: String,
+    content_type: Option<&'static str>,
+    chunk_size: usize,
+) -> (String, tokio::task::JoinHandle<String>) {
+    assert!(chunk_size > 0, "SSE server chunk size must be positive");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
     let task = tokio::spawn(async move {
@@ -840,13 +856,34 @@ async fn one_sse_server_with_content_type(
             .write_all(response.as_bytes())
             .await
             .expect("write headers");
-        for chunk in body.as_bytes().chunks(17) {
+        for chunk in body.as_bytes().chunks(chunk_size) {
             stream.write_all(chunk).await.expect("write SSE chunk");
             tokio::task::yield_now().await;
         }
         request_text
     });
     (format!("http://{address}/v1"), task)
+}
+
+fn padded_compatible_sse_body_above_legacy_default() -> String {
+    const LEGACY_DEFAULT: usize = 1024 * 1024;
+    const CURRENT_DEFAULT: usize = 4 * 1024 * 1024;
+
+    let comment = format!(":{}\n", "x".repeat(4 * 1024));
+    let mut body = String::with_capacity(LEGACY_DEFAULT + comment.len() + 512);
+    while body.len() <= LEGACY_DEFAULT {
+        body.push_str(&comment);
+    }
+    body.push_str(
+        r#"data: {"id":"chat-large","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#,
+    );
+    assert!(body.len() > LEGACY_DEFAULT);
+    assert!(body.len() < CURRENT_DEFAULT);
+    body
 }
 
 #[derive(Default)]
@@ -2169,6 +2206,93 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
             .iter()
             .any(|event| event.event_type == "effect.chunk_released.v1")
     );
+}
+
+#[tokio::test]
+async fn compatible_sse_stream_accepts_raw_body_above_legacy_default() {
+    let body = padded_compatible_sse_body_above_legacy_default();
+    let (base_url, server) = one_sse_server_with_chunk_size(body, 64 * 1024).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [63_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+
+    gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect("raw provider stream within the revised default");
+    assert!(released.0.iter().any(|item| matches!(
+        item,
+        ProviderStreamItem::Event {
+            event: ProviderEvent::FinalOutput { text }
+        } if text == "ok"
+    )));
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn compatible_sse_stream_rejects_raw_body_above_effective_policy_ceiling() {
+    let body = padded_compatible_sse_body_above_legacy_default();
+    let (base_url, server) = one_sse_server_with_chunk_size(body, 64 * 1024).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_limits(30_000, 1024 * 1024, 1, 64 * 1024 * 1024, 1)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [64_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+
+    let error = gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect_err("raw provider stream above the effective ceiling must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("raw provider event stream exceeds the permitted output bound"),
+        "unexpected error: {error}"
+    );
+    server.await.expect("server task");
 }
 
 #[tokio::test]

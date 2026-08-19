@@ -19,4 +19,4 @@ pub use session_map::{
     WorkerSessionMemory, WorkerSessionPlan, WorkerSessionResearchRun, WorkerSessionResearchSource,
     WorkerSessionTask,
 };
-pub use wire::{PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlError};
+pub use wire::{MAX_FRAME_BYTES, PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlError};

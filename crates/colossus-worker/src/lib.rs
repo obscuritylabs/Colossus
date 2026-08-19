@@ -22,7 +22,7 @@ use colossus_runtime::{
     CodexAuthStore, CredentialResolver, EnvironmentCredentialResolver, Runtime, RuntimeConfig,
     RuntimeError, RuntimeOpenOptions, format_provider_response_diagnostic,
 };
-use colossus_worker_protocol::PROTOCOL_VERSION;
+use colossus_worker_protocol::{MAX_FRAME_BYTES, PROTOCOL_VERSION};
 use hmac::{Hmac, Mac as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -42,7 +42,6 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
-const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 const REPLAY_WINDOW: usize = 4_096;
 #[cfg(not(windows))]

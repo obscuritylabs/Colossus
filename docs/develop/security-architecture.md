@@ -569,6 +569,9 @@ coordination directory used by the workspace writer lease. The sidecar binds thi
 endpoint before acknowledging bootstrap activation, so an unsafe or unavailable local
 endpoint fails on the inherited control channel rather than being misreported as a
 public TLS failure. No worker key or provider credential is written into the pathname.
+Protocol v15 keeps authenticated client requests bounded at 1 MiB and serialized
+response frames bounded at 8 MiB, enough for a permitted 4 MiB effect result after the
+nested base64 encoding without turning worker IPC into an unbounded allocation path.
 For ordinary CLI-started workers, the server creates or loads a versioned random key
 from the owner-only, no-follow regular file at `<storage.path>.worker-auth`; clients
 never create or repair that file. This key is independent of journal encryption,

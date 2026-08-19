@@ -165,9 +165,9 @@ sandbox:
   environment: []
   networkDestinations: []
   timeoutMs: 30000
-  maxOutputBytes: 1048576
+  maxOutputBytes: 4194304
   maxProcesses: 16
-  maxMemoryBytes: 268435456
+  maxMemoryBytes: 1073741824
   maxConcurrency: 1
 agent:
   maxTurns: 100
