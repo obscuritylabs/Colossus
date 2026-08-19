@@ -2169,6 +2169,10 @@ p {
   overflow: hidden;
 }
 
+.work-layout:has(.run-controls[open]) {
+  overflow: visible;
+}
+
 .work-layout.is-work-drawer-open {
   grid-template-columns: minmax(410px, 47%) minmax(360px, 53%);
 }

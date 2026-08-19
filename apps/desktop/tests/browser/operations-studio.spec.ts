@@ -77,7 +77,12 @@ test("Space archive and restore update the sidebar and confirm the outcome", asy
 test("Research settings expose depth and evidence choices and restore focus", async ({
   page,
 }) => {
-  await page.getByRole("radio", { name: "Research" }).check();
+  const researchMode = page.getByRole("radio", { name: "Research" });
+  await page
+    .locator(".mode-switch")
+    .getByText("Research", { exact: true })
+    .click();
+  await expect(researchMode).toBeChecked();
 
   const settingsTrigger = page.getByLabel(
     "Research controls, sources This Space",
