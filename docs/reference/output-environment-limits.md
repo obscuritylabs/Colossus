@@ -46,9 +46,9 @@ and never interpreted as terminal control input.
 | Agent turns | `100` |
 | Concurrent subagents | `10` |
 | Sandbox timeout | `30000 ms` |
-| Sandbox output | `1048576 bytes` |
+| Sandbox output | `4194304 bytes` |
 | Sandbox processes | `16` |
-| Sandbox memory | `268435456 bytes` |
+| Sandbox memory | `1073741824 bytes` |
 | Sandbox concurrency | `1` |
 | Context window estimate | `32768 tokens` |
 | Auto-compaction threshold | `70%` |
@@ -63,6 +63,12 @@ additional hard protocol and input bounds. Exact effective values come from `con
 show`, `config effective`, and the relevant command help. See
 [Runtime limits configuration](configuration/limits.md) for field interactions,
 validation ranges, and tuning examples.
+
+Provider raw-stream bytes, model output tokens, and process-tree memory are separate
+limits. The provider byte count includes the full SSE framing and metadata before
+normalization. The memory value is an enforced effect-process-tree ceiling, not memory
+preallocated by the Colossus process. Policy, adapter, and request-specific obligations
+may narrow either configured ceiling and never widen it.
 
 ## Important hard bounds
 

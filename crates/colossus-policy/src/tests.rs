@@ -192,6 +192,22 @@ fn network_request(action: &str, content: serde_json::Value) -> colossus_contrac
     request
 }
 
+#[tokio::test]
+async fn builtin_policy_decisions_carry_default_sandbox_ceilings() {
+    let decision = BuiltInPolicy::offline_default()
+        .decide(&effect_request(
+            system_actor("default-limits-test"),
+            "provider.echo",
+            "echo",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("built-in policy decision");
+
+    assert_eq!(decision.obligations.max_output_bytes, 4 * 1024 * 1024);
+    assert_eq!(decision.obligations.max_memory_bytes, 1024 * 1024 * 1024);
+}
+
 fn mcp_call_request(
     transport: &str,
     resource: &str,
