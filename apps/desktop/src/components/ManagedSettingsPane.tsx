@@ -4052,7 +4052,7 @@ function AuthorityItem({
   );
 }
 
-function RepositoryImportDialog({
+export function RepositoryImportDialog({
   proposal,
   stage,
   credentials,
@@ -4086,6 +4086,29 @@ function RepositoryImportDialog({
     "Authority",
     "Apply",
   ];
+  const credentialIds = new Set(credentials.map((credential) => credential.id));
+  const mappingsValid = proposal.credentialSlots.every((slot) => {
+    const credentialId = mappings[slot.slotId];
+    return Boolean(credentialId && credentialIds.has(credentialId));
+  });
+  const conflictsValid = proposal.resources
+    .filter((resource) => resource.conflict)
+    .every((resource) => {
+      const decision = conflicts[`${resource.kind}:${resource.sourceId}`];
+      if (!decision) return false;
+      if (decision.action !== "rename") return true;
+      const renamed = decision.renamedSourceId?.trim() ?? "";
+      return (
+        renamed.length > 0 &&
+        renamed.length <= 64 &&
+        renamed !== resource.sourceId &&
+        /^[A-Za-z0-9._-]+$/.test(renamed)
+      );
+    });
+  const stageValid =
+    (stage !== 1 || mappingsValid) &&
+    (stage !== 2 || conflictsValid) &&
+    (stage !== stages.length - 1 || (mappingsValid && conflictsValid));
   return (
     <div className="settings-dialog-backdrop" role="presentation">
       <section
@@ -4331,7 +4354,7 @@ function RepositoryImportDialog({
           <button
             className="button primary"
             type="button"
-            disabled={busy}
+            disabled={busy || !stageValid}
             onClick={() =>
               stage === stages.length - 1 ? onApply() : onStageChange(stage + 1)
             }

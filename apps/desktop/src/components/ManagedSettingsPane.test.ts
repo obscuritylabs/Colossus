@@ -2,12 +2,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { DesktopStatus, SpaceSummary } from "../types";
+import type {
+  DesktopStatus,
+  ManagedCredentialMetadata,
+  RepositoryConfigurationProposal,
+  SpaceSummary,
+} from "../types";
 import {
   advancedSectionContainsField,
   buildManagedSettingsFixture,
   managedFieldDestination,
   ManagedSettingsPane,
+  RepositoryImportDialog,
 } from "./ManagedSettingsPane";
 
 const space: SpaceSummary = {
@@ -139,6 +145,81 @@ function renderPane(): string {
   );
 }
 
+const importProposal: RepositoryConfigurationProposal = {
+  spaceId: space.spaceId,
+  relativePath: ".colossus/config.yaml",
+  sha256: "a".repeat(64),
+  previousSha256: "b".repeat(64),
+  changedSinceImport: true,
+  resources: [
+    {
+      kind: "provider",
+      sourceId: "openapi",
+      label: "OpenAPI",
+      detail: "open ai compatible",
+      conflict: true,
+      existingResourceId: "provider-existing",
+    },
+    {
+      kind: "mcp",
+      sourceId: "docs",
+      label: "Documentation",
+      detail: "streamable http",
+      conflict: false,
+      existingResourceId: null,
+    },
+  ],
+  credentialSlots: [
+    {
+      slotId: "env:OPENAI_API_KEY",
+      label: "OPENAI_API_KEY",
+      consumers: ["runtime.providers.profiles.openapi.credentialReference"],
+    },
+  ],
+  fieldOverrides: ["agent.maxTurns"],
+  lockedFields: ["storage.location"],
+  warnings: ["Static MCP headers are not imported."],
+};
+
+const importCredentials: ManagedCredentialMetadata[] = [
+  {
+    id: "credential-openapi",
+    label: "OpenAPI production",
+    kind: "api_key",
+    backend: "desktop",
+    createdAtMs: 1,
+  },
+];
+
+function renderImport(
+  stage: number,
+  mappings: Record<string, string> = {
+    "env:OPENAI_API_KEY": "credential-openapi",
+  },
+  conflicts = {
+    "provider:openapi": {
+      action: "rename" as const,
+      renamedSourceId: "openapi-imported",
+    },
+  },
+): string {
+  return renderToStaticMarkup(
+    createElement(RepositoryImportDialog, {
+      proposal: importProposal,
+      stage,
+      credentials: importCredentials,
+      mappings,
+      conflicts,
+      busy: false,
+      onStageChange: vi.fn(),
+      onMappingsChange: vi.fn(),
+      onConflictsChange: vi.fn(),
+      onApply: vi.fn(),
+      onClose: vi.fn(),
+    }),
+  );
+}
+
 describe("ManagedSettingsPane", () => {
   it("builds a revisioned, renderer-safe snapshot from Desktop status", () => {
     const snapshot = buildManagedSettingsFixture(desktop());
@@ -205,5 +286,41 @@ describe("ManagedSettingsPane", () => {
     expect(markup).not.toContain("apiKey");
     expect(markup).not.toContain("clientSecret");
     expect(markup).not.toContain("credentialValue");
+  });
+
+  it.each([
+    [0, "OpenAPI"],
+    [1, "OPENAI_API_KEY"],
+    [2, "Rename imported"],
+    [3, "storage.location"],
+    [4, "Apply import"],
+  ])("renders repository import stage %i", (stage, expected) => {
+    const markup = renderImport(stage as number);
+
+    expect(markup).toContain(expected);
+    expect(markup).toContain("SHA-256 aaaaaaaaaaaa");
+    expect(markup).not.toContain('type="password"');
+    expect(markup).not.toContain("must-not-cross-renderer");
+  });
+
+  it("blocks import progression until native credentials and valid renames are mapped", () => {
+    const unmapped = renderImport(1, { "env:OPENAI_API_KEY": "" });
+    const missingCredential = renderImport(1, {
+      "env:OPENAI_API_KEY": "credential-missing",
+    });
+    const invalidRename = renderImport(2, undefined, {
+      "provider:openapi": {
+        action: "rename",
+        renamedSourceId: "openapi imported",
+      },
+    });
+    const valid = renderImport(2);
+
+    expect(unmapped).toContain('disabled=""');
+    expect(missingCredential).toContain('disabled=""');
+    expect(invalidRename).toContain('disabled=""');
+    expect(valid).not.toContain(
+      'class="button primary" type="button" disabled',
+    );
   });
 });
