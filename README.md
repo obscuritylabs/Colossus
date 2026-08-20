@@ -1,13 +1,24 @@
 # Colossus
 
-Colossus is an auditable runtime for agent work and durable automation. It combines a
-bounded model-and-tool loop, policy-controlled effects, resumable sessions, workflows,
-memory, research, and a hash-chained event journal with optional authenticated
-encryption in one Rust binary.
+**A runtime for agents that do real work—and leave an audit trail.**
 
-## Start in five minutes
+Colossus gives AI agents a controlled way to use files, Git, processes, network
+services, and other tools. Every effect passes through access checks, policy, optional
+approval, execution limits, and durable audit. Sessions, plans, workflows, research,
+and other work survive restarts instead of disappearing with the terminal transcript.
 
-Install the latest stable native binary directly from the public release channel:
+It ships as a Rust binary with a CLI and terminal UI. A Tauri desktop app and
+authenticated SDKs use the same runtime and security model.
+
+> [!WARNING]
+> Colossus is alpha software. Behavior, configuration, storage formats, APIs, and user
+> interfaces may change between releases. Review the [upgrade and compatibility
+> guide](docs/get-started/upgrade-compatibility.md) before updating an installation you
+> depend on.
+
+## Try it offline
+
+Install the latest stable release on macOS or Linux:
 
 ```bash
 curl -fsSL https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.sh | sh
@@ -19,97 +30,100 @@ On Windows PowerShell:
 irm https://github.com/obscuritylabs/Colossus/releases/latest/download/colossus-install.ps1 | iex
 ```
 
-The installer selects the native archive for the host, verifies its adjacent SHA-256
-sidecar, installs to `$HOME/.local` without `sudo` or profile changes, and prepares an
-empty owner-private `$HOME/.colossus` home. The
-[installation guide](docs/get-started/install.md) includes a review-before-running form,
-exact-version selection, Nix, offline archives, supported targets, updates, and
-uninstallation.
+If you prefer to inspect the installer first, need an exact version, or use Nix, start
+with the [installation guide](docs/get-started/install.md).
 
-Initialize your user configuration and prove the runtime offline in the current
-repository:
+Then initialize Colossus in a repository and run the built-in offline provider:
 
 ```bash
+cd your-repository
 colossus config init
 colossus run "Reply with exactly: ready"
 colossus audit verify
 ```
 
-The generated `echo` provider is credential-free and makes this first run completely
-offline. State is isolated beneath the current workspace's partition in the Colossus
-home. Start the terminal UI with:
+That first run needs no API key or network connection. It creates workspace-isolated
+state under your owner-private Colossus home and verifies the journal that recorded the
+run. Launch the terminal UI with:
 
 ```bash
 colossus
 ```
 
-The working directory, or explicit `-w`, identifies the repository context and its
-workspace-partitioned state; it does not relocate the Colossus home. A repository can
-replace user defaults with `.colossus/config.yaml` and can supply bounded instructions
-through `AGENTS.md`. Fresh and sparse schema-version-2 configurations intentionally
-default to `allow_all` with acknowledged `danger_full_access`, so authorized tools may
-use ambient host resources outside `-w`. Select an isolating execution boundary when
-that authority is inappropriate. Policy, permits, audit, configured extension trust,
-credentials, and supervised time/output bounds remain enforced. Under direct Unix full
-access, descendant cleanup plus process-count and memory enforcement are best effort;
-select isolation when strict containment is required. See
-[Colossus home and workspace resolution](docs/reference/colossus-home.md) for the exact
-load order and storage layout.
+> [!IMPORTANT]
+> Fresh schema-version-2 configurations currently default to `allow_all` with the
+> acknowledged `danger_full_access` execution boundary. Authorized tools can therefore
+> reach host resources outside the selected workspace. If that is not appropriate,
+> initialize with `--sandbox-profile workspace-development` or
+> `--sandbox-profile offline-default`. Read [Access and
+> approvals](docs/admin/access-and-approvals.md) and
+> [Sandbox](docs/admin/sandbox.md) before granting an agent broader authority.
 
-[Read the five-minute quickstart](docs/get-started/quickstart.md) or open the
-[published documentation](https://obscuritylabs.github.io/Colossus/).
+Continue with the [five-minute quickstart](docs/get-started/quickstart.md),
+[connect a model](docs/get-started/connect-model.md), or choose the
+[Desktop setup](docs/get-started/desktop.md).
 
-Direct installations can later check or apply stable updates with:
+## What Colossus provides
 
-```bash
-colossus update check
-colossus update
-```
+- **Controlled execution.** Strict tool schemas, access profiles, policy decisions,
+  approvals, one-use permits, sandbox boundaries, and quarantined output share one
+  effect path.
+- **Durable work.** Sessions, tasks, decisions, plans, goals, delegated agents,
+  memories, research, and workflows are event-sourced and resumable.
+- **Verifiable history.** The canonical journal uses payload hashes and a global hash
+  chain; protected storage can add authenticated encryption and signed checkpoints.
+- **Practical extension points.** Add providers, search routes, integrations, MCP
+  servers, skills, signed packs, and YAML workflows without creating a second path
+  around policy.
+- **Application APIs.** Embed the Rust SDK or connect TypeScript, Python, and Go clients
+  through the authenticated, loopback gRPC API.
 
-## What you can do
+## Choose an interface
 
-- Run bounded agent tasks with streaming, durable sessions, explicit context controls,
-  and provider role routing.
-- Use filesystem, Git, process, search, research, memory, integration, MCP, workflow,
-  goal, and subagent capabilities through one effect gateway.
-- Automate repeatable work with validated YAML workflows, schedules, webhooks,
-  recovery, signed packs, and collections.
-- Build Rust and Tauri applications in process, or connect enrolled Rust, TypeScript,
-  Python, and Go backends through the durable authenticated application API.
-- Apply access profiles, approvals, OPA policy, sandbox limits, optional encrypted
-  journaling, audit verification, and offline operation without hiding security
-  decisions in a UI.
+| If you want to… | Start here |
+| --- | --- |
+| Run one task or produce machine-readable output | [Agent runs](docs/use/agent-runs.md) |
+| Work interactively in a terminal | [Terminal UI](docs/use/terminal-ui.md) |
+| Use a folder-first native app | [Desktop](docs/get-started/desktop.md) |
+| Build durable automation | [Workflows](docs/extend/workflows/first-workflow.md) |
+| Integrate another application | [Application SDK](docs/develop/application-sdk.md) |
+| Understand the trust boundaries | [Security architecture](docs/develop/security-architecture.md) |
 
 ## Documentation
 
-- [Get started](docs/get-started/index.md) — install, connect a model, and complete a
-  first repository task.
-- [Use Colossus](docs/use/index.md) — sessions, the terminal UI, durable work, goals,
-  memories, and research.
-- [Automate and extend](docs/extend/index.md) — workflows, skills, integrations, MCP,
-  packs, and registries.
-- [Administer and secure](docs/admin/index.md) — configuration, routing, access,
-  policy, storage, audit, offline operation, and troubleshooting.
-- [Reference](docs/reference/index.md) — CLI, TUI, configuration, schemas, manifests,
-  limits, and glossary.
-- [Develop](docs/develop/index.md) — source setup, architecture, security boundaries,
-  the [public application SDK](docs/develop/application-sdk.md), test tiers, and
-  documentation authoring.
+- [Get started](docs/get-started/index.md): installation, first run, and model setup
+- [Use Colossus](docs/use/index.md): sessions, plans, goals, memory, and research
+- [Automate and extend](docs/extend/index.md): workflows, skills, integrations, MCP,
+  packs, and registries
+- [Administer and secure](docs/admin/index.md): configuration, access, sandboxing,
+  storage, audit, and troubleshooting
+- [Reference](docs/reference/index.md): CLI, TUI, schemas, formats, and limits
+- [Develop](docs/develop/index.md): architecture, source setup, testing, and releases
 
-Release history lives in [CHANGELOG.md](CHANGELOG.md). Report vulnerabilities using
-the private process in [SECURITY.md](SECURITY.md).
+The complete documentation is also available at
+[obscuritylabs.github.io/Colossus](https://obscuritylabs.github.io/Colossus/).
 
 ## Develop
 
-Contributor setup, the Rust toolchain contract, focused test tiers, and completion
-gates live in [Develop Colossus](docs/develop/index.md). Keeping source-build commands
-there lets the installation and first-run paths stay binary-first.
+Colossus uses Rust 1.96 and edition 2024. From a source checkout:
 
-Build or preview the documentation through the pinned containerized toolchain:
+```bash
+cargo build --workspace
+cargo xtask dev
+```
+
+Run `cargo xtask check rust` before declaring a Rust change complete. The
+[contributor guide](docs/develop/contributing.md) explains the architecture rules,
+focused test tiers, Desktop checks, and pre-PR gate.
+
+Build or preview the documentation with its pinned containerized toolchain:
 
 ```bash
 ./scripts/docs-site build
 ./scripts/docs-site serve
 ```
 
-The project is licensed under [Apache License 2.0](LICENSE).
+See the [changelog](CHANGELOG.md) for release history. Report vulnerabilities through
+the private process in [SECURITY.md](SECURITY.md).
+
+Colossus is licensed under the [Apache License 2.0](LICENSE).
