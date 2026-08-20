@@ -641,6 +641,9 @@ export function ModelConfigurationEditor({
             }
           >
             <option value="minimal">Minimal — no workspace tools</option>
+            <option value="pinned">
+              Pinned — exact tools configured in Settings
+            </option>
             <option value="development">
               Development — approval-gated effects
             </option>

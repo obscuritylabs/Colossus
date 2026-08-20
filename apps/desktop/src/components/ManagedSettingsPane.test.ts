@@ -252,6 +252,7 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain("Global");
     expect(markup).toContain("Space");
     expect(markup).toContain("Runtime defaults");
+    expect(markup).toContain('<option value="pinned">Pinned</option>');
     expect(markup).toContain("built in");
     expect(markup).toContain("Authority summary");
     expect(markup).toContain("No local changes");

@@ -1606,7 +1606,7 @@ fn access_profile_elevation(settings: &DesktopSettings, requested: AccessProfile
 
 const fn access_profile_rank(profile: AccessProfileSetting) -> u8 {
     match profile {
-        AccessProfileSetting::Minimal => 0,
+        AccessProfileSetting::Minimal | AccessProfileSetting::Pinned => 0,
         AccessProfileSetting::Development => 1,
         AccessProfileSetting::AllowAll => 2,
     }
@@ -1646,6 +1646,10 @@ async fn confirm_access_profile(
 ) -> Result<bool, CommandErrorDto> {
     let (name, message) = match profile {
         AccessProfileSetting::Minimal => return Ok(true),
+        AccessProfileSetting::Pinned => (
+            "Pinned",
+            "Pinned access denies every tool and action except the exact entries configured in Settings. The execution boundary and approval mode are configured separately.",
+        ),
         AccessProfileSetting::Development => (
             "Development",
             "Development access lets Colossus use workspace-development tools. The execution boundary and approval mode are configured separately.",

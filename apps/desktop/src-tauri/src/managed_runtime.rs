@@ -343,11 +343,15 @@ pub(crate) async fn drain_active_runs_for_configuration(
     match drained {
         Ok(Ok(())) => Ok(Some(drain)),
         Ok(Err(error)) => {
-            state.set_managed_health_for(space_id, previous_health).await;
+            state
+                .set_managed_health_for(space_id, previous_health)
+                .await;
             Err(error)
         }
         Err(_) => {
-            state.set_managed_health_for(space_id, previous_health).await;
+            state
+                .set_managed_health_for(space_id, previous_health)
+                .await;
             Err(CommandErrorDto::busy(
                 "Active work did not drain before the configuration deadline. The current runtime is still active and no settings were saved.",
             ))
@@ -1081,6 +1085,7 @@ fn self_test_grant() -> Result<SidecarApplicationGrant, SdkError> {
 const fn access_profile(profile: AccessProfileSetting) -> ManagedAccessProfile {
     match profile {
         AccessProfileSetting::Minimal => ManagedAccessProfile::Minimal,
+        AccessProfileSetting::Pinned => ManagedAccessProfile::Pinned,
         AccessProfileSetting::Development => ManagedAccessProfile::Development,
         AccessProfileSetting::AllowAll => ManagedAccessProfile::AllowAll,
     }
@@ -1335,6 +1340,10 @@ mod tests {
 
     #[test]
     fn allow_all_maps_independently_from_the_execution_boundary() {
+        assert_eq!(
+            access_profile(AccessProfileSetting::Pinned),
+            ManagedAccessProfile::Pinned
+        );
         assert_eq!(
             access_profile(AccessProfileSetting::AllowAll),
             ManagedAccessProfile::AllowAll

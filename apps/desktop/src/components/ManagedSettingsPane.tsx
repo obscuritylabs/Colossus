@@ -3973,6 +3973,7 @@ function AuthorityControls({
         >
           <option value="inherit">Inherit</option>
           <option value="minimal">Minimal</option>
+          <option value="pinned">Pinned</option>
           <option value="development">Development</option>
           <option value="allow_all">Allow all</option>
         </select>

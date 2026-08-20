@@ -75,6 +75,7 @@ pub(crate) const CODEX_BASE_URL: &str = colossus_codex_auth::CODEX_API_BASE_URL;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AccessProfileSetting {
     Minimal,
+    Pinned,
     Development,
     #[default]
     AllowAll,
@@ -1280,16 +1281,18 @@ fn migrate_legacy_settings(
 const fn migrate_legacy_access_profile(profile: AccessProfileSetting) -> AccessProfileSetting {
     match profile {
         AccessProfileSetting::AllowAll => AccessProfileSetting::Development,
-        AccessProfileSetting::Minimal | AccessProfileSetting::Development => profile,
+        AccessProfileSetting::Minimal
+        | AccessProfileSetting::Pinned
+        | AccessProfileSetting::Development => profile,
     }
 }
 
 const fn legacy_execution_boundary(profile: AccessProfileSetting) -> ExecutionBoundarySetting {
     match profile {
         AccessProfileSetting::Minimal => ExecutionBoundarySetting::OfflineIsolated,
-        AccessProfileSetting::Development | AccessProfileSetting::AllowAll => {
-            ExecutionBoundarySetting::WorkspaceIsolated
-        }
+        AccessProfileSetting::Pinned
+        | AccessProfileSetting::Development
+        | AccessProfileSetting::AllowAll => ExecutionBoundarySetting::WorkspaceIsolated,
     }
 }
 

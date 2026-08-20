@@ -2078,7 +2078,7 @@ fn configuration_error() -> CommandErrorDto {
 
 const fn access_rank(profile: AccessProfileSetting) -> u8 {
     match profile {
-        AccessProfileSetting::Minimal => 0,
+        AccessProfileSetting::Minimal | AccessProfileSetting::Pinned => 0,
         AccessProfileSetting::Development => 1,
         AccessProfileSetting::AllowAll => 2,
     }

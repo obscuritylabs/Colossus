@@ -235,7 +235,7 @@ export interface DesktopStatus {
 }
 
 export type ApprovalMode = "deny" | "ask" | "risk_auto" | "full_access";
-export type AccessProfile = "minimal" | "development" | "allow_all";
+export type AccessProfile = "minimal" | "pinned" | "development" | "allow_all";
 export type ExecutionBoundary =
   "full_access" | "workspace_isolated" | "offline_isolated";
 

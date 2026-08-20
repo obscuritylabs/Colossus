@@ -906,6 +906,7 @@ fn imported_roles(canonical: &Value, pointer: &str) -> BTreeMap<String, String> 
 fn imported_access_profile(canonical: &Value) -> Option<AccessProfileSetting> {
     match canonical.pointer("/access/profile").and_then(Value::as_str) {
         Some("minimal") => Some(AccessProfileSetting::Minimal),
+        Some("pinned") => Some(AccessProfileSetting::Pinned),
         Some("development") => Some(AccessProfileSetting::Development),
         Some("allow_all") => Some(AccessProfileSetting::AllowAll),
         _ => None,
@@ -1397,8 +1398,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn runtime_only_echo_import_preserves_the_desktop_model_stack() {
         let runtime_only = serde_json::json!({
+            "access": {
+                "profile": "pinned",
+                "tools": { "include": ["echo"], "exclude": [] },
+                "actions": { "allow": [], "requireApproval": [], "deny": [] }
+            },
             "providers": { "profiles": {
                 "echo": {
                     "kind": "echo",
@@ -1457,7 +1464,7 @@ mod tests {
             &mut settings,
             "target",
             &runtime_only,
-            &[],
+            &["access.profile".into(), "access.tools.include".into()],
             &BTreeMap::new(),
             &BTreeMap::new(),
             "a".repeat(64),
@@ -1467,6 +1474,18 @@ mod tests {
         let target = settings.space("target").expect("target");
         assert_eq!(target.configuration.catalog_revisions, previous_references);
         assert_eq!(target.configuration.model_roles["primary"], "primary");
+        assert_eq!(target.access_profile, AccessProfileSetting::Pinned);
+        assert_eq!(
+            target.configuration.access_profile_override,
+            Some(AccessProfileSetting::Pinned)
+        );
+        assert!(
+            target
+                .configuration
+                .field_overrides
+                .iter()
+                .any(|field| field.field_id == "access.tools.include")
+        );
         assert_eq!(target.providers[0].kind, ProviderKindSetting::Codex);
         validate_configuration(&settings.global_configuration, &settings.spaces)
             .expect("valid Desktop catalog");
@@ -1480,6 +1499,7 @@ mod tests {
             &[
                 "providers.profiles.echo.kind".into(),
                 "models.profiles.echo.providerProfile".into(),
+                "access.profile".into(),
             ],
             &settings.global_configuration,
         );
