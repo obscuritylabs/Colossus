@@ -1,14 +1,16 @@
 # Colossus
 
-**A runtime for agents that do real work—and leave an audit trail.**
+**AI agent operations for real work in mission environments.**
 
-Colossus gives AI agents a controlled way to use files, Git, processes, network
-services, and other tools. Every effect passes through access checks, policy, optional
-approval, execution limits, and durable audit. Sessions, plans, workflows, research,
-and other work survive restarts instead of disappearing with the terminal transcript.
+Colossus is an alpha-stage runtime for organizations that need agents to act under
+explicit authority, inside enforceable boundaries, with durable evidence of what
+happened. It brings models, tools, policy, approvals, sandboxing, state, and audit into
+one system that can operate online or offline.
 
-It ships as a Rust binary with a CLI and terminal UI. A Tauri desktop app and
-authenticated SDKs use the same runtime and security model.
+The project is being built for serious enterprise and public-sector deployment,
+including regulated, disconnected, and security-sensitive environments. It ships as a
+Rust binary with a CLI and terminal UI; a Tauri desktop app and authenticated SDKs use
+the same runtime and security model.
 
 > [!WARNING]
 > Colossus is alpha software. Behavior, configuration, storage formats, APIs, and user
@@ -50,6 +52,9 @@ run. Launch the terminal UI with:
 colossus
 ```
 
+See [Colossus home and workspace resolution](docs/reference/colossus-home.md) for the
+configuration load order, state layout, and repository instruction boundary.
+
 > [!IMPORTANT]
 > Fresh schema-version-2 configurations currently default to `allow_all` with the
 > acknowledged `danger_full_access` execution boundary. Authorized tools can therefore
@@ -63,20 +68,28 @@ Continue with the [five-minute quickstart](docs/get-started/quickstart.md),
 [connect a model](docs/get-started/connect-model.md), or choose the
 [Desktop setup](docs/get-started/desktop.md).
 
-## What Colossus provides
+Direct installations can check for or apply a stable update with:
 
-- **Controlled execution.** Strict tool schemas, access profiles, policy decisions,
-  approvals, one-use permits, sandbox boundaries, and quarantined output share one
-  effect path.
-- **Durable work.** Sessions, tasks, decisions, plans, goals, delegated agents,
-  memories, research, and workflows are event-sourced and resumable.
-- **Verifiable history.** The canonical journal uses payload hashes and a global hash
-  chain; protected storage can add authenticated encryption and signed checkpoints.
-- **Practical extension points.** Add providers, search routes, integrations, MCP
-  servers, skills, signed packs, and YAML workflows without creating a second path
-  around policy.
-- **Application APIs.** Embed the Rust SDK or connect TypeScript, Python, and Go clients
-  through the authenticated, loopback gRPC API.
+```bash
+colossus update check
+colossus update
+```
+
+## What Colossus is built for
+
+- **Accountable effects.** Requested actions, decisions, approvals, execution, release,
+  and uncertain outcomes produce durable evidence.
+- **Bounded execution.** Strict tool schemas, one-use permits, sandbox profiles,
+  resource ceilings, and quarantined output keep authority explicit.
+- **Durable operations.** Sessions, plans, goals, delegated agents, workflows,
+  memories, and research survive restarts and can be reconstructed from canonical
+  state.
+- **Online or offline deployment.** Connect hosted providers, run local models, or
+  prepare controlled and air-gapped environments without changing the authorization
+  path.
+- **Enterprise integration.** Add application clients, search routes, integrations,
+  MCP servers, skills, signed packs, and versioned YAML workflows through declared
+  boundaries.
 
 ## Choose an interface
 

@@ -510,8 +510,8 @@ fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
     let capture = read("documentation/tui-offline-session.txt");
     assert_eq!(
         capture.lines().count(),
-        12,
-        "the real TUI capture must remain a fixed 112x12 frame"
+        24,
+        "the real TUI capture must remain a fixed 132x24 frame"
     );
     let capture_width = capture
         .lines()
@@ -519,19 +519,21 @@ fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
         .max()
         .expect("the real TUI capture must not be empty");
     assert_eq!(
-        capture_width, 112,
-        "the real TUI capture must retain its 112-column display width"
+        capture_width, 132,
+        "the real TUI capture must retain its 132-column display width"
     );
     assert!(
-        capture.lines().all(|line| line.chars().count() <= 112),
-        "the real TUI capture must not overflow its 112-column display width"
+        capture.lines().all(|line| line.chars().count() <= 132),
+        "the real TUI capture must not overflow its 132-column display width"
     );
     for marker in [
-        "› You",
-        "● Colossus",
-        "primary:echo@echo",
-        "approval=ask",
-        "status=ok",
+        "COLOSSUS",
+        "What are we moving today?",
+        "SANDBOX  workspace-development",
+        "APPROVAL  ask",
+        "Durable session ready",
+        "Security posture · 1 warning",
+        "status=ready",
     ] {
         assert!(
             capture.contains(marker),
@@ -563,8 +565,8 @@ fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
     let height = u32::from_be_bytes(screenshot[20..24].try_into().expect("PNG height"));
     assert_eq!(
         (width, height),
-        (1184, 304),
-        "the homepage TUI screenshot must retain its reproducible compact composition"
+        (1384, 554),
+        "the homepage TUI screenshot must retain its reproducible launch composition"
     );
     let renderer = read("scripts/render-docs-tui-capture");
     for marker in [

@@ -1,12 +1,24 @@
-› You
-  Summarize what Colossus controls before a tool effect.
+ C │  COLOSSUS    ● READY
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-● Colossus
-  Summarize what Colossus controls before a tool effect.
+  What are we moving today?
+  ~/.codex/worktrees/3e11/Colossus · new session
+
+  ›  Build or change something
+     Plan it first                         /plan
+     Resume recent work                    /resume
+     Inspect capabilities                  /tools
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  MODEL  echo · echo · echo   │   SANDBOX  workspace-development   │   APPROVAL  ask
+  ●  Durable session ready · 1 security warning
+
+! Security posture · 1 warning
+  • Journal payloads are stored as plaintext canonical JSON.
+    Recommendation: Create a fresh configuration and storage path with storage.keys.kind set to platform or environment.
 
 
-
-┌ Message · Enter sends ───────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                              │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- Colossus 019f77d7 · primary:echo@echo · ctx=61/32768 · msgs=2 · approval=ask · status=ok
+┌ Execute · Enter sends ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Implement {feature}                                                                                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ⚠ Security: 1 ·  Colossus 01a0216d · execute · primary:echo@echo via echo · ctx=17/25395 · msgs=0 · approval=ask · status=ready
