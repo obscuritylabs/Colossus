@@ -31,6 +31,7 @@ import type {
 } from "../types";
 import type { AgentParticipant } from "./AgentFlow";
 import { AgentFlow } from "./AgentFlow";
+import { ManagedSettingsPane } from "./ManagedSettingsPane";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
@@ -634,12 +635,24 @@ function SettingsView({
         : "Not configured";
   return (
     <>
-      <SurfaceHeader
-        eyebrow="Settings / Runtime"
-        title="Desktop runtime"
-        description="Manage the local sidecar, external targets, and local-only terminal boundary."
-      />
       <div className="overview-scroll settings-scroll">
+        <ManagedSettingsPane
+          desktop={desktop}
+          connecting={connecting}
+          updateChecking={updateChecking}
+          updateMessage={updateMessage}
+          onChooseWorkspace={onChooseWorkspace}
+          onConfigureManaged={onConfigureManaged}
+          onRestartManaged={onRestartManaged}
+          onAddExternalTarget={onAddExternalTarget}
+          onRemoveExternalTarget={onRemoveExternalTarget}
+          onSetTerminalEnabled={onSetTerminalEnabled}
+          onOpenTerminal={onOpenTerminal}
+          onCheckForUpdates={onCheckForUpdates}
+          onInstallUpdate={onInstallUpdate}
+          onImportCaBundle={onImportCaBundle}
+          onRemoveCaBundle={onRemoveCaBundle}
+        />
         <section className="settings-card">
           <div className="settings-card-icon">
             <IconPlugConnected size={23} stroke={1.6} aria-hidden="true" />
