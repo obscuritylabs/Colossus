@@ -897,10 +897,7 @@ impl SettingsStore {
     }
 
     pub(crate) fn save(&self, settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
-        let mut persisted = settings.clone();
-        persisted.sync_selected_space_projection()?;
-        initialize_catalog(&mut persisted.global_configuration, &mut persisted.spaces);
-        validate_settings(&persisted)?;
+        let persisted = normalized_settings_snapshot(settings)?;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| storage_error())?;
         if bytes.len() > usize::try_from(MAX_SETTINGS_BYTES).unwrap_or(usize::MAX) {
             return Err(storage_error());
@@ -1055,6 +1052,16 @@ impl SettingsStore {
         ensure_private_directory(&path)?;
         Ok(path)
     }
+}
+
+pub(crate) fn normalized_settings_snapshot(
+    settings: &DesktopSettings,
+) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut normalized = settings.clone();
+    normalized.sync_selected_space_projection()?;
+    initialize_catalog(&mut normalized.global_configuration, &mut normalized.spaces);
+    validate_settings(&normalized)?;
+    Ok(normalized)
 }
 
 pub(crate) fn validate_workspace(path: &Path) -> Result<WorkspaceSetting, CommandErrorDto> {
@@ -2163,6 +2170,37 @@ mod tests {
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
         }
+    }
+
+    #[test]
+    fn normalized_snapshot_seeds_catalogs_for_new_onboarding_configuration() {
+        let (_workspace_guard, workspace_path) = test_directory("cfg");
+        let workspace = validate_workspace(&workspace_path).expect("workspace");
+        let mut settings = DesktopSettings::default();
+        let space_id = settings.add_space(workspace).expect("add Space");
+        let configured = configured_settings(ProviderKindSetting::Codex, CODEX_BASE_URL, None);
+        settings.providers = configured.providers;
+        settings.models = configured.models;
+        settings.model_roles = configured.model_roles;
+        settings.access_profile = AccessProfileSetting::Minimal;
+        settings.execution_boundary = ExecutionBoundarySetting::WorkspaceIsolated;
+
+        let normalized = normalized_settings_snapshot(&settings).expect("normalize settings");
+        let space = normalized.space(&space_id).expect("normalized Space");
+        let resolved = crate::managed_configuration::resolve_space_configuration(
+            &normalized.global_configuration,
+            space,
+        )
+        .expect("resolve normalized configuration");
+
+        assert_eq!(resolved.providers, settings.providers);
+        assert_eq!(resolved.models, settings.models);
+        assert_eq!(resolved.model_roles, settings.model_roles);
+        assert_eq!(resolved.access_profile, AccessProfileSetting::Minimal);
+        assert_eq!(
+            resolved.execution_boundary,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        );
     }
 
     #[test]

@@ -503,8 +503,24 @@ pub(crate) fn initialize_catalog(
         global.defaults = GlobalDefaultsSetting::default();
     }
     for space in spaces {
+        let seeds_managed_configuration = space.configuration.catalog_revisions.is_empty()
+            && (!space.providers.is_empty() || !space.models.is_empty());
         if space.configuration.accepted_global_revision == 0 {
             space.configuration.accepted_global_revision = global.revision;
+        }
+        if seeds_managed_configuration {
+            space
+                .configuration
+                .access_profile_override
+                .get_or_insert(space.access_profile);
+            space
+                .configuration
+                .execution_boundary_override
+                .get_or_insert(space.execution_boundary);
+            space
+                .configuration
+                .terminal_enabled_override
+                .get_or_insert(space.terminal_enabled);
         }
         for provider in &space.providers {
             let key = format!("provider:{}", provider.profile);

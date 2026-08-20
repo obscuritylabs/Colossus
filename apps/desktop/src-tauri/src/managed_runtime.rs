@@ -23,7 +23,8 @@ use crate::{
     desktop_dto::{ManagedRuntimeStateDto, RuntimeFailureCodeDto},
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ProviderKindSetting,
-        ReasoningEffortSetting, SettingsStore, load_provider_secret, revalidate_workspace,
+        ReasoningEffortSetting, SettingsStore, load_provider_secret, normalized_settings_snapshot,
+        revalidate_workspace,
     },
     dto::CommandErrorDto,
     managed_configuration::{
@@ -121,6 +122,8 @@ pub(crate) async fn start(
     settings: &DesktopSettings,
     restarting: bool,
 ) -> Result<(), CommandErrorDto> {
+    let normalized_settings = normalized_settings_snapshot(settings)?;
+    let settings = &normalized_settings;
     let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
         CommandErrorDto::invalid("spaceId", "Select a Space before starting Managed Local.")
     })?;
