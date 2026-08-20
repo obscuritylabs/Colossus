@@ -9942,6 +9942,10 @@ textarea {
   border-bottom: 0;
 }
 
+.repository-import-dialog {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
 .import-stage-list {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -9983,7 +9987,8 @@ textarea {
 }
 
 .repository-import-content {
-  min-height: 360px;
+  min-height: 0;
+  height: min(420px, 44vh);
   overflow: auto;
   padding: 20px;
 }
