@@ -119,6 +119,15 @@ impl Task {
             let mut command = Command::new(git_bash()?);
             command.arg(&self.program);
             command
+        } else if let Some(script) = windows_batch_script(
+            &self.program,
+            &self.current_dir,
+            env::var_os("PATH").as_deref(),
+        ) {
+            let mut command =
+                Command::new(env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe")));
+            command.args(["/d", "/c"]).arg(script);
+            command
         } else {
             Command::new(&self.program)
         };
@@ -144,6 +153,54 @@ impl Task {
     fn print(&self) {
         eprintln!("+ {}", display_command(&self.program, &self.args));
     }
+}
+
+#[cfg(windows)]
+fn windows_batch_script(
+    program: &OsStr,
+    current_dir: &Path,
+    search_path: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let program = Path::new(program);
+    let has_directory = program.components().count() > 1;
+    let candidates = if program.is_absolute() {
+        vec![program.to_path_buf()]
+    } else if has_directory {
+        vec![current_dir.join(program)]
+    } else {
+        std::iter::once(current_dir.to_path_buf())
+            .chain(search_path.into_iter().flat_map(env::split_paths))
+            .map(|directory| directory.join(program))
+            .collect()
+    };
+
+    for candidate in candidates {
+        if is_batch_extension(&candidate) && candidate.is_file() {
+            return Some(candidate);
+        }
+        if candidate.extension().is_some() {
+            continue;
+        }
+        if candidate.with_extension("exe").is_file() || candidate.with_extension("com").is_file() {
+            return None;
+        }
+        for extension in ["cmd", "bat"] {
+            let script = candidate.with_extension(extension);
+            if script.is_file() {
+                return Some(script);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn is_batch_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
 }
 
 #[cfg(windows)]
@@ -205,6 +262,10 @@ fn display(value: &OsStr) -> String {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn repository_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -239,5 +300,32 @@ mod tests {
             command.get_args().next(),
             Some(OsStr::new("./scripts/check_crate_roots.sh"))
         );
+    }
+
+    #[test]
+    fn path_batch_tasks_use_cmd_on_windows() {
+        let scratch = env::temp_dir().join(format!(
+            "colossus-xtask-command-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&scratch).expect("create command test directory");
+        fs::write(scratch.join("npm.cmd"), "@echo off\r\n").expect("write batch shim");
+
+        let root = repository_root();
+        let search_path = env::join_paths([&scratch]).expect("join search path");
+        let task = Task::new(&root, "npm").arg("--version");
+        let script = windows_batch_script(
+            task.program.as_os_str(),
+            &task.current_dir,
+            Some(search_path.as_os_str()),
+        )
+        .expect("batch script should resolve");
+
+        assert_eq!(script, scratch.join("npm.cmd"));
+        fs::remove_dir_all(scratch).expect("remove command test directory");
     }
 }

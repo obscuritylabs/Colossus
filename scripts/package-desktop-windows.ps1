@@ -169,6 +169,7 @@ try {
 
     Push-Location $Desktop
     try {
+        $BundleStartedAtUtc = [DateTime]::UtcNow
         $BundleArguments = @(
             "bundle",
             "--target", $Target,
@@ -185,7 +186,8 @@ try {
 
     $Installers = @(
         Get-ChildItem -LiteralPath (Join-Path $ReleaseRoot "bundle/nsis") `
-            -Filter "*.exe" -File
+            -Filter "*.exe" -File |
+            Where-Object { $_.LastWriteTimeUtc -ge $BundleStartedAtUtc }
     )
     if ($Installers.Count -ne 1) {
         Fail "NSIS packaging must produce exactly one installer"
