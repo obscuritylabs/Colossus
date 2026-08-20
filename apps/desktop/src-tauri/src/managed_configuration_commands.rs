@@ -1205,7 +1205,7 @@ fn rotate_current_resource_bindings(
     Ok(affected)
 }
 
-fn advance_unaffected_spaces(
+pub(crate) fn advance_unaffected_spaces(
     settings: &mut DesktopSettings,
     previous_global_revision: u64,
     affected_resources: &BTreeSet<String>,

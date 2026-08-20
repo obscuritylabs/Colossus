@@ -22,8 +22,8 @@ use crate::{
         resolve_space_configuration, validate_configuration,
     },
     managed_configuration_commands::{
-        append_catalog_revision, bump_global_revision, confirm_authority_elevation,
-        persist_and_restart, resolved_for,
+        advance_unaffected_spaces, append_catalog_revision, bump_global_revision,
+        confirm_authority_elevation, persist_and_restart, resolved_for,
     },
     state::AppState,
     workspace_files::read_file,
@@ -193,6 +193,8 @@ fn apply_imported_configuration(
     conflict_decisions: &BTreeMap<String, ImportConflictDecisionInput>,
     sha256: String,
 ) -> Result<(), CommandErrorDto> {
+    let affected_resources =
+        replaced_resource_ids(&settings.global_configuration, conflict_decisions);
     let mut providers = imported_providers(canonical, credential_mappings)?;
     let mut models = imported_models(canonical)?;
     let mut search = imported_search(canonical, credential_mappings)?;
@@ -279,16 +281,13 @@ fn apply_imported_configuration(
     let previous_revision = settings.global_configuration.revision;
     bump_global_revision(&mut settings.global_configuration)?;
     let current_revision = settings.global_configuration.revision;
-    for space in &mut settings.spaces {
-        if space.configuration.accepted_global_revision == previous_revision {
-            space.configuration.accepted_global_revision = current_revision;
-        }
-    }
+    advance_unaffected_spaces(settings, previous_revision, &affected_resources);
     let space = settings
         .spaces
         .iter_mut()
         .find(|space| space.id == space_id)
         .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+    space.configuration.accepted_global_revision = current_revision;
     space
         .configuration
         .catalog_revisions
@@ -319,6 +318,20 @@ fn apply_imported_configuration(
         settings.project_selected_space();
     }
     Ok(())
+}
+
+fn replaced_resource_ids(
+    global: &GlobalConfigurationSetting,
+    decisions: &BTreeMap<String, ImportConflictDecisionInput>,
+) -> BTreeSet<String> {
+    decisions
+        .iter()
+        .filter(|(_, decision)| decision.action == ImportConflictActionInput::Replace)
+        .filter_map(|(key, _)| {
+            let (kind, source_id) = key.split_once(':')?;
+            conflicting_resource_id(global, kind, source_id)
+        })
+        .collect()
 }
 
 fn matches_catalog_prefix(key: &str) -> bool {
@@ -1179,6 +1192,10 @@ fn collect_credential_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_settings::{
+        ExecutionBoundarySetting, WorkspaceProfile, WorkspaceSetting,
+    };
+    use std::path::PathBuf;
 
     fn canonical() -> Value {
         serde_json::json!({
@@ -1225,6 +1242,32 @@ mod tests {
             }},
             "observability": { "enabled": false }
         })
+    }
+
+    fn space(id: &str) -> WorkspaceProfile {
+        WorkspaceProfile {
+            id: id.into(),
+            display_name: id.into(),
+            archived: false,
+            last_opened_at_ms: 1,
+            workspace: WorkspaceSetting {
+                id: format!("workspace-{id}"),
+                path: PathBuf::from(format!(r"C:\{id}")),
+                identity: None,
+                display_name: id.into(),
+                display_path: format!(r"C:\{id}"),
+            },
+            providers: Vec::new(),
+            models: Vec::new(),
+            model_roles: BTreeMap::new(),
+            access_profile: AccessProfileSetting::AllowAll,
+            execution_boundary: ExecutionBoundarySetting::FullAccess,
+            terminal_enabled: false,
+            configuration: crate::managed_configuration::SpaceConfigurationSetting {
+                accepted_global_revision: 1,
+                ..crate::managed_configuration::SpaceConfigurationSetting::default()
+            },
+        }
     }
 
     #[test]
@@ -1355,5 +1398,73 @@ mod tests {
         assert_eq!(providers[0].1.profile, "openapi-imported");
         assert_eq!(models[0].1.provider_profile, "openapi-imported");
         assert_eq!(model_roles["primary"], "primary");
+    }
+
+    #[test]
+    fn replacing_an_imported_definition_keeps_other_dependents_pending() {
+        let mappings = BTreeMap::from([
+            ("env:OPENAI_API_KEY".into(), "credential-provider".into()),
+            ("env:DOCS_TOKEN".into(), "credential-docs".into()),
+        ]);
+        let mut existing = imported_providers(&canonical(), &mappings)
+            .expect("providers")
+            .pop()
+            .expect("provider")
+            .1;
+        existing.base_url = "https://old.example.test/v1".into();
+
+        let mut settings = DesktopSettings::default();
+        settings.global_configuration.providers = vec![CatalogEntrySetting {
+            id: "provider-existing".into(),
+            label: "OpenAPI".into(),
+            current_revision: 1,
+            archived: false,
+            revisions: vec![crate::managed_configuration::CatalogRevisionSetting {
+                revision: 1,
+                value: existing,
+            }],
+        }];
+        let mut target = space("target");
+        let mut dependent = space("dependent");
+        dependent.configuration.catalog_revisions.insert(
+            "provider:openapi".into(),
+            CatalogReferenceSetting {
+                resource_id: "provider-existing".into(),
+                revision: 1,
+            },
+        );
+        let unrelated = space("unrelated");
+        settings.spaces = vec![target.clone(), dependent, unrelated];
+        settings.selected_space_id = Some(target.id.clone());
+        let decisions = BTreeMap::from([(
+            "provider:openapi".into(),
+            ImportConflictDecisionInput {
+                action: ImportConflictActionInput::Replace,
+                renamed_source_id: None,
+            },
+        )]);
+
+        apply_imported_configuration(
+            &mut settings,
+            &target.id,
+            &canonical(),
+            &[],
+            &mappings,
+            &decisions,
+            "a".repeat(64),
+        )
+        .expect("repository import");
+
+        target = settings.space("target").expect("target").clone();
+        let dependent = settings.space("dependent").expect("dependent");
+        let unrelated = settings.space("unrelated").expect("unrelated");
+        assert_eq!(settings.global_configuration.revision, 2);
+        assert_eq!(target.configuration.accepted_global_revision, 2);
+        assert_eq!(unrelated.configuration.accepted_global_revision, 2);
+        assert_eq!(dependent.configuration.accepted_global_revision, 1);
+        assert_eq!(
+            dependent.configuration.catalog_revisions["provider:openapi"].revision,
+            1
+        );
     }
 }
