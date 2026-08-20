@@ -960,6 +960,8 @@ sandbox:
     assert_eq!(config.sandbox.backend, "danger_full_access");
     assert!(config.sandbox.acknowledge_danger_full_access);
     assert_eq!(config.sandbox.timeout_ms, 45_000);
+    assert_eq!(config.sandbox.max_output_bytes, 4 * 1024 * 1024);
+    assert_eq!(config.sandbox.max_memory_bytes, 1024 * 1024 * 1024);
 
     let expanded: Value = serde_saphyr::from_str(
         &config
@@ -989,6 +991,14 @@ sandbox:
     ] {
         assert!(expanded.get(key).is_some(), "expanded output omitted {key}");
     }
+    assert_eq!(
+        expanded["sandbox"]["maxOutputBytes"].as_u64(),
+        Some(4_194_304)
+    );
+    assert_eq!(
+        expanded["sandbox"]["maxMemoryBytes"].as_u64(),
+        Some(1_073_741_824)
+    );
 }
 
 #[test]
@@ -1121,11 +1131,28 @@ sandbox:
     assert_eq!(config.sandbox.backend, "native");
     assert_eq!(config.sandbox.profile, "workspace-development");
     assert!(!config.sandbox.acknowledge_danger_full_access);
+    assert_eq!(config.sandbox.max_output_bytes, 1_048_576);
+    assert_eq!(config.sandbox.max_memory_bytes, 268_435_456);
     assert_eq!(
         config.storage.location,
         super::StorageLocation::HomeWorkspace
     );
     assert_eq!(config.storage.path, Path::new("state.redb"));
+}
+
+#[test]
+fn explicit_sandbox_resource_overrides_remain_unchanged() {
+    for (max_output_bytes, max_memory_bytes) in [
+        (64 * 1024_u64, 128 * 1024 * 1024_u64),
+        (8 * 1024 * 1024_u64, 2 * 1024 * 1024 * 1024_u64),
+    ] {
+        let config = RuntimeConfig::from_yaml(&format!(
+            "schemaVersion: 2\nstorage:\n  path: state.redb\nsandbox:\n  maxOutputBytes: {max_output_bytes}\n  maxMemoryBytes: {max_memory_bytes}\n"
+        ))
+        .expect("explicit sandbox resource overrides");
+        assert_eq!(config.sandbox.max_output_bytes, max_output_bytes);
+        assert_eq!(config.sandbox.max_memory_bytes, max_memory_bytes);
+    }
 }
 
 #[test]

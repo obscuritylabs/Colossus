@@ -235,9 +235,9 @@ deliberately detached descendants. These are the default values; see
 | Field | Meaning | Constraint | Default |
 | --- | --- | --- | ---: |
 | `sandbox.timeoutMs` | Supervised effect wall time, including attached-group cleanup; isolating backends confirm whole-tree cleanup | Positive, with backend minimums | `30000` |
-| `sandbox.maxOutputBytes` | Request, result, and captured-output ceiling in bytes | At least `1024` | `1048576` |
+| `sandbox.maxOutputBytes` | Request, result, and captured-output ceiling in bytes | At least `1024` | `4194304` |
 | `sandbox.maxProcesses` | Process-tree count where supported | Positive | `16` |
-| `sandbox.maxMemoryBytes` | Process-tree memory in bytes where supported | Positive | `268435456` |
+| `sandbox.maxMemoryBytes` | Process-tree memory in bytes where supported | Positive | `1073741824` |
 | `sandbox.maxConcurrency` | Concurrent effects per actor/run | Positive | `1` |
 
 Backend-specific minimum timeouts are:
@@ -254,10 +254,17 @@ smaller timeout or output cap. It cannot widen the sandbox ceiling. For example,
 server's `maxOutputBytes` must be at least 1,024 bytes and no greater than
 `sandbox.maxOutputBytes`.
 
-Output limits use bytes, while model limits use tokens. Increasing one does not change
-the other. Raising `maxConcurrency` can multiply the effective process count, memory
-demand, network traffic, and output volume, so size it together with host and worker
-capacity.
+Output limits use bytes, while model limits use tokens. For a streaming provider turn,
+the byte ceiling counts the complete raw SSE body, including event and JSON framing,
+reasoning events, tool-call arguments, usage metadata, and visible text. Increasing a
+model's `maxOutputTokens` does not widen that byte ceiling.
+
+Process memory is not preallocated at startup. Native supervision measures the observed
+process-tree resident memory, OCI passes the effective ceiling as the container memory
+cap, and Windows applies process and job memory limits. V8 heaps, native runtime memory,
+loaded modules, buffers, and child processes all contribute. Raising `maxConcurrency`
+can multiply the effective process count, memory demand, network traffic, and output
+volume, so size it together with host and worker capacity.
 
 ## Timeouts are local to an operation
 
@@ -296,9 +303,9 @@ for adapter-specific limits.
 | `research.maxSources` | `1..=100` | `20` |
 | `research.maxWorkers` | `1..=16` | `4` |
 | `sandbox.timeoutMs` | Positive, plus backend minimum | `30000` |
-| `sandbox.maxOutputBytes` | At least `1024` | `1048576` |
+| `sandbox.maxOutputBytes` | At least `1024` | `4194304` |
 | `sandbox.maxProcesses` | Positive | `16` |
-| `sandbox.maxMemoryBytes` | Positive | `268435456` |
+| `sandbox.maxMemoryBytes` | Positive | `1073741824` |
 | `sandbox.maxConcurrency` | Positive | `1` |
 | `storage.postgres.statementTimeoutMs` | `100..=300000` | `30000` |
 

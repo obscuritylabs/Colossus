@@ -911,7 +911,9 @@ impl HostedWorkerFixture {
     }
 }
 
-async fn hosted_worker_fixture() -> HostedWorkerFixture {
+async fn hosted_worker_fixture_with_configure(
+    configure: impl FnOnce(&mut RuntimeConfig),
+) -> HostedWorkerFixture {
     let directory = tempfile::tempdir().expect("worker fixture directory");
     let root = directory
         .path()
@@ -924,6 +926,7 @@ async fn hosted_worker_fixture() -> HostedWorkerFixture {
     config.skills.repository = root.join("skills-repository");
     config.skills.user = root.join("skills-user");
     config.packs.install_root = root.join("packs");
+    configure(&mut config);
     for path in [
         &config.workflows.repository,
         &config.workflows.user,
@@ -961,6 +964,69 @@ async fn hosted_worker_fixture() -> HostedWorkerFixture {
         shutdown: shutdown_tx,
         server: server_task,
     }
+}
+
+async fn hosted_worker_fixture() -> HostedWorkerFixture {
+    hosted_worker_fixture_with_configure(|_| {}).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_network_get_carries_default_permitted_large_response_over_worker_ipc() {
+    const RESPONSE_BYTES: usize = 3 * 1024 * 1024;
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("large response listener");
+    let address = listener.local_addr().expect("large response address");
+    let origin = format!("http://{address}");
+    let url = format!("{origin}/large-response");
+    let http_server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("large response accept");
+        let mut request = [0_u8; 1024];
+        let request_bytes = stream
+            .read(&mut request)
+            .await
+            .expect("large response request");
+        assert!(
+            request_bytes > 0,
+            "large response request must not be empty"
+        );
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {RESPONSE_BYTES}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(headers.as_bytes())
+            .await
+            .expect("large response headers");
+        stream
+            .write_all(&vec![b'x'; RESPONSE_BYTES])
+            .await
+            .expect("large response body");
+    });
+    let fixture = hosted_worker_fixture_with_configure(|config| {
+        config.sandbox.network_destinations = vec![origin];
+    })
+    .await;
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        fixture.client.call(WorkerOperation::NetworkGet { url }),
+    )
+    .await
+    .expect("hosted large network response timeout")
+    .expect("hosted large network response");
+    let bytes = BASE64
+        .decode(
+            result["bytes_base64"]
+                .as_str()
+                .expect("large response base64"),
+        )
+        .expect("decode large response");
+    assert_eq!(bytes.len(), RESPONSE_BYTES);
+    assert!(bytes.iter().all(|byte| *byte == b'x'));
+
+    http_server.await.expect("large response server");
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

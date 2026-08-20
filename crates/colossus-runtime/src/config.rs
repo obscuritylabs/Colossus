@@ -598,9 +598,9 @@ impl Default for SandboxConfig {
             environment: Vec::new(),
             network_destinations: Vec::new(),
             timeout_ms: 30_000,
-            max_output_bytes: 1024 * 1024,
+            max_output_bytes: default_sandbox_max_output_bytes(),
             max_processes: 16,
-            max_memory_bytes: 256 * 1024 * 1024,
+            max_memory_bytes: default_sandbox_max_memory_bytes(),
             max_concurrency: 1,
         }
     }
@@ -712,7 +712,7 @@ const fn default_sandbox_timeout_ms() -> u64 {
 }
 
 const fn default_sandbox_max_output_bytes() -> u64 {
-    1024 * 1024
+    4 * 1024 * 1024
 }
 
 const fn default_sandbox_max_processes() -> u32 {
@@ -720,7 +720,7 @@ const fn default_sandbox_max_processes() -> u32 {
 }
 
 const fn default_sandbox_max_memory_bytes() -> u64 {
-    256 * 1024 * 1024
+    1024 * 1024 * 1024
 }
 
 const fn default_sandbox_max_concurrency() -> u32 {

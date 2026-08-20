@@ -13,7 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 /// mismatch and require a worker restart.
 pub const PROTOCOL_VERSION: u16 = 16;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
-pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum serialized authenticated response frame accepted by worker clients.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 type HmacSha256 = Hmac<Sha256>;
 

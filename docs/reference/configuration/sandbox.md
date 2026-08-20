@@ -53,9 +53,9 @@ sandbox:
   environment: []
   networkDestinations: []
   timeoutMs: 30000
-  maxOutputBytes: 1048576
+  maxOutputBytes: 4194304
   maxProcesses: 16
-  maxMemoryBytes: 268435456
+  maxMemoryBytes: 1073741824
   maxConcurrency: 1
 ```
 
@@ -350,6 +350,17 @@ Minimum `timeoutMs` values are 5,000 for OCI, 10,000 for networked OCI, and 10,0
 `windows_job`. Native execution has no additional configured minimum. Increasing
 `maxConcurrency` can multiply the effective process and memory demand, so raise it only
 after sizing the host and worker workload.
+
+The default output ceiling is 4 MiB (`4194304` bytes). Provider streaming counts the
+complete raw SSE body against this ceiling, including protocol framing, reasoning and
+usage events, tool-call arguments, and visible output. This byte bound is independent
+of model `maxOutputTokens`; policies and provider-specific declarations may narrow it.
+
+The default memory ceiling is 1 GiB (`1073741824` bytes) and is not reserved when
+Colossus starts. Native supervision measures observed process-tree resident memory, OCI
+uses the effective value as its container memory cap, and Windows applies process and
+job limits. Explicit configuration or external policy can retain stricter deployment
+values.
 
 For a two-minute build with a 4 MiB output ceiling and up to two concurrent effects:
 

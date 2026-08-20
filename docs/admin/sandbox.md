@@ -44,11 +44,16 @@ isolation whenever ambient host authority is inappropriate.
       environment: []
       networkDestinations: []
       timeoutMs: 120000
-      maxOutputBytes: 1048576
+      maxOutputBytes: 4194304
       maxProcesses: 16
-      maxMemoryBytes: 268435456
+      maxMemoryBytes: 1073741824
       maxConcurrency: 1
     ```
+
+   These are the compiled 4 MiB output and 1 GiB process-tree memory defaults. Provider
+   raw SSE bytes are counted separately from model output tokens, and process memory is
+   observed or capped by the selected backend rather than preallocated at startup.
+   Set explicit lower values when a deployment requires stricter ceilings.
 
    Then run from any directory:
 

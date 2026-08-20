@@ -46,9 +46,9 @@ and never interpreted as terminal control input.
 | Agent turns | `100` |
 | Concurrent subagents | `10` |
 | Sandbox timeout | `30000 ms` |
-| Sandbox output | `1048576 bytes` |
+| Sandbox output | `4194304 bytes` |
 | Sandbox processes | `16` |
-| Sandbox memory | `268435456 bytes` |
+| Sandbox memory | `1073741824 bytes` |
 | Sandbox concurrency | `1` |
 | Context window estimate | `32768 tokens` |
 | Auto-compaction threshold | `70%` |
@@ -64,6 +64,12 @@ show`, `config effective`, and the relevant command help. See
 [Runtime limits configuration](configuration/limits.md) for field interactions,
 validation ranges, and tuning examples.
 
+Provider raw-stream bytes, model output tokens, and process-tree memory are separate
+limits. The provider byte count includes the full SSE framing and metadata before
+normalization. The memory value is an enforced effect-process-tree ceiling, not memory
+preallocated by the Colossus process. Policy, adapter, and request-specific obligations
+may narrow either configured ceiling and never widen it.
+
 ## Important hard bounds
 
 - Provider tool arguments receive at most two correction turns.
@@ -71,7 +77,9 @@ validation ranges, and tuning examples.
 - Workflow schedule cadence is 60 seconds through 31 days.
 - The TUI queues at most eight future turns.
 - The TUI loads at most 1,000 submitted-history entries.
-- OPA logical policy input is bounded at 1 MiB.
+- Pre-effect logical policy input is bounded at 1 MiB. Post-effect policy input is
+  bounded at 8 MiB so the base64 envelope for a permitted 4 MiB result remains
+  inspectable without widening the pre-effect request boundary.
 - Workflow conditions are non-executable and bounded by size, token, recursion, and
   boolean-composition limits.
 
