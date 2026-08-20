@@ -37,6 +37,8 @@ const SELF_TEST_DIRECTORY: &str = "self-test";
 const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v2";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
+#[cfg(windows)]
+const WINDOWS_DESKTOP_HOME_DIRECTORY: &str = "ColossusDesktopHome";
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 const MAX_PROVIDER_SECRET_BYTES: usize = 761;
 pub(crate) const LOCAL_TERMINAL_CONSENT_VERSION: u8 = 1;
@@ -701,7 +703,7 @@ pub(crate) struct ManagedWorkspaceStorage {
 
 impl SettingsStore {
     pub(crate) fn open_application() -> Result<Self, CommandErrorDto> {
-        let home = ColossusHome::resolve_and_ensure().map_err(home_storage_error)?;
+        let home = resolve_application_home().map_err(home_storage_error)?;
         Self::open_home(home)
     }
 
@@ -1053,6 +1055,38 @@ impl SettingsStore {
         ensure_private_directory(&path)?;
         Ok(path)
     }
+}
+
+#[cfg(windows)]
+fn resolve_application_home() -> Result<ColossusHome, HomeError> {
+    let root = windows_application_home_root(
+        std::env::var_os("COLOSSUS_HOME"),
+        BaseDirs::new().map(|directories| directories.data_local_dir().to_owned()),
+    )?;
+    ColossusHome::ensure_at(root)
+}
+
+#[cfg(not(windows))]
+fn resolve_application_home() -> Result<ColossusHome, HomeError> {
+    ColossusHome::resolve_and_ensure()
+}
+
+#[cfg(windows)]
+fn windows_application_home_root(
+    configured_home: Option<std::ffi::OsString>,
+    local_data_directory: Option<PathBuf>,
+) -> Result<PathBuf, HomeError> {
+    if let Some(configured_home) = configured_home {
+        let root = PathBuf::from(configured_home);
+        return if root.is_absolute() {
+            Ok(root)
+        } else {
+            Err(HomeError::HomeMustBeAbsolute(root))
+        };
+    }
+    local_data_directory
+        .map(|root| root.join(WINDOWS_DESKTOP_HOME_DIRECTORY))
+        .ok_or(HomeError::HomeDirectoryUnavailable)
 }
 
 pub(crate) fn normalized_settings_snapshot(
@@ -2102,6 +2136,39 @@ mod tests {
         let relative = home_storage_error(HomeError::HomeMustBeAbsolute(PathBuf::from("relative")));
         assert!(relative.message.contains("absolute private directory"));
         assert!(!relative.message.contains("relative"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_desktop_uses_private_local_storage_unless_home_is_explicit() {
+        let temporary = PrivateTestRoot::in_target("default-home");
+        let local_data = temporary.path().canonicalize().expect("canonical local data");
+        let default_home = windows_application_home_root(None, Some(local_data.clone()))
+            .expect("default Desktop home");
+        assert_eq!(
+            default_home,
+            local_data.join(WINDOWS_DESKTOP_HOME_DIRECTORY)
+        );
+        let store = SettingsStore::open_home(
+            ColossusHome::ensure_at(&default_home).expect("private default Desktop home"),
+        )
+        .expect("Desktop store");
+        assert_eq!(store.home_root().expect("home root"), default_home);
+        assert!(default_home.join("desktop").is_dir());
+
+        let explicit = local_data.join("explicit-home");
+        assert_eq!(
+            windows_application_home_root(
+                Some(explicit.clone().into_os_string()),
+                Some(local_data)
+            )
+            .expect("explicit Desktop home"),
+            explicit
+        );
+        assert!(matches!(
+            windows_application_home_root(Some("relative-home".into()), None),
+            Err(HomeError::HomeMustBeAbsolute(path)) if path == Path::new("relative-home")
+        ));
     }
 
     #[test]

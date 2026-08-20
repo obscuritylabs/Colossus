@@ -79,11 +79,12 @@ sidecar process tree.
 
 Desktop settings, generated configuration, runtime state, and imported connection files
 live in the workspace's private Desktop partition under the Colossus home and are checked
-with Windows owner and DACL rules. The former application-support location is ignored and
-left untouched. Provider credentials are collected by Windows Credential UI with UI
-persistence disabled, then stored in Windows Credential Manager. Intermediate credential
-buffers are zeroized. Credentials, prompts, model output, and private paths are not
-included in diagnostics.
+with Windows owner and DACL rules. With no explicit `COLOSSUS_HOME`, Desktop creates and
+uses `%LOCALAPPDATA%\ColossusDesktopHome`; an explicit override must still be absolute and
+owner-private. The former application-support location is ignored and left untouched.
+Provider credentials are collected by Windows Credential UI with UI persistence disabled,
+then stored in Windows Credential Manager. Intermediate credential buffers are zeroized.
+Credentials, prompts, model output, and private paths are not included in diagnostics.
 
 The enhanced Settings pane uses the same Windows storage and credential boundary.
 Global provider, model, MCP, search, telemetry, and credential definitions are
