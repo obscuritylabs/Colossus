@@ -5,12 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   DesktopStatus,
   ManagedCredentialMetadata,
+  ManagedExtensionInventory,
   RepositoryConfigurationProposal,
   SpaceSummary,
 } from "../types";
 import {
   advancedSectionContainsField,
   buildManagedSettingsFixture,
+  ExtensionCatalog,
   managedFieldDestination,
   ManagedSettingsPane,
   RepositoryImportDialog,
@@ -323,4 +325,55 @@ describe("ManagedSettingsPane", () => {
       'class="button primary" type="button" disabled',
     );
   });
+
+  it.each(["Skills", "Packs", "Workflows"])(
+    "renders the live %s catalog without private paths or payloads",
+    (section) => {
+      const inventory: ManagedExtensionInventory = {
+        skills: [
+          {
+            name: "incident-response",
+            version: "1.0.0",
+            description: "Incident triage",
+            source: "repository:incident-response",
+            offlineCompatible: true,
+          },
+        ],
+        packs: [
+          {
+            name: "engineering-tools",
+            version: "2.0.0",
+            publisher: "Obscurity Labs",
+            status: "enabled",
+            manifestSha256: "a".repeat(64),
+            trusted: true,
+          },
+        ],
+        workflows: [
+          {
+            name: "release",
+            version: "3.0.0",
+            status: "registered",
+            updatedAt: "2026-08-20T12:00:00Z",
+            revisionHash: "b".repeat(64),
+          },
+        ],
+      };
+      const markup = renderToStaticMarkup(
+        createElement(ExtensionCatalog, {
+          section,
+          inventory,
+          busy: false,
+          runtimeActive: true,
+          onRefresh: vi.fn(),
+        }),
+      );
+
+      expect(markup).toContain("Live runtime catalog");
+      expect(markup).toContain(`Refresh ${section.toLowerCase()} catalog`);
+      expect(markup).not.toContain("installedPath");
+      expect(markup).not.toContain("C:\\private");
+      expect(markup).not.toContain("payload");
+    },
+  );
 });

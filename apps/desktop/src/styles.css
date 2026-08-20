@@ -9681,6 +9681,36 @@ textarea {
   background: #0a1928;
 }
 
+.managed-extension-catalog {
+  border-top: 1px solid var(--border);
+}
+
+.managed-catalog-toolbar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #081522;
+}
+
+.managed-catalog-toolbar strong,
+.managed-catalog-toolbar small {
+  display: block;
+}
+
+.managed-catalog-toolbar strong {
+  color: var(--text);
+  font-size: 0.7rem;
+}
+
+.managed-catalog-toolbar small {
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 0.61rem;
+}
+
 .source-badge {
   display: inline-flex;
   min-height: 22px;

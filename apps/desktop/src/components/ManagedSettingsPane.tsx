@@ -36,6 +36,7 @@ import {
   diagnoseManagedModel,
   diagnoseManagedProvider,
   diagnoseManagedSearch,
+  getManagedExtensionInventory,
   getManagedConfiguration,
   inspectRepositoryConfiguration,
   logoutManagedMcpOAuth,
@@ -57,6 +58,7 @@ import type {
   ImportConflictDecision,
   ManagedCredentialKind,
   ManagedDefaultOverrides,
+  ManagedExtensionInventory,
   ManagedFieldDescriptor,
   ManagedFieldOverride,
   ManagedMcpServer,
@@ -1130,6 +1132,11 @@ export function ManagedSettingsPane({
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<
     Record<string, ManagedRuntimeDiagnostic>
   >({});
+  const [extensionInventory, setExtensionInventory] =
+    useState<ManagedExtensionInventory | null>(null);
+  const [extensionInventorySpaceId, setExtensionInventorySpaceId] =
+    useState("");
+  const [extensionInventoryBusy, setExtensionInventoryBusy] = useState(false);
 
   const selectedSpace =
     snapshot.spaces.find((candidate) => candidate.id === selectedSpaceId) ??
@@ -1162,6 +1169,17 @@ export function ManagedSettingsPane({
   useEffect(() => {
     if (selectedSpace) setSpace(spaceDraft(selectedSpace));
   }, [selectedSpace]);
+
+  useEffect(() => {
+    if (spaceTab !== "advanced" || !selectedSpace) return;
+    if (selectedSpace.status !== "active") {
+      setExtensionInventory(null);
+      setExtensionInventorySpaceId("");
+      return;
+    }
+    if (extensionInventorySpaceId === selectedSpace.id) return;
+    void loadExtensionInventory();
+  }, [spaceTab, selectedSpace?.id, selectedSpace?.status]);
 
   useEffect(() => {
     if (!focusedFieldId || query || scope !== "space") return;
@@ -1608,6 +1626,30 @@ export function ManagedSettingsPane({
       }));
       setNotice(`${role} search diagnostic passed.`);
     });
+  }
+
+  async function loadExtensionInventory() {
+    if (!selectedSpace || selectedSpace.status !== "active") return;
+    if (extensionInventorySpaceId !== selectedSpace.id) {
+      setExtensionInventory(null);
+    }
+    setExtensionInventoryBusy(true);
+    setFailure("");
+    try {
+      const inventory = isTauriRuntime()
+        ? await getManagedExtensionInventory(selectedSpace.id)
+        : fixtureExtensionInventory();
+      setExtensionInventory(inventory);
+      setExtensionInventorySpaceId(selectedSpace.id);
+    } catch (error: unknown) {
+      setFailure(
+        error instanceof Error
+          ? error.message
+          : "The extension inventory could not be loaded.",
+      );
+    } finally {
+      setExtensionInventoryBusy(false);
+    }
   }
 
   async function saveMcp() {
@@ -2238,6 +2280,9 @@ export function ManagedSettingsPane({
               runtimeDiagnostics={runtimeDiagnostics}
               onTestRuntimeProfile={testRuntimeProfile}
               onTestSearchRole={testSearchRole}
+              extensionInventory={extensionInventory}
+              extensionInventoryBusy={extensionInventoryBusy}
+              onRefreshExtensionInventory={() => void loadExtensionInventory()}
             />
           ) : (
             <EmptySettings
@@ -2950,6 +2995,9 @@ function SpaceSettingsBody({
   runtimeDiagnostics,
   onTestRuntimeProfile,
   onTestSearchRole,
+  extensionInventory,
+  extensionInventoryBusy,
+  onRefreshExtensionInventory,
 }: {
   tab: SpaceTab;
   snapshot: ManagedSettingsSnapshot;
@@ -2975,6 +3023,9 @@ function SpaceSettingsBody({
   runtimeDiagnostics: Record<string, ManagedRuntimeDiagnostic>;
   onTestRuntimeProfile: (kind: "provider" | "model", profile: string) => void;
   onTestSearchRole: (role: "agent" | "research") => void;
+  extensionInventory: ManagedExtensionInventory | null;
+  extensionInventoryBusy: boolean;
+  onRefreshExtensionInventory: () => void;
 }) {
   if (tab === "mcp") {
     return (
@@ -3613,7 +3664,12 @@ function SpaceSettingsBody({
         </div>
       </div>
       {tab === "advanced" ? (
-        [...new Set(filtered.map((descriptor) => descriptor.section))]
+        [
+          ...new Set([
+            ...filtered.map((descriptor) => descriptor.section),
+            "Packs",
+          ]),
+        ]
           .sort()
           .map((section) => {
             const sectionDescriptors = filtered.filter(
@@ -3636,21 +3692,34 @@ function SpaceSettingsBody({
               >
                 <summary>
                   <span>{section}</span>
-                  <small>{sectionDescriptors.length} settings</small>
+                  <small>
+                    {section === "Packs"
+                      ? "Live catalog"
+                      : `${sectionDescriptors.length} settings`}
+                  </small>
                 </summary>
-                <FieldGrid
-                  descriptors={sectionDescriptors}
-                  values={draft.fields}
-                  effective={effective}
-                  scope="space"
-                  focusedFieldId={focusedFieldId}
-                  onChange={(id, value) =>
-                    setDraft({
-                      ...draft,
-                      fields: { ...draft.fields, [id]: value },
-                    })
-                  }
-                  onInherit={(id) => removeDraftField(draft, setDraft, id)}
+                {sectionDescriptors.length > 0 ? (
+                  <FieldGrid
+                    descriptors={sectionDescriptors}
+                    values={draft.fields}
+                    effective={effective}
+                    scope="space"
+                    focusedFieldId={focusedFieldId}
+                    onChange={(id, value) =>
+                      setDraft({
+                        ...draft,
+                        fields: { ...draft.fields, [id]: value },
+                      })
+                    }
+                    onInherit={(id) => removeDraftField(draft, setDraft, id)}
+                  />
+                ) : null}
+                <ExtensionCatalog
+                  section={section}
+                  inventory={extensionInventory}
+                  busy={extensionInventoryBusy}
+                  runtimeActive={selectedSpace.status === "active"}
+                  onRefresh={onRefreshExtensionInventory}
                 />
               </details>
             );
@@ -3676,6 +3745,149 @@ function SpaceSettingsBody({
       ) : null}
     </section>
   );
+}
+
+export function ExtensionCatalog({
+  section,
+  inventory,
+  busy,
+  runtimeActive,
+  onRefresh,
+}: {
+  section: string;
+  inventory: ManagedExtensionInventory | null;
+  busy: boolean;
+  runtimeActive: boolean;
+  onRefresh: () => void;
+}) {
+  if (!matchesExtensionSection(section)) return null;
+  const count =
+    section === "Skills"
+      ? (inventory?.skills.length ?? 0)
+      : section === "Packs"
+        ? (inventory?.packs.length ?? 0)
+        : (inventory?.workflows.length ?? 0);
+  return (
+    <div className="managed-extension-catalog">
+      <div className="managed-catalog-toolbar">
+        <div>
+          <strong>Live runtime catalog</strong>
+          <small>{count} resources</small>
+        </div>
+        <button
+          className="icon-button"
+          type="button"
+          aria-label={`Refresh ${section.toLowerCase()} catalog`}
+          title={`Refresh ${section.toLowerCase()} catalog`}
+          disabled={!runtimeActive || busy}
+          onClick={onRefresh}
+        >
+          <IconRefresh size={16} />
+        </button>
+      </div>
+      {!runtimeActive ? (
+        <EmptySettings
+          icon={<IconActivityHeartbeat size={24} />}
+          title="Runtime not active"
+        />
+      ) : null}
+      {runtimeActive && busy && !inventory ? (
+        <EmptySettings
+          icon={<IconRefresh size={24} />}
+          title="Loading catalog"
+        />
+      ) : null}
+      {runtimeActive && !busy && inventory && count === 0 ? (
+        <EmptySettings
+          icon={<IconDatabase size={24} />}
+          title={`No ${section.toLowerCase()} registered`}
+        />
+      ) : null}
+      {runtimeActive && inventory && count > 0 ? (
+        <div className="managed-list">
+          {section === "Skills"
+            ? inventory.skills.map((skill) => (
+                <div
+                  className="managed-list-row"
+                  key={`${skill.name}:${skill.version}:${skill.source}`}
+                >
+                  <span className="resource-icon">
+                    <IconFileImport size={17} />
+                  </span>
+                  <div>
+                    <strong>
+                      {skill.name} · {skill.version}
+                    </strong>
+                    <small>{skill.description}</small>
+                  </div>
+                  <span className="status-chip tone-neutral">
+                    {skill.source}
+                  </span>
+                  <span
+                    className={`status-chip ${skill.offlineCompatible ? "tone-success" : "tone-warning"}`}
+                  >
+                    {skill.offlineCompatible ? "Offline" : "Network"}
+                  </span>
+                </div>
+              ))
+            : null}
+          {section === "Packs"
+            ? inventory.packs.map((pack) => (
+                <div
+                  className="managed-list-row"
+                  key={`${pack.name}:${pack.version}:${pack.manifestSha256}`}
+                >
+                  <span className="resource-icon">
+                    <IconDatabase size={17} />
+                  </span>
+                  <div>
+                    <strong>
+                      {pack.name} · {pack.version}
+                    </strong>
+                    <small>{pack.publisher}</small>
+                  </div>
+                  <span
+                    className={`status-chip ${pack.status === "enabled" ? "tone-success" : "tone-neutral"}`}
+                  >
+                    {pack.status}
+                  </span>
+                  <span
+                    className={`status-chip ${pack.trusted ? "tone-success" : "tone-warning"}`}
+                  >
+                    {pack.trusted ? "Trusted" : "Untrusted"}
+                  </span>
+                </div>
+              ))
+            : null}
+          {section === "Workflows"
+            ? inventory.workflows.map((workflow) => (
+                <div
+                  className="managed-list-row"
+                  key={`${workflow.name}:${workflow.version}:${workflow.revisionHash}`}
+                >
+                  <span className="resource-icon">
+                    <IconActivityHeartbeat size={17} />
+                  </span>
+                  <div>
+                    <strong>
+                      {workflow.name} · {workflow.version}
+                    </strong>
+                    <small>{workflow.updatedAt}</small>
+                  </div>
+                  <span className="status-chip tone-neutral">
+                    {workflow.status}
+                  </span>
+                </div>
+              ))
+            : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function matchesExtensionSection(section: string) {
+  return section === "Skills" || section === "Packs" || section === "Workflows";
 }
 
 function AuthorityControls({
@@ -5601,6 +5813,46 @@ function fixtureImportProposal(
     fieldOverrides: ["agent.maxTurns", "research.maxSources"],
     lockedFields: ["storage.path", "sandbox.backend"],
     warnings: [],
+  };
+}
+
+function fixtureExtensionInventory(): ManagedExtensionInventory {
+  return {
+    skills: [
+      {
+        name: "incident-response",
+        version: "1.3.0",
+        description: "Structured incident triage and evidence handling.",
+        source: "repository:incident-response",
+        offlineCompatible: true,
+      },
+      {
+        name: "release-review",
+        version: "2.1.0",
+        description: "Release readiness and regression review.",
+        source: "bundled:release-review",
+        offlineCompatible: true,
+      },
+    ],
+    packs: [
+      {
+        name: "engineering-tools",
+        version: "4.2.1",
+        publisher: "Obscurity Labs",
+        status: "enabled",
+        manifestSha256: "5d8c0f12f65de8a2a7e61a3b4a8dd204",
+        trusted: true,
+      },
+    ],
+    workflows: [
+      {
+        name: "release",
+        version: "3.2.1",
+        status: "revised",
+        updatedAt: "2026-08-20T12:00:00Z",
+        revisionHash: "d7f184c2e2b0ac019f34c1cbec9e15e8",
+      },
+    ],
   };
 }
 
