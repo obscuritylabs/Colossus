@@ -348,6 +348,7 @@ pub(crate) async fn save_space_configuration(
     let before = resolved_for(&settings, &request.space_id)?;
     apply_space_edit(&mut settings, request)?;
     let after = resolved_for(&settings, &space_id)?;
+    managed_runtime::preflight_runtime_configuration(&settings, &space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
     let drain = managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
     persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
@@ -368,6 +369,7 @@ pub(crate) async fn apply_space_configuration(
     let before = resolved_for(&settings, &space_id)?;
     advance_space_revision(&mut settings, &space_id)?;
     let after = resolved_for(&settings, &space_id)?;
+    managed_runtime::preflight_runtime_configuration(&settings, &space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
     let drain = managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
     persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
@@ -983,6 +985,7 @@ pub(crate) async fn persist_and_restart(
     previous: DesktopSettings,
     space_id: &str,
 ) -> Result<(), CommandErrorDto> {
+    managed_runtime::preflight_runtime_configuration(settings, space_id)?;
     store.save(settings)?;
     if !state.connected(space_id).await {
         return Ok(());

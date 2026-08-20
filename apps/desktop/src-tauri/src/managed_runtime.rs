@@ -782,8 +782,33 @@ fn managed_bootstrap(
     worker_authentication: &[u8],
     paths: &ManagedBootstrapPaths<'_>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
+    let runtime = managed_runtime_config(resolved);
+    let bootstrap = SidecarBootstrapConfig::new(
+        workspace,
+        runtime,
+        application_grant(resolved.access_profile)?,
+    )?
+    .with_expected_workspace_identity(workspace_identity)?
+    .with_colossus_home(paths.colossus_home)?
+    .with_approval_broker_grant(approval_broker_grant)?
+    .with_host_credentials(host_credentials)?
+    .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
+    #[cfg(debug_assertions)]
+    let bootstrap = bootstrap.with_plaintext_journal_for_development();
+    let bootstrap = match paths.ca_bundle {
+        Some(path) => bootstrap.with_additional_ca_bundle_path(path)?,
+        None => bootstrap,
+    };
+    match paths.codex_auth {
+        Some(path) => bootstrap.with_codex_auth_path(path),
+        None => Ok(bootstrap),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn managed_runtime_config(resolved: &ResolvedSpaceConfiguration) -> ManagedRuntimeConfig {
     let (search_profiles, search_roles) = managed_search(resolved);
-    let runtime = ManagedRuntimeConfig {
+    ManagedRuntimeConfig {
         access_profile: access_profile(resolved.access_profile),
         execution_boundary: execution_boundary(resolved.execution_boundary),
         providers: resolved
@@ -903,27 +928,24 @@ fn managed_bootstrap(
                 value: field.value.clone(),
             })
             .collect(),
-    };
-    let bootstrap = SidecarBootstrapConfig::new(
-        workspace,
-        runtime,
-        application_grant(resolved.access_profile)?,
-    )?
-    .with_expected_workspace_identity(workspace_identity)?
-    .with_colossus_home(paths.colossus_home)?
-    .with_approval_broker_grant(approval_broker_grant)?
-    .with_host_credentials(host_credentials)?
-    .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
-    #[cfg(debug_assertions)]
-    let bootstrap = bootstrap.with_plaintext_journal_for_development();
-    let bootstrap = match paths.ca_bundle {
-        Some(path) => bootstrap.with_additional_ca_bundle_path(path)?,
-        None => bootstrap,
-    };
-    match paths.codex_auth {
-        Some(path) => bootstrap.with_codex_auth_path(path),
-        None => Ok(bootstrap),
     }
+}
+
+pub(crate) fn preflight_runtime_configuration(
+    settings: &DesktopSettings,
+    space_id: &str,
+) -> Result<(), CommandErrorDto> {
+    let space = settings
+        .space(space_id)
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+    let resolved = resolve_space_configuration(&settings.global_configuration, space)?;
+    managed_runtime_config(&resolved).validate().map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "desktop_configuration",
+            "The managed Desktop configuration could not be compiled.",
+            false,
+        )
+    })
 }
 
 fn managed_search(

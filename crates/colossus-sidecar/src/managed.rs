@@ -23,10 +23,10 @@ use colossus_runtime::{
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame,
     ConfigurationInspectionRequest, ConfigurationInspectionResponse, FailureCode, FailureResponse,
-    ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter, ManagedExecutionBoundary,
-    ManagedFieldOverride, ManagedJournalPayloadMode, ManagedMcpTransport, ManagedOtlpProtocol,
-    ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchKind,
-    PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
+    MANAGED_EDITABLE_FIELD_IDS, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedJournalPayloadMode, ManagedMcpTransport,
+    ManagedOtlpProtocol, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
+    ManagedSearchKind, PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
     WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication, read_frame,
     write_frame,
 };
@@ -849,16 +849,27 @@ fn apply_managed_field_overrides(
         "packs.installRoot",
         "workflows.user",
     ];
+    let agent =
+        serde_json::to_value(&config.agent).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let subagents =
+        serde_json::to_value(&config.subagents).map_err(|_| FailureCode::InvalidConfiguration)?;
     let mut value =
         serde_json::to_value(&*config).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let root = value
+        .as_object_mut()
+        .ok_or(FailureCode::InvalidConfiguration)?;
+    root.entry("agent").or_insert(agent);
+    root.entry("subagents").or_insert(subagents);
     for field in overrides {
-        if LOCKED_FIELDS.iter().any(|locked| {
-            field.field_id == *locked
-                || field
-                    .field_id
-                    .strip_prefix(locked)
-                    .is_some_and(|suffix| suffix.starts_with('.'))
-        }) {
+        if !MANAGED_EDITABLE_FIELD_IDS.contains(&field.field_id.as_str())
+            || LOCKED_FIELDS.iter().any(|locked| {
+                field.field_id == *locked
+                    || field
+                        .field_id
+                        .strip_prefix(locked)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+        {
             return Err(FailureCode::InvalidConfiguration);
         }
         replace_existing_configuration_field(&mut value, &field.field_id, field.value.clone())?;
@@ -1489,7 +1500,7 @@ fn connect_windows_bootstrap_pipe() -> Result<File, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use colossus_sidecar_protocol::ManagedProviderConfig;
+    use colossus_sidecar_protocol::{ManagedMcpServerConfig, ManagedProviderConfig};
 
     fn test_managed_runtime() -> ManagedRuntimeConfig {
         ManagedRuntimeConfig {
@@ -1599,6 +1610,81 @@ mod tests {
                 .expect_err("locked storage override"),
             FailureCode::InvalidConfiguration
         );
+
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "access.profile".into(),
+            value: serde_json::json!("allow_all"),
+        };
+        assert_eq!(
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false,)
+                .expect_err("unmanaged access override"),
+            FailureCode::InvalidConfiguration
+        );
+    }
+
+    #[test]
+    fn imported_pinned_desktop_configuration_compiles() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.access_profile = ManagedAccessProfile::Pinned;
+        let overrides = [
+            ("access.tools.include", serde_json::json!(["echo"])),
+            ("access.tools.exclude", serde_json::json!([])),
+            ("access.actions.allow", serde_json::json!([])),
+            ("access.actions.requireApproval", serde_json::json!([])),
+            ("access.actions.deny", serde_json::json!([])),
+            ("workflows.repository", serde_json::json!("workflows")),
+            (
+                "sandbox.profile",
+                serde_json::json!("workspace-development"),
+            ),
+            ("sandbox.allowBrokerFallback", serde_json::json!(false)),
+            ("sandbox.helperPath", serde_json::Value::Null),
+            ("sandbox.ociRuntime", serde_json::Value::Null),
+            ("sandbox.ociImage", serde_json::Value::Null),
+            ("sandbox.ociProxyImage", serde_json::Value::Null),
+            ("sandbox.filesystem", serde_json::json!([])),
+            ("sandbox.executables", serde_json::json!([])),
+            ("sandbox.environment", serde_json::json!([])),
+            (
+                "sandbox.networkDestinations",
+                serde_json::json!(["https://mcp.example.test"]),
+            ),
+            ("sandbox.timeoutMs", serde_json::json!(30_000)),
+            ("sandbox.maxOutputBytes", serde_json::json!(1_048_576)),
+            ("sandbox.maxProcesses", serde_json::json!(4)),
+            ("sandbox.maxMemoryBytes", serde_json::json!(134_217_728)),
+            ("sandbox.maxConcurrency", serde_json::json!(1)),
+            ("agent.maxTurns", serde_json::json!(4)),
+            ("subagents.maxConcurrent", serde_json::json!(2)),
+        ];
+        for (field_id, value) in overrides {
+            managed.field_overrides.push(ManagedFieldOverride {
+                field_id: field_id.into(),
+                value,
+            });
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                .unwrap_or_else(|_| panic!("managed field override failed: {field_id}"));
+        }
+        managed.mcp_servers.push(ManagedMcpServerConfig {
+            name: "docs".into(),
+            transport: ManagedMcpTransport::StreamableHttp,
+            command: None,
+            args: Vec::new(),
+            working_directory: None,
+            environment_credentials: BTreeMap::new(),
+            url: Some("https://mcp.example.test/services/mcp".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: true,
+            oauth: None,
+            allowed_tools: vec!["search_docs".into()],
+            research_tools: Vec::new(),
+            timeout_ms: Some(5_000),
+            max_output_bytes: Some(1_048_576),
+        });
+        managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("managed MCP configuration");
     }
 
     #[test]

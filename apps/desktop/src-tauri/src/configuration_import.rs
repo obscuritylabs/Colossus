@@ -1012,6 +1012,7 @@ pub(crate) async fn apply_repository_configuration(
     )?;
     validate_configuration(&settings.global_configuration, &settings.spaces)?;
     let after = resolved_for(&settings, &request.space_id)?;
+    crate::managed_runtime::preflight_runtime_configuration(&settings, &request.space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
     let drain =
         crate::managed_runtime::drain_active_runs_for_configuration(&state, &request.space_id)
@@ -1424,7 +1425,44 @@ mod tests {
                 }
             }, "roles": { "primary": "echo" }},
             "search": { "profiles": {}, "roles": {} },
-            "mcp": { "servers": {} },
+            "mcp": { "servers": {
+                "docs": {
+                    "transport": "streamable_http",
+                    "command": null,
+                    "args": [],
+                    "workingDirectory": null,
+                    "environment": {},
+                    "url": "https://mcp.example.test/services/mcp",
+                    "headers": {},
+                    "credentialHeaders": {},
+                    "allowStateless": true,
+                    "oauth": null,
+                    "allowedTools": ["search_docs"],
+                    "researchTools": [],
+                    "timeoutMs": 5000,
+                    "maxOutputBytes": 1_048_576
+                }
+            }},
+            "workflows": { "repository": "workflows", "user": "workflows" },
+            "sandbox": {
+                "profile": "workspace-development",
+                "allowBrokerFallback": false,
+                "helperPath": null,
+                "ociRuntime": null,
+                "ociImage": null,
+                "ociProxyImage": null,
+                "filesystem": [],
+                "executables": [],
+                "environment": [],
+                "networkDestinations": ["https://mcp.example.test"],
+                "timeoutMs": 30000,
+                "maxOutputBytes": 1_048_576,
+                "maxProcesses": 4,
+                "maxMemoryBytes": 134_217_728,
+                "maxConcurrency": 1
+            },
+            "agent": { "maxTurns": 4 },
+            "subagents": { "maxConcurrent": 2 },
             "observability": { "enabled": false }
         });
         let mut target = space("target");
@@ -1464,7 +1502,33 @@ mod tests {
             &mut settings,
             "target",
             &runtime_only,
-            &["access.profile".into(), "access.tools.include".into()],
+            &[
+                "access.profile".into(),
+                "access.tools.include".into(),
+                "access.tools.exclude".into(),
+                "access.actions.allow".into(),
+                "access.actions.requireApproval".into(),
+                "access.actions.deny".into(),
+                "workflows.repository".into(),
+                "workflows.user".into(),
+                "sandbox.profile".into(),
+                "sandbox.allowBrokerFallback".into(),
+                "sandbox.helperPath".into(),
+                "sandbox.ociRuntime".into(),
+                "sandbox.ociImage".into(),
+                "sandbox.ociProxyImage".into(),
+                "sandbox.filesystem".into(),
+                "sandbox.executables".into(),
+                "sandbox.environment".into(),
+                "sandbox.networkDestinations".into(),
+                "sandbox.timeoutMs".into(),
+                "sandbox.maxOutputBytes".into(),
+                "sandbox.maxProcesses".into(),
+                "sandbox.maxMemoryBytes".into(),
+                "sandbox.maxConcurrency".into(),
+                "agent.maxTurns".into(),
+                "subagents.maxConcurrent".into(),
+            ],
             &BTreeMap::new(),
             &BTreeMap::new(),
             "a".repeat(64),
@@ -1472,7 +1536,15 @@ mod tests {
         .expect("repository import");
 
         let target = settings.space("target").expect("target");
-        assert_eq!(target.configuration.catalog_revisions, previous_references);
+        assert_eq!(
+            target.configuration.catalog_revisions["provider:primary-provider"],
+            previous_references["provider:primary-provider"]
+        );
+        assert_eq!(
+            target.configuration.catalog_revisions["model:primary"],
+            previous_references["model:primary"]
+        );
+        assert!(target.configuration.catalog_revisions.contains_key("mcp:docs"));
         assert_eq!(target.configuration.model_roles["primary"], "primary");
         assert_eq!(target.access_profile, AccessProfileSetting::Pinned);
         assert_eq!(
@@ -1489,6 +1561,8 @@ mod tests {
         assert_eq!(target.providers[0].kind, ProviderKindSetting::Codex);
         validate_configuration(&settings.global_configuration, &settings.spaces)
             .expect("valid Desktop catalog");
+        crate::managed_runtime::preflight_runtime_configuration(&settings, "target")
+            .expect("valid managed runtime projection");
 
         let proposal = proposal_from_canonical(
             "target",
@@ -1503,7 +1577,8 @@ mod tests {
             ],
             &settings.global_configuration,
         );
-        assert!(proposal.resources.is_empty());
+        assert_eq!(proposal.resources.len(), 1);
+        assert_eq!(proposal.resources[0].kind, "mcp");
         assert!(
             proposal
                 .warnings
