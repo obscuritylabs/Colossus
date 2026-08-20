@@ -78,6 +78,15 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
   assert.match(packaging, /x86_64-pc-windows-msvc/u);
   assert.match(packaging, /developer_preview", "validation_only/u);
   assert.match(packaging, /COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED"/u);
+  assert.match(
+    packaging,
+    /cargo metadata --locked --no-deps --format-version 1/u,
+  );
+  assert.match(packaging, /\$ReleaseVersion = \$BundledVersion/u);
+  assert.match(
+    packaging,
+    /desktop release version \$ReleaseVersion must match bundled CLI version \$BundledVersion/u,
+  );
   assert.match(packaging, /cargo xtask desktop prepare/u);
   assert.match(packaging, /--no-sign/u);
   assert.match(packaging, /\[IO\.Path\]::GetTempPath\(\)/u);

@@ -54,13 +54,6 @@ if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @("developer_preview", "validat
 if ($env:COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED") {
     Fail "unsigned Windows packaging requires COLOSSUS_DESKTOP_TEAM_ID=UNSIGNED"
 }
-if (
-    $ReleaseVersion -and
-    $ReleaseVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
-) {
-    Fail "desktop release version must be canonical semantic versioning"
-}
-
 $TargetRoot = if ($env:CARGO_TARGET_DIR) {
     if ([IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
         $env:CARGO_TARGET_DIR
@@ -81,6 +74,29 @@ $Vite = Join-Path $Desktop "node_modules/.bin/vite.cmd"
 $TauriOverridePath = Join-Path `
     ([IO.Path]::GetTempPath()) `
     "colossus-tauri-override-$([Guid]::NewGuid().ToString('N')).json"
+
+$MetadataJson = & cargo metadata --locked --no-deps --format-version 1 `
+    --manifest-path (Join-Path $Repository "Cargo.toml")
+if ($LASTEXITCODE -ne 0) {
+    Fail "workspace metadata inspection failed"
+}
+$Metadata = $MetadataJson | ConvertFrom-Json
+$CliPackages = @($Metadata.packages | Where-Object { $_.name -eq "colossus-cli" })
+if ($CliPackages.Count -ne 1) {
+    Fail "workspace metadata must contain exactly one colossus-cli package"
+}
+$BundledVersion = [string]$CliPackages[0].version
+if (-not $ReleaseVersion) {
+    $ReleaseVersion = $BundledVersion
+}
+if (
+    $ReleaseVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+) {
+    Fail "desktop release version must be canonical semantic versioning"
+}
+if ($ReleaseVersion -ne $BundledVersion) {
+    Fail "desktop release version $ReleaseVersion must match bundled CLI version $BundledVersion"
+}
 
 if (-not (Test-Path -LiteralPath $Tauri -PathType Leaf)) {
     Fail "run npm ci in apps/desktop before packaging"
