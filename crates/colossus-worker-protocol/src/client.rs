@@ -236,6 +236,21 @@ impl WorkerControlClient {
         .await
     }
 
+    /// Return metadata-only data-skill inventory from the live runtime.
+    pub async fn skills(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::SkillList).await
+    }
+
+    /// Return bounded installed-pack lifecycle metadata from the live runtime.
+    pub async fn packs(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::PackList { limit: 256 }).await
+    }
+
+    /// Return bounded registered-workflow event metadata from the live runtime.
+    pub async fn workflows(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::WorkflowList).await
+    }
+
     async fn call(
         &self,
         operation: ControlOperation,

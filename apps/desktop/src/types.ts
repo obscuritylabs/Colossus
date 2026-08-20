@@ -391,6 +391,37 @@ export interface ManagedRuntimeDiagnostic {
   resultCount: number | null;
 }
 
+export interface ManagedSkillCatalogEntry {
+  name: string;
+  version: string;
+  description: string;
+  source: string;
+  offlineCompatible: boolean;
+}
+
+export interface ManagedPackCatalogEntry {
+  name: string;
+  version: string;
+  publisher: string;
+  status: "enabled" | "disabled" | "uninstalled" | "unknown";
+  manifestSha256: string;
+  trusted: boolean;
+}
+
+export interface ManagedWorkflowCatalogEntry {
+  name: string;
+  version: string;
+  status: "registered" | "revised";
+  updatedAt: string;
+  revisionHash: string;
+}
+
+export interface ManagedExtensionInventory {
+  skills: ManagedSkillCatalogEntry[];
+  packs: ManagedPackCatalogEntry[];
+  workflows: ManagedWorkflowCatalogEntry[];
+}
+
 export interface ManagedProviderCatalogValue {
   profile: string;
   kind: ProviderKind;

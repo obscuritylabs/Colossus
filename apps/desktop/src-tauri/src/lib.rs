@@ -47,7 +47,7 @@ use managed_configuration_commands::{
 use managed_diagnostics::{
     begin_managed_mcp_oauth, complete_managed_mcp_oauth, diagnose_managed_mcp_server,
     diagnose_managed_model, diagnose_managed_provider, diagnose_managed_search,
-    logout_managed_mcp_oauth, managed_mcp_oauth_status,
+    get_managed_extension_inventory, logout_managed_mcp_oauth, managed_mcp_oauth_status,
 };
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
@@ -110,6 +110,7 @@ pub fn run() {
             diagnose_managed_provider,
             diagnose_managed_model,
             diagnose_managed_search,
+            get_managed_extension_inventory,
             upsert_global_provider,
             upsert_global_model,
             upsert_global_search_provider,

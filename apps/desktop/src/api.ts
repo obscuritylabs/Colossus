@@ -22,6 +22,7 @@ import type {
   Interaction,
   ListRunsRequest,
   ManagedCredentialKind,
+  ManagedExtensionInventory,
   ManagedMcpServer,
   ManagedMcpDiagnostic,
   ManagedMcpOAuthLogin,
@@ -318,6 +319,12 @@ export function diagnoseManagedSearch(
   return call("diagnose_managed_search", {
     request: { spaceId, role },
   });
+}
+
+export function getManagedExtensionInventory(
+  spaceId: string,
+): Promise<ManagedExtensionInventory> {
+  return call("get_managed_extension_inventory", { request: { spaceId } });
 }
 
 export function inspectRepositoryConfiguration(

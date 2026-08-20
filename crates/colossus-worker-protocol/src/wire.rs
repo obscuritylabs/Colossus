@@ -101,6 +101,11 @@ pub(crate) enum ControlOperation {
         query: String,
         limit: usize,
     },
+    SkillList,
+    PackList {
+        limit: usize,
+    },
+    WorkflowList,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -398,6 +403,18 @@ mod tests {
                 "query": "Colossus connectivity test",
                 "limit": 1,
             })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::SkillList).expect("skill list"),
+            serde_json::json!({"operation": "skill_list"})
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::PackList { limit: 256 }).expect("pack list"),
+            serde_json::json!({"operation": "pack_list", "limit": 256})
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::WorkflowList).expect("workflow list"),
+            serde_json::json!({"operation": "workflow_list"})
         );
     }
 }

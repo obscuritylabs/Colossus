@@ -43,6 +43,7 @@
     "allow-diagnose-managed-provider",
     "allow-diagnose-managed-model",
     "allow-diagnose-managed-search",
+    "allow-get-managed-extension-inventory",
     "allow-create-managed-credential",
     "allow-rotate-managed-credential",
     "allow-delete-managed-credential",
