@@ -26,7 +26,7 @@ use crate::{
         confirm_authority_elevation, persist_and_restart, resolved_for,
     },
     state::AppState,
-    workspace_files::read_file,
+    workspace_files::read_repository_configuration,
 };
 
 const REPOSITORY_CONFIGURATION_PATH: &str = ".colossus/config.yaml";
@@ -145,7 +145,7 @@ async fn inspect_source(
         .space(space_id)
         .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
     let root = revalidate_workspace(&space.workspace)?;
-    let source = read_file(&root, REPOSITORY_CONFIGURATION_PATH)?.content;
+    let source = read_repository_configuration(&root)?;
     let sha256 = hex::encode(Sha256::digest(source.as_bytes()));
     let bundle = VerifiedBundle::load()?;
     let inspection = inspect_sidecar_configuration(&bundle.sidecar, source)
@@ -1224,7 +1224,7 @@ mod tests {
                 "primary": {
                     "providerProfile": "openapi",
                     "model": "gpt-compatible",
-                    "contextWindowTokens": 128000,
+                    "contextWindowTokens": 128_000,
                     "maxOutputTokens": 16384,
                     "capabilities": { "toolCalls": true, "streaming": true }
                 }
