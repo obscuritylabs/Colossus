@@ -12,6 +12,7 @@ use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     http_transport_authority_match, non_public_network_address,
 };
+use colossus_ports::CredentialResolutionError;
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,12 @@ const MAX_TITLE_CHARS: usize = 4_096;
 const MAX_URL_CHARS: usize = 8_192;
 const MAX_SNIPPET_CHARS: usize = 32_768;
 const MAX_SOURCE_CHARS: usize = 256;
+
+impl From<CredentialResolutionError> for SearchAdapterError {
+    fn from(error: CredentialResolutionError) -> Self {
+        Self::Credential(error.to_string())
+    }
+}
 
 mod normalization;
 pub use normalization::default_search_limit;

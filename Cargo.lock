@@ -1585,6 +1585,7 @@ dependencies = [
  "colossus-api",
  "colossus-grpc",
  "colossus-home",
+ "colossus-mcp",
  "colossus-network",
  "colossus-ports",
  "colossus-provider",

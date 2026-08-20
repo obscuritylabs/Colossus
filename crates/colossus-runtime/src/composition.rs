@@ -628,12 +628,16 @@ impl Runtime {
         let providers = Arc::new(provider_registry(
             &config.providers,
             &config.models,
-            provider_credentials,
+            Arc::clone(&provider_credentials),
             codex_auth,
             &tls_roots,
             configured_resource_authority(&config.sandbox),
         )?);
-        let searches = Arc::new(search_registry(config, &tls_roots)?);
+        let searches = Arc::new(search_registry(
+            config,
+            &tls_roots,
+            Arc::clone(&provider_credentials),
+        )?);
         let access_config = &config.access;
         let mut candidate_tool_specs = builtin_specs();
         let mut tool_descriptors = candidate_tool_specs
@@ -930,6 +934,7 @@ impl Runtime {
             &config.sandbox.backend,
             Arc::clone(&process_executor),
         )?
+        .with_credentials(provider_credentials)
         .with_tls_roots(tls_roots.clone())
         // Operator OAuth runs outside the effect gateway and has no session-scoped
         // acknowledgement capability. Only the global acknowledgement may widen it.

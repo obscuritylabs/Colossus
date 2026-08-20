@@ -316,6 +316,7 @@ pub(crate) struct ResolvedSpaceConfiguration {
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
     pub(crate) field_overrides: Vec<FieldOverrideSetting>,
+    pub(crate) mcp_servers: Vec<McpServerSetting>,
 }
 
 pub(crate) fn resolve_space_configuration(
@@ -334,6 +335,34 @@ pub(crate) fn resolve_space_configuration(
     for field in &space.configuration.field_overrides {
         field_overrides.insert(field.field_id.clone(), field.value.clone());
     }
+    let mcp_servers = space
+        .configuration
+        .catalog_revisions
+        .iter()
+        .filter(|(key, _)| key.starts_with("mcp:"))
+        .map(|(_, reference)| {
+            let mut server = catalog_revision_value(&global.mcp_servers, reference)
+                .ok_or_else(configuration_error)?
+                .clone();
+            for credential in server.environment_credentials.values_mut() {
+                apply_credential_override(credential, &space.configuration.credential_overrides);
+            }
+            for header in server.credential_headers.values_mut() {
+                apply_credential_override(
+                    &mut header.credential_id,
+                    &space.configuration.credential_overrides,
+                );
+            }
+            if let Some(credential) = server
+                .oauth
+                .as_mut()
+                .and_then(|oauth| oauth.client_secret_credential_id.as_mut())
+            {
+                apply_credential_override(credential, &space.configuration.credential_overrides);
+            }
+            Ok(server)
+        })
+        .collect::<Result<Vec<_>, CommandErrorDto>>()?;
     Ok(ResolvedSpaceConfiguration {
         access_profile: space
             .configuration
@@ -354,7 +383,27 @@ pub(crate) fn resolve_space_configuration(
             .into_iter()
             .map(|(field_id, value)| FieldOverrideSetting { field_id, value })
             .collect(),
+        mcp_servers,
     })
+}
+
+fn catalog_revision_value<'a, T>(
+    entries: &'a [CatalogEntrySetting<T>],
+    reference: &CatalogReferenceSetting,
+) -> Option<&'a T> {
+    entries
+        .iter()
+        .find(|entry| entry.id == reference.resource_id)?
+        .revisions
+        .iter()
+        .find(|revision| revision.revision == reference.revision)
+        .map(|revision| &revision.value)
+}
+
+fn apply_credential_override(credential: &mut String, overrides: &BTreeMap<String, String>) {
+    if let Some(replacement) = overrides.get(credential) {
+        credential.clone_from(replacement);
+    }
 }
 
 fn empty_object() -> Value {

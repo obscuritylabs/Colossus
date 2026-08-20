@@ -36,6 +36,18 @@ fn ambient_search_profiles_allow_non_loopback_http_only_explicitly() {
         )
         .is_err()
     );
+    assert!(
+        SearchProfile::new(
+            "paid",
+            SearchKind::SerpApi,
+            "https://serpapi.com/search.json",
+            Some("host:search-key".into()),
+            None,
+            "test",
+            1000,
+        )
+        .is_ok()
+    );
     SearchProfile::new_with_resource_authority(
         "private",
         SearchKind::Searxng,
@@ -50,7 +62,7 @@ fn ambient_search_profiles_allow_non_loopback_http_only_explicitly() {
 }
 
 impl CredentialResolver for CountingCredentialResolver {
-    fn resolve(&self, reference: &str) -> Result<String, SearchAdapterError> {
+    fn resolve(&self, reference: &str) -> Result<String, CredentialResolutionError> {
         assert!(reference.starts_with("env:"));
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok(self.secret.clone())

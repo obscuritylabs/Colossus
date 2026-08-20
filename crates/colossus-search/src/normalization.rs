@@ -225,14 +225,14 @@ pub(super) fn valid_name(value: &str) -> bool {
 }
 
 pub(super) fn valid_credential_reference(reference: &str) -> bool {
-    let Some(variable) = reference.strip_prefix("env:") else {
-        return false;
-    };
-    let mut bytes = variable.bytes();
-    bytes
-        .next()
-        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+    if let Some(variable) = reference.strip_prefix("env:") {
+        let mut bytes = variable.bytes();
+        return bytes
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+            && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
+    }
+    reference.strip_prefix("host:").is_some_and(valid_name)
 }
 
 pub(super) fn valid_header_name(value: &str) -> bool {

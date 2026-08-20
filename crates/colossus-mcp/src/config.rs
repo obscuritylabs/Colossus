@@ -604,10 +604,10 @@ fn validate_stdio_server(
     for (child_name, reference) in &server.environment {
         if !valid_environment_name(child_name)
             || (!ambient_resources && !allowed_environment.contains(child_name))
-            || environment_reference(reference).is_none()
+            || !valid_credential_reference(reference)
         {
             return Err(McpError::Invalid(format!(
-                "server {name} environment requires allowed child names and env:VARIABLE references"
+                "server {name} environment requires allowed child names and credential references"
             )));
         }
     }
@@ -680,12 +680,13 @@ fn validate_streamable_http_server(
                 "server {name} contains duplicate HTTP header {header}"
             )));
         }
-        let variable = environment_reference(&credential.reference).ok_or_else(|| {
+        let reference = credential_reference(&credential.reference).ok_or_else(|| {
             McpError::Invalid(format!(
-                "server {name} credential header {header} requires env:VARIABLE"
+                "server {name} credential header {header} requires a credential reference"
             ))
         })?;
-        if !ambient_resources
+        if let CredentialReferenceKind::Environment(variable) = reference
+            && !ambient_resources
             && !allowed_environment
                 .iter()
                 .any(|allowed| allowed.as_str() == variable)
@@ -801,12 +802,13 @@ fn validate_oauth(
         }
     }
     if let Some(reference) = oauth.client_secret_reference.as_deref() {
-        let variable = environment_reference(reference).ok_or_else(|| {
+        let reference = credential_reference(reference).ok_or_else(|| {
             McpError::Invalid(format!(
-                "server {server} OAuth client secret requires env:VARIABLE"
+                "server {server} OAuth client secret requires a credential reference"
             ))
         })?;
-        if !ambient_resources
+        if let CredentialReferenceKind::Environment(variable) = reference
+            && !ambient_resources
             && !allowed_environment
                 .iter()
                 .any(|allowed| allowed.as_str() == variable)
@@ -844,4 +846,27 @@ fn valid_environment_name(name: &str) -> bool {
 pub(super) fn environment_reference(value: &str) -> Option<&str> {
     let name = value.strip_prefix("env:")?;
     valid_environment_name(name).then_some(name)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum CredentialReferenceKind<'a> {
+    Environment(&'a str),
+    Host,
+}
+
+pub(super) fn credential_reference(value: &str) -> Option<CredentialReferenceKind<'_>> {
+    if let Some(name) = environment_reference(value) {
+        return Some(CredentialReferenceKind::Environment(name));
+    }
+    let identifier = value.strip_prefix("host:")?;
+    (!identifier.is_empty()
+        && identifier.len() <= 128
+        && identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
+    .then_some(CredentialReferenceKind::Host)
+}
+
+fn valid_credential_reference(value: &str) -> bool {
+    credential_reference(value).is_some()
 }

@@ -2,8 +2,9 @@ use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
     ManagedExecutionBoundary, ManagedFieldOverride, ManagedModelCapabilities, ManagedModelConfig,
-    ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
-    ManagedSearchConfig,
+    ManagedMcpCredentialHeader, ManagedMcpOAuthConfig, ManagedMcpResearchTool,
+    ManagedMcpServerConfig, ManagedMcpTransport, ManagedProviderConfig, ManagedProviderKind,
+    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig,
     NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
     SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
     SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
@@ -24,7 +25,9 @@ use crate::{
         ReasoningEffortSetting, SettingsStore, load_provider_secret, revalidate_workspace,
     },
     dto::CommandErrorDto,
-    managed_configuration::{ResolvedSpaceConfiguration, resolve_space_configuration},
+    managed_configuration::{
+        McpTransportSetting, ResolvedSpaceConfiguration, resolve_space_configuration,
+    },
     run_list,
     state::{AppState, MAX_LIVE_MANAGED_SPACES, ManagedHealth},
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
@@ -592,16 +595,36 @@ async fn start_inner(
 
 fn provider_host_credentials(
     settings: &DesktopSettings,
+    resolved: &ResolvedSpaceConfiguration,
 ) -> Result<Vec<SidecarHostCredential>, (CommandErrorDto, RuntimeFailureCodeDto)> {
-    settings
+    let mut credential_ids = settings
         .provider_credential_ids()
         .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    for server in &resolved.mcp_servers {
+        credential_ids.extend(server.environment_credentials.values().cloned());
+        credential_ids.extend(
+            server
+                .credential_headers
+                .values()
+                .map(|header| header.credential_id.clone()),
+        );
+        credential_ids.extend(
+            server
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_secret_credential_id.clone()),
+        );
+    }
+    credential_ids
+        .into_iter()
         .map(|credential_id| {
-            let credential = load_provider_secret(credential_id)
+            let credential = load_provider_secret(&credential_id)
                 .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
             let provider_secret = Secret::new(credential.to_vec())
                 .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
-            SidecarHostCredential::new(credential_id, provider_secret)
+            SidecarHostCredential::new(&credential_id, provider_secret)
                 .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))
         })
         .collect()
@@ -632,7 +655,7 @@ fn prepare_managed_bootstrap(
         })?;
     let resolved = resolve_space_configuration(&settings.global_configuration, space)
         .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
-    let host_credentials = provider_host_credentials(settings)?;
+    let host_credentials = provider_host_credentials(settings, &resolved)?;
     let codex_auth_path = codex_auth_path(settings)?;
     let ca_bundle_path = settings
         .additional_ca_bundle
@@ -728,6 +751,55 @@ fn managed_bootstrap(
         roles: settings.model_roles.clone(),
         search_profiles,
         search_roles,
+        mcp_servers: resolved
+            .mcp_servers
+            .iter()
+            .map(|server| ManagedMcpServerConfig {
+                name: server.name.clone(),
+                transport: match server.transport {
+                    McpTransportSetting::Stdio => ManagedMcpTransport::Stdio,
+                    McpTransportSetting::StreamableHttp => ManagedMcpTransport::StreamableHttp,
+                },
+                command: server.command.clone(),
+                args: server.args.clone(),
+                working_directory: server.working_directory.clone(),
+                environment_credentials: server.environment_credentials.clone(),
+                url: server.url.clone(),
+                headers: server.headers.clone(),
+                credential_headers: server
+                    .credential_headers
+                    .iter()
+                    .map(|(name, header)| {
+                        (
+                            name.clone(),
+                            ManagedMcpCredentialHeader {
+                                scheme: header.scheme.clone(),
+                                credential_id: header.credential_id.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+                allow_stateless: server.allow_stateless,
+                oauth: server.oauth.as_ref().map(|oauth| ManagedMcpOAuthConfig {
+                    client_id: oauth.client_id.clone(),
+                    client_secret_credential_id: oauth.client_secret_credential_id.clone(),
+                    callback_port: oauth.callback_port,
+                    scopes: oauth.scopes.clone(),
+                }),
+                allowed_tools: server.allowed_tools.clone(),
+                research_tools: server
+                    .research_tools
+                    .iter()
+                    .map(|tool| ManagedMcpResearchTool {
+                        tool: tool.tool.clone(),
+                        title: tool.title.clone(),
+                        arguments: tool.arguments.clone(),
+                    })
+                    .collect(),
+                timeout_ms: server.timeout_ms,
+                max_output_bytes: server.max_output_bytes,
+            })
+            .collect(),
         field_overrides: resolved
             .field_overrides
             .iter()

@@ -37,8 +37,7 @@ use executor::{
 mod config;
 pub use config::*;
 use config::{
-    INITIALIZE_REQUEST_ID, MAX_PROTOCOL_LINE_BYTES, MCP_REQUEST_ID, McpEffectInput,
-    environment_reference, validate_name,
+    INITIALIZE_REQUEST_ID, MAX_PROTOCOL_LINE_BYTES, MCP_REQUEST_ID, McpEffectInput, validate_name,
 };
 
 mod http_client;

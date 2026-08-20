@@ -4,6 +4,10 @@ use colossus_access::AccessProfile;
 use colossus_api::{ApiScope, ApplicationKind};
 use colossus_grpc::{TlsIdentity, TlsKeySeed};
 use colossus_home::{ColossusHome, ConfinedRoot};
+use colossus_mcp::{
+    McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
+    McpTransportKind,
+};
 use colossus_ports::StoreError;
 use colossus_provider::{
     CODEX_AUTH_ORIGIN, CODEX_CREDENTIAL_REFERENCE, ChatCompletionsOutputTokenParameter,
@@ -17,10 +21,10 @@ use colossus_runtime::{
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
     FailureResponse, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
-    ManagedExecutionBoundary, ManagedFieldOverride, ManagedProviderKind, ManagedReasoningEffort,
-    ManagedRuntimeConfig, PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
-    WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication, read_frame,
-    write_frame,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedMcpTransport, ManagedProviderKind,
+    ManagedReasoningEffort, ManagedRuntimeConfig, PROTOCOL_VERSION, ParentFrame, ReadyResponse,
+    SecretString, WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication,
+    read_frame, write_frame,
 };
 use colossus_worker::{
     ApplicationGrant, PublicApiAuthenticationKey, PublicApiDeploymentMode, PublicApiHostOptions,
@@ -551,6 +555,84 @@ fn managed_runtime_config(
             .collect(),
         roles: managed.search_roles.clone(),
     };
+    config.mcp.servers = managed
+        .mcp_servers
+        .iter()
+        .map(|server| {
+            (
+                server.name.clone(),
+                McpServerConfig {
+                    transport: match server.transport {
+                        ManagedMcpTransport::Stdio => McpTransportKind::Stdio,
+                        ManagedMcpTransport::StreamableHttp => McpTransportKind::StreamableHttp,
+                    },
+                    command: server
+                        .command
+                        .as_deref()
+                        .map_or_else(PathBuf::new, PathBuf::from),
+                    args: server.args.clone(),
+                    working_directory: server.working_directory.as_deref().map(PathBuf::from),
+                    environment: server
+                        .environment_credentials
+                        .iter()
+                        .map(|(name, credential)| (name.clone(), format!("host:{credential}")))
+                        .collect(),
+                    url: server.url.clone(),
+                    headers: server.headers.clone(),
+                    credential_headers: server
+                        .credential_headers
+                        .iter()
+                        .map(|(name, credential)| {
+                            (
+                                name.clone(),
+                                McpCredentialHeaderConfig {
+                                    scheme: credential.scheme.clone(),
+                                    reference: format!("host:{}", credential.credential_id),
+                                },
+                            )
+                        })
+                        .collect(),
+                    allow_stateless: server.allow_stateless,
+                    oauth: server.oauth.as_ref().map(|oauth| McpOAuthConfig {
+                        client_id: oauth.client_id.clone(),
+                        client_secret_reference: oauth
+                            .client_secret_credential_id
+                            .as_ref()
+                            .map(|credential| format!("host:{credential}")),
+                        callback_port: oauth.callback_port,
+                        scopes: oauth.scopes.clone(),
+                    }),
+                    allowed_tools: server.allowed_tools.clone(),
+                    research_tools: server
+                        .research_tools
+                        .iter()
+                        .map(|tool| McpResearchToolConfig {
+                            tool: tool.tool.clone(),
+                            title: tool.title.clone(),
+                            arguments: tool.arguments.clone(),
+                        })
+                        .collect(),
+                    timeout_ms: server.timeout_ms,
+                    max_output_bytes: server.max_output_bytes,
+                    effect_action_prefix: None,
+                    provenance: None,
+                },
+            )
+        })
+        .collect();
+    config.sandbox.executables.extend(
+        managed
+            .mcp_servers
+            .iter()
+            .filter_map(|server| server.command.as_deref())
+            .map(PathBuf::from),
+    );
+    config.sandbox.environment.extend(
+        managed
+            .mcp_servers
+            .iter()
+            .flat_map(|server| server.environment_credentials.keys().cloned()),
+    );
     let mut network_destinations = managed
         .providers
         .iter()
@@ -565,6 +647,17 @@ fn managed_runtime_config(
         .search_profiles
         .iter()
         .map(|profile| profile.endpoint.as_str())
+    {
+        let origin = url::Url::parse(endpoint)
+            .map_err(|_| FailureCode::InvalidConfiguration)?
+            .origin()
+            .ascii_serialization();
+        network_destinations.insert(origin);
+    }
+    for endpoint in managed
+        .mcp_servers
+        .iter()
+        .filter_map(|server| server.url.as_deref())
     {
         let origin = url::Url::parse(endpoint)
             .map_err(|_| FailureCode::InvalidConfiguration)?
@@ -1284,6 +1377,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
             field_overrides: Vec::new(),
         }
     }
@@ -1340,6 +1434,49 @@ mod tests {
             managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false,)
                 .expect_err("locked storage override"),
             FailureCode::InvalidConfiguration
+        );
+    }
+
+    #[test]
+    fn managed_mcp_credentials_remain_opaque_host_references_in_runtime_config() {
+        use colossus_sidecar_protocol::{
+            ManagedMcpCredentialHeader, ManagedMcpServerConfig, ManagedMcpTransport,
+        };
+
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = ManagedRuntimeConfig::echo(ManagedAccessProfile::Development);
+        managed.mcp_servers = vec![ManagedMcpServerConfig {
+            name: "research".into(),
+            transport: ManagedMcpTransport::StreamableHttp,
+            command: None,
+            args: Vec::new(),
+            working_directory: None,
+            environment_credentials: BTreeMap::new(),
+            url: Some("https://mcp.example.test/service".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::from([(
+                "Authorization".into(),
+                ManagedMcpCredentialHeader {
+                    scheme: Some("Bearer".into()),
+                    credential_id: "native-record".into(),
+                },
+            )]),
+            allow_stateless: false,
+            oauth: None,
+            allowed_tools: vec!["search".into()],
+            research_tools: Vec::new(),
+            timeout_ms: Some(30_000),
+            max_output_bytes: Some(1024 * 1024),
+        }];
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("managed MCP config");
+        let header = &config.mcp.servers["research"].credential_headers["Authorization"];
+
+        assert_eq!(header.reference, "host:native-record");
+        assert_eq!(
+            config.sandbox.network_destinations,
+            ["https://mcp.example.test".to_owned()]
         );
     }
 
@@ -1665,6 +1802,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "main".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
             field_overrides: Vec::new(),
         };
 
@@ -1723,6 +1861,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "main".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
             field_overrides: Vec::new(),
         };
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
@@ -1767,6 +1906,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
             field_overrides: Vec::new(),
         };
 
