@@ -2142,7 +2142,10 @@ mod tests {
     #[test]
     fn windows_desktop_uses_private_local_storage_unless_home_is_explicit() {
         let temporary = PrivateTestRoot::in_target("default-home");
-        let local_data = temporary.path().canonicalize().expect("canonical local data");
+        let local_data = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical local data");
         let default_home = windows_application_home_root(None, Some(local_data.clone()))
             .expect("default Desktop home");
         assert_eq!(

@@ -47,8 +47,8 @@ use managed_configuration_commands::{
 use managed_diagnostics::{
     begin_managed_mcp_oauth, complete_managed_mcp_oauth, diagnose_managed_mcp_server,
     diagnose_managed_model, diagnose_managed_provider, diagnose_managed_search,
-    diagnose_managed_telemetry,
-    get_managed_extension_inventory, logout_managed_mcp_oauth, managed_mcp_oauth_status,
+    diagnose_managed_telemetry, get_managed_extension_inventory, logout_managed_mcp_oauth,
+    managed_mcp_oauth_status,
 };
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,

@@ -349,12 +349,9 @@ pub(crate) async fn get_managed_extension_inventory(
 ) -> Result<ManagedExtensionInventoryDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let worker = worker_for(&state, &request.space_id).await?;
-    let (skills, packs, workflows) = tokio::try_join!(
-        worker.skills(),
-        worker.packs(),
-        worker.workflows(),
-    )
-    .map_err(|_| diagnostic_error("The extension inventory could not be loaded."))?;
+    let (skills, packs, workflows) =
+        tokio::try_join!(worker.skills(), worker.packs(), worker.workflows(),)
+            .map_err(|_| diagnostic_error("The extension inventory could not be loaded."))?;
     extension_inventory(skills, packs, workflows)
 }
 
@@ -463,9 +460,7 @@ fn extension_inventory(
         .into_iter()
         .take(256)
         .filter_map(|workflow| {
-            let identity = workflow
-                .stream_id
-                .strip_prefix("workflow-definition:")?;
+            let identity = workflow.stream_id.strip_prefix("workflow-definition:")?;
             let (name, version) = identity.rsplit_once(':')?;
             Some(ManagedWorkflowCatalogDto {
                 name: renderer_safe_text(name, 128),

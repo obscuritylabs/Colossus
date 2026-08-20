@@ -1544,7 +1544,12 @@ mod tests {
             target.configuration.catalog_revisions["model:primary"],
             previous_references["model:primary"]
         );
-        assert!(target.configuration.catalog_revisions.contains_key("mcp:docs"));
+        assert!(
+            target
+                .configuration
+                .catalog_revisions
+                .contains_key("mcp:docs")
+        );
         assert_eq!(target.configuration.model_roles["primary"], "primary");
         assert_eq!(target.access_profile, AccessProfileSetting::Pinned);
         assert_eq!(
