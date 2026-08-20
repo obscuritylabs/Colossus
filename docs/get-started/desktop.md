@@ -112,6 +112,32 @@ The key is not written to YAML, argv, environment variables, renderer state, log
 terminal sessions. Real model runs remain unavailable until this setup succeeds. Use
 the explicit offline self-test when you only need to validate local startup.
 
+### Manage inherited configuration
+
+Open **Settings** and switch between **Global** and **Space**. Global resources are
+immutable revisioned definitions for providers, models, credentials, MCP servers,
+search, and telemetry. A Space pins the exact revisions it uses. Saving a Global edit
+does not change a running Space; the Space shows an update and must review and apply it.
+Space edits apply only to that Space after configuration preflight and any required
+native authority confirmation.
+
+Each ordinary setting shows whether its effective value comes from the Colossus
+built-in default, a Global override, or a Space override. **Inherit** removes an
+override instead of copying the current value. The read-only effective YAML view is
+sanitized and marks Desktop-owned runtime identities and private storage paths.
+
+Use **Import config** in a Space to inspect `.colossus/config.yaml` without modifying
+the repository. Desktop proposes reusable catalog resources, Space overrides, and
+native credential mappings. Same-name conflicts require **Rename**, **Replace**, or
+**Skip**. Re-import compares the stored source hash before applying any changes.
+Repository `env:` references must map to native credentials; secret values and static
+MCP headers never cross into the WebView.
+
+For an active Space, provider, model, search, and MCP health checks run through that
+Space's authenticated worker using its accepted revisions, CA trust, credentials,
+network grants, and sandbox. MCP OAuth status, login completion, and logout remain
+runtime-owned; Desktop exposes only bounded status and authorization metadata.
+
 ### 4. Start work
 
 Create new work, choose Plan or Execute, and submit a prompt. Every request names the
