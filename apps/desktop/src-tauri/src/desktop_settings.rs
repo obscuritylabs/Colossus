@@ -354,8 +354,7 @@ impl Default for DesktopSettings {
 
 impl DesktopSettings {
     pub(crate) fn local_terminal_enabled(&self) -> bool {
-        self.terminal_enabled
-            && self.has_local_terminal_consent()
+        self.terminal_enabled && self.has_local_terminal_consent()
     }
 
     pub(crate) fn has_local_terminal_consent(&self) -> bool {
@@ -739,6 +738,7 @@ impl SettingsStore {
         Err(storage_error())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn load(&self) -> Result<DesktopSettings, CommandErrorDto> {
         let path = self.root.join(SETTINGS_FILE);
         let metadata = match fs::symlink_metadata(&path) {
@@ -870,10 +870,7 @@ impl SettingsStore {
     pub(crate) fn save(&self, settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
         let mut persisted = settings.clone();
         persisted.sync_selected_space_projection()?;
-        initialize_catalog(
-            &mut persisted.global_configuration,
-            &mut persisted.spaces,
-        );
+        initialize_catalog(&mut persisted.global_configuration, &mut persisted.spaces);
         validate_settings(&persisted)?;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| storage_error())?;
         if bytes.len() > usize::try_from(MAX_SETTINGS_BYTES).unwrap_or(usize::MAX) {
@@ -1192,7 +1189,8 @@ fn migrate_v5_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto>
         "schemaVersion".into(),
         serde_json::Value::from(SETTINGS_SCHEMA_VERSION),
     );
-    let mut settings: DesktopSettings = serde_json::from_value(value).map_err(|_| storage_error())?;
+    let mut settings: DesktopSettings =
+        serde_json::from_value(value).map_err(|_| storage_error())?;
     for space in &mut settings.spaces {
         space.configuration.access_profile_override = Some(space.access_profile);
         space.configuration.execution_boundary_override = Some(space.execution_boundary);
@@ -2180,16 +2178,18 @@ mod tests {
             .expect("space object")
             .remove("configuration");
 
-        let migrated = migrate_v5_settings(
-            &serde_json::to_vec(&encoded).expect("schema five settings"),
-        )
-        .expect("migrate schema five");
+        let migrated =
+            migrate_v5_settings(&serde_json::to_vec(&encoded).expect("schema five settings"))
+                .expect("migrate schema five");
 
         assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
         assert_eq!(migrated.global_configuration.providers.len(), 1);
         assert_eq!(migrated.global_configuration.models.len(), 1);
         assert_eq!(migrated.global_configuration.credentials.len(), 1);
-        assert_eq!(migrated.global_configuration.credentials[0].id, credential_id);
+        assert_eq!(
+            migrated.global_configuration.credentials[0].id,
+            credential_id
+        );
         let configuration = &migrated.spaces[0].configuration;
         assert_eq!(configuration.accepted_global_revision, 1);
         assert_eq!(
@@ -2201,8 +2201,16 @@ mod tests {
             Some(ExecutionBoundarySetting::WorkspaceIsolated)
         );
         assert_eq!(configuration.terminal_enabled_override, Some(true));
-        assert!(configuration.catalog_revisions.contains_key("provider:primary-provider"));
-        assert!(configuration.catalog_revisions.contains_key("model:primary"));
+        assert!(
+            configuration
+                .catalog_revisions
+                .contains_key("provider:primary-provider")
+        );
+        assert!(
+            configuration
+                .catalog_revisions
+                .contains_key("model:primary")
+        );
     }
 
     #[cfg(windows)]

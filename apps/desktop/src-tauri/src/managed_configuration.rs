@@ -176,6 +176,7 @@ pub(crate) enum JournalPayloadSetting {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct TelemetryProfileSetting {
     pub(crate) name: String,
     pub(crate) endpoint: Option<String>,
@@ -426,10 +427,12 @@ pub(crate) fn initialize_catalog(
         }
         for provider in &space.providers {
             let key = format!("provider:{}", provider.profile);
-            if !space.configuration.catalog_revisions.contains_key(&key) {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                space.configuration.catalog_revisions.entry(key)
+            {
                 let reference =
                     ensure_catalog_entry(&mut global.providers, &provider.profile, provider);
-                space.configuration.catalog_revisions.insert(key, reference);
+                entry.insert(reference);
             }
             if let Some(credential_id) = provider.credential_id.as_deref()
                 && global
@@ -448,9 +451,11 @@ pub(crate) fn initialize_catalog(
         }
         for model in &space.models {
             let key = format!("model:{}", model.profile);
-            if !space.configuration.catalog_revisions.contains_key(&key) {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                space.configuration.catalog_revisions.entry(key)
+            {
                 let reference = ensure_catalog_entry(&mut global.models, &model.profile, model);
-                space.configuration.catalog_revisions.insert(key, reference);
+                entry.insert(reference);
             }
         }
     }
@@ -528,10 +533,13 @@ pub(crate) fn validate_configuration(
                 .defaults
                 .revision(space.configuration.accepted_global_revision)
                 .is_none()
-            || space.configuration.catalog_revisions.iter().any(|(key, reference)| {
-                reference.revision == 0
-                    || !valid_catalog_reference(global, key, reference)
-            })
+            || space
+                .configuration
+                .catalog_revisions
+                .iter()
+                .any(|(key, reference)| {
+                    reference.revision == 0 || !valid_catalog_reference(global, key, reference)
+                })
             || space
                 .configuration
                 .credential_overrides
@@ -672,9 +680,7 @@ fn valid_id(value: &str) -> bool {
 }
 
 fn valid_label(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_LABEL_BYTES
-        && !value.chars().any(char::is_control)
+    !value.is_empty() && value.len() <= MAX_LABEL_BYTES && !value.chars().any(char::is_control)
 }
 
 fn configuration_error() -> CommandErrorDto {
@@ -753,9 +759,7 @@ mod tests {
         let mut spaces = vec![space("one", original)];
         let mut global = GlobalConfigurationSetting::default();
         initialize_catalog(&mut global, &mut spaces);
-        let pinned = spaces[0].configuration.catalog_revisions
-            ["provider:primary-provider"]
-            .clone();
+        let pinned = spaces[0].configuration.catalog_revisions["provider:primary-provider"].clone();
         global.providers[0].revisions.push(CatalogRevisionSetting {
             revision: 2,
             value: provider("https://changed.test/v1"),
@@ -772,8 +776,10 @@ mod tests {
 
     #[test]
     fn accepted_global_revision_controls_effective_defaults() {
-        let mut global = GlobalConfigurationSetting::default();
-        global.revision = 2;
+        let mut global = GlobalConfigurationSetting {
+            revision: 2,
+            ..GlobalConfigurationSetting::default()
+        };
         global.defaults.current_revision = 2;
         global.defaults.revisions[0].value.access_profile = Some(AccessProfileSetting::Minimal);
         global.defaults.revisions.push(CatalogRevisionSetting {
@@ -798,10 +804,7 @@ mod tests {
 
     #[test]
     fn validation_rejects_unknown_or_cross_catalog_revisions() {
-        let mut spaces = vec![space(
-            "one",
-            provider("https://example.test/v1"),
-        )];
+        let mut spaces = vec![space("one", provider("https://example.test/v1"))];
         let mut global = GlobalConfigurationSetting::default();
         initialize_catalog(&mut global, &mut spaces);
         spaces[0]

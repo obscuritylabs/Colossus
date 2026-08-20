@@ -1,13 +1,13 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
-    ManagedExecutionBoundary, ManagedFieldOverride, ManagedModelCapabilities, ManagedModelConfig,
-    ManagedMcpCredentialHeader, ManagedMcpOAuthConfig, ManagedMcpResearchTool,
-    ManagedMcpServerConfig, ManagedMcpTransport, ManagedProviderConfig, ManagedProviderKind,
-    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig,
-    NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
-    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
-    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedMcpCredentialHeader,
+    ManagedMcpOAuthConfig, ManagedMcpResearchTool, ManagedMcpServerConfig, ManagedMcpTransport,
+    ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
+    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig, NativeSidecarLifecycle,
+    PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
+    WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
 use sha2::{Digest as _, Sha256};
@@ -703,6 +703,7 @@ struct ManagedBootstrapPaths<'a> {
     colossus_home: &'a Path,
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,

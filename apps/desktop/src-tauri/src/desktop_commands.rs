@@ -1520,7 +1520,7 @@ async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandError
     reject_active_managed_runs_for(state, &target_id).await
 }
 
-async fn reject_active_managed_runs_for(
+pub(crate) async fn reject_active_managed_runs_for(
     state: &AppState,
     target_id: &str,
 ) -> Result<(), CommandErrorDto> {
@@ -2892,11 +2892,13 @@ const fn managed_state_name(state: ManagedRuntimeStateDto) -> &'static str {
     }
 }
 
-fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
+pub(crate) fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
     SettingsStore::open_application()
 }
 
-fn connect_guard(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, CommandErrorDto> {
+pub(crate) fn connect_guard(
+    state: &AppState,
+) -> Result<tokio::sync::MutexGuard<'_, ()>, CommandErrorDto> {
     state.try_connect_guard().ok_or_else(|| {
         CommandErrorDto::busy("A Colossus connection or restart is already in progress.")
     })

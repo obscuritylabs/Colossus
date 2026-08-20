@@ -7,8 +7,9 @@ mod desktop_dto;
 mod desktop_settings;
 mod diagnostics;
 mod dto;
-mod managed_runtime;
 mod managed_configuration;
+mod managed_configuration_commands;
+mod managed_runtime;
 mod provider_enrollment;
 mod run_list;
 mod space_search;
@@ -34,6 +35,11 @@ use desktop_commands::{
     search_space_threads, select_space, select_target, set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
+use managed_configuration_commands::{
+    apply_space_configuration, create_managed_credential, delete_managed_credential,
+    get_managed_configuration, rotate_managed_credential, save_global_defaults,
+    save_space_configuration, upsert_global_mcp_server,
+};
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -82,6 +88,14 @@ pub fn run() {
             archive_space,
             restore_space,
             search_space_threads,
+            get_managed_configuration,
+            save_global_defaults,
+            upsert_global_mcp_server,
+            save_space_configuration,
+            apply_space_configuration,
+            create_managed_credential,
+            rotate_managed_credential,
+            delete_managed_credential,
             configure_managed_runtime,
             apply_managed_model_configuration,
             restart_managed_runtime,
