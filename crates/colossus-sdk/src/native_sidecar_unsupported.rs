@@ -8,6 +8,16 @@ use crate::{
 };
 use tokio::sync::watch;
 
+/// Configuration inspection is unavailable on unsupported native platforms.
+pub async fn inspect_sidecar_configuration(
+    _executable: &crate::VerifiedExecutable,
+    _yaml: String,
+) -> SdkResult<colossus_sidecar_protocol::ConfigurationInspectionResponse> {
+    Err(SdkError::InvalidConfiguration(
+        "configuration inspection is unsupported on this platform",
+    ))
+}
+
 /// Portable API stub for platforms that do not yet have a native sidecar launcher.
 pub struct NativeSidecarLifecycle {
     bootstrap: Arc<SidecarBootstrapConfig>,

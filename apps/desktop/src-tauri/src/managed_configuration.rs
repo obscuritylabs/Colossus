@@ -18,6 +18,7 @@ const MAX_FIELD_ID_BYTES: usize = 160;
 const MAX_LABEL_BYTES: usize = 96;
 const MAX_IMPORT_PATH_BYTES: usize = 2_048;
 const MAX_VALUE_BYTES: usize = 64 * 1024;
+pub(crate) use colossus_sidecar_protocol::MANAGED_EDITABLE_FIELD_IDS as MANAGED_FIELD_IDS;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -300,6 +301,10 @@ pub(crate) struct SpaceConfigurationSetting {
     #[serde(default)]
     pub(crate) credential_overrides: BTreeMap<String, String>,
     #[serde(default)]
+    pub(crate) search_roles: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(crate) model_roles: BTreeMap<String, String>,
+    #[serde(default)]
     pub(crate) access_profile_override: Option<AccessProfileSetting>,
     #[serde(default)]
     pub(crate) execution_boundary_override: Option<ExecutionBoundarySetting>,
@@ -317,7 +322,13 @@ pub(crate) struct ResolvedSpaceConfiguration {
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
     pub(crate) field_overrides: Vec<FieldOverrideSetting>,
+    pub(crate) providers: Vec<ProviderSetting>,
+    pub(crate) models: Vec<ModelSetting>,
+    pub(crate) model_roles: BTreeMap<String, String>,
+    pub(crate) search_providers: Vec<SearchProviderSetting>,
+    pub(crate) search_roles: BTreeMap<String, String>,
     pub(crate) mcp_servers: Vec<McpServerSetting>,
+    pub(crate) telemetry: Option<TelemetryProfileSetting>,
 }
 
 pub(crate) fn resolve_space_configuration(
@@ -336,34 +347,62 @@ pub(crate) fn resolve_space_configuration(
     for field in &space.configuration.field_overrides {
         field_overrides.insert(field.field_id.clone(), field.value.clone());
     }
-    let mcp_servers = space
-        .configuration
-        .catalog_revisions
-        .iter()
-        .filter(|(key, _)| key.starts_with("mcp:"))
-        .map(|(_, reference)| {
-            let mut server = catalog_revision_value(&global.mcp_servers, reference)
-                .ok_or_else(configuration_error)?
-                .clone();
-            for credential in server.environment_credentials.values_mut() {
-                apply_credential_override(credential, &space.configuration.credential_overrides);
-            }
-            for header in server.credential_headers.values_mut() {
-                apply_credential_override(
-                    &mut header.credential_id,
-                    &space.configuration.credential_overrides,
-                );
-            }
-            if let Some(credential) = server
-                .oauth
-                .as_mut()
-                .and_then(|oauth| oauth.client_secret_credential_id.as_mut())
-            {
-                apply_credential_override(credential, &space.configuration.credential_overrides);
-            }
-            Ok(server)
-        })
-        .collect::<Result<Vec<_>, CommandErrorDto>>()?;
+    let mut providers = resolve_catalog_values(
+        &global.providers,
+        &space.configuration.catalog_revisions,
+        "provider:",
+    )?;
+    for provider in &mut providers {
+        if let Some(credential) = provider.credential_id.as_mut() {
+            apply_credential_override(credential, &space.configuration.credential_overrides);
+        }
+    }
+    let models = resolve_catalog_values(
+        &global.models,
+        &space.configuration.catalog_revisions,
+        "model:",
+    )?;
+    let mut search_providers = resolve_catalog_values(
+        &global.search_providers,
+        &space.configuration.catalog_revisions,
+        "search:",
+    )?;
+    for search in &mut search_providers {
+        if let Some(credential) = search.credential_id.as_mut() {
+            apply_credential_override(credential, &space.configuration.credential_overrides);
+        }
+    }
+    let mcp_servers = resolve_catalog_values(
+        &global.mcp_servers,
+        &space.configuration.catalog_revisions,
+        "mcp:",
+    )?
+    .into_iter()
+    .map(|mut server| {
+        for credential in server.environment_credentials.values_mut() {
+            apply_credential_override(credential, &space.configuration.credential_overrides);
+        }
+        for header in server.credential_headers.values_mut() {
+            apply_credential_override(
+                &mut header.credential_id,
+                &space.configuration.credential_overrides,
+            );
+        }
+        if let Some(credential) = server
+            .oauth
+            .as_mut()
+            .and_then(|oauth| oauth.client_secret_credential_id.as_mut())
+        {
+            apply_credential_override(credential, &space.configuration.credential_overrides);
+        }
+        Ok(server)
+    })
+    .collect::<Result<Vec<_>, CommandErrorDto>>()?;
+    let telemetry = resolve_optional_catalog_value(
+        &global.telemetry_profiles,
+        &space.configuration.catalog_revisions,
+        "telemetry:",
+    )?;
     Ok(ResolvedSpaceConfiguration {
         access_profile: space
             .configuration
@@ -384,8 +423,50 @@ pub(crate) fn resolve_space_configuration(
             .into_iter()
             .map(|(field_id, value)| FieldOverrideSetting { field_id, value })
             .collect(),
+        providers,
+        models,
+        model_roles: resolved_model_roles(space),
+        search_providers,
+        search_roles: space.configuration.search_roles.clone(),
         mcp_servers,
+        telemetry,
     })
+}
+
+fn resolve_optional_catalog_value<T: Clone>(
+    entries: &[CatalogEntrySetting<T>],
+    references: &BTreeMap<String, CatalogReferenceSetting>,
+    prefix: &str,
+) -> Result<Option<T>, CommandErrorDto> {
+    match resolve_catalog_values(entries, references, prefix)?.as_slice() {
+        [] => Ok(None),
+        [value] => Ok(Some(value.clone())),
+        _ => Err(configuration_error()),
+    }
+}
+
+fn resolved_model_roles(space: &WorkspaceProfile) -> BTreeMap<String, String> {
+    if space.configuration.model_roles.is_empty() {
+        space.model_roles.clone()
+    } else {
+        space.configuration.model_roles.clone()
+    }
+}
+
+fn resolve_catalog_values<T: Clone>(
+    entries: &[CatalogEntrySetting<T>],
+    references: &BTreeMap<String, CatalogReferenceSetting>,
+    prefix: &str,
+) -> Result<Vec<T>, CommandErrorDto> {
+    references
+        .iter()
+        .filter(|(key, _)| key.starts_with(prefix))
+        .map(|(_, reference)| {
+            catalog_revision_value(entries, reference)
+                .ok_or_else(configuration_error)
+                .cloned()
+        })
+        .collect()
 }
 
 fn catalog_revision_value<'a, T>(
@@ -461,7 +542,7 @@ pub(crate) fn initialize_catalog(
     }
 }
 
-fn ensure_catalog_entry<T: Clone + PartialEq>(
+pub(crate) fn ensure_catalog_entry<T: Clone + PartialEq>(
     entries: &mut Vec<CatalogEntrySetting<T>>,
     label: &str,
     value: &T,
@@ -526,6 +607,36 @@ pub(crate) fn validate_configuration(
             return Err(configuration_error());
         }
     }
+    if global
+        .providers
+        .iter()
+        .flat_map(|entry| &entry.revisions)
+        .filter_map(|revision| revision.value.credential_id.as_deref())
+        .any(|credential| !credential_ids.contains(credential))
+        || global
+            .search_providers
+            .iter()
+            .flat_map(|entry| &entry.revisions)
+            .any(|revision| {
+                !managed_search_setting_is_valid(&revision.value)
+                    || revision
+                        .value
+                        .credential_id
+                        .as_deref()
+                        .is_some_and(|credential| !credential_ids.contains(credential))
+            })
+        || global
+            .mcp_servers
+            .iter()
+            .flat_map(|entry| &entry.revisions)
+            .any(|revision| {
+                mcp_credential_ids(&revision.value)
+                    .into_iter()
+                    .any(|credential| !credential_ids.contains(credential))
+            })
+    {
+        return Err(configuration_error());
+    }
     for space in spaces {
         if space.configuration.accepted_global_revision == 0
             || validate_overrides(&space.configuration.field_overrides).is_err()
@@ -545,6 +656,8 @@ pub(crate) fn validate_configuration(
                 .credential_overrides
                 .values()
                 .any(|id| !credential_ids.contains(id.as_str()))
+            || !valid_search_roles(global, space)
+            || !valid_model_roles(global, space)
             || space.configuration.import.as_ref().is_some_and(|import| {
                 import.relative_path.is_empty()
                     || import.relative_path.len() > MAX_IMPORT_PATH_BYTES
@@ -556,6 +669,103 @@ pub(crate) fn validate_configuration(
         }
     }
     Ok(())
+}
+
+fn mcp_credential_ids(server: &McpServerSetting) -> impl Iterator<Item = &str> {
+    server
+        .environment_credentials
+        .values()
+        .map(String::as_str)
+        .chain(
+            server
+                .credential_headers
+                .values()
+                .map(|header| header.credential_id.as_str()),
+        )
+        .chain(
+            server
+                .oauth
+                .iter()
+                .filter_map(|oauth| oauth.client_secret_credential_id.as_deref()),
+        )
+}
+
+pub(crate) fn managed_search_setting_is_valid(search: &SearchProviderSetting) -> bool {
+    let endpoint = url::Url::parse(&search.endpoint);
+    !search.profile.is_empty()
+        && search.profile.len() <= 64
+        && search
+            .profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && search.timeout_ms > 0
+        && search.timeout_ms <= 300_000
+        && endpoint.is_ok_and(|url| {
+            url.scheme() == "https"
+                || (url.scheme() == "http"
+                    && url
+                        .host_str()
+                        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1")))
+        })
+        && match search.kind {
+            SearchProviderKindSetting::Searxng => search
+                .auth_header
+                .as_deref()
+                .is_none_or(|header| !header.is_empty() && header.len() <= 128),
+            SearchProviderKindSetting::SerpApi => {
+                search.credential_id.is_some() && search.auth_header.is_none()
+            }
+        }
+}
+
+fn valid_search_roles(global: &GlobalConfigurationSetting, space: &WorkspaceProfile) -> bool {
+    let selected_profiles = space
+        .configuration
+        .catalog_revisions
+        .iter()
+        .filter(|(key, _)| key.starts_with("search:"))
+        .filter_map(|(_, reference)| catalog_revision_value(&global.search_providers, reference))
+        .map(|search| search.profile.as_str())
+        .collect::<BTreeSet<_>>();
+    space
+        .configuration
+        .search_roles
+        .iter()
+        .all(|(role, profile)| {
+            matches!(role.as_str(), "agent" | "research")
+                && selected_profiles.contains(profile.as_str())
+        })
+}
+
+fn valid_model_roles(global: &GlobalConfigurationSetting, space: &WorkspaceProfile) -> bool {
+    const ROLES: [&str; 7] = [
+        "primary",
+        "risk_evaluator",
+        "context_summarizer",
+        "subagent_default",
+        "research_planner",
+        "research_worker",
+        "research_synthesizer",
+    ];
+    if space.configuration.model_roles.is_empty() {
+        return true;
+    }
+    let selected_profiles = space
+        .configuration
+        .catalog_revisions
+        .iter()
+        .filter(|(key, _)| key.starts_with("model:"))
+        .filter_map(|(_, reference)| catalog_revision_value(&global.models, reference))
+        .map(|model| model.profile.as_str())
+        .collect::<BTreeSet<_>>();
+    space.configuration.model_roles.contains_key("primary")
+        && space
+            .configuration
+            .model_roles
+            .iter()
+            .all(|(role, profile)| {
+                ROLES.contains(&role.as_str()) && selected_profiles.contains(profile.as_str())
+            })
 }
 
 fn validate_default_revisions(defaults: &GlobalDefaultsSetting) -> Result<(), CommandErrorDto> {
@@ -644,11 +854,57 @@ fn validate_telemetry_entries(
     if entries
         .iter()
         .flat_map(|entry| &entry.revisions)
-        .any(|revision| revision.value.trace_sample_ratio_millionths > 1_000_000)
+        .any(|revision| !managed_telemetry_setting_is_valid(&revision.value))
     {
         return Err(configuration_error());
     }
     Ok(())
+}
+
+pub(crate) fn managed_telemetry_setting_is_valid(value: &TelemetryProfileSetting) -> bool {
+    let enabled = value.traces_enabled
+        || value.metrics_enabled
+        || value.logs_otlp
+        || value.logs_stdout_json
+        || value.journal_payloads != JournalPayloadSetting::Disabled;
+    let endpoint_valid = value.endpoint.as_deref().is_none_or(|endpoint| {
+        url::Url::parse(endpoint).is_ok_and(|url| {
+            let loopback = url.host().is_some_and(|host| match host {
+                url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                url::Host::Ipv4(address) => address.is_loopback(),
+                url::Host::Ipv6(address) => address.is_loopback(),
+            });
+            url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && (url.scheme() == "https"
+                    || (url.scheme() == "http"
+                        && (loopback || value.acknowledge_insecure_transport)))
+        })
+    });
+    !value.name.is_empty()
+        && value.name.len() <= 128
+        && !value.name.chars().any(char::is_control)
+        && (!enabled
+            || value.endpoint.is_some()
+            || !(value.traces_enabled || value.metrics_enabled || value.logs_otlp))
+        && endpoint_valid
+        && (100..=120_000).contains(&value.timeout_ms)
+        && value.trace_sample_ratio_millionths <= 1_000_000
+        && (1_000..=300_000).contains(&value.metric_export_interval_ms)
+        && (value.journal_payloads != JournalPayloadSetting::Full
+            || value.acknowledge_sensitive_content)
+        && (!value.acknowledge_sensitive_content
+            || value.journal_payloads == JournalPayloadSetting::Full)
+        && value.resource_attributes.len() <= 32
+        && value.resource_attributes.iter().all(|(key, attribute)| {
+            !key.is_empty()
+                && key.len() <= 256
+                && attribute.len() <= 256
+                && !key.chars().any(char::is_control)
+                && !attribute.chars().any(char::is_control)
+        })
 }
 
 fn validate_overrides(overrides: &[FieldOverrideSetting]) -> Result<(), CommandErrorDto> {
@@ -657,7 +913,8 @@ fn validate_overrides(overrides: &[FieldOverrideSetting]) -> Result<(), CommandE
     }
     let mut ids = BTreeSet::new();
     for field in overrides {
-        if field.field_id.is_empty()
+        if !MANAGED_FIELD_IDS.contains(&field.field_id.as_str())
+            || field.field_id.is_empty()
             || field.field_id.len() > MAX_FIELD_ID_BYTES
             || field.field_id.split('.').any(|segment| {
                 segment.is_empty()
@@ -694,7 +951,9 @@ fn configuration_error() -> CommandErrorDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desktop_settings::{ProviderKindSetting, WorkspaceSetting};
+    use crate::desktop_settings::{
+        ModelCapabilitiesSetting, ProviderKindSetting, WorkspaceSetting,
+    };
     use std::path::PathBuf;
 
     fn provider(base_url: &str) -> ProviderSetting {
@@ -704,6 +963,21 @@ mod tests {
             base_url: base_url.into(),
             credential_id: None,
             timeout_ms: Some(120_000),
+        }
+    }
+
+    fn model(name: &str) -> ModelSetting {
+        ModelSetting {
+            profile: "primary".into(),
+            provider_profile: "primary-provider".into(),
+            model: name.into(),
+            context_window_tokens: 32_768,
+            max_output_tokens: 4_096,
+            capabilities: ModelCapabilitiesSetting {
+                tool_calls: true,
+                streaming: true,
+            },
+            reasoning_effort: None,
         }
     }
 
@@ -771,6 +1045,45 @@ mod tests {
         assert_eq!(
             spaces[0].configuration.catalog_revisions["provider:primary-provider"],
             pinned
+        );
+    }
+
+    #[test]
+    fn resolution_uses_each_spaces_pinned_provider_and_model_revisions() {
+        let mut workspace = space("one", provider("https://old.example.test/v1"));
+        workspace.models = vec![model("old-model")];
+        workspace.model_roles = BTreeMap::from([("primary".into(), "primary".into())]);
+        let mut spaces = vec![workspace];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        let provider_pin =
+            spaces[0].configuration.catalog_revisions["provider:primary-provider"].clone();
+        let model_pin = spaces[0].configuration.catalog_revisions["model:primary"].clone();
+        global.providers[0].revisions.push(CatalogRevisionSetting {
+            revision: 2,
+            value: provider("https://new.example.test/v1"),
+        });
+        global.providers[0].current_revision = 2;
+        global.models[0].revisions.push(CatalogRevisionSetting {
+            revision: 2,
+            value: model("new-model"),
+        });
+        global.models[0].current_revision = 2;
+
+        let resolved = resolve_space_configuration(&global, &spaces[0]).expect("pinned config");
+
+        assert_eq!(
+            resolved.providers[0].base_url,
+            "https://old.example.test/v1"
+        );
+        assert_eq!(resolved.models[0].model, "old-model");
+        assert_eq!(
+            spaces[0].configuration.catalog_revisions["provider:primary-provider"],
+            provider_pin
+        );
+        assert_eq!(
+            spaces[0].configuration.catalog_revisions["model:primary"],
+            model_pin
         );
     }
 

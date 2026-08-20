@@ -181,6 +181,18 @@ impl ProviderSetting {
     }
 }
 
+pub(crate) fn managed_provider_setting_is_valid(provider: &ProviderSetting) -> bool {
+    valid_profile_name(&provider.profile)
+        && provider.timeout_ms != Some(0)
+        && validate_managed_provider_base_url(&provider.base_url).is_ok()
+        && provider
+            .credential_id
+            .as_deref()
+            .is_none_or(valid_opaque_id)
+        && (provider.kind != ProviderKindSetting::Codex
+            || (provider.base_url == CODEX_BASE_URL && provider.credential_id.is_none()))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ModelCapabilitiesSetting {
@@ -199,6 +211,23 @@ pub(crate) struct ModelSetting {
     pub(crate) capabilities: ModelCapabilitiesSetting,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reasoning_effort: Option<ReasoningEffortSetting>,
+}
+
+pub(crate) fn managed_model_setting_is_valid(
+    model: &ModelSetting,
+    provider_profiles: &BTreeSet<&str>,
+) -> bool {
+    let safety = model.context_window_tokens.div_ceil(10).max(512);
+    valid_profile_name(&model.profile)
+        && provider_profiles.contains(model.provider_profile.as_str())
+        && validate_managed_model_identifier(&model.model).is_ok()
+        && model.context_window_tokens >= 1_024
+        && model.max_output_tokens > 0
+        && model
+            .context_window_tokens
+            .checked_sub(model.max_output_tokens)
+            .and_then(|remaining| remaining.checked_sub(safety))
+            .is_some_and(|input| input > 0)
 }
 
 pub(crate) struct SelfTestStorage {

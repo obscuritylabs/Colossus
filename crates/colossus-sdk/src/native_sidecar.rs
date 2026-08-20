@@ -13,8 +13,9 @@ use crate::{
 use crate::{ApiError, ApiErrorReason};
 use async_trait::async_trait;
 use colossus_sidecar_protocol::{
-    AckRequest, ActivatedResponse, ChildFrame, FailureCode, MAX_FRAME_BYTES, PROTOCOL_VERSION,
-    ParentFrame, ReadyResponse, WorkspaceIdentity, decode_payload, encode_frame,
+    AckRequest, ActivatedResponse, ChildFrame, ConfigurationInspectionRequest,
+    ConfigurationInspectionResponse, FailureCode, MAX_FRAME_BYTES, PROTOCOL_VERSION, ParentFrame,
+    ReadyResponse, WorkspaceIdentity, decode_payload, encode_frame,
 };
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
@@ -78,6 +79,69 @@ const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_VERIFIED_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const PROCESS_TREE_FREEZE_PASSES: usize = 4;
 const PROCESS_TREE_DEATH_TIMEOUT: Duration = Duration::from_secs(5);
+const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
+
+/// Inspect repository YAML with the exact verified sidecar and canonical Rust parser.
+#[cfg(target_os = "linux")]
+pub async fn inspect_sidecar_configuration(
+    executable: &crate::VerifiedExecutable,
+    yaml: String,
+) -> SdkResult<ConfigurationInspectionResponse> {
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+
+    let request = ConfigurationInspectionRequest {
+        protocol_version: PROTOCOL_VERSION,
+        yaml,
+    };
+    request.validate().map_err(|_| {
+        SdkError::InvalidConfiguration("configuration inspection request is invalid")
+    })?;
+    let binding = verify_executable(executable)?;
+    fcntl(&binding.snapshot, FcntlArg::F_SETFD(FdFlag::empty()))
+        .map_err(|_| SdkError::IdentityMismatch)?;
+    let executable_path = format!("/proc/self/fd/{}", binding.snapshot.as_raw_fd());
+    let mut command = Command::new(executable_path);
+    command
+        .arg(CONFIGURATION_INSPECTION_ARGUMENT)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command.spawn().map_err(|_| SdkError::SidecarFailed)?;
+    let mut stdin = child.stdin.take().ok_or(SdkError::SidecarFailed)?;
+    let mut stdout = child.stdout.take().ok_or(SdkError::SidecarFailed)?;
+    drop(binding);
+    let exchange = async {
+        write_async_frame(&mut stdin, &request).await?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        let response = read_async_frame::<_, ConfigurationInspectionResponse>(&mut stdout).await?;
+        response.validate().map_err(|_| SdkError::SidecarFailed)?;
+        let status = child.wait().await.map_err(|_| SdkError::SidecarFailed)?;
+        if status.success() {
+            Ok(response)
+        } else {
+            Err(SdkError::SidecarFailed)
+        }
+    };
+    timeout(BOOTSTRAP_TIMEOUT, exchange)
+        .await
+        .map_err(|_| SdkError::SidecarFailed)?
+}
+
+/// Configuration inspection is not yet available on this Unix platform.
+#[cfg(not(target_os = "linux"))]
+pub async fn inspect_sidecar_configuration(
+    _executable: &crate::VerifiedExecutable,
+    _yaml: String,
+) -> SdkResult<ConfigurationInspectionResponse> {
+    Err(SdkError::InvalidConfiguration(
+        "configuration inspection is unsupported on this platform",
+    ))
+}
 const PUBLIC_API_DIRECTORY: &str = "public-api";
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
 const CERTIFICATE_FILENAME: &str = "certificate.pem";

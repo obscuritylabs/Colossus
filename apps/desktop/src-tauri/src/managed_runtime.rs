@@ -1,13 +1,14 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
-    ManagedExecutionBoundary, ManagedFieldOverride, ManagedMcpCredentialHeader,
-    ManagedMcpOAuthConfig, ManagedMcpResearchTool, ManagedMcpServerConfig, ManagedMcpTransport,
-    ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
-    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig, NativeSidecarLifecycle,
-    PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
-    WorkspaceIdentity, scopes,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedJournalPayloadMode,
+    ManagedMcpCredentialHeader, ManagedMcpOAuthConfig, ManagedMcpResearchTool,
+    ManagedMcpServerConfig, ManagedMcpTransport, ManagedModelCapabilities, ManagedModelConfig,
+    ManagedOtlpProtocol, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
+    ManagedRuntimeConfig, ManagedSearchConfig, ManagedSearchKind, ManagedTelemetryConfig,
+    NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
+    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
+    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
 use sha2::{Digest as _, Sha256};
@@ -26,7 +27,8 @@ use crate::{
     },
     dto::CommandErrorDto,
     managed_configuration::{
-        McpTransportSetting, ResolvedSpaceConfiguration, resolve_space_configuration,
+        JournalPayloadSetting, McpTransportSetting, OtlpProtocolSetting,
+        ResolvedSpaceConfiguration, SearchProviderKindSetting, resolve_space_configuration,
     },
     run_list,
     state::{AppState, MAX_LIVE_MANAGED_SPACES, ManagedHealth},
@@ -36,10 +38,6 @@ use crate::{
 const APPLICATION_ID: &str = "app:colossus-desktop-managed";
 const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
 const SELF_TEST_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-self-test-instance-v2\0";
-#[cfg(debug_assertions)]
-const LOCAL_DEV_SEARCH_PROFILE: &str = "local-dev-searxng";
-#[cfg(debug_assertions)]
-const LOCAL_DEV_SEARCH_ENDPOINT: &str = "http://127.0.0.1:8888/search";
 const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
 const PRIMARY_SCOPES: [&str; 6] = [
@@ -594,13 +592,12 @@ async fn start_inner(
 }
 
 fn provider_host_credentials(
-    settings: &DesktopSettings,
     resolved: &ResolvedSpaceConfiguration,
 ) -> Result<Vec<SidecarHostCredential>, (CommandErrorDto, RuntimeFailureCodeDto)> {
-    let mut credential_ids = settings
-        .provider_credential_ids()
-        .into_iter()
-        .map(str::to_owned)
+    let mut credential_ids = resolved
+        .providers
+        .iter()
+        .filter_map(|provider| provider.credential_id.clone())
         .collect::<BTreeSet<_>>();
     for server in &resolved.mcp_servers {
         credential_ids.extend(server.environment_credentials.values().cloned());
@@ -617,6 +614,12 @@ fn provider_host_credentials(
                 .and_then(|oauth| oauth.client_secret_credential_id.clone()),
         );
     }
+    credential_ids.extend(
+        resolved
+            .search_providers
+            .iter()
+            .filter_map(|search| search.credential_id.clone()),
+    );
     credential_ids
         .into_iter()
         .map(|credential_id| {
@@ -655,7 +658,7 @@ fn prepare_managed_bootstrap(
         })?;
     let resolved = resolve_space_configuration(&settings.global_configuration, space)
         .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
-    let host_credentials = provider_host_credentials(settings, &resolved)?;
+    let host_credentials = provider_host_credentials(&resolved)?;
     let codex_auth_path = codex_auth_path(settings)?;
     let ca_bundle_path = settings
         .additional_ca_bundle
@@ -682,7 +685,6 @@ fn prepare_managed_bootstrap(
     let bootstrap = managed_bootstrap(
         workspace,
         workspace_identity,
-        settings,
         &resolved,
         host_credentials,
         approval_broker_grant,
@@ -707,18 +709,17 @@ struct ManagedBootstrapPaths<'a> {
 fn managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
-    settings: &DesktopSettings,
     resolved: &ResolvedSpaceConfiguration,
     host_credentials: Vec<SidecarHostCredential>,
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
     paths: &ManagedBootstrapPaths<'_>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
-    let (search_profiles, search_roles) = managed_search(resolved.execution_boundary);
+    let (search_profiles, search_roles) = managed_search(resolved);
     let runtime = ManagedRuntimeConfig {
         access_profile: access_profile(resolved.access_profile),
         execution_boundary: execution_boundary(resolved.execution_boundary),
-        providers: settings
+        providers: resolved
             .providers
             .iter()
             .map(|provider| ManagedProviderConfig {
@@ -733,7 +734,7 @@ fn managed_bootstrap(
                 chat_completions_output_token_parameter: None,
             })
             .collect(),
-        models: settings
+        models: resolved
             .models
             .iter()
             .map(|model| ManagedModelConfig {
@@ -749,7 +750,7 @@ fn managed_bootstrap(
                 reasoning_effort: model.reasoning_effort.map(reasoning_effort),
             })
             .collect(),
-        roles: settings.model_roles.clone(),
+        roles: resolved.model_roles.clone(),
         search_profiles,
         search_roles,
         mcp_servers: resolved
@@ -801,6 +802,32 @@ fn managed_bootstrap(
                 max_output_bytes: server.max_output_bytes,
             })
             .collect(),
+        telemetry: resolved
+            .telemetry
+            .as_ref()
+            .map(|telemetry| ManagedTelemetryConfig {
+                name: telemetry.name.clone(),
+                endpoint: telemetry.endpoint.clone(),
+                protocol: match telemetry.protocol {
+                    OtlpProtocolSetting::Grpc => ManagedOtlpProtocol::Grpc,
+                    OtlpProtocolSetting::HttpProtobuf => ManagedOtlpProtocol::HttpProtobuf,
+                },
+                timeout_ms: telemetry.timeout_ms,
+                traces_enabled: telemetry.traces_enabled,
+                trace_sample_ratio_millionths: telemetry.trace_sample_ratio_millionths,
+                metrics_enabled: telemetry.metrics_enabled,
+                metric_export_interval_ms: telemetry.metric_export_interval_ms,
+                logs_otlp: telemetry.logs_otlp,
+                logs_stdout_json: telemetry.logs_stdout_json,
+                journal_payloads: match telemetry.journal_payloads {
+                    JournalPayloadSetting::Disabled => ManagedJournalPayloadMode::Disabled,
+                    JournalPayloadSetting::Metadata => ManagedJournalPayloadMode::Metadata,
+                    JournalPayloadSetting::Full => ManagedJournalPayloadMode::Full,
+                },
+                acknowledge_sensitive_content: telemetry.acknowledge_sensitive_content,
+                acknowledge_insecure_transport: telemetry.acknowledge_insecure_transport,
+                resource_attributes: telemetry.resource_attributes.clone(),
+            }),
         field_overrides: resolved
             .field_overrides
             .iter()
@@ -832,31 +859,28 @@ fn managed_bootstrap(
     }
 }
 
-#[cfg(debug_assertions)]
 fn managed_search(
-    boundary: ExecutionBoundarySetting,
+    resolved: &ResolvedSpaceConfiguration,
 ) -> (Vec<ManagedSearchConfig>, BTreeMap<String, String>) {
-    if boundary == ExecutionBoundarySetting::OfflineIsolated {
+    if resolved.execution_boundary == ExecutionBoundarySetting::OfflineIsolated {
         return (Vec::new(), BTreeMap::new());
     }
-    (
-        vec![ManagedSearchConfig {
-            profile: LOCAL_DEV_SEARCH_PROFILE.into(),
-            endpoint: LOCAL_DEV_SEARCH_ENDPOINT.into(),
-            timeout_ms: 30_000,
-        }],
-        BTreeMap::from([
-            ("agent".into(), LOCAL_DEV_SEARCH_PROFILE.into()),
-            ("research".into(), LOCAL_DEV_SEARCH_PROFILE.into()),
-        ]),
-    )
-}
-
-#[cfg(not(debug_assertions))]
-fn managed_search(
-    _boundary: ExecutionBoundarySetting,
-) -> (Vec<ManagedSearchConfig>, BTreeMap<String, String>) {
-    (Vec::new(), BTreeMap::new())
+    let profiles = resolved
+        .search_providers
+        .iter()
+        .map(|search| ManagedSearchConfig {
+            profile: search.profile.clone(),
+            kind: match search.kind {
+                SearchProviderKindSetting::Searxng => ManagedSearchKind::Searxng,
+                SearchProviderKindSetting::SerpApi => ManagedSearchKind::SerpApi,
+            },
+            endpoint: search.endpoint.clone(),
+            credential_id: search.credential_id.clone(),
+            auth_header: search.auth_header.clone(),
+            timeout_ms: search.timeout_ms,
+        })
+        .collect();
+    (profiles, resolved.search_roles.clone())
 }
 
 fn codex_auth_path(
@@ -1202,18 +1226,38 @@ mod tests {
         assert!(!debug.contains("shell.run"));
     }
 
-    #[cfg(debug_assertions)]
     #[test]
-    fn debug_managed_search_is_loopback_only_and_disabled_offline() {
-        let (profiles, roles) = managed_search(ExecutionBoundarySetting::WorkspaceIsolated);
+    fn managed_search_uses_selected_profiles_and_is_disabled_offline() {
+        let mut resolved = ResolvedSpaceConfiguration {
+            access_profile: AccessProfileSetting::Development,
+            execution_boundary: ExecutionBoundarySetting::WorkspaceIsolated,
+            terminal_enabled: false,
+            field_overrides: Vec::new(),
+            providers: Vec::new(),
+            models: Vec::new(),
+            model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
+            search_providers: vec![crate::managed_configuration::SearchProviderSetting {
+                profile: "local-search".into(),
+                kind: SearchProviderKindSetting::Searxng,
+                endpoint: "http://127.0.0.1:8888/search".into(),
+                credential_id: None,
+                auth_header: Some("X-Search-Key".into()),
+                timeout_ms: 30_000,
+            }],
+            search_roles: BTreeMap::from([("research".into(), "local-search".into())]),
+            mcp_servers: Vec::new(),
+            telemetry: None,
+        };
+        let (profiles, roles) = managed_search(&resolved);
         assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].endpoint, LOCAL_DEV_SEARCH_ENDPOINT);
+        assert_eq!(profiles[0].endpoint, "http://127.0.0.1:8888/search");
         assert_eq!(
             roles.get("research").map(String::as_str),
-            Some(LOCAL_DEV_SEARCH_PROFILE)
+            Some("local-search")
         );
 
-        let (profiles, roles) = managed_search(ExecutionBoundarySetting::OfflineIsolated);
+        resolved.execution_boundary = ExecutionBoundarySetting::OfflineIsolated;
+        let (profiles, roles) = managed_search(&resolved);
         assert!(profiles.is_empty());
         assert!(roles.is_empty());
     }

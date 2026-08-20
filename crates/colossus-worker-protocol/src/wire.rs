@@ -8,10 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 14 adds a selected-session, bounded canonical resource-map operation for
-/// trusted native Desktop clients. Older workers cannot validate that request shape,
-/// so both sides must reject the mismatch and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 14;
+/// Version 15 adds live MCP discovery and OAuth diagnostics for trusted native Desktop
+/// clients. Older workers cannot validate those request shapes, so both sides reject
+/// the mismatch and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 15;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -70,6 +70,36 @@ pub(crate) enum ControlOperation {
     },
     InspectSessionMap {
         session_id: String,
+    },
+    McpServers,
+    McpTools {
+        server: Option<String>,
+    },
+    McpAuthBegin {
+        server: String,
+    },
+    McpAuthComplete {
+        server: String,
+        callback_url: String,
+    },
+    McpAuthStatus {
+        server: String,
+    },
+    McpAuthLogout {
+        server: String,
+    },
+    ProviderDoctor {
+        profile: Option<String>,
+        include_provider_response: bool,
+    },
+    ModelDoctor {
+        profile: Option<String>,
+        include_provider_response: bool,
+    },
+    SearchQuery {
+        role: String,
+        query: String,
+        limit: usize,
     },
 }
 
@@ -310,6 +340,63 @@ mod tests {
             serde_json::json!({
                 "operation": "inspect_session_map",
                 "session_id": "session-primary",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::McpTools {
+                server: Some("docs".into()),
+            })
+            .expect("MCP tools"),
+            serde_json::json!({ "operation": "mcp_tools", "server": "docs" })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::McpAuthComplete {
+                server: "docs".into(),
+                callback_url: "http://127.0.0.1:8765/callback?code=opaque".into(),
+            })
+            .expect("MCP OAuth complete"),
+            serde_json::json!({
+                "operation": "mcp_auth_complete",
+                "server": "docs",
+                "callback_url": "http://127.0.0.1:8765/callback?code=opaque"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::ProviderDoctor {
+                profile: Some("openapi".into()),
+                include_provider_response: false,
+            })
+            .expect("provider doctor"),
+            serde_json::json!({
+                "operation": "provider_doctor",
+                "profile": "openapi",
+                "include_provider_response": false,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::ModelDoctor {
+                profile: Some("primary".into()),
+                include_provider_response: false,
+            })
+            .expect("model doctor"),
+            serde_json::json!({
+                "operation": "model_doctor",
+                "profile": "primary",
+                "include_provider_response": false,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::SearchQuery {
+                role: "research".into(),
+                query: "Colossus connectivity test".into(),
+                limit: 1,
+            })
+            .expect("search doctor"),
+            serde_json::json!({
+                "operation": "search_query",
+                "role": "research",
+                "query": "Colossus connectivity test",
+                "limit": 1,
             })
         );
     }

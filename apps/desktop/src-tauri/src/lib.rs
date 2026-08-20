@@ -1,6 +1,7 @@
 mod bundle;
 mod codex_auth;
 mod commands;
+mod configuration_import;
 mod connection;
 mod desktop_commands;
 mod desktop_dto;
@@ -9,6 +10,7 @@ mod diagnostics;
 mod dto;
 mod managed_configuration;
 mod managed_configuration_commands;
+mod managed_diagnostics;
 mod managed_runtime;
 mod provider_enrollment;
 mod run_list;
@@ -26,6 +28,7 @@ use commands::{
     archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_asides, list_runs,
     read_artifact_content, respond_interaction, restore_thread, watch_run,
 };
+use configuration_import::{apply_repository_configuration, inspect_repository_configuration};
 use desktop_commands::{
     add_external_target, apply_managed_model_configuration, archive_space, choose_workspace,
     configure_managed_runtime, connect_colossus, connection_status, create_space,
@@ -38,7 +41,13 @@ use diagnostics::{desktop_release_metadata, export_diagnostics};
 use managed_configuration_commands::{
     apply_space_configuration, create_managed_credential, delete_managed_credential,
     get_managed_configuration, rotate_managed_credential, save_global_defaults,
-    save_space_configuration, upsert_global_mcp_server,
+    save_space_configuration, upsert_global_mcp_server, upsert_global_model,
+    upsert_global_provider, upsert_global_search_provider, upsert_global_telemetry_profile,
+};
+use managed_diagnostics::{
+    begin_managed_mcp_oauth, complete_managed_mcp_oauth, diagnose_managed_mcp_server,
+    diagnose_managed_model, diagnose_managed_provider, diagnose_managed_search,
+    logout_managed_mcp_oauth, managed_mcp_oauth_status,
 };
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
@@ -89,8 +98,22 @@ pub fn run() {
             restore_space,
             search_space_threads,
             get_managed_configuration,
+            inspect_repository_configuration,
+            apply_repository_configuration,
             save_global_defaults,
             upsert_global_mcp_server,
+            diagnose_managed_mcp_server,
+            managed_mcp_oauth_status,
+            begin_managed_mcp_oauth,
+            complete_managed_mcp_oauth,
+            logout_managed_mcp_oauth,
+            diagnose_managed_provider,
+            diagnose_managed_model,
+            diagnose_managed_search,
+            upsert_global_provider,
+            upsert_global_model,
+            upsert_global_search_provider,
+            upsert_global_telemetry_profile,
             save_space_configuration,
             apply_space_configuration,
             create_managed_credential,

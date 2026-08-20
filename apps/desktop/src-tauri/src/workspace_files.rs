@@ -195,7 +195,7 @@ fn list_directory(root: &Path, relative: &str) -> Result<WorkspaceDirectoryDto, 
     })
 }
 
-fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErrorDto> {
+pub(crate) fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErrorDto> {
     let candidate = resolve_relative(root, relative, false)?;
     let before = fs::symlink_metadata(&candidate).map_err(|_| workspace_read_error())?;
     if before.file_type().is_symlink() || !before.is_file() || before.len() > MAX_FILE_BYTES {
