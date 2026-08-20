@@ -294,9 +294,22 @@ struct ManagedSpaceRuntime {
     approval_mode: AtomicU8,
     approval_mode_synchronized: AtomicBool,
     approval_mode_run_guard: Arc<RwLock<()>>,
+    configuration_draining: AtomicBool,
     last_used_at_ms: AtomicU64,
     terminal_workspace: RwLock<Option<TerminalWorkspace>>,
     terminal_enabled: AtomicBool,
+}
+
+pub(crate) struct ManagedConfigurationDrainGuard {
+    runtime: Arc<ManagedSpaceRuntime>,
+}
+
+impl Drop for ManagedConfigurationDrainGuard {
+    fn drop(&mut self) {
+        self.runtime
+            .configuration_draining
+            .store(false, Ordering::Release);
+    }
 }
 
 impl Default for ManagedSpaceRuntime {
@@ -309,6 +322,7 @@ impl Default for ManagedSpaceRuntime {
             approval_mode: AtomicU8::new(DesktopApprovalModeDto::Ask as u8),
             approval_mode_synchronized: AtomicBool::new(false),
             approval_mode_run_guard: Arc::new(RwLock::new(())),
+            configuration_draining: AtomicBool::new(false),
             last_used_at_ms: AtomicU64::new(monotonic_millis()),
             terminal_workspace: RwLock::new(None),
             terminal_enabled: AtomicBool::new(false),
@@ -611,12 +625,18 @@ impl AppState {
     }
 
     pub(crate) async fn managed_health_for(&self, space_id: &str) -> ManagedHealth {
-        self.managed_space_runtime(space_id)
-            .await
-            .health
-            .read()
-            .await
-            .clone()
+        let runtime = self.managed_space_runtime(space_id).await;
+        let health = runtime.health.read().await.clone();
+        if runtime.configuration_draining.load(Ordering::Acquire)
+            && health.state == ManagedRuntimeStateDto::Ready
+        {
+            return ManagedHealth {
+                state: ManagedRuntimeStateDto::Stopping,
+                message: "Draining active work before applying configuration…".into(),
+                failure_code: None,
+            };
+        }
+        health
     }
 
     pub(crate) async fn set_managed_health_for(&self, space_id: &str, health: ManagedHealth) {
@@ -797,6 +817,35 @@ impl AppState {
         )
         .read_owned()
         .await
+    }
+
+    pub(crate) async fn begin_configuration_drain_for(
+        &self,
+        space_id: &str,
+    ) -> Option<ManagedConfigurationDrainGuard> {
+        let runtime = self.managed_space_runtime(space_id).await;
+        if runtime
+            .configuration_draining
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+        let drain = ManagedConfigurationDrainGuard { runtime };
+
+        // Wait for any run creation that crossed the admission check before the
+        // draining flag was raised. Subsequent attempts fail before reaching the SDK.
+        let admission_barrier = Arc::clone(&drain.runtime.approval_mode_run_guard)
+            .write_owned()
+            .await;
+        drop(admission_barrier);
+        Some(drain)
+    }
+
+    pub(crate) async fn configuration_draining_for(&self, space_id: &str) -> bool {
+        self.existing_managed_space_runtime(space_id)
+            .await
+            .is_some_and(|runtime| runtime.configuration_draining.load(Ordering::Acquire))
     }
 
     pub(crate) async fn approval_mode_change_guard_for(
@@ -1498,6 +1547,55 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), state.run_creation_guard())
                 .await
                 .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn configuration_drain_closes_run_admission_before_waiting_for_creation() {
+        let state = Arc::new(AppState::default());
+        let space_id = "space-draining";
+        state
+            .set_managed_health_for(
+                space_id,
+                ManagedHealth {
+                    state: ManagedRuntimeStateDto::Ready,
+                    message: "ready".into(),
+                    failure_code: None,
+                },
+            )
+            .await;
+        let creating = state.run_creation_guard_for(space_id).await;
+        let drain_state = Arc::clone(&state);
+        let draining = tokio::spawn(async move {
+            drain_state
+                .begin_configuration_drain_for(space_id)
+                .await
+                .expect("first drain")
+        });
+        tokio::task::yield_now().await;
+
+        assert!(state.configuration_draining_for(space_id).await);
+        assert_eq!(
+            state.managed_health_for(space_id).await.state,
+            ManagedRuntimeStateDto::Stopping
+        );
+        assert!(
+            state
+                .begin_configuration_drain_for(space_id)
+                .await
+                .is_none(),
+            "a second settings transition must fail fast"
+        );
+        assert!(!draining.is_finished());
+
+        drop(creating);
+        let drain = draining.await.expect("drain task");
+        assert!(state.configuration_draining_for(space_id).await);
+        drop(drain);
+        assert!(!state.configuration_draining_for(space_id).await);
+        assert_eq!(
+            state.managed_health_for(space_id).await.state,
+            ManagedRuntimeStateDto::Ready
         );
     }
 

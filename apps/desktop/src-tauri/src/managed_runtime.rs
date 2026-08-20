@@ -16,6 +16,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
     str::FromStr as _,
+    time::Duration,
 };
 
 use crate::{
@@ -32,7 +33,10 @@ use crate::{
         ResolvedSpaceConfiguration, SearchProviderKindSetting, resolve_space_configuration,
     },
     run_list,
-    state::{AppState, MAX_LIVE_MANAGED_SPACES, ManagedHealth},
+    state::{
+        AppState, MAX_LIVE_MANAGED_SPACES, ManagedConfigurationDrainGuard, ManagedHealth,
+        TargetConsentContext,
+    },
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
 };
 
@@ -41,6 +45,8 @@ const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
 const SELF_TEST_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-self-test-instance-v2\0";
 const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
+const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const CONFIGURATION_DRAIN_TIMEOUT: Duration = Duration::from_mins(5);
 const PRIMARY_SCOPES: [&str; 6] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
@@ -293,6 +299,60 @@ async fn managed_target_has_active_work(client: &Colossus) -> Result<bool, Comma
         }
     }
     Ok(true)
+}
+
+pub(crate) async fn drain_active_runs_for_configuration(
+    state: &AppState,
+    space_id: &str,
+) -> Result<Option<ManagedConfigurationDrainGuard>, CommandErrorDto> {
+    let Some(target) = state.target(space_id).await else {
+        return Ok(None);
+    };
+    if !matches!(target.consent, TargetConsentContext::ManagedLocal) {
+        return Ok(None);
+    }
+    let previous_health = state.managed_health_for(space_id).await;
+    let drain = state
+        .begin_configuration_drain_for(space_id)
+        .await
+        .ok_or_else(|| {
+            CommandErrorDto::busy(
+                "This Space is already applying a configuration update. Wait for it to finish.",
+            )
+        })?;
+    state
+        .set_managed_health_for(
+            space_id,
+            ManagedHealth {
+                state: ManagedRuntimeStateDto::Stopping,
+                message: "Draining active work before applying configuration…".into(),
+                failure_code: None,
+            },
+        )
+        .await;
+
+    let drained = tokio::time::timeout(CONFIGURATION_DRAIN_TIMEOUT, async {
+        loop {
+            if !managed_target_has_active_work(&target.client).await? {
+                return Ok::<(), CommandErrorDto>(());
+            }
+            tokio::time::sleep(CONFIGURATION_DRAIN_POLL_INTERVAL).await;
+        }
+    })
+    .await;
+    match drained {
+        Ok(Ok(())) => Ok(Some(drain)),
+        Ok(Err(error)) => {
+            state.set_managed_health_for(space_id, previous_health).await;
+            Err(error)
+        }
+        Err(_) => {
+            state.set_managed_health_for(space_id, previous_health).await;
+            Err(CommandErrorDto::busy(
+                "Active work did not drain before the configuration deadline. The current runtime is still active and no settings were saved.",
+            ))
+        }
+    }
 }
 
 fn next_active_run_page_token(

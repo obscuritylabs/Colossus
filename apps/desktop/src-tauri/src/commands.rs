@@ -207,7 +207,18 @@ pub(crate) async fn create_run(
                 "This Space has a pending configuration update. Review and apply it before starting new work.",
             ));
         }
-        Some(state.run_creation_guard_for(&target_id).await)
+        if state.configuration_draining_for(&target_id).await {
+            return Err(CommandErrorDto::busy(
+                "This Space is draining active work before applying configuration. Wait for the restart to finish.",
+            ));
+        }
+        let guard = state.run_creation_guard_for(&target_id).await;
+        if state.configuration_draining_for(&target_id).await {
+            return Err(CommandErrorDto::busy(
+                "This Space is draining active work before applying configuration. Wait for the restart to finish.",
+            ));
+        }
+        Some(guard)
     } else {
         None
     };

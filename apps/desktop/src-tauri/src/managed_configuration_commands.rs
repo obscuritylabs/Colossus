@@ -6,7 +6,7 @@ use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKin
 use uuid::Uuid;
 
 use crate::{
-    desktop_commands::{connect_guard, reject_active_managed_runs_for, settings_store},
+    desktop_commands::{connect_guard, settings_store},
     desktop_dto::ManagedRuntimeStateDto,
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ModelSetting,
@@ -349,8 +349,9 @@ pub(crate) async fn save_space_configuration(
     apply_space_edit(&mut settings, request)?;
     let after = resolved_for(&settings, &space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
-    reject_active_managed_runs_for(&state, &space_id).await?;
+    let drain = managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
     persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
+    drop(drain);
     snapshot(state.inner(), &settings).await
 }
 
@@ -368,8 +369,9 @@ pub(crate) async fn apply_space_configuration(
     advance_space_revision(&mut settings, &space_id)?;
     let after = resolved_for(&settings, &space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
-    reject_active_managed_runs_for(&state, &space_id).await?;
+    let drain = managed_runtime::drain_active_runs_for_configuration(&state, &space_id).await?;
     persist_and_restart(&state, &store, &mut settings, previous, &space_id).await?;
+    drop(drain);
     snapshot(state.inner(), &settings).await
 }
 

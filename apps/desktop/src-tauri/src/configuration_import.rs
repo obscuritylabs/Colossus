@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     bundle::VerifiedBundle,
-    desktop_commands::{connect_guard, reject_active_managed_runs_for, settings_store},
+    desktop_commands::{connect_guard, settings_store},
     desktop_settings::{
         AccessProfileSetting, CODEX_BASE_URL, DesktopSettings, ModelSetting, ProviderKindSetting,
         ProviderSetting, provider_base_url, revalidate_workspace,
@@ -983,8 +983,15 @@ pub(crate) async fn apply_repository_configuration(
     validate_configuration(&settings.global_configuration, &settings.spaces)?;
     let after = resolved_for(&settings, &request.space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
-    reject_active_managed_runs_for(&state, &request.space_id).await?;
-    persist_and_restart(&state, &store, &mut settings, previous, &request.space_id).await
+    let drain = crate::managed_runtime::drain_active_runs_for_configuration(
+        &state,
+        &request.space_id,
+    )
+    .await?;
+    let result =
+        persist_and_restart(&state, &store, &mut settings, previous, &request.space_id).await;
+    drop(drain);
+    result
 }
 
 fn proposal_from_canonical(
