@@ -1,8 +1,9 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ListRunsRequest, ManagedAccessProfile,
-    ManagedExecutionBoundary, ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig,
-    ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedModelCapabilities, ManagedModelConfig,
+    ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
+    ManagedSearchConfig,
     NativeSidecarLifecycle, PageRequest, PageResponse, RunMode, RunStatus, SdkError, Secret,
     SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
     SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
@@ -23,6 +24,7 @@ use crate::{
         ReasoningEffortSetting, SettingsStore, load_provider_secret, revalidate_workspace,
     },
     dto::CommandErrorDto,
+    managed_configuration::{ResolvedSpaceConfiguration, resolve_space_configuration},
     run_list,
     state::{AppState, MAX_LIVE_MANAGED_SPACES, ManagedHealth},
     terminal::{TerminalWorkerAuthentication, TerminalWorkspace},
@@ -560,6 +562,7 @@ async fn start_inner(
     let PreparedManagedBootstrap {
         bootstrap,
         worker_authentication,
+        terminal_enabled,
     } = prepare_managed_bootstrap(
         &canonical_workspace,
         workspace_identity.clone(),
@@ -582,7 +585,7 @@ async fn start_inner(
             config: None,
             worker_authentication: Some(worker_authentication),
         },
-        settings.local_terminal_enabled(),
+        terminal_enabled,
     )
     .await
 }
@@ -607,6 +610,7 @@ fn provider_host_credentials(
 struct PreparedManagedBootstrap {
     bootstrap: SidecarBootstrapConfig,
     worker_authentication: TerminalWorkerAuthentication,
+    terminal_enabled: bool,
 }
 
 fn prepare_managed_bootstrap(
@@ -615,6 +619,19 @@ fn prepare_managed_bootstrap(
     store: &SettingsStore,
     settings: &DesktopSettings,
 ) -> Result<PreparedManagedBootstrap, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    let space = settings
+        .selected_space_id
+        .as_deref()
+        .and_then(|space_id| settings.space(space_id))
+        .ok_or_else(|| {
+            classified(
+                "configuration",
+                "Managed Local configuration is invalid.",
+                RuntimeFailureCodeDto::Configuration,
+            )
+        })?;
+    let resolved = resolve_space_configuration(&settings.global_configuration, space)
+        .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
     let host_credentials = provider_host_credentials(settings)?;
     let codex_auth_path = codex_auth_path(settings)?;
     let ca_bundle_path = settings
@@ -643,6 +660,7 @@ fn prepare_managed_bootstrap(
         workspace,
         workspace_identity,
         settings,
+        &resolved,
         host_credentials,
         approval_broker_grant,
         worker_bootstrap_secret.as_ref(),
@@ -652,6 +670,7 @@ fn prepare_managed_bootstrap(
     Ok(PreparedManagedBootstrap {
         bootstrap,
         worker_authentication,
+        terminal_enabled: resolved.terminal_enabled && settings.has_local_terminal_consent(),
     })
 }
 
@@ -665,15 +684,16 @@ fn managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
     settings: &DesktopSettings,
+    resolved: &ResolvedSpaceConfiguration,
     host_credentials: Vec<SidecarHostCredential>,
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
     paths: &ManagedBootstrapPaths<'_>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
-    let (search_profiles, search_roles) = managed_search(settings.execution_boundary);
+    let (search_profiles, search_roles) = managed_search(resolved.execution_boundary);
     let runtime = ManagedRuntimeConfig {
-        access_profile: access_profile(settings.access_profile),
-        execution_boundary: execution_boundary(settings.execution_boundary),
+        access_profile: access_profile(resolved.access_profile),
+        execution_boundary: execution_boundary(resolved.execution_boundary),
         providers: settings
             .providers
             .iter()
@@ -708,11 +728,19 @@ fn managed_bootstrap(
         roles: settings.model_roles.clone(),
         search_profiles,
         search_roles,
+        field_overrides: resolved
+            .field_overrides
+            .iter()
+            .map(|field| ManagedFieldOverride {
+                field_id: field.field_id.clone(),
+                value: field.value.clone(),
+            })
+            .collect(),
     };
     let bootstrap = SidecarBootstrapConfig::new(
         workspace,
         runtime,
-        application_grant(settings.access_profile)?,
+        application_grant(resolved.access_profile)?,
     )?
     .with_expected_workspace_identity(workspace_identity)?
     .with_colossus_home(paths.colossus_home)?

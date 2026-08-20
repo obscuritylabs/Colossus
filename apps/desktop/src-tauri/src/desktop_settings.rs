@@ -18,12 +18,16 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
+use crate::managed_configuration::{
+    GlobalConfigurationSetting, SpaceConfigurationSetting, initialize_catalog,
+    validate_configuration,
+};
 
 use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 5;
+const SETTINGS_SCHEMA_VERSION: u16 = 6;
 const SETTINGS_FILE: &str = "settings.json";
 const THREAD_SEARCH_FILE: &str = "thread-search.redb";
 const MANAGED_DIRECTORY: &str = "managed-local";
@@ -33,7 +37,7 @@ const SELF_TEST_DIRECTORY: &str = "self-test";
 const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v2";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
-const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
+const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 const MAX_PROVIDER_SECRET_BYTES: usize = 761;
 pub(crate) const LOCAL_TERMINAL_CONSENT_VERSION: u8 = 1;
 pub(crate) const MAX_EXTERNAL_TARGETS: usize = 32;
@@ -151,6 +155,10 @@ pub(crate) struct WorkspaceProfile {
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
+    /// Sparse inherited configuration and pinned global catalog revisions. The legacy
+    /// concrete fields above remain the selected-runtime compatibility projection.
+    #[serde(default)]
+    pub(crate) configuration: SpaceConfigurationSetting,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -253,6 +261,9 @@ pub(crate) struct DesktopSettings {
     pub(crate) spaces: Vec<WorkspaceProfile>,
     #[serde(default)]
     pub(crate) selected_space_id: Option<String>,
+    /// Versioned reusable definitions and defaults shared by Desktop Spaces.
+    #[serde(default)]
+    pub(crate) global_configuration: GlobalConfigurationSetting,
     /// Bounded linkage metadata for Space-scoped side conversations. No prompt,
     /// message, tool output, or selected text is persisted here.
     #[serde(default)]
@@ -322,6 +333,7 @@ impl Default for DesktopSettings {
             managed_instance_id: Uuid::now_v7().to_string(),
             spaces: Vec::new(),
             selected_space_id: None,
+            global_configuration: GlobalConfigurationSetting::default(),
             asides: Vec::new(),
             workspace: None,
             providers: Vec::new(),
@@ -343,7 +355,11 @@ impl Default for DesktopSettings {
 impl DesktopSettings {
     pub(crate) fn local_terminal_enabled(&self) -> bool {
         self.terminal_enabled
-            && self.local_terminal_consent_version == LOCAL_TERMINAL_CONSENT_VERSION
+            && self.has_local_terminal_consent()
+    }
+
+    pub(crate) fn has_local_terminal_consent(&self) -> bool {
+        self.local_terminal_consent_version == LOCAL_TERMINAL_CONSENT_VERSION
     }
 
     pub(crate) fn managed_configured(&self) -> bool {
@@ -525,6 +541,10 @@ impl DesktopSettings {
             access_profile: self.access_profile,
             execution_boundary: self.execution_boundary,
             terminal_enabled: self.terminal_enabled,
+            configuration: SpaceConfigurationSetting {
+                accepted_global_revision: self.global_configuration.revision,
+                ..SpaceConfigurationSetting::default()
+            },
         });
         self.activate_space(&id)?;
         Ok(id)
@@ -606,6 +626,10 @@ impl DesktopSettings {
             access_profile: self.access_profile,
             execution_boundary: self.execution_boundary,
             terminal_enabled: self.terminal_enabled,
+            configuration: SpaceConfigurationSetting {
+                accepted_global_revision: self.global_configuration.revision,
+                ..SpaceConfigurationSetting::default()
+            },
         });
         self.selected_space_id = Some(id.clone());
         if self.selected_target_id.as_deref() == Some("managed-local") {
@@ -765,6 +789,8 @@ impl SettingsStore {
             (migrate_legacy_settings(&bytes, schema_version)?, true)
         } else if schema_version == 4 {
             (migrate_v4_settings(&bytes)?, true)
+        } else if schema_version == 5 {
+            (migrate_v5_settings(&bytes)?, true)
         } else {
             (
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
@@ -772,6 +798,20 @@ impl SettingsStore {
             )
         };
         migrated_settings |= settings.migrate_workspace_to_space();
+        let previous_global = settings.global_configuration.clone();
+        let previous_space_configuration = settings
+            .spaces
+            .iter()
+            .map(|space| space.configuration.clone())
+            .collect::<Vec<_>>();
+        initialize_catalog(&mut settings.global_configuration, &mut settings.spaces);
+        migrated_settings |= previous_global != settings.global_configuration
+            || previous_space_configuration
+                != settings
+                    .spaces
+                    .iter()
+                    .map(|space| space.configuration.clone())
+                    .collect::<Vec<_>>();
         migrated_settings |= settings.archive_stale_same_path_spaces();
         settings.project_selected_space();
         let legacy_workspace_requires_reselection =
@@ -830,6 +870,10 @@ impl SettingsStore {
     pub(crate) fn save(&self, settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
         let mut persisted = settings.clone();
         persisted.sync_selected_space_projection()?;
+        initialize_catalog(
+            &mut persisted.global_configuration,
+            &mut persisted.spaces,
+        );
         validate_settings(&persisted)?;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| storage_error())?;
         if bytes.len() > usize::try_from(MAX_SETTINGS_BYTES).unwrap_or(usize::MAX) {
@@ -1093,6 +1137,7 @@ fn migrate_v1_settings(
         managed_instance_id: legacy.managed_instance_id,
         spaces: Vec::new(),
         selected_space_id: None,
+        global_configuration: GlobalConfigurationSetting::default(),
         asides: Vec::new(),
         workspace: legacy.workspace,
         providers: Vec::new(),
@@ -1130,6 +1175,31 @@ fn migrate_v4_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto>
     object.insert("spaces".into(), serde_json::Value::Array(Vec::new()));
     object.insert("selectedSpaceId".into(), serde_json::Value::Null);
     serde_json::from_value(value).map_err(|_| storage_error())
+}
+
+fn migrate_v5_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    let object = value.as_object_mut().ok_or_else(storage_error)?;
+    if object
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(5)
+    {
+        return Err(storage_error());
+    }
+    object.insert(
+        "schemaVersion".into(),
+        serde_json::Value::from(SETTINGS_SCHEMA_VERSION),
+    );
+    let mut settings: DesktopSettings = serde_json::from_value(value).map_err(|_| storage_error())?;
+    for space in &mut settings.spaces {
+        space.configuration.access_profile_override = Some(space.access_profile);
+        space.configuration.execution_boundary_override = Some(space.execution_boundary);
+        space.configuration.terminal_enabled_override = Some(space.terminal_enabled);
+    }
+    initialize_catalog(&mut settings.global_configuration, &mut settings.spaces);
+    Ok(settings)
 }
 
 fn migrate_legacy_settings(
@@ -1205,6 +1275,7 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
         return Err(storage_error());
     }
     validate_workspace_profiles(settings)?;
+    validate_configuration(&settings.global_configuration, &settings.spaces)?;
     let mut aside_sessions = HashSet::with_capacity(settings.asides.len());
     if settings.asides.iter().any(|aside| {
         !settings
@@ -2065,6 +2136,73 @@ mod tests {
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
         }
+    }
+
+    #[test]
+    fn v5_migration_preserves_space_authority_and_seeds_revisioned_catalogs() {
+        let credential_id = Uuid::now_v7().to_string();
+        let mut settings = configured_settings(
+            ProviderKindSetting::Compatible,
+            OPENROUTER_BASE_URL,
+            Some(credential_id.clone()),
+        );
+        settings.access_profile = AccessProfileSetting::Development;
+        settings.execution_boundary = ExecutionBoundarySetting::WorkspaceIsolated;
+        settings.terminal_enabled = true;
+        settings.spaces.push(WorkspaceProfile {
+            id: "space-one".into(),
+            display_name: "Space One".into(),
+            archived: false,
+            last_opened_at_ms: 42,
+            workspace: WorkspaceSetting {
+                id: "space-one".into(),
+                path: PathBuf::from(r"C:\space-one"),
+                identity: None,
+                display_name: "space-one".into(),
+                display_path: r"C:\space-one".into(),
+            },
+            providers: settings.providers.clone(),
+            models: settings.models.clone(),
+            model_roles: settings.model_roles.clone(),
+            access_profile: settings.access_profile,
+            execution_boundary: settings.execution_boundary,
+            terminal_enabled: settings.terminal_enabled,
+            configuration: SpaceConfigurationSetting::default(),
+        });
+        let mut encoded = serde_json::to_value(settings).expect("settings");
+        encoded["schemaVersion"] = serde_json::Value::from(5);
+        encoded
+            .as_object_mut()
+            .expect("settings object")
+            .remove("globalConfiguration");
+        encoded["spaces"][0]
+            .as_object_mut()
+            .expect("space object")
+            .remove("configuration");
+
+        let migrated = migrate_v5_settings(
+            &serde_json::to_vec(&encoded).expect("schema five settings"),
+        )
+        .expect("migrate schema five");
+
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated.global_configuration.providers.len(), 1);
+        assert_eq!(migrated.global_configuration.models.len(), 1);
+        assert_eq!(migrated.global_configuration.credentials.len(), 1);
+        assert_eq!(migrated.global_configuration.credentials[0].id, credential_id);
+        let configuration = &migrated.spaces[0].configuration;
+        assert_eq!(configuration.accepted_global_revision, 1);
+        assert_eq!(
+            configuration.access_profile_override,
+            Some(AccessProfileSetting::Development)
+        );
+        assert_eq!(
+            configuration.execution_boundary_override,
+            Some(ExecutionBoundarySetting::WorkspaceIsolated)
+        );
+        assert_eq!(configuration.terminal_enabled_override, Some(true));
+        assert!(configuration.catalog_revisions.contains_key("provider:primary-provider"));
+        assert!(configuration.catalog_revisions.contains_key("model:primary"));
     }
 
     #[cfg(windows)]

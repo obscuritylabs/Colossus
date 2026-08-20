@@ -17,8 +17,8 @@ use colossus_runtime::{
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
     FailureResponse, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
-    ManagedExecutionBoundary, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
-    PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedProviderKind, ManagedReasoningEffort,
+    ManagedRuntimeConfig, PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
     WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication, read_frame,
     write_frame,
 };
@@ -585,10 +585,77 @@ fn managed_runtime_config(
     config.workflows.user = instance_dir.join("workflows");
     config.skills.user = instance_dir.join("skills");
     config.packs.install_root = instance_dir.join("packs");
+    apply_managed_field_overrides(&mut config, &managed.field_overrides)?;
     let yaml = config
         .to_yaml()
         .map_err(|_| FailureCode::InvalidConfiguration)?;
     RuntimeConfig::from_yaml(&yaml).map_err(|_| FailureCode::InvalidConfiguration)
+}
+
+fn apply_managed_field_overrides(
+    config: &mut RuntimeConfig,
+    overrides: &[ManagedFieldOverride],
+) -> Result<(), FailureCode> {
+    const LOCKED_FIELDS: [&str; 17] = [
+        "schemaVersion",
+        "storage",
+        "network.caBundlePath",
+        "providers",
+        "models",
+        "search",
+        "mcp",
+        "observability",
+        "sandbox.backend",
+        "sandbox.helperPath",
+        "sandbox.ociRuntime",
+        "sandbox.ociImage",
+        "sandbox.ociProxyImage",
+        "sandbox.filesystem",
+        "sandbox.executables",
+        "sandbox.environment",
+        "sandbox.networkDestinations",
+    ];
+    let mut value =
+        serde_json::to_value(&*config).map_err(|_| FailureCode::InvalidConfiguration)?;
+    for field in overrides {
+        if LOCKED_FIELDS.iter().any(|locked| {
+            field.field_id == *locked
+                || field
+                    .field_id
+                    .strip_prefix(locked)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        }) {
+            return Err(FailureCode::InvalidConfiguration);
+        }
+        replace_existing_configuration_field(&mut value, &field.field_id, field.value.clone())?;
+    }
+    *config = serde_json::from_value(value).map_err(|_| FailureCode::InvalidConfiguration)?;
+    Ok(())
+}
+
+fn replace_existing_configuration_field(
+    root: &mut serde_json::Value,
+    field_id: &str,
+    replacement: serde_json::Value,
+) -> Result<(), FailureCode> {
+    let mut segments = field_id.split('.').peekable();
+    let mut current = root;
+    while let Some(segment) = segments.next() {
+        let object = current
+            .as_object_mut()
+            .ok_or(FailureCode::InvalidConfiguration)?;
+        if segments.peek().is_none() {
+            let field = object
+                .get_mut(segment)
+                .ok_or(FailureCode::InvalidConfiguration)?;
+            *field = replacement;
+            return Ok(());
+        }
+        current = object
+            .get_mut(segment)
+            .ok_or(FailureCode::InvalidConfiguration)?;
+    }
+    Err(FailureCode::InvalidConfiguration)
 }
 
 const fn reasoning_effort(effort: ManagedReasoningEffort) -> ReasoningEffort {
@@ -1217,6 +1284,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            field_overrides: Vec::new(),
         }
     }
 
@@ -1250,6 +1318,29 @@ mod tests {
         assert_ne!(offline.sandbox.backend, "danger_full_access");
         assert_eq!(offline.sandbox.profile, "offline-default");
         assert!(!offline.sandbox.acknowledge_danger_full_access);
+    }
+
+    #[test]
+    fn managed_field_overrides_reach_runtime_without_crossing_locked_boundaries() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.field_overrides = vec![ManagedFieldOverride {
+            field_id: "research.maxSources".into(),
+            value: serde_json::Value::from(7),
+        }];
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("overridden config");
+        assert_eq!(config.research.max_sources, 7);
+
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "storage.path".into(),
+            value: serde_json::Value::String("outside.redb".into()),
+        };
+        assert_eq!(
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false,)
+                .expect_err("locked storage override"),
+            FailureCode::InvalidConfiguration
+        );
     }
 
     #[test]
@@ -1574,6 +1665,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "main".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            field_overrides: Vec::new(),
         };
 
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
@@ -1631,6 +1723,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "main".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            field_overrides: Vec::new(),
         };
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed config");
@@ -1674,6 +1767,7 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            field_overrides: Vec::new(),
         };
 
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)

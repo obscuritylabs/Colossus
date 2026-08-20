@@ -8,6 +8,7 @@ mod desktop_settings;
 mod diagnostics;
 mod dto;
 mod managed_runtime;
+mod managed_configuration;
 mod provider_enrollment;
 mod run_list;
 mod space_search;

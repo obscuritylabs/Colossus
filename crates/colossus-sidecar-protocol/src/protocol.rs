@@ -7,6 +7,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -20,7 +21,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 2;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -37,6 +38,8 @@ pub const MAX_MANAGED_PROVIDERS: usize = 16;
 pub const MAX_MANAGED_MODELS: usize = 64;
 /// Maximum explicit search profiles in one app-managed runtime.
 pub const MAX_MANAGED_SEARCH_PROFILES: usize = 16;
+/// Maximum sparse configuration overrides accepted by one managed runtime.
+pub const MAX_MANAGED_FIELD_OVERRIDES: usize = 512;
 /// Default request timeout for remote model providers.
 pub const REMOTE_PROVIDER_TIMEOUT_MS: u64 = 300_000;
 /// Default request timeout for providers hosted on the local loopback interface.
@@ -45,6 +48,9 @@ const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 256;
 const MAX_PRIVATE_PATH_BYTES: usize = 4_096;
 const MAX_AUTHORIZATION_ITEMS: usize = 512;
+const MAX_MANAGED_FIELD_ID_BYTES: usize = 160;
+const MAX_MANAGED_FIELD_VALUE_BYTES: usize = 64 * 1024;
+const MAX_MANAGED_FIELD_VALUE_DEPTH: usize = 16;
 const MAX_CERTIFICATE_PEM_BYTES: usize = 256 * 1024;
 const APPROVALS_RESPOND_SCOPE: &str = "approvals:respond";
 const LEGACY_UNIX_WORKSPACE_IDENTITY_VERSION: u16 = 1;
@@ -610,6 +616,57 @@ pub fn default_managed_provider_timeout_ms(value: &str) -> Result<u64, ProtocolE
     })
 }
 
+/// One sparse, secret-free override applied by the managed sidecar before canonical
+/// runtime validation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedFieldOverride {
+    /// Stable dotted field identity using canonical camel-case configuration names.
+    pub field_id: String,
+    /// Structured replacement value for the selected field.
+    pub value: Value,
+}
+
+impl ManagedFieldOverride {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        if self.field_id.is_empty()
+            || self.field_id.len() > MAX_MANAGED_FIELD_ID_BYTES
+            || self.field_id.split('.').any(|segment| {
+                segment.is_empty()
+                    || !segment.as_bytes()[0].is_ascii_lowercase()
+                    || !segment
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            })
+            || serde_json::to_vec(&self.value).map_or(true, |encoded| {
+                encoded.len() > MAX_MANAGED_FIELD_VALUE_BYTES
+            })
+            || json_value_depth(&self.value) > MAX_MANAGED_FIELD_VALUE_DEPTH
+        {
+            return Err(ProtocolError::InvalidFrame);
+        }
+        Ok(())
+    }
+}
+
+fn json_value_depth(value: &Value) -> usize {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .map(json_value_depth)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1),
+        Value::Object(values) => values
+            .values()
+            .map(json_value_depth)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 1,
+    }
+}
+
 /// Compact secret-free runtime settings generated into canonical sidecar YAML.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -630,6 +687,11 @@ pub struct ManagedRuntimeConfig {
     /// Exact `agent` and `research` routes mapped to search profiles.
     #[serde(default)]
     pub search_roles: BTreeMap<String, String>,
+    /// Sparse ordinary configuration fields compiled after typed catalogs and before
+    /// canonical runtime validation. Desktop-owned invariants are rejected by the
+    /// managed sidecar.
+    #[serde(default)]
+    pub field_overrides: Vec<ManagedFieldOverride>,
 }
 
 impl ManagedRuntimeConfig {
@@ -661,6 +723,7 @@ impl ManagedRuntimeConfig {
             roles: BTreeMap::from([("primary".into(), "echo".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            field_overrides: Vec::new(),
         }
     }
 
@@ -703,6 +766,7 @@ impl ManagedRuntimeConfig {
             return Err(ProtocolError::InvalidFrame);
         }
         if self.search_profiles.len() > MAX_MANAGED_SEARCH_PROFILES
+            || self.field_overrides.len() > MAX_MANAGED_FIELD_OVERRIDES
             || self
                 .search_roles
                 .keys()
@@ -744,6 +808,13 @@ impl ManagedRuntimeConfig {
             !valid_token(role) || !search_profiles.contains(profile.as_str())
         }) {
             return Err(ProtocolError::InvalidFrame);
+        }
+        let mut field_ids = BTreeSet::new();
+        for field in &self.field_overrides {
+            field.validate()?;
+            if !field_ids.insert(field.field_id.as_str()) {
+                return Err(ProtocolError::InvalidFrame);
+            }
         }
         Ok(())
     }
@@ -1417,6 +1488,7 @@ mod tests {
                 roles: BTreeMap::from([("primary".into(), "main".into())]),
                 search_profiles: Vec::new(),
                 search_roles: BTreeMap::new(),
+                field_overrides: Vec::new(),
             },
             grant: BootstrapGrant {
                 application_id: "app:desktop".into(),
@@ -1489,6 +1561,29 @@ mod tests {
         assert!(runtime.validate().is_err());
         runtime.search_profiles[0].endpoint = "http://127.0.0.1:8888/search".into();
         runtime.search_roles = BTreeMap::from([("research".into(), "missing".into())]);
+        assert!(runtime.validate().is_err());
+    }
+
+    #[test]
+    fn managed_field_overrides_are_sparse_bounded_and_unique() {
+        let mut runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal);
+        runtime.field_overrides = vec![ManagedFieldOverride {
+            field_id: "research.maxSources".into(),
+            value: Value::from(12),
+        }];
+        runtime.validate().expect("valid sparse override");
+
+        runtime
+            .field_overrides
+            .push(runtime.field_overrides[0].clone());
+        assert!(runtime.validate().is_err());
+        runtime.field_overrides.truncate(1);
+        runtime.field_overrides[0].field_id = "Research.maxSources".into();
+        assert!(runtime.validate().is_err());
+        runtime.field_overrides[0].field_id = "research..maxSources".into();
+        assert!(runtime.validate().is_err());
+        runtime.field_overrides[0].field_id = "research.maxSources".into();
+        runtime.field_overrides[0].value = Value::String("x".repeat(65 * 1024));
         assert!(runtime.validate().is_err());
     }
 

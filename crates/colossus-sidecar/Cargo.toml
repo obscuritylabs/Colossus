@@ -21,6 +21,7 @@ colossus-sandbox.workspace = true
 colossus-sidecar-protocol.workspace = true
 colossus-worker.workspace = true
 getrandom.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
