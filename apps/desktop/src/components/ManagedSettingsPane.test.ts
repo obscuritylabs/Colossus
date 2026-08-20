@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DesktopStatus, SpaceSummary } from "../types";
 import {
+  advancedSectionContainsField,
   buildManagedSettingsFixture,
+  managedFieldDestination,
   ManagedSettingsPane,
 } from "./ManagedSettingsPane";
 
@@ -169,6 +171,31 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain("Authority summary");
     expect(markup).toContain("No local changes");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("routes field search results to the owning tab and disclosure", () => {
+    const descriptors = buildManagedSettingsFixture(desktop()).fieldDescriptors;
+    const semantic = descriptors.find(
+      (descriptor) => descriptor.id === "memory.semantic",
+    )!;
+    const sandbox = descriptors.find(
+      (descriptor) => descriptor.id === "sandbox.maxMemoryBytes",
+    )!;
+
+    expect(managedFieldDestination(semantic)).toEqual({
+      tab: "advanced",
+      section: "Memory",
+    });
+    expect(managedFieldDestination(sandbox)).toEqual({
+      tab: "sandbox",
+      section: null,
+    });
+    expect(
+      advancedSectionContainsField(
+        descriptors.filter(({ section }) => section === "Memory"),
+        semantic.id,
+      ),
+    ).toBe(true);
   });
 
   it("keeps all renderer markup free of secret inputs and values", () => {

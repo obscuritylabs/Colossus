@@ -211,6 +211,33 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "effective", label: "Effective YAML" },
 ];
 
+export function managedFieldDestination(descriptor: ManagedFieldDescriptor): {
+  tab: "sandbox" | "research" | "advanced" | "runtime";
+  section: string | null;
+} {
+  if (descriptor.id.startsWith("sandbox.")) {
+    return { tab: "sandbox", section: null };
+  }
+  if (descriptor.id.startsWith("research.")) {
+    return { tab: "research", section: null };
+  }
+  if (descriptor.advanced) {
+    return { tab: "advanced", section: descriptor.section };
+  }
+  return { tab: "runtime", section: null };
+}
+
+export function advancedSectionContainsField(
+  descriptors: ManagedFieldDescriptor[],
+  fieldId: string | null,
+): boolean {
+  return fieldId !== null && descriptors.some(({ id }) => id === fieldId);
+}
+
+function managedFieldElementId(fieldId: string): string {
+  return `managed-setting-${fieldId}`;
+}
+
 const EMPTY_MCP_DRAFT: McpEditorDraft = {
   resourceId: null,
   label: "",
@@ -1037,6 +1064,10 @@ export function ManagedSettingsPane({
   const [scope, setScope] = useState<SettingsScope>("space");
   const [globalTab, setGlobalTab] = useState<GlobalTab>("mcp");
   const [spaceTab, setSpaceTab] = useState<SpaceTab>("runtime");
+  const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
+  const [expandedAdvancedSections, setExpandedAdvancedSections] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [selectedSpaceId, setSelectedSpaceId] = useState(
     desktop.selectedSpaceId ?? initial.spaces[0]?.id ?? "",
   );
@@ -1131,6 +1162,18 @@ export function ManagedSettingsPane({
   useEffect(() => {
     if (selectedSpace) setSpace(spaceDraft(selectedSpace));
   }, [selectedSpace]);
+
+  useEffect(() => {
+    if (!focusedFieldId || query || scope !== "space") return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(
+        managedFieldElementId(focusedFieldId),
+      );
+      target?.scrollIntoView({ block: "center" });
+      target?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusedFieldId, query, scope, spaceTab]);
 
   const defaultsDirty =
     JSON.stringify(defaults) !== JSON.stringify(defaultsDraft(snapshot));
@@ -1945,7 +1988,10 @@ export function ManagedSettingsPane({
               type="button"
               className={scope === "global" ? "is-active" : ""}
               aria-pressed={scope === "global"}
-              onClick={() => setScope("global")}
+              onClick={() => {
+                setFocusedFieldId(null);
+                setScope("global");
+              }}
             >
               <IconWorld size={16} aria-hidden="true" />
               Global
@@ -1954,7 +2000,10 @@ export function ManagedSettingsPane({
               type="button"
               className={scope === "space" ? "is-active" : ""}
               aria-pressed={scope === "space"}
-              onClick={() => setScope("space")}
+              onClick={() => {
+                setFocusedFieldId(null);
+                setScope("space");
+              }}
             >
               <IconFolder size={16} aria-hidden="true" />
               Space
@@ -1968,13 +2017,19 @@ export function ManagedSettingsPane({
             type="search"
             value={query}
             placeholder="Search every setting"
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setFocusedFieldId(null);
+              setQuery(event.target.value);
+            }}
           />
           {query ? (
             <button
               type="button"
               aria-label="Clear settings search"
-              onClick={() => setQuery("")}
+              onClick={() => {
+                setFocusedFieldId(null);
+                setQuery("");
+              }}
             >
               <IconX size={15} aria-hidden="true" />
             </button>
@@ -2003,16 +2058,20 @@ export function ManagedSettingsPane({
               const descriptor = descriptors.find(
                 (candidate) => candidate.id === result.id,
               );
-              setSpaceTab(
-                result.id.startsWith("sandbox.")
-                  ? "sandbox"
-                  : result.id.startsWith("research.")
-                    ? "research"
-                    : descriptor?.advanced
-                      ? "advanced"
-                      : "runtime",
-              );
+              if (!descriptor) return;
+              const destination = managedFieldDestination(descriptor);
+              setFocusedFieldId(result.id);
+              if (destination.section) {
+                const section = destination.section;
+                setExpandedAdvancedSections((current) => {
+                  const next = new Set(current);
+                  next.add(section);
+                  return next;
+                });
+              }
+              setSpaceTab(destination.tab);
             } else {
+              setFocusedFieldId(null);
               setScope("global");
               setGlobalTab(result.scope);
             }
@@ -2128,7 +2187,10 @@ export function ManagedSettingsPane({
           <SettingsTabs
             tabs={SPACE_TABS}
             active={spaceTab}
-            onChange={(tab) => setSpaceTab(tab as SpaceTab)}
+            onChange={(tab) => {
+              setFocusedFieldId(null);
+              setSpaceTab(tab as SpaceTab);
+            }}
           />
           {selectedSpace ? (
             <SpaceSettingsBody
@@ -2139,6 +2201,24 @@ export function ManagedSettingsPane({
               setDraft={setSpace}
               descriptors={descriptors}
               effective={effective}
+              focusedFieldId={focusedFieldId}
+              expandedAdvancedSections={expandedAdvancedSections}
+              onAdvancedSectionToggle={(section, open) => {
+                setExpandedAdvancedSections((current) => {
+                  if (current.has(section) === open) return current;
+                  const next = new Set(current);
+                  if (open) next.add(section);
+                  else next.delete(section);
+                  return next;
+                });
+                if (
+                  !open &&
+                  descriptors.find(({ id }) => id === focusedFieldId)
+                    ?.section === section
+                ) {
+                  setFocusedFieldId(null);
+                }
+              }}
               busy={busy}
               mcpDiagnostics={mcpDiagnostics}
               mcpOauthStatuses={mcpOauthStatuses}
@@ -2853,6 +2933,9 @@ function SpaceSettingsBody({
   setDraft,
   descriptors,
   effective,
+  focusedFieldId,
+  expandedAdvancedSections,
+  onAdvancedSectionToggle,
   busy,
   mcpDiagnostics,
   mcpOauthStatuses,
@@ -2875,6 +2958,9 @@ function SpaceSettingsBody({
   setDraft: (draft: SpaceDraft) => void;
   descriptors: ManagedFieldDescriptor[];
   effective: Map<string, { value: unknown; source: string }>;
+  focusedFieldId: string | null;
+  expandedAdvancedSections: ReadonlySet<string>;
+  onAdvancedSectionToggle: (section: string, open: boolean) => void;
   busy: boolean;
   mcpDiagnostics: Record<string, ManagedMcpDiagnostic>;
   mcpOauthStatuses: Record<string, ManagedMcpOAuthStatus>;
@@ -3291,6 +3377,7 @@ function SpaceSettingsBody({
               values={draft.fields}
               effective={effective}
               scope="space"
+              focusedFieldId={focusedFieldId}
               onChange={(id, value) =>
                 setDraft({ ...draft, fields: { ...draft.fields, [id]: value } })
               }
@@ -3533,7 +3620,20 @@ function SpaceSettingsBody({
               (descriptor) => descriptor.section === section,
             );
             return (
-              <details className="managed-advanced-disclosure" key={section}>
+              <details
+                className="managed-advanced-disclosure"
+                key={section}
+                open={
+                  expandedAdvancedSections.has(section) ||
+                  advancedSectionContainsField(
+                    sectionDescriptors,
+                    focusedFieldId,
+                  )
+                }
+                onToggle={(event) =>
+                  onAdvancedSectionToggle(section, event.currentTarget.open)
+                }
+              >
                 <summary>
                   <span>{section}</span>
                   <small>{sectionDescriptors.length} settings</small>
@@ -3543,6 +3643,7 @@ function SpaceSettingsBody({
                   values={draft.fields}
                   effective={effective}
                   scope="space"
+                  focusedFieldId={focusedFieldId}
                   onChange={(id, value) =>
                     setDraft({
                       ...draft,
@@ -3560,6 +3661,7 @@ function SpaceSettingsBody({
           values={draft.fields}
           effective={effective}
           scope="space"
+          focusedFieldId={focusedFieldId}
           onChange={(id, value) =>
             setDraft({ ...draft, fields: { ...draft.fields, [id]: value } })
           }
@@ -3655,6 +3757,7 @@ function FieldGrid({
   values,
   effective,
   scope,
+  focusedFieldId = null,
   onChange,
   onInherit,
 }: {
@@ -3662,6 +3765,7 @@ function FieldGrid({
   values: Record<string, unknown>;
   effective: Map<string, { value: unknown; source: string }>;
   scope: "global" | "space";
+  focusedFieldId?: string | null;
   onChange: (id: string, value: unknown) => void;
   onInherit: (id: string) => void;
 }) {
@@ -3676,7 +3780,12 @@ function FieldGrid({
           ? scope
           : (effective.get(descriptor.id)?.source ?? "built_in");
         return (
-          <div className="managed-field-row" key={descriptor.id}>
+          <div
+            className={`managed-field-row${focusedFieldId === descriptor.id ? " is-search-target" : ""}`}
+            id={managedFieldElementId(descriptor.id)}
+            key={descriptor.id}
+            tabIndex={focusedFieldId === descriptor.id ? -1 : undefined}
+          >
             <div>
               <strong>{descriptor.title}</strong>
               <small>

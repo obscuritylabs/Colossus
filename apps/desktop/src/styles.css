@@ -9600,6 +9600,13 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
+.managed-field-row.is-search-target {
+  outline: 1px solid var(--blue);
+  outline-offset: -1px;
+  background: var(--blue-soft);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
 .managed-field-row textarea {
   min-height: 68px;
   resize: vertical;
