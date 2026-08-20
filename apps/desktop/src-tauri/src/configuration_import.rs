@@ -210,6 +210,7 @@ fn apply_imported_configuration(
         &mut mcp,
         conflict_decisions,
     )?;
+    let replace_model_stack = imported_model_stack_is_complete(&providers, &models, &model_roles);
     let telemetry = imported_telemetry(canonical)?;
     let mut references = BTreeMap::new();
     for (source_id, value) in providers {
@@ -222,7 +223,8 @@ fn apply_imported_configuration(
             &value,
             conflict_decisions,
             |provider| provider.profile.as_str(),
-        )? {
+        )? && replace_model_stack
+        {
             references.insert(format!("provider:{}", value.profile), reference);
         }
     }
@@ -236,7 +238,8 @@ fn apply_imported_configuration(
             &value,
             conflict_decisions,
             |model| model.profile.as_str(),
-        )? {
+        )? && replace_model_stack
+        {
             references.insert(format!("model:{}", value.profile), reference);
         }
     }
@@ -288,12 +291,14 @@ fn apply_imported_configuration(
         .find(|space| space.id == space_id)
         .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
     space.configuration.accepted_global_revision = current_revision;
-    space
-        .configuration
-        .catalog_revisions
-        .retain(|key, _| !matches_catalog_prefix(key));
+    space.configuration.catalog_revisions.retain(|key, _| {
+        (key.starts_with("provider:") || key.starts_with("model:")) && !replace_model_stack
+            || !matches_catalog_prefix(key)
+    });
     space.configuration.catalog_revisions.extend(references);
-    space.configuration.model_roles = model_roles;
+    if replace_model_stack {
+        space.configuration.model_roles = model_roles;
+    }
     space.configuration.search_roles = search_roles;
     if explicit_fields
         .iter()
@@ -318,6 +323,30 @@ fn apply_imported_configuration(
         settings.project_selected_space();
     }
     Ok(())
+}
+
+fn imported_model_stack_is_complete(
+    providers: &[(String, ProviderSetting)],
+    models: &[(String, ModelSetting)],
+    roles: &BTreeMap<String, String>,
+) -> bool {
+    if providers.is_empty() || models.is_empty() || !roles.contains_key("primary") {
+        return false;
+    }
+    let provider_profiles = providers
+        .iter()
+        .map(|(_, provider)| provider.profile.as_str())
+        .collect::<BTreeSet<_>>();
+    let model_profiles = models
+        .iter()
+        .map(|(_, model)| model.profile.as_str())
+        .collect::<BTreeSet<_>>();
+    models
+        .iter()
+        .all(|(_, model)| provider_profiles.contains(model.provider_profile.as_str()))
+        && roles
+            .values()
+            .all(|profile| model_profiles.contains(profile.as_str()))
 }
 
 fn replaced_resource_ids(
@@ -983,11 +1012,9 @@ pub(crate) async fn apply_repository_configuration(
     validate_configuration(&settings.global_configuration, &settings.spaces)?;
     let after = resolved_for(&settings, &request.space_id)?;
     confirm_authority_elevation(&app, &before, &after).await?;
-    let drain = crate::managed_runtime::drain_active_runs_for_configuration(
-        &state,
-        &request.space_id,
-    )
-    .await?;
+    let drain =
+        crate::managed_runtime::drain_active_runs_for_configuration(&state, &request.space_id)
+            .await?;
     let result =
         persist_and_restart(&state, &store, &mut settings, previous, &request.space_id).await;
     drop(drain);
@@ -1047,7 +1074,7 @@ fn proposal_from_canonical(
         })
         .cloned()
         .collect();
-    let warnings = import_warnings(canonical);
+    let warnings = import_warnings(canonical, explicit_fields);
     RepositoryConfigurationProposalDto {
         space_id: space_id.to_owned(),
         relative_path: REPOSITORY_CONFIGURATION_PATH,
@@ -1095,8 +1122,32 @@ fn locked_import_fields(explicit_fields: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn import_warnings(canonical: &Value) -> Vec<String> {
+fn import_warnings(canonical: &Value, explicit_fields: &[String]) -> Vec<String> {
     let mut warnings = Vec::new();
+    let has_runtime_only_models = canonical
+        .pointer("/providers/profiles")
+        .and_then(Value::as_object)
+        .is_some_and(|profiles| {
+            profiles.iter().any(|(name, profile)| {
+                profile.get("kind").and_then(Value::as_str) == Some("echo")
+                    && import_resource_is_explicit(explicit_fields, "providers.profiles", name)
+            })
+        })
+        || canonical
+            .pointer("/models/profiles")
+            .and_then(Value::as_object)
+            .is_some_and(|profiles| {
+                profiles.iter().any(|(name, profile)| {
+                    profile.get("providerProfile").and_then(Value::as_str) == Some("echo")
+                        && import_resource_is_explicit(explicit_fields, "models.profiles", name)
+                })
+            });
+    if has_runtime_only_models {
+        warnings.push(
+            "The built-in echo provider and its models are runtime-only. Desktop will keep this Space's existing provider and model selection."
+                .into(),
+        );
+    }
     if canonical
         .pointer("/mcp/servers")
         .and_then(Value::as_object)
@@ -1117,6 +1168,16 @@ fn import_warnings(canonical: &Value) -> Vec<String> {
     warnings
 }
 
+fn import_resource_is_explicit(explicit_fields: &[String], prefix: &str, name: &str) -> bool {
+    let resource = format!("{prefix}.{name}");
+    explicit_fields.iter().any(|field| {
+        field == &resource
+            || field
+                .strip_prefix(&resource)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    })
+}
+
 fn collect_profile_resources(
     canonical: &Value,
     path: &[&str],
@@ -1134,6 +1195,9 @@ fn collect_profile_resources(
         return;
     };
     for (profile, definition) in profiles {
+        if !desktop_manages_import_resource(kind, definition) {
+            continue;
+        }
         let detail = definition
             .get("kind")
             .and_then(Value::as_str)
@@ -1147,6 +1211,17 @@ fn collect_profile_resources(
             conflict: false,
             existing_resource_id: None,
         });
+    }
+}
+
+fn desktop_manages_import_resource(kind: &str, definition: &Value) -> bool {
+    match kind {
+        "provider" => !matches!(definition.get("kind").and_then(Value::as_str), Some("echo")),
+        "model" => !matches!(
+            definition.get("providerProfile").and_then(Value::as_str),
+            Some("echo")
+        ),
+        _ => true,
     }
 }
 
@@ -1199,9 +1274,7 @@ fn collect_credential_references(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desktop_settings::{
-        ExecutionBoundarySetting, WorkspaceProfile, WorkspaceSetting,
-    };
+    use crate::desktop_settings::{ExecutionBoundarySetting, WorkspaceProfile, WorkspaceSetting};
     use std::path::PathBuf;
 
     fn canonical() -> Value {
@@ -1296,6 +1369,12 @@ mod tests {
         assert!(serialized.contains("DOCS_TOKEN"));
         assert!(!serialized.contains("must-not-cross-renderer"));
         assert!(proposal.locked_fields.contains(&"storage.path".into()));
+        assert!(
+            proposal
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("runtime-only"))
+        );
     }
 
     #[test]
@@ -1314,6 +1393,102 @@ mod tests {
         assert_eq!(
             mcp[0].1.credential_headers["Authorization"].credential_id,
             "credential-docs"
+        );
+    }
+
+    #[test]
+    fn runtime_only_echo_import_preserves_the_desktop_model_stack() {
+        let runtime_only = serde_json::json!({
+            "providers": { "profiles": {
+                "echo": {
+                    "kind": "echo",
+                    "baseUrl": null,
+                    "credentialReference": null,
+                    "timeoutMs": 5000
+                }
+            }},
+            "models": { "profiles": {
+                "echo": {
+                    "providerProfile": "echo",
+                    "model": "echo",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": { "toolCalls": true, "streaming": true }
+                }
+            }, "roles": { "primary": "echo" }},
+            "search": { "profiles": {}, "roles": {} },
+            "mcp": { "servers": {} },
+            "observability": { "enabled": false }
+        });
+        let mut target = space("target");
+        target.providers = vec![ProviderSetting {
+            profile: "primary-provider".into(),
+            kind: ProviderKindSetting::Codex,
+            base_url: CODEX_BASE_URL.into(),
+            credential_id: None,
+            timeout_ms: None,
+        }];
+        target.models = vec![
+            serde_json::from_value(serde_json::json!({
+                "profile": "primary",
+                "providerProfile": "primary-provider",
+                "model": "gpt-5",
+                "contextWindowTokens": 128_000,
+                "maxOutputTokens": 16384,
+                "capabilities": { "toolCalls": true, "streaming": true }
+            }))
+            .expect("model"),
+        ];
+        target.model_roles = BTreeMap::from([("primary".into(), "primary".into())]);
+        target.configuration.model_roles = target.model_roles.clone();
+
+        let mut settings = DesktopSettings {
+            spaces: vec![target],
+            selected_space_id: Some("target".into()),
+            ..DesktopSettings::default()
+        };
+        crate::managed_configuration::initialize_catalog(
+            &mut settings.global_configuration,
+            &mut settings.spaces,
+        );
+        let previous_references = settings.spaces[0].configuration.catalog_revisions.clone();
+
+        apply_imported_configuration(
+            &mut settings,
+            "target",
+            &runtime_only,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            "a".repeat(64),
+        )
+        .expect("repository import");
+
+        let target = settings.space("target").expect("target");
+        assert_eq!(target.configuration.catalog_revisions, previous_references);
+        assert_eq!(target.configuration.model_roles["primary"], "primary");
+        assert_eq!(target.providers[0].kind, ProviderKindSetting::Codex);
+        validate_configuration(&settings.global_configuration, &settings.spaces)
+            .expect("valid Desktop catalog");
+
+        let proposal = proposal_from_canonical(
+            "target",
+            "b".repeat(64),
+            None,
+            false,
+            &runtime_only,
+            &[
+                "providers.profiles.echo.kind".into(),
+                "models.profiles.echo.providerProfile".into(),
+            ],
+            &settings.global_configuration,
+        );
+        assert!(proposal.resources.is_empty());
+        assert!(
+            proposal
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("runtime-only"))
         );
     }
 
