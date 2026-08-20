@@ -146,6 +146,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         {
             let observability =
                 colossus_observability::ObservabilityGuard::install(&config.observability)?;
+            let observability_diagnostics = observability
+                .as_ref()
+                .map(colossus_observability::ObservabilityGuard::diagnostics)
+                .unwrap_or_default();
             let mode = match cli.approval_mode.unwrap_or(ApprovalMode::Ask) {
                 ApprovalMode::Deny => WorkerApprovalMode::Deny,
                 ApprovalMode::Ask => WorkerApprovalMode::Ask,
@@ -154,7 +158,20 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             };
             let server =
                 WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())
-                    .map_err(worker_open_error)?;
+                    .map_err(worker_open_error)?
+                    .with_observability_diagnostics(move || {
+                        serde_json::to_value(observability_diagnostics.force_flush())
+                            .unwrap_or_else(|_| {
+                                serde_json::json!({
+                                    "ready": false,
+                                    "checks": [{
+                                        "name": "host",
+                                        "status": "fail",
+                                        "detail": "The exporter diagnostic failed safely."
+                                    }]
+                                })
+                            })
+                    });
             let (server, public_environment) =
                 if let Some(directory) = worker.public_api_dir.as_deref() {
                     let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;

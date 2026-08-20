@@ -321,6 +321,15 @@ export function diagnoseManagedSearch(
   });
 }
 
+export function diagnoseManagedTelemetry(
+  spaceId: string,
+  profile: string,
+): Promise<ManagedRuntimeDiagnostic> {
+  return call("diagnose_managed_telemetry", {
+    request: { spaceId, profile },
+  });
+}
+
 export function getManagedExtensionInventory(
   spaceId: string,
 ): Promise<ManagedExtensionInventory> {

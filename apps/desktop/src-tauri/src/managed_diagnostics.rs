@@ -302,6 +302,20 @@ pub(crate) async fn diagnose_managed_model(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn diagnose_managed_telemetry(
+    state: State<'_, AppState>,
+    request: ManagedProfileDiagnosticInput,
+) -> Result<ManagedRuntimeDiagnosticDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let value = worker_for(&state, &request.space_id)
+        .await?
+        .observability_doctor()
+        .await
+        .map_err(|_| diagnostic_error("The OTLP exporter health test failed."))?;
+    readiness_diagnostic("telemetry", request.profile, value)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn diagnose_managed_search(
     state: State<'_, AppState>,
     request: ManagedSearchDiagnosticInput,
@@ -401,8 +415,8 @@ fn readiness_diagnostic(
             .map(|check| ManagedReadinessCheckDto {
                 name: renderer_safe_text(&check.name, 128),
                 status: match check.status.as_str() {
-                    "pass" | "fail" | "warn" => check.status,
-                    _ => "unknown".into(),
+                    "pass" | "fail" | "not_checked" | "not_applicable" => check.status,
+                    _ => "not_checked".into(),
                 },
                 detail: renderer_safe_text(&check.detail, 512),
             })
@@ -511,7 +525,7 @@ mod tests {
         assert!(!serialized.contains("providerResponse"));
         assert_eq!(diagnostic.checks[0].name.chars().count(), 128);
         assert_eq!(diagnostic.checks[0].detail.chars().count(), 512);
-        assert_eq!(diagnostic.checks[0].status, "unknown");
+        assert_eq!(diagnostic.checks[0].status, "not_checked");
         assert!(!diagnostic.checks[0].detail.contains('\0'));
     }
 

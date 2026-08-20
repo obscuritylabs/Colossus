@@ -61,6 +61,11 @@ impl WorkerControlClient {
         }
     }
 
+    /// Flush live host-owned OTLP exporters without releasing configuration or payloads.
+    pub async fn observability_doctor(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::ObservabilityDoctor).await
+    }
+
     /// Change the worker-wide mode used outside client-scoped overrides.
     pub async fn set_approval_mode(
         &self,

@@ -12,6 +12,7 @@ pub struct WorkerServer {
     runtime: Arc<Runtime>,
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
+    observability_diagnostics: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
     public_interactions: Arc<colossus_api_runtime::PublicInteractionRouter>,
     public_api: Option<public_api::PreparedPublicApi>,
 }
@@ -57,6 +58,7 @@ impl WorkerServer {
             runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
+            observability_diagnostics: None,
             public_interactions: interactions,
             public_api: None,
         })
@@ -182,9 +184,19 @@ impl WorkerServer {
             runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
+            observability_diagnostics: None,
             public_interactions: interactions,
             public_api: None,
         })
+    }
+
+    /// Bind the host-owned, secret-free exporter diagnostic to authenticated IPC.
+    pub fn with_observability_diagnostics(
+        mut self,
+        diagnostics: impl Fn() -> Value + Send + Sync + 'static,
+    ) -> Self {
+        self.observability_diagnostics = Some(Arc::new(diagnostics));
+        self
     }
 
     /// Bind a credential manager to this worker's authoritative journal.
@@ -284,6 +296,7 @@ impl WorkerServer {
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
+        let observability_diagnostics = self.observability_diagnostics.clone();
         let approval_mode = self.approval_mode.clone();
         let key = self.authentication_key.clone();
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
@@ -383,18 +396,22 @@ impl WorkerServer {
                     let runtime = Arc::clone(&runtime);
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
+                    let observability_diagnostics = observability_diagnostics.clone();
                     let approval_mode = approval_mode.clone();
                     let drain_requests = drain_request_tx.clone();
                     let shutdown = shutdown_tx.clone();
                     tasks.spawn(async move {
                         if handle_connection(
                             stream,
-                            key.expose(),
                             runtime,
-                            replay.as_ref(),
-                            maintenance.as_ref(),
-                            approval_mode,
-                            &drain_requests,
+                            WorkerConnectionContext {
+                                key: key.expose(),
+                                replay: replay.as_ref(),
+                                maintenance: maintenance.as_ref(),
+                                observability_diagnostics,
+                                approval_mode,
+                                drain_requests: &drain_requests,
+                            },
                         )
                             .await
                             .is_ok_and(|stopping| stopping)
@@ -823,18 +840,31 @@ fn interactive_error(error: &WorkerError) -> String {
     }
 }
 
+struct WorkerConnectionContext<'a> {
+    key: &'a [u8; 32],
+    replay: &'a Mutex<ReplayGuard>,
+    maintenance: &'a tokio::sync::Mutex<()>,
+    observability_diagnostics: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
+    approval_mode: WorkerApprovalModeState,
+    drain_requests: &'a tokio::sync::mpsc::Sender<()>,
+}
+
 async fn handle_connection<S>(
     mut stream: S,
-    key: &[u8; 32],
     runtime: Arc<Runtime>,
-    replay: &Mutex<ReplayGuard>,
-    maintenance: &tokio::sync::Mutex<()>,
-    approval_mode: WorkerApprovalModeState,
-    drain_requests: &tokio::sync::mpsc::Sender<()>,
+    context: WorkerConnectionContext<'_>,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let WorkerConnectionContext {
+        key,
+        replay,
+        maintenance,
+        observability_diagnostics,
+        approval_mode,
+        drain_requests,
+    } = context;
     let connection_nonce =
         match tokio::time::timeout(HANDSHAKE_TIMEOUT, server_handshake(&mut stream, key))
             .await
@@ -996,7 +1026,14 @@ where
         }
         operation => {
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
-            let result = dispatch(&runtime, operation, maintenance, &approval_mode).await;
+            let result = dispatch(
+                &runtime,
+                operation,
+                maintenance,
+                &approval_mode,
+                observability_diagnostics.as_ref(),
+            )
+            .await;
             let succeeded = result.is_ok();
             if succeeded && requests_drain {
                 // Durable work is committed at this point. Request its drain before

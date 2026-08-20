@@ -40,6 +40,7 @@ import {
   diagnoseManagedModel,
   diagnoseManagedProvider,
   diagnoseManagedSearch,
+  diagnoseManagedTelemetry,
   getManagedExtensionInventory,
   getManagedConfiguration,
   getSessionMap,
@@ -106,6 +107,7 @@ describe("desktop API target routing", () => {
     await diagnoseManagedProvider("space-1", "openapi");
     await diagnoseManagedModel("space-1", "primary");
     await diagnoseManagedSearch("space-1", "research");
+    await diagnoseManagedTelemetry("space-1", "production-otlp");
     await getManagedExtensionInventory("space-1");
 
     expect(tauri.invoke.mock.calls).toEqual([
@@ -146,6 +148,10 @@ describe("desktop API target routing", () => {
       [
         "diagnose_managed_search",
         { request: { spaceId: "space-1", role: "research" } },
+      ],
+      [
+        "diagnose_managed_telemetry",
+        { request: { spaceId: "space-1", profile: "production-otlp" } },
       ],
       ["get_managed_extension_inventory", { request: { spaceId: "space-1" } }],
     ]);

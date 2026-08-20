@@ -384,7 +384,7 @@ export interface ManagedReadinessCheck {
 }
 
 export interface ManagedRuntimeDiagnostic {
-  kind: "provider" | "model" | "search";
+  kind: "provider" | "model" | "search" | "telemetry";
   profile: string;
   ready: boolean;
   checks: ManagedReadinessCheck[];

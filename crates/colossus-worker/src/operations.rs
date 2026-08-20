@@ -225,6 +225,8 @@ pub enum InteractiveWorkerRequest {
 pub enum WorkerOperation {
     /// Authenticate the endpoint and return bounded readiness metadata.
     Ping,
+    /// Flush host-owned OTLP exporters and return secret-free signal readiness.
+    ObservabilityDoctor,
     /// Change the worker-wide approval mode used outside client-scoped overrides.
     SetApprovalMode {
         /// New mode for subsequent approval obligations.

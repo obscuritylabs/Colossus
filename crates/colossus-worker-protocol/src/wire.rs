@@ -8,10 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 15 adds live MCP discovery and OAuth diagnostics for trusted native Desktop
-/// clients. Older workers cannot validate those request shapes, so both sides reject
-/// the mismatch and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 15;
+/// Version 16 adds secret-free host exporter validation for trusted native Desktop
+/// clients. Older workers cannot validate that request shape, so both sides reject the
+/// mismatch and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 16;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -61,6 +61,7 @@ impl From<std::io::Error> for WorkerControlError {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub(crate) enum ControlOperation {
     Ping,
+    ObservabilityDoctor,
     SetApprovalMode {
         approval_mode: WorkerApprovalMode,
     },
@@ -314,6 +315,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ControlOperation::Ping).expect("ping"),
             serde_json::json!({"operation": "ping"})
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::ObservabilityDoctor)
+                .expect("observability doctor"),
+            serde_json::json!({"operation": "observability_doctor"})
         );
         assert_eq!(
             serde_json::to_value(ControlOperation::SetApprovalMode {

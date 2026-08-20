@@ -16,6 +16,8 @@ import {
   managedFieldDestination,
   ManagedSettingsPane,
   RepositoryImportDialog,
+  SpaceSettingsBody,
+  spaceDraft,
 } from "./ManagedSettingsPane";
 
 const space: SpaceSummary = {
@@ -254,6 +256,80 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain("Authority summary");
     expect(markup).toContain("No local changes");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("renders the live OTLP diagnostic only for an active selected profile", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const selectedSpace = snapshot.spaces[0]!;
+    const draft = spaceDraft(selectedSpace);
+    snapshot.globalConfiguration.telemetryProfiles.push({
+      id: "telemetry-local",
+      label: "Local collector",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            name: "colossus-desktop",
+            endpoint: "http://127.0.0.1:4317",
+            protocol: "grpc",
+            timeoutMs: 10_000,
+            tracesEnabled: true,
+            traceSampleRatioMillionths: 100_000,
+            metricsEnabled: true,
+            metricExportIntervalMs: 60_000,
+            logsOtlp: true,
+            logsStdoutJson: false,
+            journalPayloads: "metadata",
+            acknowledgeSensitiveContent: false,
+            acknowledgeInsecureTransport: false,
+            resourceAttributes: {},
+          },
+        },
+      ],
+    });
+    draft.selectedTelemetry = "telemetry-local";
+
+    const markup = renderToStaticMarkup(
+      createElement(SpaceSettingsBody, {
+        tab: "telemetry",
+        snapshot,
+        selectedSpace,
+        draft,
+        setDraft: vi.fn(),
+        descriptors: snapshot.fieldDescriptors,
+        effective: new Map(
+          selectedSpace.effectiveValues.map((value) => [value.fieldId, value]),
+        ),
+        focusedFieldId: null,
+        expandedAdvancedSections: new Set<string>(),
+        onAdvancedSectionToggle: vi.fn(),
+        busy: false,
+        mcpDiagnostics: {},
+        mcpOauthStatuses: {},
+        mcpOauthLogins: {},
+        mcpOauthCallbacks: {},
+        onMcpOauthCallback: vi.fn(),
+        onTestMcp: vi.fn(),
+        onLoadMcpOAuthStatus: vi.fn(),
+        onLoginMcpOAuth: vi.fn(),
+        onCompleteMcpOAuth: vi.fn(),
+        onLogoutMcpOAuth: vi.fn(),
+        runtimeDiagnostics: {},
+        onTestRuntimeProfile: vi.fn(),
+        onTestSearchRole: vi.fn(),
+        onTestTelemetry: vi.fn(),
+        extensionInventory: null,
+        extensionInventoryBusy: false,
+        onRefreshExtensionInventory: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Test OTLP exporters");
+    expect(markup).not.toContain('disabled=""');
+    expect(markup).not.toContain("secretValue");
+    expect(markup).not.toContain("authorization");
   });
 
   it("routes field search results to the owning tab and disclosure", () => {

@@ -46,6 +46,7 @@ const COMMANDS: &[&str] = &[
     "diagnose_managed_provider",
     "diagnose_managed_model",
     "diagnose_managed_search",
+    "diagnose_managed_telemetry",
     "get_managed_extension_inventory",
     "upsert_global_provider",
     "upsert_global_model",

@@ -36,6 +36,7 @@ import {
   diagnoseManagedModel,
   diagnoseManagedProvider,
   diagnoseManagedSearch,
+  diagnoseManagedTelemetry,
   getManagedExtensionInventory,
   getManagedConfiguration,
   inspectRepositoryConfiguration,
@@ -682,7 +683,9 @@ function defaultsDraft(snapshot: ManagedSettingsSnapshot): DefaultsDraft {
   };
 }
 
-function spaceDraft(space: ManagedSpaceConfigurationSnapshot): SpaceDraft {
+export function spaceDraft(
+  space: ManagedSpaceConfigurationSnapshot,
+): SpaceDraft {
   return {
     accessProfile: space.configuration.accessProfileOverride,
     executionBoundary: space.configuration.executionBoundaryOverride,
@@ -1628,6 +1631,26 @@ export function ManagedSettingsPane({
     });
   }
 
+  async function testTelemetry(resourceId: string) {
+    if (!selectedSpace) return;
+    const entry = snapshot.globalConfiguration.telemetryProfiles.find(
+      (candidate) => candidate.id === resourceId,
+    );
+    if (!entry) return;
+    await runMcpDiagnostic(async () => {
+      const diagnostic = isTauriRuntime()
+        ? await diagnoseManagedTelemetry(selectedSpace.id, entry.label)
+        : fixtureRuntimeDiagnostic("telemetry", entry.label);
+      setRuntimeDiagnostics((current) => ({
+        ...current,
+        [`telemetry:${resourceId}`]: diagnostic,
+      }));
+      setNotice(
+        `${entry.label} telemetry diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
+      );
+    });
+  }
+
   async function loadExtensionInventory() {
     if (!selectedSpace || selectedSpace.status !== "active") return;
     if (extensionInventorySpaceId !== selectedSpace.id) {
@@ -2280,6 +2303,7 @@ export function ManagedSettingsPane({
               runtimeDiagnostics={runtimeDiagnostics}
               onTestRuntimeProfile={testRuntimeProfile}
               onTestSearchRole={testSearchRole}
+              onTestTelemetry={testTelemetry}
               extensionInventory={extensionInventory}
               extensionInventoryBusy={extensionInventoryBusy}
               onRefreshExtensionInventory={() => void loadExtensionInventory()}
@@ -2970,7 +2994,7 @@ function GlobalSettingsBody({
   );
 }
 
-function SpaceSettingsBody({
+export function SpaceSettingsBody({
   tab,
   snapshot,
   selectedSpace,
@@ -2995,6 +3019,7 @@ function SpaceSettingsBody({
   runtimeDiagnostics,
   onTestRuntimeProfile,
   onTestSearchRole,
+  onTestTelemetry,
   extensionInventory,
   extensionInventoryBusy,
   onRefreshExtensionInventory,
@@ -3023,6 +3048,7 @@ function SpaceSettingsBody({
   runtimeDiagnostics: Record<string, ManagedRuntimeDiagnostic>;
   onTestRuntimeProfile: (kind: "provider" | "model", profile: string) => void;
   onTestSearchRole: (role: "agent" | "research") => void;
+  onTestTelemetry: (resourceId: string) => void;
   extensionInventory: ManagedExtensionInventory | null;
   extensionInventoryBusy: boolean;
   onRefreshExtensionInventory: () => void;
@@ -3344,16 +3370,42 @@ function SpaceSettingsBody({
             </label>
           </div>
           {draft.selectedTelemetry ? (
-            <div className="authority-note">
-              <IconActivityHeartbeat size={18} />
-              <div>
-                <strong>Immutable while active</strong>
-                <p>
-                  Runs keep this telemetry revision until the Space applies a
-                  newer global revision.
-                </p>
+            <>
+              <div className="authority-note">
+                <IconActivityHeartbeat size={18} />
+                <div>
+                  <strong>Immutable while active</strong>
+                  <p>
+                    Runs keep this telemetry revision until the Space applies a
+                    newer global revision.
+                  </p>
+                </div>
               </div>
-            </div>
+              <div className="managed-diagnostic-actions">
+                <div>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    disabled={busy || selectedSpace.status !== "active"}
+                    onClick={() => onTestTelemetry(draft.selectedTelemetry!)}
+                  >
+                    <IconActivityHeartbeat size={15} />
+                    Test OTLP exporters
+                  </button>
+                  {runtimeDiagnostics[
+                    `telemetry:${draft.selectedTelemetry}`
+                  ] ? (
+                    <DiagnosticResult
+                      value={
+                        runtimeDiagnostics[
+                          `telemetry:${draft.selectedTelemetry}`
+                        ]!
+                      }
+                    />
+                  ) : null}
+                </div>
+              </div>
+            </>
           ) : null}
         </div>
         <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
@@ -5857,7 +5909,7 @@ function fixtureExtensionInventory(): ManagedExtensionInventory {
 }
 
 function fixtureRuntimeDiagnostic(
-  kind: "provider" | "model" | "search",
+  kind: "provider" | "model" | "search" | "telemetry",
   profile: string,
 ): ManagedRuntimeDiagnostic {
   return {
