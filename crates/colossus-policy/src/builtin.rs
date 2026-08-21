@@ -203,7 +203,6 @@ impl PolicyDecisionPoint for BuiltInPolicy {
                 if request.action.starts_with("openapi.")
                     || request.action.starts_with("github.")
                     || request.action.starts_with("searxng.")
-                    || request.action.starts_with("opensearch.")
                     || request.action == "web.search"
                     || request.action == "mcp.call"
                 {
@@ -279,7 +278,6 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("openapi.")
             || request.action.starts_with("github.")
             || request.action.starts_with("searxng.")
-            || request.action.starts_with("opensearch.")
             || request.action.starts_with("mcp.")
             || request.action.starts_with("pack.")
             || request.action.starts_with("bundle.")

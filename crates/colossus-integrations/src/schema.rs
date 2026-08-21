@@ -195,9 +195,6 @@ pub(super) fn validate_connection(connection: &IntegrationConnection) -> Result<
     validate_base_url(&connection.base_url)?;
     validate_auth(&connection.auth)?;
     validate_credential_reference(connection.credential_reference.as_deref())?;
-    for reference in connection.credential_references.values() {
-        validate_credential_reference(Some(reference))?;
-    }
     if connection.title.trim().is_empty()
         || connection.title.len() > 512
         || connection.description.len() > MAX_DESCRIPTION_BYTES
@@ -217,20 +214,13 @@ pub(super) fn validate_connection(connection: &IntegrationConnection) -> Result<
         ));
     }
     if connection.status == IntegrationStatus::Connected
-        && !credentials_satisfy_auth(
-            &connection.auth,
-            connection.credential_reference.as_deref(),
-            &connection.credential_references,
-        )
+        && !credentials_satisfy_auth(&connection.auth, connection.credential_reference.as_deref())
     {
         return Err(StoreError::Adapter(
             "connected authenticated integration requires a credential reference".into(),
         ));
     }
-    if !auth_requires_credential(&connection.auth)
-        && (connection.credential_reference.is_some()
-            || !connection.credential_references.is_empty())
-    {
+    if !auth_requires_credential(&connection.auth) && connection.credential_reference.is_some() {
         return Err(StoreError::Adapter(
             "auth-none integrations cannot retain a credential reference".into(),
         ));
@@ -362,7 +352,6 @@ pub(super) fn validate_auth(auth: &IntegrationAuth) -> Result<(), StoreError> {
         {
             Ok(())
         }
-        IntegrationAuth::Basic { header } if valid_header(header) => Ok(()),
         IntegrationAuth::ServiceAccount { header } if valid_header(header) => Ok(()),
         _ => Err(StoreError::Adapter(
             "integration auth header or scheme is invalid".into(),
@@ -407,17 +396,10 @@ pub(super) fn auth_requires_credential(auth: &IntegrationAuth) -> bool {
 pub(super) fn credentials_satisfy_auth(
     auth: &IntegrationAuth,
     credential_reference: Option<&str>,
-    credential_references: &BTreeMap<String, String>,
 ) -> bool {
     match auth {
-        IntegrationAuth::None => credential_reference.is_none() && credential_references.is_empty(),
-        IntegrationAuth::Basic { .. } => {
-            credential_reference.is_none()
-                && credential_references.len() == 2
-                && credential_references.contains_key("username")
-                && credential_references.contains_key("password")
-        }
-        _ => credential_reference.is_some() && credential_references.is_empty(),
+        IntegrationAuth::None => credential_reference.is_none(),
+        _ => credential_reference.is_some(),
     }
 }
 
@@ -425,7 +407,6 @@ pub(super) fn validate_native_auth(
     name: &str,
     auth: &IntegrationAuth,
     credential_reference: Option<&str>,
-    credential_references: &BTreeMap<String, String>,
 ) -> Result<(), StoreError> {
     validate_auth(auth)?;
     validate_credential_reference(credential_reference)?;
@@ -435,10 +416,6 @@ pub(super) fn validate_native_auth(
             auth,
             IntegrationAuth::None | IntegrationAuth::Bearer { .. } | IntegrationAuth::ApiKey { .. }
         ),
-        "opensearch" => matches!(
-            auth,
-            IntegrationAuth::None | IntegrationAuth::Bearer { .. } | IntegrationAuth::Basic { .. }
-        ),
         _ => false,
     };
     if !supported {
@@ -446,17 +423,11 @@ pub(super) fn validate_native_auth(
             "native integration auth type is not supported".into(),
         ));
     }
-    let partial_basic = matches!(auth, IntegrationAuth::Basic { .. })
-        && !credential_references.is_empty()
-        && !credentials_satisfy_auth(auth, credential_reference, credential_references);
     let misplaced = match auth {
-        IntegrationAuth::None => {
-            credential_reference.is_some() || !credential_references.is_empty()
-        }
-        IntegrationAuth::Basic { .. } => credential_reference.is_some(),
-        _ => !credential_references.is_empty(),
+        IntegrationAuth::None => credential_reference.is_some(),
+        _ => false,
     };
-    if partial_basic || misplaced {
+    if misplaced {
         return Err(StoreError::Adapter(
             "native integration credential references do not match its auth type".into(),
         ));

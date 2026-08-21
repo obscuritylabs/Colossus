@@ -1062,8 +1062,6 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 base_url,
                 auth_type,
                 credential_reference,
-                username_reference,
-                password_reference,
                 auth_header,
                 auth_scheme,
                 scopes,
@@ -1074,13 +1072,6 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     _ => IntegrationAuthMode::None,
                 });
                 let auth = integration_auth(mode, auth_header, auth_scheme);
-                let mut named = BTreeMap::new();
-                if let Some(reference) = username_reference {
-                    named.insert("username".into(), reference);
-                }
-                if let Some(reference) = password_reference {
-                    named.insert("password".into(), reference);
-                }
                 print_json(
                     &runtime
                         .connect_native_integration(
@@ -1088,7 +1079,6 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                             base_url.as_deref(),
                             auth,
                             credential_reference.as_deref(),
-                            &named,
                             &scopes,
                         )
                         .await?,

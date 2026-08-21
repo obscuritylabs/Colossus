@@ -210,8 +210,6 @@ memory:
 research:
   maxSources: 20
   maxWorkers: 4
-  search:
-    kind: disabled
 ```
 
 | Field | Meaning | Constraint | Default |

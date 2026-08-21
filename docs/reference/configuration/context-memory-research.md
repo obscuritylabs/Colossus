@@ -30,7 +30,7 @@ For user workflows, see [Sessions and context](../../use/sessions-context.md),
 | Deterministic or air-gapped operation | Set `context.modelAssisted: false`, keep semantic memory disabled, and use repository-only research |
 | Long sessions with a dedicated summarizer | Route `context_summarizer` to a reviewed model and keep recent-message preservation explicit |
 | Meaning-based memory retrieval | Add Chroma with local embeddings before introducing a second remote embedding service |
-| Web-backed research | Configure the top-level `search.roles.research` route; keep legacy `research.search` disabled |
+| Web-backed research | Configure the top-level `search.roles.research` route |
 | MCP-backed research | Add explicit `mcp.servers.*.researchTools` templates; allowing an MCP tool alone is insufficient |
 
 Omitting all three blocks selects these defaults:
@@ -51,14 +51,11 @@ memory:
 research:
   maxSources: 20
   maxWorkers: 4
-  search:
-    kind: disabled
 ```
 
 When a block is present, you may specify only the fields you want to override. Omitted
 ordinary fields keep the defaults above, while unknown fields are rejected. Tagged
-choices such as `semantic` and `search` still require an explicit `kind` when their
-block is present.
+choices such as `semantic` still require an explicit `kind` when their block is present.
 
 ## Context configuration
 
@@ -363,16 +360,14 @@ rebuild the disposable memory indexes deliberately after the new profile is in p
 
 ## Research configuration
 
-Research configuration sets run-wide evidence bounds and retains one deprecated search
-compatibility field. The caller selects depth and evidence lanes for each run; the model
+Research configuration sets run-wide evidence bounds. The caller selects depth and
+evidence lanes for each run; the model
 cannot add an unrequested lane or choose a new backend.
 
 ```yaml
 research:
   maxSources: 20
   maxWorkers: 4
-  search:
-    kind: disabled
 ```
 
 ### Research fields
@@ -381,7 +376,6 @@ research:
 | --- | --- | --- | ---: |
 | `maxSources` | Maximum canonical evidence sources saved in one research run | `1..=100` | `20` |
 | `maxWorkers` | Maximum query/lane collection jobs attempted in one research run | `1..=16` | `4` |
-| `search` | Deprecated SearXNG compatibility adapter | `disabled` or legacy `searxng` | Disabled |
 
 Despite its name, `maxWorkers` is a total work-item budget in the current runtime, not a
 promise of parallel execution. Each planned query combined with each selected lane is
@@ -406,8 +400,6 @@ ceiling:
 research:
   maxSources: 30
   maxWorkers: 9
-  search:
-    kind: disabled
 ```
 
 Deep three-lane research can plan 18 jobs, but the hard `maxWorkers` maximum is 16. Split
@@ -441,17 +433,14 @@ and continues with deterministic queries, source sentences, or citation-safe rep
 generation. Model assistance never weakens the configured source, lane, or worker
 bounds.
 
-### Deprecated `research.search`
+### Web search route
 
-New configurations should leave this field disabled and use named top-level search
-profiles and an explicit `research` route:
+Use named top-level search profiles and an explicit `research` route:
 
 ```yaml
 research:
   maxSources: 20
   maxWorkers: 4
-  search:
-    kind: disabled
 search:
   profiles:
     internal:
@@ -470,27 +459,8 @@ sandbox:
 
 Top-level search supports credentials, independent profiles, and explicit `agent` and
 `research` routes. Its credential is resolved in-process and does not need a sandbox
-environment grant.
-
-For migration compatibility only, `research.search` also accepts:
-
-```yaml
-research:
-  maxSources: 20
-  maxWorkers: 4
-  search:
-    kind: searxng
-    endpoint: https://search.example.com/search
-    userAgent: colossus-rust/0.6
-```
-
-Under isolation, the legacy endpoint requires HTTPS except for loopback HTTP.
-Acknowledged full access also accepts canonical non-loopback plaintext HTTP, with no TLS
-confidentiality or server authentication. Every mode requires no query or fragment, a
-nonempty user agent of at most 256 bytes, and authorized request-bound network
-authority. The legacy adapter has no credential field and inherits `sandbox.timeoutMs`.
-Configuring both legacy
-`research.search` and any top-level search profile or role is rejected.
+environment grant. See [Search configuration](search.md) for transport and authority
+requirements.
 
 ## Data disclosure and trust boundaries
 
@@ -525,7 +495,6 @@ always rechecks canonical lifecycle and scope before composing memory context.
 | A Chroma retry is blocked after failure | The previous mutation outcome is unknown; inspect status and perform a deliberate rebuild |
 | Vector writes fail after changing models | Keep dimensions compatible or rebuild the disposable collection and position state |
 | Web research is disabled | Configure the exact top-level `search.roles.research` route |
-| Search configuration reports a conflict | Do not combine top-level `search` with deprecated `research.search` |
 | Research lanes are unexpectedly skipped | `maxWorkers` counts query/lane jobs; compare depth × selected lanes with the configured bound |
 | Research reaches the source limit early | `maxSources` applies across every query and lane in the run |
 | MCP research is disabled despite allowed tools | Add explicit `researchTools`; `allowedTools` alone does not create a research template |

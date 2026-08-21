@@ -3,7 +3,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, CredentialReference, EffectRequest, EventClassification, ExecutionContext,
     IntegrationAuth, IntegrationConnection, IntegrationKind, IntegrationOperation,
@@ -24,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,

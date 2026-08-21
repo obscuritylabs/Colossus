@@ -57,7 +57,18 @@ pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
 }
 
 pub(super) fn docs(repository: &Repository) -> Result<(), String> {
-    repository.task("./scripts/docs-site").arg("build").run()
+    repository.task("./scripts/docs-site").arg("build").run()?;
+    repository
+        .task(cargo_program())
+        .args([
+            "test",
+            "--locked",
+            "--package",
+            "colossus-cli",
+            "--test",
+            "docs_examples",
+        ])
+        .run()
 }
 
 pub(super) fn workflows(repository: &Repository) -> Result<(), String> {

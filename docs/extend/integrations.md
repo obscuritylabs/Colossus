@@ -14,7 +14,7 @@ only after connection, and invoke an operation through the effect gateway.
 
 ## Prerequisites
 
-- A supported GitHub, SearXNG, or OpenSearch endpoint, or a JSON OpenAPI 3 document.
+- A supported GitHub or SearXNG endpoint, or a JSON OpenAPI 3 document.
 - A least-privilege credential supplied through an environment reference.
 - Under an isolating boundary, the exact service origin in
   `sandbox.networkDestinations`.

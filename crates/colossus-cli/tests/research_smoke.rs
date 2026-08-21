@@ -95,7 +95,7 @@ access:
     include: []
     exclude: []
   actions:
-    allow: [research.run, network.http]
+    allow: [research.run, web.search]
     requireApproval: []
     deny: []
 policy:
@@ -107,10 +107,15 @@ workflows:
 research:
   maxSources: 5
   maxWorkers: 2
-  search:
-    kind: searxng
-    endpoint: http://{search_address}/search
-    userAgent: colossus-test
+search:
+  profiles:
+    local:
+      kind: searxng
+      endpoint: http://{search_address}/search
+      userAgent: colossus-test
+      timeoutMs: 30000
+  roles:
+    research: local
 sandbox:
   backend: native
   profile: research-test-v1

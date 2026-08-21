@@ -263,9 +263,6 @@ pub struct ResearchConfig {
     pub max_sources: usize,
     /// Maximum query/lane collection jobs in one run.
     pub max_workers: usize,
-    /// Optional web-search adapter. Disabled by default.
-    #[serde(default)]
-    pub search: ResearchSearchConfig,
 }
 
 impl Default for ResearchConfig {
@@ -273,7 +270,6 @@ impl Default for ResearchConfig {
         Self {
             max_sources: 20,
             max_workers: 4,
-            search: ResearchSearchConfig::Disabled,
         }
     }
 }
@@ -388,27 +384,6 @@ impl Default for PacksConfig {
             install_root: PathBuf::from(".colossus/packs"),
         }
     }
-}
-
-/// Explicit research web-search adapter configuration.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ResearchSearchConfig {
-    /// Record web lanes as disabled without any network attempt.
-    #[default]
-    Disabled,
-    /// Query a SearXNG JSON endpoint through `network.http`.
-    Searxng {
-        /// Exact `/search` endpoint without query or fragment.
-        endpoint: String,
-        /// Non-secret HTTP user agent.
-        #[serde(rename = "userAgent", default = "default_research_user_agent")]
-        user_agent: String,
-    },
-}
-
-pub(super) fn default_research_user_agent() -> String {
-    "colossus-rust/0.6".into()
 }
 
 /// Strict provider connection profiles.
@@ -1602,84 +1577,6 @@ pub(super) fn validate_audit_config(
     Ok(())
 }
 
-pub(super) fn validate_research_search_config(
-    search: &ResearchSearchConfig,
-    sandbox: &SandboxConfig,
-) -> Result<(), RuntimeError> {
-    let ResearchSearchConfig::Searxng {
-        endpoint,
-        user_agent,
-    } = search
-    else {
-        return Ok(());
-    };
-    let url = Url::parse(endpoint).map_err(|error| {
-        RuntimeError::Config(format!("invalid research search endpoint: {error}"))
-    })?;
-    let loopback = url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    });
-    let ambient = configured_resource_authority(sandbox) == ResourceAuthority::Ambient;
-    if (!ambient && url.scheme() != "https" && !(url.scheme() == "http" && loopback))
-        || (ambient && !matches!(url.scheme(), "http" | "https"))
-        || url.cannot_be_a_base()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || user_agent.trim().is_empty()
-        || user_agent.len() > 256
-    {
-        return Err(RuntimeError::Config(
-            "research SearXNG requires HTTPS or loopback HTTP, no endpoint query/fragment, and a bounded userAgent"
-                .into(),
-        ));
-    }
-    let origin = url.origin().ascii_serialization();
-    if !sandbox_allows_network(sandbox, &origin)? {
-        return Err(RuntimeError::Config(format!(
-            "research search origin {origin} is absent from sandbox.networkDestinations"
-        )));
-    }
-    Ok(())
-}
-
-pub(super) fn effective_search_config(
-    config: &RuntimeConfig,
-) -> Result<SearchConfig, RuntimeError> {
-    let has_new_search = !config.search.profiles.is_empty() || !config.search.roles.is_empty();
-    let has_legacy_search = !matches!(config.research.search, ResearchSearchConfig::Disabled);
-    if has_new_search && has_legacy_search {
-        return Err(RuntimeError::Config(
-            "top-level search and deprecated research.search cannot be configured together".into(),
-        ));
-    }
-    if has_new_search || !has_legacy_search {
-        return Ok(config.search.clone());
-    }
-    let ResearchSearchConfig::Searxng {
-        endpoint,
-        user_agent,
-    } = &config.research.search
-    else {
-        unreachable!("legacy search presence was checked")
-    };
-    Ok(SearchConfig {
-        profiles: BTreeMap::from([(
-            "legacy-research".into(),
-            SearchProfileConfig::Searxng {
-                endpoint: endpoint.clone(),
-                credential_reference: None,
-                auth_header: default_searxng_auth_header(),
-                user_agent: user_agent.clone(),
-                timeout_ms: config.sandbox.timeout_ms,
-            },
-        )]),
-        roles: BTreeMap::from([("research".into(), "legacy-research".into())]),
-    })
-}
-
 pub(super) fn configured_search_profile_with_authority(
     name: &str,
     config: &SearchProfileConfig,
@@ -1727,7 +1624,7 @@ pub(super) fn search_registry(
     credentials: Arc<dyn CredentialResolver>,
 ) -> Result<SearchRegistry, RuntimeError> {
     let resource_authority = configured_resource_authority(&config.sandbox);
-    let config = effective_search_config(config)?;
+    let config = &config.search;
     let profiles = config
         .profiles
         .iter()
@@ -1737,13 +1634,12 @@ pub(super) fn search_registry(
                 .map(|executor| executor.with_tls_roots(tls_roots.clone()))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    SearchRegistry::new(profiles, config.roles).map_err(Into::into)
+    SearchRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
 }
 
 pub(super) fn validate_search_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    validate_research_search_config(&config.research.search, &config.sandbox)?;
-    let effective = effective_search_config(config)?;
-    if effective
+    if config
+        .search
         .roles
         .keys()
         .any(|role| !matches!(role.as_str(), "agent" | "research"))
@@ -1752,7 +1648,7 @@ pub(super) fn validate_search_config(config: &RuntimeConfig) -> Result<(), Runti
             "search roles must be exactly agent or research".into(),
         ));
     }
-    for (name, profile) in &effective.profiles {
+    for (name, profile) in &config.search.profiles {
         let profile = configured_search_profile_with_authority(
             name,
             profile,

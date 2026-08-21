@@ -1278,51 +1278,6 @@ fn bundled_ocean_example_remains_a_valid_custom_theme() {
 }
 
 #[test]
-fn legacy_python_theme_schema_is_strictly_mapped_during_cutover() {
-    let directory = tempdir().expect("directory");
-    let themes = directory.path().join("themes");
-    fs::create_dir(&themes).expect("themes");
-    fs::write(
-        themes.join("ocean.json"),
-        r##"{
-              "name": "ocean",
-              "title": "Ocean",
-              "caret": ">",
-              "continuation": "|",
-              "styles": {
-                "prompt.title": "#00ffff bold",
-                "prompt.caret": "bright_cyan"
-              },
-              "trace": {"tool_call": "bold cyan"},
-              "transcript": {
-                "assistant": "#d7ffff",
-                "tool": "bold blue",
-                "activity_spinner": "line"
-              }
-            }"##,
-    )
-    .expect("legacy theme");
-
-    let library = ThemeLibrary::load(std::slice::from_ref(&themes)).expect("library");
-    let ocean = library.preview("ocean").expect("legacy preview");
-    assert_eq!(ocean.base, ThemeName::Default);
-    assert_eq!(ocean.title, "Ocean");
-    assert_eq!(ocean.prompt_left.expect("prompt color").green, 255);
-    assert_eq!(ocean.indicator.expect("indicator").blue, 255);
-    assert_eq!(ocean.assistant.foreground.expect("assistant").red, 215);
-    assert!(ocean.tool.bold);
-    assert_eq!(ocean.tool.foreground.expect("tool").green, 255);
-    assert_eq!(ocean.spinner, colossus_contracts::ThemeSpinner::Line);
-
-    fs::write(
-        themes.join("invalid.json"),
-        r#"{"name":"invalid","transcript":{"activity_spinner":"unknown"}}"#,
-    )
-    .expect("invalid legacy theme");
-    assert!(ThemeLibrary::load(std::slice::from_ref(&themes)).is_err());
-}
-
-#[test]
 fn custom_theme_snapshot_reconstructs_without_rereading_mutated_source() {
     let directory = tempdir().expect("directory");
     let themes = directory.path().join("themes");

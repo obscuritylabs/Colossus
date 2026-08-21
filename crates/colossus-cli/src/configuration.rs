@@ -450,7 +450,6 @@ pub(super) fn integration_auth(
             scheme: scheme.unwrap_or_else(|| "Bearer".into()),
         },
         IntegrationAuthMode::ApiKey => IntegrationAuth::ApiKey { header, scheme },
-        IntegrationAuthMode::Basic => IntegrationAuth::Basic { header },
         IntegrationAuthMode::ServiceAccount => IntegrationAuth::ServiceAccount { header },
     }
 }

@@ -1097,8 +1097,6 @@ pub enum WorkerOperation {
         auth: IntegrationAuth,
         /// Optional primary credential reference.
         credential_reference: Option<String>,
-        /// Named credential references.
-        credential_references: BTreeMap<String, String>,
         /// Declared scopes.
         scopes: Vec<String>,
     },

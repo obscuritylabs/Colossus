@@ -15,7 +15,7 @@ desktop_required=false
 
 for changed_path in "$@"; do
     case "$changed_path" in
-        docs/* | documentation/* | internal/documentation/* | README.md | CHANGELOG.md | SECURITY.md | AGENTS.md | zensical.toml | scripts/docs-site | scripts/generate-doc-redirects)
+        docs/* | documentation/* | README.md | CHANGELOG.md | SECURITY.md | AGENTS.md | zensical.toml | scripts/docs-site | scripts/generate-doc-redirects)
             docs_required=true
             ;;
         *)
