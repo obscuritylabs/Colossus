@@ -931,8 +931,6 @@ pub(super) async fn dispatch_to_worker_if_active(
                     base_url,
                     auth_type,
                     credential_reference,
-                    username_reference,
-                    password_reference,
                     auth_header,
                     auth_scheme,
                     scopes,
@@ -942,19 +940,11 @@ pub(super) async fn dispatch_to_worker_if_active(
                         "searxng" if credential_reference.is_some() => IntegrationAuthMode::ApiKey,
                         _ => IntegrationAuthMode::None,
                     });
-                    let mut credential_references = BTreeMap::new();
-                    if let Some(reference) = username_reference {
-                        credential_references.insert("username".into(), reference.clone());
-                    }
-                    if let Some(reference) = password_reference {
-                        credential_references.insert("password".into(), reference.clone());
-                    }
                     WorkerOperation::IntegrationConnect {
                         name: name.clone(),
                         base_url: base_url.clone(),
                         auth: integration_auth(mode, auth_header.clone(), auth_scheme.clone()),
                         credential_reference: credential_reference.clone(),
-                        credential_references,
                         scopes: scopes.clone(),
                     }
                 }

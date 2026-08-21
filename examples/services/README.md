@@ -6,7 +6,6 @@ part of the Colossus runtime, release image, or production deployment contract.
 | Directory | Purpose | Security note |
 | --- | --- | --- |
 | `searxng/` | Local web-search backend for agent and research routes | Loopback-only port; replace the development secret before sharing the service |
-| `opensearch/` | Local OpenSearch endpoint for integration development | Security plugin disabled; loopback-only and unsuitable for production |
 
 Run commands from the repository root so relative paths remain predictable. Pin image
 versions in any reproducible or shared environment.

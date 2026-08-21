@@ -15,7 +15,7 @@ include breaking changes while the public API is still settling.
   the bounded post-effect policy input and worker protocol v15 response frame capacities
   also rise so permitted large results survive policy inspection and authenticated IPC
   encoding.
-- Moved optional SearXNG and OpenSearch development stacks from the repository root to
+- Moved the optional SearXNG development stack from the repository root to
   `examples/services/` and replaced the stale internal reconstruction archive with a
   current feature inventory, Rust practices, test strategy, and architecture decisions.
 

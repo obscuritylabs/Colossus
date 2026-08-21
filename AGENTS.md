@@ -15,8 +15,10 @@ This file is the short map. Keep deeper details in `docs/`.
   adapters, and tests into focused modules instead of accumulating unrelated
   responsibilities in one file. Run `./scripts/check_crate_roots.sh` after structural
   changes.
-- Add or update tests for every behavior change. Remove tests only with the behavior or
-  obsolete compatibility contract they prove.
+- Tests should protect behavior and contracts that remain supported. When removing a
+  feature, remove its feature-specific tests. Add rejection, migration, or tombstone
+  tests only when the post-removal behavior is itself an intentional compatibility or
+  security contract. Add or update tests for every other behavior change.
 - Before merging, inspect unresolved human and automated review threads plus required
   checks. Address actionable findings in code and tests; see `docs/develop/contributing.md`.
 - Rust is the active root implementation. Python 0.5 is retained only on

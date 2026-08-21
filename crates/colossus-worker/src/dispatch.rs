@@ -759,7 +759,6 @@ pub(super) async fn dispatch(
             base_url,
             auth,
             credential_reference,
-            credential_references,
             scopes,
         } => Ok(serde_json::to_value(
             runtime
@@ -768,7 +767,6 @@ pub(super) async fn dispatch(
                     base_url.as_deref(),
                     auth,
                     credential_reference.as_deref(),
-                    &credential_references,
                     &scopes,
                 )
                 .await?,

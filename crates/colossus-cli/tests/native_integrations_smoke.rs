@@ -1,4 +1,4 @@
-//! End-to-end native GitHub, SearXNG, and OpenSearch connector smoke tests.
+//! End-to-end native GitHub and SearXNG connector smoke tests.
 
 #[path = "support/process.rs"]
 mod process_support;
@@ -29,8 +29,6 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
         .env("COLOSSUS_NATIVE_TEST_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_NATIVE_TEST_SIGNING_KEY", SIGNING_KEY)
         .env("COLOSSUS_NATIVE_GITHUB_TOKEN", "github-secret")
-        .env("COLOSSUS_NATIVE_OPENSEARCH_USER", "search-user")
-        .env("COLOSSUS_NATIVE_OPENSEARCH_PASSWORD", "search-password")
         .output()
         .expect("run Colossus")
 }
@@ -94,13 +92,8 @@ fn native_connectors_are_hidden_typed_credential_brokered_and_post_gated() {
     fs::create_dir_all(&workflows).expect("workflows");
     let github = TcpListener::bind("127.0.0.1:0").expect("GitHub listener");
     let searxng = TcpListener::bind("127.0.0.1:0").expect("SearXNG listener");
-    let opensearch = TcpListener::bind("127.0.0.1:0").expect("OpenSearch listener");
     let github_origin = format!("http://{}", github.local_addr().expect("GitHub address"));
     let searxng_origin = format!("http://{}", searxng.local_addr().expect("SearXNG address"));
-    let opensearch_origin = format!(
-        "http://{}",
-        opensearch.local_addr().expect("OpenSearch address")
-    );
     let state = workspace.join("state.redb");
     let anchor = workspace.join("anchor.json");
     let config = workspace.join("config.yaml");
@@ -151,7 +144,7 @@ sandbox:
   filesystem: []
   executables: []
   environment: []
-  networkDestinations: ["{github_origin}", "{searxng_origin}", "{opensearch_origin}"]
+  networkDestinations: ["{github_origin}", "{searxng_origin}"]
   timeoutMs: 5000
   maxOutputBytes: 1048576
   maxProcesses: 4
@@ -209,40 +202,10 @@ sandbox:
         ],
     );
     assert_eq!(searx_connection["status"], "connected");
-    let search_connection = approved_connect(
-        binary,
-        &config,
-        &workspace,
-        &[
-            "opensearch",
-            "--base-url",
-            &opensearch_origin,
-            "--auth-type",
-            "basic",
-            "--username-reference",
-            "env:COLOSSUS_NATIVE_OPENSEARCH_USER",
-            "--password-reference",
-            "env:COLOSSUS_NATIVE_OPENSEARCH_PASSWORD",
-        ],
-    );
-    assert_eq!(search_connection["status"], "connected");
-    assert_eq!(
-        search_connection["credential_references"]["username"],
-        "env:COLOSSUS_NATIVE_OPENSEARCH_USER"
-    );
-    let serialized = serde_json::to_string(&search_connection).expect("JSON");
-    assert!(!serialized.contains("search-user"));
-    assert!(!serialized.contains("search-password"));
 
     let tools = run(binary, &config, &workspace, &["tools", "list"]);
     let tools = String::from_utf8_lossy(&tools.stdout);
-    for name in [
-        "github.repos",
-        "github.issues",
-        "searxng.search",
-        "opensearch.search",
-        "opensearch.update_document",
-    ] {
+    for name in ["github.repos", "github.issues", "searxng.search"] {
         assert!(tools.contains(name), "missing dynamic tool {name}");
     }
 
@@ -329,41 +292,4 @@ sandbox:
         searx_call["result"]["results"][0]["metadata"]["engine"],
         "demo"
     );
-
-    let search_server = thread::spawn(move || {
-        let (mut stream, _) = opensearch.accept().expect("OpenSearch accept");
-        let request = read_request(&mut stream);
-        assert!(request.starts_with("POST /notes/_update/doc-1?refresh=wait_for HTTP/1.1"));
-        assert!(
-            request
-                .to_ascii_lowercase()
-                .contains("authorization: basic c2vhcmnolxvzzxi6c2vhcmnolxbhc3n3b3jk")
-        );
-        let body = request.split_once("\r\n\r\n").expect("body").1;
-        let body: Value = serde_json::from_str(body).expect("body JSON");
-        assert_eq!(body["doc"]["status"], "done");
-        assert_eq!(body["doc_as_upsert"], true);
-        respond(&mut stream, br#"{"result":"updated"}"#);
-    });
-    let search_call = run(
-        binary,
-        &config,
-        &workspace,
-        &[
-            "--approval-mode",
-            "full-access",
-            "integrations",
-            "call",
-            "opensearch.update_document",
-            r#"{"index":"notes","id":"doc-1","doc":{"status":"done"},"doc_as_upsert":true,"refresh":"wait_for"}"#,
-        ],
-    );
-    search_server.join().expect("OpenSearch server");
-    assert!(
-        search_call.status.success(),
-        "{}",
-        String::from_utf8_lossy(&search_call.stderr)
-    );
-    let search_call: Value = serde_json::from_slice(&search_call.stdout).expect("OpenSearch JSON");
-    assert_eq!(search_call["result"]["result"], "updated");
 }
