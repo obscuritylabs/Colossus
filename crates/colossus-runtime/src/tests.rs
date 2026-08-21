@@ -8,13 +8,13 @@ use super::{
     MemoryEmbeddingConfig, MemoryOperation, ModelCapabilities, ModelProfileConfig,
     PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor,
     PresentationOperation, ProviderProfileConfig, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort,
-    ResearchSearchConfig, Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig,
-    SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
-    SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, derive_development_sandbox, goal_objective_from_plan,
-    model_resource_path, model_workspace_path, provider_profile, recover_interrupted_subagents,
-    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
-    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
+    Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig,
+    SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
+    TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
+    goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
+    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
+    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
+    terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
@@ -1085,8 +1085,6 @@ memory:
 research:
   maxSources: 20
   maxWorkers: 4
-  search:
-    kind: disabled
 search:
   profiles: {}
   roles: {}
@@ -2649,28 +2647,7 @@ fn agent_config_rejects_unbounded_turns_and_invalid_runtime_limits() {
 }
 
 #[test]
-fn research_search_requires_secure_exact_network_origin() {
-    let mut config = RuntimeConfig::offline_template("state.redb");
-    config.research.search = ResearchSearchConfig::Searxng {
-        endpoint: "http://localhost:8888/search".into(),
-        user_agent: "colossus-test".into(),
-    };
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
-    config
-        .sandbox
-        .network_destinations
-        .push("http://localhost:8888".into());
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
-    config.research.search = ResearchSearchConfig::Searxng {
-        endpoint: "http://example.com/search".into(),
-        user_agent: "colossus-test".into(),
-    };
-    config.sandbox.network_destinations = vec!["http://example.com".into()];
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
-}
-
-#[test]
-fn provider_neutral_search_requires_explicit_valid_routes_and_rejects_legacy_ambiguity() {
+fn provider_neutral_search_requires_explicit_valid_routes() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.search = SearchConfig {
         profiles: std::collections::BTreeMap::from([(
@@ -2696,14 +2673,6 @@ fn provider_neutral_search_requires_explicit_valid_routes_and_rejects_legacy_amb
 
     config.search.roles.remove("agent");
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
-    config.search.roles.insert("agent".into(), "local".into());
-    config.research.search = ResearchSearchConfig::Searxng {
-        endpoint: "http://127.0.0.1:8888/search".into(),
-        user_agent: "legacy".into(),
-    };
-    let error = RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML"))
-        .expect_err("legacy and new search must be ambiguous");
-    assert!(error.to_string().contains("cannot be configured together"));
 }
 
 #[test]

@@ -759,23 +759,6 @@ impl Runtime {
                     };
                     policy = policy.with_action(&action.name, outcome);
                 }
-                if config.search.profiles.is_empty()
-                    && config.search.roles.is_empty()
-                    && matches!(config.research.search, ResearchSearchConfig::Searxng { .. })
-                {
-                    let legacy_outcome = match access.action_decision("network.http") {
-                        Some(AccessDecision::Allow) => DecisionOutcome::Allow,
-                        Some(AccessDecision::RequireApproval) => DecisionOutcome::RequireApproval,
-                        Some(AccessDecision::Deny) | None => DecisionOutcome::Deny,
-                        Some(AccessDecision::ExternalPolicy) => {
-                            return Err(RuntimeError::Config(
-                                "built-in legacy search received an external access decision"
-                                    .into(),
-                            ));
-                        }
-                    };
-                    policy = policy.with_action("web.search", legacy_outcome);
-                }
                 for root in [&config.workflows.repository, &config.workflows.user] {
                     if let Ok(root) = fs::canonicalize(workspace_absolute_path(&workspace, root)) {
                         policy = policy.with_filesystem_read_root(root.display().to_string());

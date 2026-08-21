@@ -122,7 +122,7 @@ the selected execution boundary is not Offline isolated. Start the local service
 selecting **Web**:
 
 ```bash
-docker compose -f docker-compose.searxng.yml up -d --wait
+docker compose -f examples/services/searxng/compose.yml up -d --wait
 ```
 
 This loopback development convenience is not emitted by release builds. A missing local

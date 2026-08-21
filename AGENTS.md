@@ -5,6 +5,8 @@ This file is the short map. Keep deeper details in `docs/`.
 - Read `docs/develop/architecture.md` before changing boundaries.
 - Read `docs/develop/security-architecture.md` before changing tools, subprocess
   execution, policy, audit, or bundle handling.
+- Follow `docs/develop/rust-practices.md` for nontrivial Rust changes and
+  `docs/develop/testing.md` when adding, moving, or removing tests.
 - Keep `domain` dependency-free.
 - Keep CLI and TUI as interfaces only; no model, tool, policy, or state logic
   should live there.
@@ -13,7 +15,8 @@ This file is the short map. Keep deeper details in `docs/`.
   adapters, and tests into focused modules instead of accumulating unrelated
   responsibilities in one file. Run `./scripts/check_crate_roots.sh` after structural
   changes.
-- Add or update tests for every behavior change.
+- Add or update tests for every behavior change. Remove tests only with the behavior or
+  obsolete compatibility contract they prove.
 - Before merging, inspect unresolved human and automated review threads plus required
   checks. Address actionable findings in code and tests; see `docs/develop/contributing.md`.
 - Rust is the active root implementation. Python 0.5 is retained only on

@@ -20,6 +20,14 @@ operation stay in [Get started](../get-started/index.md) and
 - [Architecture overview](architecture.md) defines dependency direction.
 - [Rust crate structure](crate-structure.md) keeps crate roots readable and behavior in
   responsibility-focused modules.
+- [Rust engineering practices](rust-practices.md) defines repository-specific ownership,
+  API, async, error, and review guidance.
+- [Test strategy and crate audit](testing.md) maps test levels and retained evidence for
+  every workspace crate.
+- [Feature ownership inventory](feature-inventory.md) locates current implementations,
+  documentation, and acceptance evidence.
+- [Architecture decisions](adr/index.md) retain the context behind durable boundary and
+  migration choices.
 - [Runtime and ports](runtime-ports.md) maps application responsibilities.
 - [Public API and application SDKs](application-sdk.md) defines the gRPC, SDK, and
   Tauri integration boundary.

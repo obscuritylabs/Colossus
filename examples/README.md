@@ -10,8 +10,12 @@ expected results. Run them from a development workspace after reviewing the file
 | `workflows/` | Strict durable workflow definitions covering control flow, gates, recovery, and model steps |
 | `themes/` | Presentation theme examples |
 | `observability/` | Development-only Kubernetes Colossus + Grafana LGTM smoke environment |
+| `services/` | Optional local service stacks used by examples and integration development |
 
 Start with `asks/01-model-smoke.txt` for a provider check or
 `workflows/01-control-flow-lab.yaml` for a deterministic workflow check. Use
 `sdk/scenarios/01-model-smoke.txt` to run the same provider through an enrolled
 application SDK.
+
+Service stacks are development conveniences, not supported production deployments.
+Each service directory documents its security posture and startup command.
