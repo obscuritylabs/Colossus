@@ -7,7 +7,6 @@ pub fn compile_native(
     base_url: Option<&str>,
     auth: IntegrationAuth,
     credential_reference: Option<String>,
-    credential_references: BTreeMap<String, String>,
     scopes: Vec<String>,
     connected_at: String,
     updated_at: String,
@@ -25,31 +24,16 @@ pub fn compile_native(
             "http://127.0.0.1:8888",
             searxng_operations()?,
         ),
-        "opensearch" => (
-            "OpenSearch",
-            "Native OpenSearch connector for document search, retrieval, indexing, updates, deletes, mappings, and cluster health.",
-            "http://127.0.0.1:9200",
-            opensearch_operations()?,
-        ),
         _ => {
             return Err(StoreError::Adapter(
-                "native integration must be github, searxng, or opensearch".into(),
+                "native integration must be github or searxng".into(),
             ));
         }
     };
-    validate_native_auth(
-        name,
-        &auth,
-        credential_reference.as_deref(),
-        &credential_references,
-    )?;
+    validate_native_auth(name, &auth, credential_reference.as_deref())?;
     let base_url = base_url.unwrap_or(default_url).to_owned();
     validate_base_url(&base_url)?;
-    for reference in credential_references.values() {
-        validate_credential_reference(Some(reference))?;
-    }
-    let required_refs = usize::from(credential_reference.is_some()) + credential_references.len();
-    let status = if auth_requires_credential(&auth) && required_refs == 0 {
+    let status = if auth_requires_credential(&auth) && credential_reference.is_none() {
         IntegrationStatus::PendingAuth
     } else {
         IntegrationStatus::Connected
@@ -75,7 +59,6 @@ pub fn compile_native(
         base_url,
         auth,
         credential_reference,
-        credential_references,
         scopes,
         operations,
         manifest_sha256: format!("{:x}", Sha256::digest(manifest)),
@@ -229,93 +212,6 @@ pub(super) fn searxng_operations() -> Result<Vec<IntegrationOperation>, StoreErr
             "GET",
             "/search",
             16_000,
-        )?,
-    ])
-}
-
-pub(super) fn opensearch_operations() -> Result<Vec<IntegrationOperation>, StoreError> {
-    let empty = || json!({"type":"object","additionalProperties":false,"properties":{}});
-    let index = || json!({"type":"string","minLength":1,"maxLength":1024});
-    let id = || json!({"type":"string","minLength":1,"maxLength":1024});
-    let refresh = || json!({"type":"string","enum":["false","true","wait_for"]});
-    Ok(vec![
-        native_operation(
-            "opensearch.info",
-            "Fetch basic OpenSearch endpoint information.",
-            empty(),
-            "GET",
-            "/",
-            16_000,
-        )?,
-        native_operation(
-            "opensearch.health",
-            "Fetch OpenSearch cluster health.",
-            empty(),
-            "GET",
-            "/_cluster/health",
-            16_000,
-        )?,
-        native_operation(
-            "opensearch.list_indices",
-            "List OpenSearch indices through the JSON cat API.",
-            empty(),
-            "GET",
-            "/_cat/indices",
-            64_000,
-        )?,
-        native_operation(
-            "opensearch.get_mapping",
-            "Fetch an OpenSearch index mapping.",
-            json!({"type":"object","additionalProperties":false,"properties":{"index":index()},"required":["index"]}),
-            "GET",
-            "/{index}/_mapping",
-            64_000,
-        )?,
-        native_operation(
-            "opensearch.search",
-            "Run a bounded OpenSearch query.",
-            json!({"type":"object","additionalProperties":false,"properties":{
-            "index":index(),"query":{"type":"object"},
-            "size":{"type":"integer","minimum":1,"maximum":100,"default":10},
-            "from":{"type":"integer","minimum":0,"maximum":10000,"default":0},
-            "source_includes":{"type":"array","maxItems":256,"items":{"type":"string","maxLength":1024}},
-            "sort":{"type":"array","maxItems":64,"items":{"type":"object"}}
-        },"required":["index","query"]}),
-            "POST",
-            "/{index}/_search",
-            128_000,
-        )?,
-        native_operation(
-            "opensearch.get_document",
-            "Fetch one OpenSearch document.",
-            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id()},"required":["index","id"]}),
-            "GET",
-            "/{index}/_doc/{id}",
-            64_000,
-        )?,
-        native_operation(
-            "opensearch.index_document",
-            "Create or replace one OpenSearch document.",
-            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id(),"document":{"type":"object"},"refresh":refresh()},"required":["index","document"]}),
-            "POST",
-            "/{index}/_doc",
-            32_000,
-        )?,
-        native_operation(
-            "opensearch.update_document",
-            "Partially update one OpenSearch document.",
-            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id(),"doc":{"type":"object"},"doc_as_upsert":{"type":"boolean"},"refresh":refresh()},"required":["index","id","doc"]}),
-            "POST",
-            "/{index}/_update/{id}",
-            32_000,
-        )?,
-        native_operation(
-            "opensearch.delete_document",
-            "Delete one OpenSearch document.",
-            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id(),"refresh":refresh()},"required":["index","id"]}),
-            "DELETE",
-            "/{index}/_doc/{id}",
-            32_000,
         )?,
     ])
 }

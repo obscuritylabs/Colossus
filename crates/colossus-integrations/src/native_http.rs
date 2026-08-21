@@ -23,24 +23,13 @@ pub(super) fn validate_request_credentials(
         } => credential_reference.iter().cloned().collect::<Vec<_>>(),
         IntegrationRequest::ConnectNative {
             credential_reference,
-            credential_references,
             ..
-        } => credential_reference
-            .iter()
-            .cloned()
-            .chain(credential_references.values().cloned())
-            .collect(),
+        } => credential_reference.iter().cloned().collect(),
         IntegrationRequest::Disconnect { .. } => Vec::new(),
         IntegrationRequest::Invoke { connection, .. } => repository
             .get_integration(connection)
             .map_err(execution)?
-            .map(|connection| {
-                connection
-                    .credential_reference
-                    .into_iter()
-                    .chain(connection.credential_references.into_values())
-                    .collect()
-            })
+            .map(|connection| connection.credential_reference.into_iter().collect())
             .unwrap_or_default(),
     };
     expected.sort();
@@ -62,7 +51,6 @@ pub(super) fn validate_request_credentials(
 pub(super) fn auth_header(
     auth: &IntegrationAuth,
     secret: Option<&str>,
-    named: &BTreeMap<String, String>,
 ) -> Result<Option<(HeaderName, HeaderValue)>, ExecutionError> {
     let (header, value) = match auth {
         IntegrationAuth::None => return Ok(None),
@@ -88,18 +76,6 @@ pub(super) fn auth_header(
                 },
             )?,
         ),
-        IntegrationAuth::Basic { header } => {
-            let username = named
-                .get("username")
-                .ok_or_else(|| execution("basic-auth username is unavailable"))?;
-            let password = named
-                .get("password")
-                .ok_or_else(|| execution("basic-auth password is unavailable"))?;
-            (
-                header,
-                format!("Basic {}", BASE64.encode(format!("{username}:{password}"))),
-            )
-        }
         IntegrationAuth::ServiceAccount { header } => (
             header,
             secret
@@ -130,7 +106,6 @@ pub(super) fn prepare_native_request(
     match connection.name.as_str() {
         "github" => github_request(connection, tool_name, arguments),
         "searxng" => searxng_request(connection, tool_name, arguments),
-        "opensearch" => opensearch_request(connection, tool_name, arguments),
         _ => Err(execution("unsupported native integration")),
     }
 }
@@ -232,135 +207,6 @@ pub(super) fn searxng_request(
     })
 }
 
-pub(super) fn opensearch_request(
-    connection: &IntegrationConnection,
-    tool_name: &str,
-    arguments: &Map<String, Value>,
-) -> Result<PreparedHttpRequest, ExecutionError> {
-    let mut query = Vec::<(&str, String)>::new();
-    let (method, path, body) = match tool_name {
-        "opensearch.info" => (reqwest::Method::GET, "/".into(), None),
-        "opensearch.health" => (reqwest::Method::GET, "/_cluster/health".into(), None),
-        "opensearch.list_indices" => {
-            query.push(("format", "json".into()));
-            (reqwest::Method::GET, "/_cat/indices".into(), None)
-        }
-        "opensearch.get_mapping" => (
-            reqwest::Method::GET,
-            format!("/{}/_mapping", opensearch_index(arguments)?),
-            None,
-        ),
-        "opensearch.search" => {
-            let mut body = Map::from_iter([
-                (
-                    "query".into(),
-                    arguments
-                        .get("query")
-                        .cloned()
-                        .ok_or_else(|| execution("OpenSearch query is required"))?,
-                ),
-                (
-                    "size".into(),
-                    json!(bounded_integer(arguments, "size", 10, 1, 100)?),
-                ),
-                (
-                    "from".into(),
-                    json!(bounded_integer(arguments, "from", 0, 0, 10_000)?),
-                ),
-            ]);
-            for name in ["source_includes", "sort"] {
-                if let Some(value) = arguments.get(name) {
-                    body.insert(
-                        if name == "source_includes" {
-                            "_source"
-                        } else {
-                            name
-                        }
-                        .into(),
-                        value.clone(),
-                    );
-                }
-            }
-            (
-                reqwest::Method::POST,
-                format!("/{}/_search", opensearch_index(arguments)?),
-                Some(Value::Object(body)),
-            )
-        }
-        "opensearch.get_document" => (
-            reqwest::Method::GET,
-            format!(
-                "/{}/_doc/{}",
-                opensearch_index(arguments)?,
-                native_segment(arguments, "id")?
-            ),
-            None,
-        ),
-        "opensearch.index_document" => {
-            add_refresh(arguments, &mut query)?;
-            let document = arguments
-                .get("document")
-                .cloned()
-                .ok_or_else(|| execution("OpenSearch document is required"))?;
-            if let Some(id) = optional_string(arguments, "id").filter(|value| !value.is_empty()) {
-                (
-                    reqwest::Method::PUT,
-                    format!(
-                        "/{}/_doc/{}",
-                        opensearch_index(arguments)?,
-                        encode_path_segment(id)
-                    ),
-                    Some(document),
-                )
-            } else {
-                (
-                    reqwest::Method::POST,
-                    format!("/{}/_doc", opensearch_index(arguments)?),
-                    Some(document),
-                )
-            }
-        }
-        "opensearch.update_document" => {
-            add_refresh(arguments, &mut query)?;
-            let mut body = Map::from_iter([(
-                "doc".into(),
-                arguments
-                    .get("doc")
-                    .cloned()
-                    .ok_or_else(|| execution("OpenSearch update doc is required"))?,
-            )]);
-            if let Some(value) = arguments.get("doc_as_upsert") {
-                body.insert("doc_as_upsert".into(), value.clone());
-            }
-            (
-                reqwest::Method::POST,
-                format!(
-                    "/{}/_update/{}",
-                    opensearch_index(arguments)?,
-                    native_segment(arguments, "id")?
-                ),
-                Some(Value::Object(body)),
-            )
-        }
-        "opensearch.delete_document" => {
-            add_refresh(arguments, &mut query)?;
-            (
-                reqwest::Method::DELETE,
-                format!(
-                    "/{}/_doc/{}",
-                    opensearch_index(arguments)?,
-                    native_segment(arguments, "id")?
-                ),
-                None,
-            )
-        }
-        _ => return Err(execution("unsupported OpenSearch integration tool")),
-    };
-    let mut url = native_url(connection, &path)?;
-    append_pairs(&mut url, query);
-    Ok(PreparedHttpRequest { method, url, body })
-}
-
 pub(super) fn normalize_native_response(
     connection: &IntegrationConnection,
     tool_name: &str,
@@ -459,34 +305,6 @@ pub(super) fn native_segment(
     Ok(encode_path_segment(required_string(arguments, name)?))
 }
 
-pub(super) fn opensearch_index(arguments: &Map<String, Value>) -> Result<String, ExecutionError> {
-    let value = required_string(arguments, "index")?;
-    if value.contains(['/', '\\']) || matches!(value, "." | "..") {
-        return Err(execution(
-            "OpenSearch index contains an unsafe path segment",
-        ));
-    }
-    Ok(encode_path_segment_with(value, b",*"))
-}
-
-pub(super) fn encode_path_segment_with(value: &str, additionally_safe: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'.' | b'_' | b'~')
-            || additionally_safe.contains(&byte)
-        {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-    }
-    encoded
-}
-
 pub(super) fn bounded_integer(
     arguments: &Map<String, Value>,
     name: &str,
@@ -505,19 +323,6 @@ pub(super) fn bounded_integer(
             "integration argument {name} is outside its bound"
         )))
     }
-}
-
-pub(super) fn add_refresh(
-    arguments: &Map<String, Value>,
-    query: &mut Vec<(&'static str, String)>,
-) -> Result<(), ExecutionError> {
-    if let Some(refresh) = optional_string(arguments, "refresh") {
-        if !matches!(refresh, "false" | "true" | "wait_for") {
-            return Err(execution("invalid OpenSearch refresh value"));
-        }
-        query.push(("refresh", refresh.into()));
-    }
-    Ok(())
 }
 
 pub(super) fn operation_url(

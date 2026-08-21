@@ -14,11 +14,6 @@ pub fn compile_openapi(
 ) -> Result<IntegrationConnection, StoreError> {
     validate_name(name)?;
     validate_auth(&auth)?;
-    if matches!(auth, IntegrationAuth::Basic { .. }) {
-        return Err(StoreError::Adapter(
-            "OpenAPI imports do not accept named basic-auth credentials".into(),
-        ));
-    }
     validate_credential_reference(credential_reference.as_deref())?;
     let bytes = serde_json::to_vec(document).map_err(adapter)?;
     if bytes.len() > MAX_SCHEMA_BYTES {
@@ -115,7 +110,6 @@ pub fn compile_openapi(
         base_url,
         auth,
         credential_reference,
-        credential_references: BTreeMap::new(),
         scopes,
         operations,
         manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),

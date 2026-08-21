@@ -272,7 +272,6 @@ pub(super) enum IntegrationAuthMode {
     None,
     Bearer,
     ApiKey,
-    Basic,
     ServiceAccount,
 }
 
@@ -285,7 +284,7 @@ pub(super) enum IntegrationsAction {
     },
     /// Show one canonical connection without resolving credentials.
     Show { name: String },
-    /// Connect a first-party GitHub, SearXNG, or OpenSearch adapter.
+    /// Connect a first-party GitHub or SearXNG adapter.
     Connect {
         name: String,
         #[arg(long)]
@@ -294,10 +293,6 @@ pub(super) enum IntegrationsAction {
         auth_type: Option<IntegrationAuthMode>,
         #[arg(long)]
         credential_reference: Option<String>,
-        #[arg(long)]
-        username_reference: Option<String>,
-        #[arg(long)]
-        password_reference: Option<String>,
         #[arg(long, default_value = "Authorization")]
         auth_header: String,
         #[arg(long)]

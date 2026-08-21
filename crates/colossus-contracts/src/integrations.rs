@@ -44,11 +44,6 @@ pub enum IntegrationAuth {
         /// Optional value prefix.
         scheme: Option<String>,
     },
-    /// Construct an HTTP Basic authorization value from named username/password refs.
-    Basic {
-        /// Header name, normally `Authorization`.
-        header: String,
-    },
     /// Send a service-account value in a configured header.
     ServiceAccount {
         /// Header name.
@@ -96,9 +91,6 @@ pub struct IntegrationConnection {
     pub auth: IntegrationAuth,
     /// Local credential handle, never its value.
     pub credential_reference: Option<String>,
-    /// Named credential handles such as OpenSearch username/password, never values.
-    #[serde(default)]
-    pub credential_references: std::collections::BTreeMap<String, String>,
     /// Declared authorization scopes.
     pub scopes: Vec<String>,
     /// Compiled operations hidden unless status is connected.
@@ -125,8 +117,6 @@ pub struct IntegrationSummary {
     pub title: String,
     /// Credential handle without a value.
     pub credential_reference: Option<String>,
-    /// Named credential handles without values.
-    pub credential_references: std::collections::BTreeMap<String, String>,
     /// Dynamic tool names.
     pub tools: Vec<String>,
     /// Last lifecycle timestamp.

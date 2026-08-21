@@ -21,7 +21,7 @@ pub enum IntegrationRequest {
     },
     /// Compile and persist one built-in native connector.
     ConnectNative {
-        /// `github`, `searxng`, or `opensearch`.
+        /// `github` or `searxng`.
         name: String,
         /// Optional endpoint override.
         base_url: Option<String>,
@@ -29,8 +29,6 @@ pub enum IntegrationRequest {
         auth: IntegrationAuth,
         /// Single bearer/API-key handle.
         credential_reference: Option<String>,
-        /// Named handles such as username/password.
-        credential_references: BTreeMap<String, String>,
         /// Declared scopes.
         scopes: Vec<String>,
     },
@@ -130,7 +128,6 @@ impl IntegrationExecutor {
                 status: connection.status,
                 title: connection.title,
                 credential_reference: connection.credential_reference,
-                credential_references: connection.credential_references,
                 tools: connection
                     .operations
                     .into_iter()
@@ -161,7 +158,7 @@ impl IntegrationExecutor {
                 .iter()
                 .any(|operation| operation.tool.name == tool_name)
             {
-                let mut credentials = connection
+                let credentials = connection
                     .credential_reference
                     .as_ref()
                     .map(|reference| {
@@ -171,13 +168,6 @@ impl IntegrationExecutor {
                         }]
                     })
                     .unwrap_or_default();
-                credentials.extend(connection.credential_references.values().map(|reference| {
-                    CredentialReference {
-                        reference: reference.clone(),
-                        value_hash: None,
-                    }
-                }));
-                credentials.sort_by(|left, right| left.reference.cmp(&right.reference));
                 return Ok(Some((
                     IntegrationRequest::Invoke {
                         connection: connection.name,
@@ -237,7 +227,6 @@ impl IntegrationExecutor {
         base_url: Option<&str>,
         auth: &IntegrationAuth,
         credential_reference: Option<&str>,
-        credential_references: &BTreeMap<String, String>,
         scopes: &[String],
     ) -> Result<IntegrationConnection, ExecutionError> {
         let existing = self.repository.get_integration(name).map_err(execution)?;
@@ -247,7 +236,6 @@ impl IntegrationExecutor {
             base_url,
             auth.clone(),
             credential_reference.map(Into::into),
-            credential_references.clone(),
             scopes.to_vec(),
             existing
                 .as_ref()
@@ -255,12 +243,7 @@ impl IntegrationExecutor {
             now,
         )
         .map_err(execution)?;
-        let missing_single =
-            credential_reference.is_some_and(|reference| resolve_environment(reference).is_err());
-        let missing_named = credential_references
-            .values()
-            .any(|reference| resolve_environment(reference).is_err());
-        if missing_single || missing_named {
+        if credential_reference.is_some_and(|reference| resolve_environment(reference).is_err()) {
             connection.status = IntegrationStatus::PendingAuth;
         }
         self.repository
@@ -338,18 +321,8 @@ impl IntegrationExecutor {
             .as_deref()
             .map(resolve_environment)
             .transpose()?;
-        let credential_values = connection
-            .credential_references
-            .iter()
-            .map(|(name, reference)| Ok((name.clone(), resolve_environment(reference)?)))
-            .collect::<Result<BTreeMap<_, _>, ExecutionError>>()?;
         let mut sensitive_values = credential_value.iter().cloned().collect::<Vec<_>>();
-        sensitive_values.extend(credential_values.values().cloned());
-        if let Some((name, value)) = auth_header(
-            &connection.auth,
-            credential_value.as_deref(),
-            &credential_values,
-        )? {
+        if let Some((name, value)) = auth_header(&connection.auth, credential_value.as_deref())? {
             if let Ok(value) = value.to_str() {
                 sensitive_values.push(value.into());
                 if let Some((_, token)) = value.split_once(' ') {
@@ -466,7 +439,6 @@ impl EffectExecutor for IntegrationExecutor {
                 base_url,
                 auth,
                 credential_reference,
-                credential_references,
                 scopes,
             } => serde_json::to_value(self.connect_native(
                 &permit,
@@ -475,7 +447,6 @@ impl EffectExecutor for IntegrationExecutor {
                 base_url.as_deref(),
                 &auth,
                 credential_reference.as_deref(),
-                &credential_references,
                 &scopes,
             )?)
             .map_err(execution)?,

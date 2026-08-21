@@ -398,8 +398,8 @@ pack-provided tools for repository-specific verification.
   `pinned` additionally needs an exact include. SearXNG and SerpAPI share a normalized
   provider-neutral result contract.
 - `mcp.call` is exposed only through an explicitly configured, allowlisted gateway.
-- Connected native integrations expose namespaced tools such as `github.*`,
-  `searxng.*`, and `opensearch.*`.
+- Connected native integrations expose namespaced tools such as `github.*` and
+  `searxng.*`.
 - Imported API operations use names like `openapi.NAME.OPERATION`.
 
 Connected integration and enabled reverified signed-pack tools enter the same access,
@@ -902,8 +902,6 @@ Baseline integrations include:
 
 - GitHub repository, issue, pull request, check, and release reads;
 - SearXNG search and health;
-- OpenSearch cluster information, health, index/mapping discovery, search, document
-  retrieval, indexing, update, and delete;
 - JSON OpenAPI import that maps path, query, and body parameters into namespaced tools;
 - configured MCP server discovery and allowlisted execution.
 
