@@ -75,9 +75,12 @@ secret values. `config init` never overwrites an existing file.
 
 The deprecated nested `research.search` adapter is no longer accepted. Move its SearXNG
 endpoint to a named top-level `search.profiles` entry and map
-`search.roles.research` to that profile. Unversioned Python-era theme files are also no
-longer imported; generate a template with interactive `/theme scaffold NAME` or convert
-them to the documented schema-version-1 format.
+`search.roles.research` to that profile. If the old configuration set an explicit access
+decision for `network.http`, add the corresponding decision for `web.search`; search is
+now evaluated as its own action and does not inherit the direct-HTTP decision.
+Unversioned Python-era theme files are also no longer imported; generate a template with
+interactive `/theme scaffold NAME` or convert them to the documented schema-version-1
+format.
 Inspect the completed file before making it active:
 
 ```bash
