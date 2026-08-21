@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_MCP_PROTOCOL_LINE_BYTES: usize = 1024 * 1024;
+
 /// Incremental, bounded observer for deciding when a protocol-aware child has
 /// completed the exchange represented by its one-shot stdin payload.
 pub(super) struct StdinCompletionMonitor {
@@ -28,10 +30,14 @@ impl StdinCompletionMonitor {
         if truncated {
             return true;
         }
-        while let Some(relative_end) = stdout[self.scanned..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-        {
+        loop {
+            let unscanned = &stdout[self.scanned..];
+            let Some(relative_end) = unscanned.iter().position(|byte| *byte == b'\n') else {
+                return unscanned.len() > MAX_MCP_PROTOCOL_LINE_BYTES;
+            };
+            if relative_end > MAX_MCP_PROTOCOL_LINE_BYTES {
+                return true;
+            }
             let line_end = self.scanned.saturating_add(relative_end);
             let line = &stdout[self.scanned..line_end];
             self.scanned = line_end.saturating_add(1);
@@ -53,6 +59,5 @@ impl StdinCompletionMonitor {
                 return true;
             }
         }
-        false
     }
 }

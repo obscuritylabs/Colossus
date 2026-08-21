@@ -342,6 +342,27 @@ fn json_rpc_stdin_completion_observes_complete_bounded_jsonl() {
     assert!(truncated.should_close(b"", true));
 }
 
+#[test]
+fn json_rpc_stdin_completion_rejects_oversized_lines_before_eof() {
+    let completion = ProcessStdinCompletion::JsonRpcResponse {
+        response_id: 2,
+        abort_error_ids: vec![1],
+    };
+    let payload = "x".repeat(1024 * 1024);
+
+    let complete_notification = format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"value\":\"{payload}\"}}}}\n"
+    );
+    let mut complete = StdinCompletionMonitor::new(&completion);
+    assert!(complete.should_close(complete_notification.as_bytes(), false));
+
+    let incomplete_notification = format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"value\":\"{payload}"
+    );
+    let mut incomplete = StdinCompletionMonitor::new(&completion);
+    assert!(incomplete.should_close(incomplete_notification.as_bytes(), false));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_process_usage_counts_threaded_program_once() {
