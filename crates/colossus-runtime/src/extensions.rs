@@ -26,13 +26,8 @@ impl Runtime {
             } => credential_reference.iter().cloned().collect::<Vec<_>>(),
             IntegrationRequest::ConnectNative {
                 credential_reference,
-                credential_references,
                 ..
-            } => credential_reference
-                .iter()
-                .cloned()
-                .chain(credential_references.values().cloned())
-                .collect(),
+            } => credential_reference.iter().cloned().collect(),
             _ => Vec::new(),
         };
         request.credential_references = references
@@ -462,7 +457,6 @@ impl Runtime {
         base_url: Option<&str>,
         auth: IntegrationAuth,
         credential_reference: Option<&str>,
-        credential_references: &BTreeMap<String, String>,
         scopes: &[String],
     ) -> Result<IntegrationConnection, RuntimeError> {
         serde_json::from_value(
@@ -471,7 +465,6 @@ impl Runtime {
                 base_url: base_url.map(Into::into),
                 auth,
                 credential_reference: credential_reference.map(Into::into),
-                credential_references: credential_references.clone(),
                 scopes: scopes.to_vec(),
             })
             .await?,

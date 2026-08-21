@@ -35,7 +35,10 @@ review.
     - keep CLI and TUI as request/render interfaces;
     - follow the [Rust crate structure](crate-structure.md) contract and keep roots thin;
     - put policy, tool, model, workflow, and state behavior in their owning services;
-    - add or update tests for every behavior change.
+    - keep tests focused on behavior and contracts that remain supported; when removing
+      a feature, remove its feature-specific tests, and retain rejection, migration, or
+      tombstone coverage only when the post-removal behavior is itself an intentional
+      compatibility or security contract.
 
 4. Iterate with the smallest relevant test tier:
 

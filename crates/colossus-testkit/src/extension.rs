@@ -35,7 +35,6 @@ where
         base_url: "https://example.com".into(),
         auth: IntegrationAuth::None,
         credential_reference: None,
-        credential_references: BTreeMap::new(),
         scopes: Vec::new(),
         operations: vec![operation],
         manifest_sha256: "0".repeat(64),

@@ -11,7 +11,7 @@ use colossus_policy::{EffectExecutor, SandboxBoundaryGate, system_actor};
 use colossus_ports::{EventJournal, ExtensionRepository};
 use colossus_testkit::{InMemoryEventJournal, assert_extension_repository_conformance};
 use serde_json::json;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 #[test]
 fn event_sourced_extension_repository_passes_shared_conformance() {
@@ -353,7 +353,7 @@ async fn remote_plaintext_integration_requires_ambient_authority_in_the_permit()
 }
 
 #[test]
-fn native_manifests_cover_github_searxng_and_opensearch_auth_contracts() {
+fn native_manifests_cover_github_and_searxng_auth_contracts() {
     let github = compile_native(
         "github",
         None,
@@ -362,7 +362,6 @@ fn native_manifests_cover_github_searxng_and_opensearch_auth_contracts() {
             scheme: "Bearer".into(),
         },
         None,
-        BTreeMap::new(),
         Vec::new(),
         "created".into(),
         "updated".into(),
@@ -377,7 +376,6 @@ fn native_manifests_cover_github_searxng_and_opensearch_auth_contracts() {
         Some("https://search.example.test/search"),
         IntegrationAuth::None,
         None,
-        BTreeMap::new(),
         Vec::new(),
         "created".into(),
         "updated".into(),
@@ -403,37 +401,4 @@ fn native_manifests_cover_github_searxng_and_opensearch_auth_contracts() {
     .expect("normalize");
     assert_eq!(normalized["count"], 1);
     assert_eq!(normalized["results"][0]["metadata"]["engine"], "demo");
-
-    let basic = BTreeMap::from([
-        ("username".into(), "env:OPENSEARCH_USER".into()),
-        ("password".into(), "env:OPENSEARCH_PASSWORD".into()),
-    ]);
-    let opensearch = compile_native(
-        "opensearch",
-        Some("https://search.example.test"),
-        IntegrationAuth::Basic {
-            header: "Authorization".into(),
-        },
-        None,
-        basic,
-        Vec::new(),
-        "created".into(),
-        "updated".into(),
-    )
-    .expect("OpenSearch");
-    assert_eq!(opensearch.status, IntegrationStatus::Connected);
-    assert_eq!(opensearch.operations.len(), 9);
-    let prepared = prepare_native_request(
-        &opensearch,
-        "opensearch.update_document",
-        &json!({
-            "index":"notes-*","id":"a b","doc":{"status":"done"},
-            "doc_as_upsert":true,"refresh":"wait_for"
-        }),
-    )
-    .expect("update request");
-    assert_eq!(prepared.method, reqwest::Method::POST);
-    assert_eq!(prepared.url.path(), "/notes-*/_update/a%20b");
-    assert_eq!(prepared.url.query(), Some("refresh=wait_for"));
-    assert_eq!(prepared.body.expect("body")["doc_as_upsert"], true);
 }
