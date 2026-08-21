@@ -8,8 +8,21 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.3] - 2026-08-21
+
+### Added
+
+- Added a revisioned global and Space managed-configuration control plane with
+  effective-value provenance, validation, immutable resource revisions, repository
+  import, diagnostics, and runtime lifecycle handling.
+- Added enhanced Desktop settings for providers, models, credentials, MCP, telemetry,
+  defaults, runtime, access, sandbox, search, research, advanced configuration,
+  authority review, and sanitized effective YAML.
+
 ### Changed
 
+- Extended the unsigned Developer Preview with the enhanced Windows Desktop settings
+  experience and its release-tested Windows x64 installer and runtime path.
 - Raised the default sandbox output ceiling from 1 MiB to 4 MiB and the process-tree
   memory ceiling from 256 MiB to 1 GiB while preserving explicit deployment overrides;
   the bounded post-effect policy input and worker protocol v15 response frame capacities
@@ -25,6 +38,13 @@ include breaking changes while the public API is still settling.
   `search.profiles` and `search.roles.research` instead.
 - Removed unversioned Python-era custom-theme imports and unused `repl_history` runtime
   aliases. Custom themes now require the documented schema-version-1 format.
+
+### Fixed
+
+- Hardened Windows private application storage, native credential handling, sidecar
+  startup, version-bound packaging, and installed-app launch behavior.
+- Preserved managed telemetry installation and historical credential revisions across
+  sidecar startup and settings changes.
 
 ## [0.10.10-preview.2] - 2026-08-18
 
