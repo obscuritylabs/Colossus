@@ -54,7 +54,10 @@ use zeroize::Zeroizing;
 #[cfg(target_os = "macos")]
 use crate::{
     macos_code_identity::{CodeDirectoryHash, MacosCodeIdentity, code_directory_hash},
-    macos_verified_process::{MacosChild, spawn_verified as spawn_verified_macos},
+    macos_verified_process::{
+        MacosChild, spawn_verified as spawn_verified_macos,
+        spawn_verified_mode as spawn_verified_macos_mode,
+    },
 };
 #[cfg(target_os = "macos")]
 type ManagedChild = MacosChild;
@@ -80,6 +83,52 @@ const MAX_VERIFIED_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const PROCESS_TREE_FREEZE_PASSES: usize = 4;
 const PROCESS_TREE_DEATH_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
+
+/// Inspect repository YAML with the exact verified sidecar and canonical Rust parser.
+#[cfg(target_os = "macos")]
+pub async fn inspect_sidecar_configuration(
+    executable: &crate::VerifiedExecutable,
+    yaml: String,
+) -> SdkResult<ConfigurationInspectionResponse> {
+    let request = ConfigurationInspectionRequest {
+        protocol_version: PROTOCOL_VERSION,
+        yaml,
+    };
+    request.validate().map_err(|_| {
+        SdkError::InvalidConfiguration("configuration inspection request is invalid")
+    })?;
+    let binding = verify_executable(executable)?;
+
+    // Keep the manifest-matching snapshot alive until the suspended child has
+    // passed dynamic CodeDirectory validation and resumed.
+    let _snapshot = binding.snapshot;
+    let (mut child, pipes) = spawn_verified_macos_mode(
+        executable.path(),
+        binding.code_directory_hash,
+        std::ffi::OsStr::new(CONFIGURATION_INSPECTION_ARGUMENT),
+    )
+    .await?;
+    let mut stdin = pipes.guardian;
+    let mut stdout = pipes.responses;
+    let exchange = async {
+        write_async_frame(&mut stdin, &request).await?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        let response = read_async_frame::<_, ConfigurationInspectionResponse>(&mut stdout).await?;
+        response.validate().map_err(|_| SdkError::SidecarFailed)?;
+        let status = child.wait().await.map_err(|_| SdkError::SidecarFailed)?;
+        if status.success() {
+            Ok(response)
+        } else {
+            Err(SdkError::SidecarFailed)
+        }
+    };
+    timeout(BOOTSTRAP_TIMEOUT, exchange)
+        .await
+        .map_err(|_| SdkError::SidecarFailed)?
+}
 
 /// Inspect repository YAML with the exact verified sidecar and canonical Rust parser.
 #[cfg(target_os = "linux")]
@@ -133,7 +182,7 @@ pub async fn inspect_sidecar_configuration(
 }
 
 /// Configuration inspection is not yet available on this Unix platform.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub async fn inspect_sidecar_configuration(
     _executable: &crate::VerifiedExecutable,
     _yaml: String,
