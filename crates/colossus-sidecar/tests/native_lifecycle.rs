@@ -5,13 +5,15 @@
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,
-    InputContentPart, InstanceId, ManagedAccessProfile, ManagedRuntimeConfig,
-    NativeSidecarLifecycle, NativeSidecarStatus, RunMode, RunStatus, Secret, Sha256Digest,
-    SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarOptions,
-    VerifiedExecutable,
+    InputContentPart, InstanceId, ManagedAccessProfile, ManagedJournalPayloadMode,
+    ManagedOtlpProtocol, ManagedRuntimeConfig, ManagedTelemetryConfig, NativeSidecarLifecycle,
+    NativeSidecarStatus, RunMode, RunStatus, Secret, Sha256Digest, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarOptions, VerifiedExecutable,
 };
+use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
 use sha2::{Digest as _, Sha256};
 use std::{
+    collections::BTreeMap,
     fs::{File, Permissions},
     io::Read as _,
     os::unix::fs::PermissionsExt as _,
@@ -19,6 +21,7 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.managed-runtime";
 
@@ -160,14 +163,27 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         Vec::<String>::new(),
     )
     .expect("grant");
-    let bootstrap = SidecarBootstrapConfig::new(
-        &workspace,
-        ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal),
-        grant,
-    )
-    .expect("bootstrap")
-    .with_expected_workspace_identity(current_workspace_identity(&workspace_metadata))
-    .expect("expected workspace identity");
+    let mut runtime_config = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal);
+    runtime_config.telemetry = Some(ManagedTelemetryConfig {
+        name: "colossus-sidecar-acceptance".into(),
+        endpoint: Some("http://127.0.0.1:9".into()),
+        protocol: ManagedOtlpProtocol::HttpProtobuf,
+        timeout_ms: 100,
+        traces_enabled: false,
+        trace_sample_ratio_millionths: 0,
+        metrics_enabled: false,
+        metric_export_interval_ms: 60_000,
+        logs_otlp: true,
+        logs_stdout_json: false,
+        journal_payloads: ManagedJournalPayloadMode::Disabled,
+        acknowledge_sensitive_content: false,
+        acknowledge_insecure_transport: false,
+        resource_attributes: BTreeMap::new(),
+    });
+    let bootstrap = SidecarBootstrapConfig::new(&workspace, runtime_config, grant)
+        .expect("bootstrap")
+        .with_expected_workspace_identity(current_workspace_identity(&workspace_metadata))
+        .expect("expected workspace identity");
     let bootstrap = bootstrap
         .with_approval_broker_grant(
             SidecarApprovalBrokerGrant::new("app:native-sidecar-acceptance", ["primary".into()])
@@ -196,6 +212,22 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         .expect("start sidecar");
     assert_eq!(lifecycle.status(), NativeSidecarStatus::Ready);
     assert_eq!(client.backend_kind(), BackendKind::Sidecar);
+    let worker = WorkerControlClient::new(
+        worker_ipc_endpoint(&instance_dir.join("state.redb")).expect("worker endpoint"),
+        Zeroizing::new([0x5a; 32]),
+    )
+    .expect("worker control client");
+    let diagnostic = worker
+        .observability_doctor()
+        .await
+        .expect("managed observability diagnostic");
+    let log_check = diagnostic["checks"]
+        .as_array()
+        .expect("diagnostic checks")
+        .iter()
+        .find(|check| check["name"] == "logs")
+        .expect("logs diagnostic");
+    assert_ne!(log_check["status"], "not_applicable");
     let created = client
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text("managed sidecar self-test".into())],

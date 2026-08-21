@@ -426,6 +426,30 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
             return Err(FailureCode::CredentialActivation);
         }
     }
+    let observability =
+        match colossus_observability::ObservabilityGuard::install(&config.observability) {
+            Ok(observability) => observability,
+            Err(_) => {
+                let _ = credentials.revoke_batch(&credential_ids);
+                return Err(FailureCode::RuntimeFailed);
+            }
+        };
+    let observability_diagnostics = observability
+        .as_ref()
+        .map(colossus_observability::ObservabilityGuard::diagnostics)
+        .unwrap_or_default();
+    let server = server.with_observability_diagnostics(move || {
+        serde_json::to_value(observability_diagnostics.force_flush()).unwrap_or_else(|_| {
+            serde_json::json!({
+                "ready": false,
+                "checks": [{
+                    "name": "host",
+                    "status": "fail",
+                    "detail": "The exporter diagnostic failed safely."
+                }]
+            })
+        })
+    });
     let activated_result = {
         let mut output = std::io::stdout().lock();
         write_frame(
@@ -469,6 +493,9 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     // runtime failure). Revoke idempotently on every exit path so neither active
     // bootstrap credential survives the supervised sidecar process.
     let _ = credentials.revoke_batch(&credential_ids);
+    if let Some(observability) = observability {
+        observability.shutdown();
+    }
     serve_result.map_err(|_| FailureCode::RuntimeFailed)
 }
 
