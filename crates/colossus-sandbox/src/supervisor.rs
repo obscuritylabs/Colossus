@@ -178,18 +178,6 @@ pub(super) fn supervise(
     if std::env::var_os(NATIVE_INNER_VARIABLE).is_some() {
         announce_native_target(child.id())?;
     }
-    if let Some(encoded) = &job.process.stdin_base64 {
-        let input = BASE64
-            .decode(encoded)
-            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
-        let mut stdin = child
-            .inner()
-            .stdin
-            .take()
-            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?;
-        stdin.write_all(&input)?;
-    }
-    drop(child.inner().stdin.take());
     let stdout = child
         .inner()
         .stdout
@@ -208,6 +196,25 @@ pub(super) fn supervise(
     }));
     let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
     let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
+    let mut stdin = child.inner().stdin.take();
+    if let Some(encoded) = &job.process.stdin_base64 {
+        let input = BASE64
+            .decode(encoded)
+            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+        let stdin = stdin
+            .as_mut()
+            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?;
+        stdin.write_all(&input)?;
+        stdin.flush()?;
+    }
+    let mut completion = job
+        .process
+        .stdin_completion
+        .as_ref()
+        .map(StdinCompletionMonitor::new);
+    if completion.is_none() {
+        drop(stdin.take());
+    }
     let started = Instant::now();
     let timeout = Duration::from_millis(job.timeout_ms);
     let mut system = System::new();
@@ -218,6 +225,19 @@ pub(super) fn supervise(
             // Always terminate remaining descendants before returning a terminal result.
             let _ = child.kill();
             break (status, false, None);
+        }
+        if let Some(completion) = completion.as_mut()
+            && stdin.is_some()
+        {
+            let close = {
+                let state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                completion.should_close(&state.stdout, state.truncated)
+            };
+            if close {
+                drop(stdin.take());
+            }
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
@@ -281,16 +301,17 @@ pub(super) fn process_tree_usage(system: &mut System, root: SystemPid) -> Proces
         ProcessRefreshKind::nothing().with_memory(),
     );
     let members = process_tree_members(system, root);
-    let memory = members
+    let (processes, memory) = members
         .iter()
         .filter_map(|pid| system.process(*pid))
-        .fold(0_u64, |total, process| {
-            total.saturating_add(process.memory())
+        .filter(|process| process.thread_kind().is_none())
+        .fold((0_usize, 0_u64), |(count, total), process| {
+            (
+                count.saturating_add(1),
+                total.saturating_add(process.memory()),
+            )
         });
-    ProcessTreeUsage {
-        processes: members.len(),
-        memory,
-    }
+    ProcessTreeUsage { processes, memory }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

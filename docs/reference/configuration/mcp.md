@@ -136,8 +136,11 @@ authority.
 
 Stdio MCP is a process effect. The MCP child receives only permit-authorized process,
 filesystem, environment, network, time, output, process-count, and memory obligations.
-The server owns its own TLS implementation and does not inherit
-`network.caBundlePath`.
+Colossus writes one initialized request batch and keeps stdin open only until the final
+operation response, an initialization error, malformed or truncated protocol output,
+child exit, or the effect timeout. It then closes stdin and supervises cleanup. Each
+discovery page and tool call still uses a fresh process. The server owns its own TLS
+implementation and does not inherit `network.caBundlePath`.
 
 ## Remote Streamable HTTP servers
 

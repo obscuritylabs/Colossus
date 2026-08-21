@@ -306,6 +306,9 @@ pub(super) fn oci_command(
         .env_clear()
         .env("PATH", oci_runtime_search_path(runtime)?)
         .args(["run", "--rm", "--pull=never"]);
+    if job.process.stdin_base64.is_some() {
+        command.arg("--interactive");
+    }
     let (uid, gid) = oci_mount_identity(&job.process.cwd)?;
     if runtime_kind == OciRuntimeKind::Podman {
         command.arg("--userns=keep-id");

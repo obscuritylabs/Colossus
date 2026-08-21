@@ -60,7 +60,9 @@ use rappct::{
 
 mod common;
 use common::*;
-pub use common::{ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig, sandbox_doctor};
+pub use common::{
+    ProcessSpec, ProcessStdinCompletion, SandboxDoctorReport, SandboxExecutorConfig, sandbox_doctor,
+};
 
 mod filesystem;
 pub use filesystem::FilesystemExecutor;
@@ -76,6 +78,9 @@ pub use helper::{SandboxHelperError, run_helper_stdio, run_native_protection_pro
 
 mod oci;
 use oci::*;
+
+mod stdin_completion;
+use stdin_completion::*;
 
 mod supervisor;
 use supervisor::*;

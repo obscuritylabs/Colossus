@@ -203,6 +203,7 @@ pub(super) fn tool_process_spec(
         args,
         environment,
         stdin_base64: None,
+        stdin_completion: None,
         timeout_ms,
         max_output_bytes,
     }

@@ -1398,6 +1398,10 @@ impl EffectExecutor for McpExecutor {
             args: server.args.clone(),
             environment,
             stdin_base64: Some(BASE64.encode(protocol)),
+            stdin_completion: Some(ProcessStdinCompletion::JsonRpcResponse {
+                response_id: MCP_REQUEST_ID,
+                abort_error_ids: vec![INITIALIZE_REQUEST_ID],
+            }),
             timeout_ms: server.timeout_ms,
             max_output_bytes: server.max_output_bytes,
         };
