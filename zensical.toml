@@ -1,7 +1,7 @@
 [project]
 site_name = "Colossus"
 site_url = "https://obscuritylabs.github.io/Colossus/"
-site_description = "Professional documentation for using, extending, administering, and developing the Colossus agent runtime."
+site_description = "Documentation for operating auditable, sandboxed AI agents in online and offline mission environments."
 site_author = "Obscurity Labs"
 copyright = """Copyright &copy; 2026 Obscurity Labs · <a href="https://github.com/obscuritylabs/Colossus/releases">Releases</a> · <a href="https://github.com/obscuritylabs/Colossus/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/obscuritylabs/Colossus/blob/main/SECURITY.md">Report a vulnerability</a> · <a href="https://github.com/obscuritylabs/Colossus/blob/main/LICENSE">License</a> · <a href="https://github.com/obscuritylabs/Colossus">Repository</a>"""
 docs_dir = "docs"

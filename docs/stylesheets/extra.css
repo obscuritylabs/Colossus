@@ -151,24 +151,32 @@ body:has(.home-page) .md-content__button {
 
 .md-typeset .home-hero {
   display: block;
-  min-height: 15rem;
-  padding: 0.7rem 0 2.4rem 0.7rem;
+  padding: 1.2rem 0 1.8rem 0.7rem;
+}
+
+.md-typeset .home-eyebrow {
+  color: var(--md-typeset-a-color);
+  font-size: 0.62rem;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  margin: 0 0 0.55rem;
 }
 
 .md-typeset .home-hero__copy h1 {
   color: var(--md-default-fg-color);
-  font-size: clamp(2.4rem, 4vw, 2.8rem);
+  font-size: clamp(2.35rem, 5vw, 3.35rem);
   letter-spacing: -0.03em;
-  line-height: 1.04;
+  line-height: 1.02;
   margin: 0 0 0.8rem;
+  max-width: 48rem;
 }
 
 .md-typeset .home-lede {
   color: var(--colossus-home-muted);
-  font-size: 0.9rem;
-  line-height: 1.78;
+  font-size: 0.96rem;
+  line-height: 1.68;
   margin: 0;
-  max-width: 34rem;
+  max-width: 49rem;
 }
 
 .md-typeset .home-actions {
@@ -203,10 +211,20 @@ body:has(.home-page) .md-content__button {
   color: #fff;
 }
 
+.md-typeset .home-alpha {
+  border-left: 0.16rem solid var(--md-typeset-a-color);
+  color: var(--colossus-home-muted);
+  font-size: 0.67rem;
+  line-height: 1.55;
+  margin: 1.15rem 0 0;
+  max-width: 43rem;
+  padding-left: 0.75rem;
+}
+
 .md-typeset figure.home-proof {
   background: var(--colossus-navy-950);
   border: 1px solid var(--colossus-home-proof-line);
-  border-radius: 0.3rem;
+  border-radius: 0.45rem;
   box-shadow: 0 0.7rem 2rem rgb(3 17 31 / 14%);
   color: #dceeff;
   display: block;
@@ -228,6 +246,16 @@ body:has(.home-page) .md-content__button {
   width: 100%;
 }
 
+.md-typeset .home-proof__caption {
+  background: var(--colossus-navy-950);
+  border-top: 1px solid var(--colossus-home-proof-line);
+  color: #aec8dc;
+  font-size: 0.63rem;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0.65rem 0.85rem 0.75rem;
+}
+
 .md-typeset figure.home-proof:focus-visible {
   outline: 0.15rem solid var(--md-accent-fg-color);
   outline-offset: 0.15rem;
@@ -243,7 +271,7 @@ body:has(.home-page) .md-content__button {
 }
 
 .md-typeset .home-outcomes {
-  margin-top: 0;
+  margin-top: 2.4rem;
 }
 
 .md-typeset .home-visually-hidden {
@@ -304,14 +332,14 @@ body:has(.home-page) .md-content__button {
 }
 
 .md-typeset .home-outcome h3 {
-  font-size: 0.8rem;
+  font-size: 0.86rem;
   margin: 0 0 0.25rem;
 }
 
 .md-typeset .home-outcome p {
   color: var(--colossus-home-muted);
-  font-size: 0.67rem;
-  line-height: 1.45;
+  font-size: 0.69rem;
+  line-height: 1.5;
   margin: 0 0 0.35rem;
 }
 
@@ -328,6 +356,7 @@ body:has(.home-page) .md-content__button {
 .md-typeset .home-section-intro {
   color: var(--colossus-home-muted);
   margin: 0;
+  max-width: 47rem;
 }
 
 .md-typeset .home-audience-grid {
@@ -512,7 +541,7 @@ body:has(.home-page) .md-content__button {
   }
 
   .md-typeset .home-proof__image {
-    min-width: 42rem;
+    min-width: 52rem;
   }
 
   .md-typeset .home-audience-grid {

@@ -28,14 +28,20 @@ END {
     line = escape_xml(rows[row])
     if (row == 1) {
       print "<span foreground=\"#7dd3fc\" weight=\"bold\">" line "</span>"
+    } else if (row == 2) {
+      print "<span foreground=\"#7dd3fc\">" line "</span>"
     } else if (row == 4) {
       print "<span foreground=\"#e6f3ff\" weight=\"bold\">" line "</span>"
-    } else if (row == 9) {
-      print "<span foreground=\"#c2d6e8\">" line
-    } else if (row == 11) {
-      print line "</span>"
-    } else if (row == 12) {
+    } else if (row == 5 || (row >= 8 && row <= 10) || row == 12 || row == 18) {
       print "<span foreground=\"#aec8dc\">" line "</span>"
+    } else if (row == 7) {
+      print "<span foreground=\"#7dd3fc\" weight=\"bold\">" line "</span>"
+    } else if (row == 13 || row == 17) {
+      print "<span foreground=\"#e6f3ff\">" line "</span>"
+    } else if (row == 14 || row == 16 || row == 24) {
+      print "<span foreground=\"#facc15\" weight=\"bold\">" line "</span>"
+    } else if (row >= 21 && row <= 23) {
+      print "<span foreground=\"#c2d6e8\">" line "</span>"
     } else {
       print line
     }
