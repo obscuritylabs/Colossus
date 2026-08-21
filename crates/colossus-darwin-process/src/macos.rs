@@ -581,9 +581,16 @@ mod tests {
     use super::*;
     use std::io::{Read as _, Write as _};
     use std::os::fd::IntoRawFd as _;
+    use std::sync::Mutex;
+
+    // File descriptor numbers are process-global and may be reused immediately after
+    // close. Keep these tests from opening pipes concurrently so assertions about a
+    // consumed descriptor cannot observe a descriptor opened by a sibling test.
+    static FILE_DESCRIPTOR_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn start_suspended_pipe_child_cannot_write_before_resume() {
+        let _guard = FILE_DESCRIPTOR_TEST_LOCK.lock().expect("lock fd tests");
         let mut spawned = spawn_suspended_pipes(
             Path::new("/bin/echo"),
             &[OsString::from("unverified-image-ran")],
@@ -605,6 +612,7 @@ mod tests {
 
     #[test]
     fn tty_authentication_uses_only_fixed_inherited_descriptors() {
+        let _guard = FILE_DESCRIPTOR_TEST_LOCK.lock().expect("lock fd tests");
         let mut spawned = spawn_suspended_tty(
             Path::new("/bin/sh"),
             &[
@@ -632,6 +640,7 @@ mod tests {
 
     #[test]
     fn inherited_authentication_descriptors_are_consumed() {
+        let _guard = FILE_DESCRIPTOR_TEST_LOCK.lock().expect("lock fd tests");
         let (input_read, input_write) = cloexec_pipe().expect("input pipe");
         let (output_read, output_write) = cloexec_pipe().expect("output pipe");
         let input_fd = input_read.into_raw_fd();
