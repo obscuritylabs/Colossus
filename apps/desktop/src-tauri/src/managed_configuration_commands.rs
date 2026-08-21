@@ -2343,7 +2343,12 @@ mod tests {
         assert!(dependents.contains(&"Provider Primary revision history".into()));
         assert!(dependents.contains(&"Search profile Engineering revision history".into()));
         assert!(dependents.contains(&"MCP server Docs revision history".into()));
-        assert!(settings.spaces[0].configuration.catalog_revisions.is_empty());
+        assert!(
+            settings.spaces[0]
+                .configuration
+                .catalog_revisions
+                .is_empty()
+        );
     }
 
     fn model(name: &str) -> ModelSetting {
