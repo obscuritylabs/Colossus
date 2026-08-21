@@ -96,18 +96,6 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Compatibility alias for callers using the original interactive surface name.
-    #[deprecated(note = "use Runtime::terminal_history")]
-    pub fn repl_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
-        self.terminal_history(limit)
-    }
-
-    /// Compatibility alias for callers using the original interactive surface name.
-    #[deprecated(note = "use Runtime::append_terminal_history")]
-    pub async fn append_repl_history(&self, entry: &str) -> Result<String, RuntimeError> {
-        self.append_terminal_history(entry).await
-    }
-
     /// Create a durable empty session.
     pub fn create_session(&self, title: Option<&str>) -> Result<SessionSummary, RuntimeError> {
         let id = Uuid::now_v7().to_string();

@@ -15,6 +15,16 @@ include breaking changes while the public API is still settling.
   the bounded post-effect policy input and worker protocol v15 response frame capacities
   also rise so permitted large results survive policy inspection and authenticated IPC
   encoding.
+- Moved the optional SearXNG development stack from the repository root to
+  `examples/services/` and replaced the stale internal reconstruction archive with a
+  current feature inventory, Rust practices, test strategy, and architecture decisions.
+
+### Removed
+
+- Removed the deprecated nested `research.search` adapter; configure named top-level
+  `search.profiles` and `search.roles.research` instead.
+- Removed unversioned Python-era custom-theme imports and unused `repl_history` runtime
+  aliases. Custom themes now require the documented schema-version-1 format.
 
 ## [0.10.10-preview.2] - 2026-08-18
 

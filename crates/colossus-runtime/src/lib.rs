@@ -188,9 +188,9 @@ pub use composition::Runtime;
 pub use config::{
     AgentConfig, AuditConfig, AuditExporterConfig, KeyConfig, MemoryConfig, MemoryEmbeddingConfig,
     ModelProfileConfig, ModelsConfig, NetworkConfig, PacksConfig, PolicyConfig,
-    ProviderProfileConfig, ProvidersConfig, ResearchConfig, ResearchSearchConfig, RuntimeConfig,
-    SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig,
-    StorageAdapter, StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
+    ProviderProfileConfig, ProvidersConfig, ResearchConfig, RuntimeConfig, SandboxConfig,
+    SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig, StorageAdapter,
+    StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;

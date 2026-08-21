@@ -46,16 +46,6 @@ verify_site() {
     echo "homepage does not preload the pinned local Mermaid runtime" >&2
     exit 1
   fi
-  if grep -Fq '"location":"internal/documentation' "${site_dir}/search.json" ||
-    grep -Fq '/internal/documentation/' "${site_dir}/sitemap.xml" ||
-    grep -Fq 'Colossus Product Requirements And Reconstruction Specification' \
-      "${site_dir}/search.json" ||
-    grep -Fq 'Colossus Product Requirements And Reconstruction Specification' \
-      "${site_dir}/sitemap.xml"; then
-    echo "repository-only documentation leaked into published artifacts" >&2
-    exit 1
-  fi
-
   while IFS=$'\t' read -r legacy_path _target_path _fragment_map _extra_field ||
     [[ -n "${legacy_path}" ]]; do
     if [[ -z "${legacy_path}" || "${legacy_path}" == \#* ]]; then

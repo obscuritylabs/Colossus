@@ -133,8 +133,6 @@ memory:
 research:
   maxSources: 20
   maxWorkers: 4
-  search:
-    kind: disabled
 search:
   profiles: {}
   roles: {}

@@ -5,6 +5,8 @@ This file is the short map. Keep deeper details in `docs/`.
 - Read `docs/develop/architecture.md` before changing boundaries.
 - Read `docs/develop/security-architecture.md` before changing tools, subprocess
   execution, policy, audit, or bundle handling.
+- Follow `docs/develop/rust-practices.md` for nontrivial Rust changes and
+  `docs/develop/testing.md` when adding, moving, or removing tests.
 - Keep `domain` dependency-free.
 - Keep CLI and TUI as interfaces only; no model, tool, policy, or state logic
   should live there.
@@ -16,7 +18,7 @@ This file is the short map. Keep deeper details in `docs/`.
 - Tests should protect behavior and contracts that remain supported. When removing a
   feature, remove its feature-specific tests. Add rejection, migration, or tombstone
   tests only when the post-removal behavior is itself an intentional compatibility or
-  security contract.
+  security contract. Add or update tests for every other behavior change.
 - Before merging, inspect unresolved human and automated review threads plus required
   checks. Address actionable findings in code and tests; see `docs/develop/contributing.md`.
 - Rust is the active root implementation. Python 0.5 is retained only on

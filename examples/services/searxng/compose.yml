@@ -10,7 +10,7 @@ services:
       SEARXNG_SECRET: "${SEARXNG_SECRET:-colossus-local-dev-change-me}"
       SEARXNG_LIMITER: "false"
     volumes:
-      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./settings.yml:/etc/searxng/settings.yml:ro
       - searxng-cache:/var/cache/searxng
 
 volumes:
