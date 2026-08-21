@@ -9,9 +9,10 @@ use crate::{
     desktop_commands::{connect_guard, settings_store},
     desktop_dto::ManagedRuntimeStateDto,
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ModelSetting,
-        ProviderSetting, SettingsStore, delete_provider_secret, managed_model_setting_is_valid,
-        managed_provider_setting_is_valid, store_provider_secret,
+        AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting,
+        MAX_PENDING_PROVIDER_CLEANUPS, ModelSetting, ProviderSetting, SettingsStore,
+        delete_provider_secret, managed_model_setting_is_valid, managed_provider_setting_is_valid,
+        store_provider_secret,
     },
     dto::CommandErrorDto,
     managed_configuration::{
@@ -486,7 +487,14 @@ pub(crate) async fn delete_managed_credential(
             "Legacy provider credentials must be replaced through the provider editor.",
         ));
     }
-    delete_provider_secret(&credential.id)?;
+    if settings.pending_provider_cleanup_ids.len() >= MAX_PENDING_PROVIDER_CLEANUPS {
+        return Err(CommandErrorDto::busy(
+            "Pending credential cleanup must finish before another credential can be deleted.",
+        ));
+    }
+    settings
+        .pending_provider_cleanup_ids
+        .push(credential.id.clone());
     settings
         .global_configuration
         .credentials
@@ -494,6 +502,11 @@ pub(crate) async fn delete_managed_credential(
     let previous_revision = settings.global_configuration.revision;
     bump_global_revision(&mut settings.global_configuration)?;
     advance_unaffected_spaces(&mut settings, previous_revision, &BTreeSet::new());
+    store.save(&settings)?;
+    delete_provider_secret(&credential.id)?;
+    settings
+        .pending_provider_cleanup_ids
+        .retain(|candidate| candidate != &credential.id);
     store.save(&settings)?;
     snapshot(state.inner(), &settings).await
 }
@@ -1255,22 +1268,30 @@ fn credential_dependents(settings: &DesktopSettings, credential_id: &str) -> Vec
         }
     }
     for entry in &settings.global_configuration.providers {
-        if current_value(entry)
-            .is_some_and(|provider| provider.credential_id.as_deref() == Some(credential_id))
+        if entry
+            .revisions
+            .iter()
+            .any(|revision| revision.value.credential_id.as_deref() == Some(credential_id))
         {
-            dependents.insert(format!("Provider {}", entry.label));
+            dependents.insert(format!("Provider {} revision history", entry.label));
         }
     }
     for entry in &settings.global_configuration.search_providers {
-        if current_value(entry)
-            .is_some_and(|search| search.credential_id.as_deref() == Some(credential_id))
+        if entry
+            .revisions
+            .iter()
+            .any(|revision| revision.value.credential_id.as_deref() == Some(credential_id))
         {
-            dependents.insert(format!("Search profile {}", entry.label));
+            dependents.insert(format!("Search profile {} revision history", entry.label));
         }
     }
     for entry in &settings.global_configuration.mcp_servers {
-        if current_value(entry).is_some_and(|mcp| mcp_uses_credential(mcp, credential_id)) {
-            dependents.insert(format!("MCP server {}", entry.label));
+        if entry
+            .revisions
+            .iter()
+            .any(|revision| mcp_uses_credential(&revision.value, credential_id))
+        {
+            dependents.insert(format!("MCP server {} revision history", entry.label));
         }
     }
     dependents.into_iter().collect()
@@ -2225,6 +2246,104 @@ mod tests {
                 .iter()
                 .any(|dependent| dependent.contains("Space One"))
         );
+    }
+
+    #[test]
+    fn credential_dependents_include_unpinned_historical_catalog_revisions() {
+        let mut settings = settings();
+        let mut old_provider = provider("https://old.example.test/v1");
+        old_provider.credential_id = Some("credential-old".into());
+        let mut new_provider = provider("https://new.example.test/v1");
+        new_provider.credential_id = Some("credential-new".into());
+        settings.global_configuration.providers = vec![CatalogEntrySetting {
+            id: "provider-main".into(),
+            label: "Primary".into(),
+            current_revision: 2,
+            archived: false,
+            revisions: vec![
+                CatalogRevisionSetting {
+                    revision: 1,
+                    value: old_provider,
+                },
+                CatalogRevisionSetting {
+                    revision: 2,
+                    value: new_provider,
+                },
+            ],
+        }];
+        settings.global_configuration.search_providers = vec![CatalogEntrySetting {
+            id: "search-main".into(),
+            label: "Engineering".into(),
+            current_revision: 2,
+            archived: false,
+            revisions: vec![
+                CatalogRevisionSetting {
+                    revision: 1,
+                    value: SearchProviderSetting {
+                        profile: "search-main".into(),
+                        kind: crate::managed_configuration::SearchProviderKindSetting::Searxng,
+                        endpoint: "https://old-search.example.test/search".into(),
+                        credential_id: Some("credential-old".into()),
+                        auth_header: Some("X-Api-Key".into()),
+                        timeout_ms: 30_000,
+                    },
+                },
+                CatalogRevisionSetting {
+                    revision: 2,
+                    value: SearchProviderSetting {
+                        profile: "search-main".into(),
+                        kind: crate::managed_configuration::SearchProviderKindSetting::Searxng,
+                        endpoint: "https://new-search.example.test/search".into(),
+                        credential_id: Some("credential-new".into()),
+                        auth_header: Some("X-Api-Key".into()),
+                        timeout_ms: 30_000,
+                    },
+                },
+            ],
+        }];
+        let mcp_server = |credential_id: &str| McpServerSetting {
+            name: "docs".into(),
+            transport: crate::managed_configuration::McpTransportSetting::Stdio,
+            command: Some("docs-mcp".into()),
+            args: Vec::new(),
+            working_directory: None,
+            environment_credentials: BTreeMap::from([(
+                "DOCS_API_KEY".into(),
+                credential_id.into(),
+            )]),
+            url: None,
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: false,
+            oauth: None,
+            allowed_tools: vec!["search".into()],
+            research_tools: Vec::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+        };
+        settings.global_configuration.mcp_servers = vec![CatalogEntrySetting {
+            id: "mcp-docs".into(),
+            label: "Docs".into(),
+            current_revision: 2,
+            archived: false,
+            revisions: vec![
+                CatalogRevisionSetting {
+                    revision: 1,
+                    value: mcp_server("credential-old"),
+                },
+                CatalogRevisionSetting {
+                    revision: 2,
+                    value: mcp_server("credential-new"),
+                },
+            ],
+        }];
+
+        let dependents = credential_dependents(&settings, "credential-old");
+
+        assert!(dependents.contains(&"Provider Primary revision history".into()));
+        assert!(dependents.contains(&"Search profile Engineering revision history".into()));
+        assert!(dependents.contains(&"MCP server Docs revision history".into()));
+        assert!(settings.spaces[0].configuration.catalog_revisions.is_empty());
     }
 
     fn model(name: &str) -> ModelSetting {
