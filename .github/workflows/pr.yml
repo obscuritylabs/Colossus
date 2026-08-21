@@ -191,13 +191,13 @@ jobs:
     if: needs.classify.outputs.docs_required == 'true'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build and verify documentation
-        run: ./scripts/docs-site build
+        run: cargo xtask check docs
 
       - name: Upload bounded documentation preview
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

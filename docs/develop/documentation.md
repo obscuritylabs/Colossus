@@ -69,10 +69,10 @@ Zensical route.
 8. Add the page to explicit `zensical.toml` navigation and use lowercase directory
    routes. If replacing a historical URL, update the checked-in redirect manifest.
 
-9. Build with the repository wrapper:
+9. Validate the site and its executable examples with the repository gate:
 
     ```bash
-    ./scripts/docs-site build
+    cargo xtask check docs
     ```
 
     Preview locally with:
@@ -91,8 +91,8 @@ canonical contract.
 
 Check the page at mobile and desktop widths in both color schemes. Verify keyboard focus,
 overflow, tables, code copy, search discovery, diagrams, missing assets, and browser
-console errors. Run the focused documentation contract before the repository completion
-gates.
+console errors. The documentation gate builds the site in strict mode and runs published
+configuration and workflow examples through the Rust parsers.
 
 ## Failure path
 
