@@ -29,6 +29,9 @@ use thiserror::Error;
 mod control;
 pub use control::*;
 
+mod credentials;
+pub use credentials::*;
+
 mod journal;
 pub use journal::*;
 

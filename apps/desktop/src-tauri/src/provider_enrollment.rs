@@ -78,11 +78,17 @@ async fn kill_and_reap(child: &mut tokio::process::Child) {
 
 #[cfg(target_os = "windows")]
 pub(crate) async fn request_provider_secret() -> Result<Zeroizing<String>, CommandErrorDto> {
+    request_managed_credential_secret().await
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) async fn request_managed_credential_secret() -> Result<Zeroizing<String>, CommandErrorDto>
+{
     let secret = tokio::task::spawn_blocking(|| {
         colossus_windows_native::prompt_secret(
-            "Configure a model provider for Colossus",
-            "Enter the credential for this model provider. Colossus will store it in Windows Credential Manager.",
-            "com.obscuritylabs.colossus.desktop/provider",
+            "Configure a Colossus credential",
+            "Enter the credential. Colossus will store it in Windows Credential Manager and will not expose it to the app window.",
+            "com.obscuritylabs.colossus.desktop/credential",
             MAX_PROVIDER_SECRET_BYTES,
         )
     })
@@ -96,6 +102,18 @@ pub(crate) async fn request_provider_secret() -> Result<Zeroizing<String>, Comma
     })?;
     validate_secret(&secret)?;
     Ok(secret)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn request_managed_credential_secret() -> Result<Zeroizing<String>, CommandErrorDto>
+{
+    request_provider_secret().await
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn request_managed_credential_secret()
+-> impl std::future::Future<Output = Result<Zeroizing<String>, CommandErrorDto>> {
+    request_provider_secret()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

@@ -205,26 +205,8 @@ impl From<url::ParseError> for ProviderError {
     }
 }
 
-/// Resolves a credential only after the gateway has supplied a permit.
-pub trait CredentialResolver: Send + Sync {
-    /// Resolve a configured reference. Implementations must not log the returned value.
-    fn resolve(&self, reference: &str) -> Result<String, ProviderError>;
-}
-
-/// Environment-only credential resolver for the first Rust provider milestone.
-#[derive(Default)]
-pub struct EnvironmentCredentialResolver;
-
-impl CredentialResolver for EnvironmentCredentialResolver {
-    fn resolve(&self, reference: &str) -> Result<String, ProviderError> {
-        let variable = reference.strip_prefix("env:").ok_or_else(|| {
-            ProviderError::Credential("credential reference is not environment-backed".into())
-        })?;
-        std::env::var(variable).map_err(|_| {
-            ProviderError::Credential(format!("environment variable {variable} is unset"))
-        })
-    }
-}
+use colossus_ports::CredentialResolutionError;
+pub use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 
 /// In-memory host credential resolver used by application-managed runtimes.
 ///
@@ -283,22 +265,16 @@ impl fmt::Debug for HostCredentialResolver {
 }
 
 impl CredentialResolver for HostCredentialResolver {
-    fn resolve(&self, reference: &str) -> Result<String, ProviderError> {
+    fn resolve(&self, reference: &str) -> Result<String, CredentialResolutionError> {
         if let Some(identifier) = reference.strip_prefix("host:") {
             if !valid_host_credential_identifier(identifier) {
-                return Err(ProviderError::Credential(
-                    "host credential reference is invalid".into(),
-                ));
+                return Err(CredentialResolutionError::InvalidReference);
             }
             return self
                 .credentials
                 .get(identifier)
                 .map(|secret| secret.as_str().to_owned())
-                .ok_or_else(|| {
-                    ProviderError::Credential(format!(
-                        "host credential {identifier} is unavailable"
-                    ))
-                });
+                .ok_or(CredentialResolutionError::Unavailable);
         }
         self.environment.resolve(reference)
     }

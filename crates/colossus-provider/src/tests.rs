@@ -118,7 +118,7 @@ impl CountingCredentialResolver {
 }
 
 impl CredentialResolver for CountingCredentialResolver {
-    fn resolve(&self, reference: &str) -> Result<String, ProviderError> {
+    fn resolve(&self, reference: &str) -> Result<String, CredentialResolutionError> {
         assert_eq!(reference, "env:UNIT_PROVIDER_KEY");
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok("unit-secret".into())
@@ -136,7 +136,7 @@ impl CountingHostCredentialResolver {
 }
 
 impl CredentialResolver for CountingHostCredentialResolver {
-    fn resolve(&self, reference: &str) -> Result<String, ProviderError> {
+    fn resolve(&self, reference: &str) -> Result<String, CredentialResolutionError> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.resolver.resolve(reference)
     }

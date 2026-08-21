@@ -214,6 +214,23 @@ fn streamable_http_config_accepts_env_credentials_and_rejects_unsafe_http_identi
         .servers
         .get_mut("splunk")
         .expect("server")
+        .credential_headers
+        .get_mut("Authorization")
+        .expect("credential header")
+        .reference = "host:mcp-splunk-token".into();
+    validate(&config).expect("injected host credential does not require an environment grant");
+    config
+        .servers
+        .get_mut("splunk")
+        .expect("server")
+        .credential_headers
+        .get_mut("Authorization")
+        .expect("credential header")
+        .reference = "env:SPLUNK_MCP_TOKEN".into();
+    config
+        .servers
+        .get_mut("splunk")
+        .expect("server")
         .allow_stateless = true;
     validate(&config).expect("explicit stateless remote server");
     config.servers.get_mut("splunk").expect("server").url = Some("http://[::1]:8787/mcp".into());
@@ -541,7 +558,7 @@ async fn remote_plaintext_mcp_requires_ambient_authority_in_the_permit() {
         .execute(request(), &executor)
         .await
         .expect_err("missing credential must stop before dispatch");
-    assert!(error.to_string().contains("environment variable"));
+    assert!(error.to_string().contains("credential is unavailable"));
     assert!(
         !error
             .to_string()

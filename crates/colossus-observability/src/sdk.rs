@@ -1,7 +1,11 @@
 use crate::{
     ObservabilityConfig, ObservabilityError, OtlpProtocol, Signal, install_trace_context_propagator,
 };
-use opentelemetry::{Key, KeyValue, global, trace::TracerProvider as _};
+use opentelemetry::{
+    Key, KeyValue, global,
+    metrics::MeterProvider as _,
+    trace::{Span as _, Tracer as _, TracerProvider as _},
+};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::{
@@ -10,6 +14,7 @@ use opentelemetry_sdk::{
     metrics::{Aggregation, Instrument, PeriodicReader, SdkMeterProvider, Stream},
     trace::{Sampler, SdkTracerProvider},
 };
+use serde::Serialize;
 use std::time::Duration;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -26,6 +31,34 @@ pub struct ObservabilityGuard {
     logger_provider: Option<SdkLoggerProvider>,
     stdout_guard: Option<WorkerGuard>,
     shutdown_timeout: Duration,
+}
+
+/// Cloneable, secret-free validation handle for the host-owned OTLP providers.
+#[derive(Clone, Default)]
+pub struct ObservabilityDiagnostics {
+    tracer_provider: Option<SdkTracerProvider>,
+    meter_provider: Option<SdkMeterProvider>,
+    logger_provider: Option<SdkLoggerProvider>,
+}
+
+/// Bounded result returned to trusted local control clients.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ObservabilityDiagnosticReport {
+    /// Whether every enabled exporter acknowledged the flush.
+    pub ready: bool,
+    /// Per-signal bounded readiness checks.
+    pub checks: Vec<ObservabilityDiagnosticCheck>,
+}
+
+/// One exporter signal result without endpoints, credentials, payloads, or errors.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ObservabilityDiagnosticCheck {
+    /// Stable OTLP signal name.
+    pub name: &'static str,
+    /// Stable `pass`, `fail`, or `not_applicable` status.
+    pub status: &'static str,
+    /// Constant renderer-safe explanation.
+    pub detail: &'static str,
 }
 
 impl ObservabilityGuard {
@@ -112,6 +145,15 @@ impl ObservabilityGuard {
         self.finish();
     }
 
+    /// Return a cloneable diagnostic handle without transferring shutdown ownership.
+    pub fn diagnostics(&self) -> ObservabilityDiagnostics {
+        ObservabilityDiagnostics {
+            tracer_provider: self.tracer_provider.clone(),
+            meter_provider: self.meter_provider.clone(),
+            logger_provider: self.logger_provider.clone(),
+        }
+    }
+
     fn finish(&mut self) {
         if let Some(provider) = self.logger_provider.take() {
             let _ = provider.shutdown_with_timeout(self.shutdown_timeout);
@@ -124,6 +166,69 @@ impl ObservabilityGuard {
         }
         drop(self.stdout_guard.take());
     }
+}
+
+impl ObservabilityDiagnostics {
+    /// Emit constant diagnostic signals and synchronously flush each enabled exporter.
+    pub fn force_flush(&self) -> ObservabilityDiagnosticReport {
+        if let Some(provider) = self.tracer_provider.as_ref() {
+            let tracer = provider.tracer("colossus.diagnostics");
+            let mut span = tracer.start("colossus.observability.diagnostic");
+            span.end();
+        }
+        if let Some(provider) = self.meter_provider.as_ref() {
+            provider
+                .meter("colossus.diagnostics")
+                .u64_counter("colossus.observability.diagnostic")
+                .build()
+                .add(1, &[]);
+        }
+
+        let mut checks = Vec::with_capacity(3);
+        push_flush_check(
+            &mut checks,
+            "traces",
+            self.tracer_provider
+                .as_ref()
+                .map(SdkTracerProvider::force_flush),
+        );
+        push_flush_check(
+            &mut checks,
+            "metrics",
+            self.meter_provider
+                .as_ref()
+                .map(SdkMeterProvider::force_flush),
+        );
+        push_flush_check(
+            &mut checks,
+            "logs",
+            self.logger_provider
+                .as_ref()
+                .map(SdkLoggerProvider::force_flush),
+        );
+        let ready = checks.iter().all(|check| check.status != "fail");
+        ObservabilityDiagnosticReport { ready, checks }
+    }
+}
+
+fn push_flush_check(
+    checks: &mut Vec<ObservabilityDiagnosticCheck>,
+    name: &'static str,
+    result: Option<opentelemetry_sdk::error::OTelSdkResult>,
+) {
+    let (status, detail) = match result {
+        None => ("not_applicable", "This OTLP signal is disabled."),
+        Some(Ok(())) => ("pass", "The exporter accepted a bounded signal flush."),
+        Some(Err(_)) => (
+            "fail",
+            "The exporter did not acknowledge the bounded signal flush.",
+        ),
+    };
+    checks.push(ObservabilityDiagnosticCheck {
+        name,
+        status,
+        detail,
+    });
 }
 
 fn is_colossus_trace_target(target: &str) -> bool {
@@ -358,7 +463,10 @@ fn configured_sampler(config: &ObservabilityConfig) -> Sampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_colossus_journal_target, is_colossus_log_metadata, is_colossus_trace_target};
+    use super::{
+        ObservabilityDiagnostics, is_colossus_journal_target, is_colossus_log_metadata,
+        is_colossus_trace_target,
+    };
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_sdk::{
@@ -366,6 +474,28 @@ mod tests {
         trace::{InMemorySpanExporter, SdkTracerProvider},
     };
     use tracing_subscriber::{Layer as _, layer::SubscriberExt as _};
+
+    #[test]
+    fn diagnostics_flush_enabled_providers_without_releasing_exporter_details() {
+        let exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let report = ObservabilityDiagnostics {
+            tracer_provider: Some(tracer_provider),
+            meter_provider: None,
+            logger_provider: None,
+        }
+        .force_flush();
+
+        assert!(report.ready);
+        assert_eq!(report.checks[0].status, "pass");
+        assert_eq!(report.checks[1].status, "not_applicable");
+        let serialized = serde_json::to_string(&report).expect("diagnostic report");
+        assert!(!serialized.contains("endpoint"));
+        assert!(!serialized.contains("header"));
+        assert!(!serialized.contains("payload"));
+    }
 
     #[test]
     fn exporter_layers_only_accept_owned_signal_targets() {

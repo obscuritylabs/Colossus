@@ -42,26 +42,7 @@ impl From<url::ParseError> for SearchAdapterError {
     }
 }
 
-/// Resolves a credential only after the effect gateway supplies a permit.
-pub trait CredentialResolver: Send + Sync {
-    /// Resolve a configured reference without logging the returned value.
-    fn resolve(&self, reference: &str) -> Result<String, SearchAdapterError>;
-}
-
-/// Environment-only credential resolver for first-party search adapters.
-#[derive(Default)]
-pub struct EnvironmentCredentialResolver;
-
-impl CredentialResolver for EnvironmentCredentialResolver {
-    fn resolve(&self, reference: &str) -> Result<String, SearchAdapterError> {
-        let variable = reference.strip_prefix("env:").ok_or_else(|| {
-            SearchAdapterError::Credential("credential reference is not environment-backed".into())
-        })?;
-        std::env::var(variable).map_err(|_| {
-            SearchAdapterError::Credential(format!("environment variable {variable} is unset"))
-        })
-    }
-}
+pub use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 
 /// One permit-bound search adapter instance.
 pub struct SearchExecutor {

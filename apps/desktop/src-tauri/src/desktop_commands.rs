@@ -1520,7 +1520,7 @@ async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandError
     reject_active_managed_runs_for(state, &target_id).await
 }
 
-async fn reject_active_managed_runs_for(
+pub(crate) async fn reject_active_managed_runs_for(
     state: &AppState,
     target_id: &str,
 ) -> Result<(), CommandErrorDto> {
@@ -1606,7 +1606,7 @@ fn access_profile_elevation(settings: &DesktopSettings, requested: AccessProfile
 
 const fn access_profile_rank(profile: AccessProfileSetting) -> u8 {
     match profile {
-        AccessProfileSetting::Minimal => 0,
+        AccessProfileSetting::Minimal | AccessProfileSetting::Pinned => 0,
         AccessProfileSetting::Development => 1,
         AccessProfileSetting::AllowAll => 2,
     }
@@ -1646,6 +1646,10 @@ async fn confirm_access_profile(
 ) -> Result<bool, CommandErrorDto> {
     let (name, message) = match profile {
         AccessProfileSetting::Minimal => return Ok(true),
+        AccessProfileSetting::Pinned => (
+            "Pinned",
+            "Pinned access denies every tool and action except the exact entries configured in Settings. The execution boundary and approval mode are configured separately.",
+        ),
         AccessProfileSetting::Development => (
             "Development",
             "Development access lets Colossus use workspace-development tools. The execution boundary and approval mode are configured separately.",
@@ -2892,11 +2896,13 @@ const fn managed_state_name(state: ManagedRuntimeStateDto) -> &'static str {
     }
 }
 
-fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
+pub(crate) fn settings_store() -> Result<SettingsStore, CommandErrorDto> {
     SettingsStore::open_application()
 }
 
-fn connect_guard(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, CommandErrorDto> {
+pub(crate) fn connect_guard(
+    state: &AppState,
+) -> Result<tokio::sync::MutexGuard<'_, ()>, CommandErrorDto> {
     state.try_connect_guard().ok_or_else(|| {
         CommandErrorDto::busy("A Colossus connection or restart is already in progress.")
     })

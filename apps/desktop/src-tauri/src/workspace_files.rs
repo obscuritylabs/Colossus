@@ -195,7 +195,7 @@ fn list_directory(root: &Path, relative: &str) -> Result<WorkspaceDirectoryDto, 
     })
 }
 
-fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErrorDto> {
+pub(crate) fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErrorDto> {
     let candidate = resolve_relative(root, relative, false)?;
     let before = fs::symlink_metadata(&candidate).map_err(|_| workspace_read_error())?;
     if before.file_type().is_symlink() || !before.is_file() || before.len() > MAX_FILE_BYTES {
@@ -246,6 +246,65 @@ fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErr
         path: relative.into(),
         content,
     })
+}
+
+pub(crate) fn read_repository_configuration(root: &Path) -> Result<String, CommandErrorDto> {
+    let directory = root.join(".colossus");
+    let candidate = directory.join("config.yaml");
+    let directory_metadata =
+        fs::symlink_metadata(&directory).map_err(|_| repository_configuration_unavailable())?;
+    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+        return Err(repository_configuration_unavailable());
+    }
+    let canonical =
+        fs::canonicalize(&candidate).map_err(|_| repository_configuration_unavailable())?;
+    if canonical != candidate || !canonical.starts_with(root) {
+        return Err(repository_configuration_unavailable());
+    }
+    let before =
+        fs::symlink_metadata(&candidate).map_err(|_| repository_configuration_unavailable())?;
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > MAX_FILE_BYTES {
+        return Err(repository_configuration_unavailable());
+    }
+    #[cfg(windows)]
+    let binding = colossus_windows_native::BoundPath::open_file(&candidate)
+        .map_err(|_| repository_configuration_unavailable())?;
+    #[cfg(windows)]
+    let file = binding
+        .try_clone_file()
+        .map_err(|_| repository_configuration_unavailable())?;
+    #[cfg(not(windows))]
+    let file = open_file_without_following(&candidate)
+        .map_err(|_| repository_configuration_unavailable())?;
+    let opened = file
+        .metadata()
+        .map_err(|_| repository_configuration_unavailable())?;
+    let after =
+        fs::symlink_metadata(&candidate).map_err(|_| repository_configuration_unavailable())?;
+    if !opened.is_file() || after.file_type().is_symlink() || !after.is_file() {
+        return Err(repository_configuration_unavailable());
+    }
+    #[cfg(not(windows))]
+    if !same_file(&opened, &after) {
+        return Err(repository_configuration_unavailable());
+    }
+
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or_default());
+    file.take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| repository_configuration_unavailable())?;
+    #[cfg(windows)]
+    binding
+        .revalidate()
+        .map_err(|_| repository_configuration_unavailable())?;
+    if bytes.len() as u64 > MAX_FILE_BYTES || bytes.contains(&0) {
+        return Err(repository_configuration_unavailable());
+    }
+    let content = String::from_utf8(bytes).map_err(|_| repository_configuration_unavailable())?;
+    if content.chars().any(unsafe_text_character) {
+        return Err(repository_configuration_unavailable());
+    }
+    Ok(content)
 }
 
 fn resolve_relative(
@@ -488,6 +547,14 @@ fn workspace_read_error() -> CommandErrorDto {
     )
 }
 
+fn repository_configuration_unavailable() -> CommandErrorDto {
+    CommandErrorDto::local_sanitized(
+        "repository_configuration_unavailable",
+        "No readable .colossus/config.yaml was found in this Space.",
+        false,
+    )
+}
+
 fn preview_unavailable() -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "file_preview_unavailable",
@@ -572,6 +639,47 @@ mod tests {
         assert!(read_file(&canonical, ".env").is_err());
         #[cfg(unix)]
         assert!(read_file(&canonical, "source-link.txt").is_err());
+    }
+
+    #[test]
+    fn repository_configuration_reader_opens_only_the_fixed_hidden_document() {
+        let root = tempdir().expect("root");
+        fs::create_dir(root.path().join(".colossus")).expect("control directory");
+        fs::write(
+            root.path().join(".colossus/config.yaml"),
+            "schemaVersion: 2\n",
+        )
+        .expect("configuration");
+
+        let canonical = fs::canonicalize(root.path()).expect("canonical root");
+        assert_eq!(
+            read_repository_configuration(&canonical).expect("repository configuration"),
+            "schemaVersion: 2\n"
+        );
+        assert!(read_file(&canonical, ".colossus/config.yaml").is_err());
+    }
+
+    #[test]
+    fn repository_configuration_reader_reports_a_missing_document() {
+        let root = tempdir().expect("root");
+        let canonical = fs::canonicalize(root.path()).expect("canonical root");
+
+        let error = read_repository_configuration(&canonical).expect_err("missing config");
+        assert_eq!(error.code, "repository_configuration_unavailable");
+        assert!(error.message.contains(".colossus/config.yaml"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_configuration_reader_rejects_linked_control_paths() {
+        let root = tempdir().expect("root");
+        let outside = tempdir().expect("outside");
+        fs::write(outside.path().join("config.yaml"), "schemaVersion: 2\n").expect("configuration");
+        std::os::unix::fs::symlink(outside.path(), root.path().join(".colossus"))
+            .expect("control directory link");
+
+        let canonical = fs::canonicalize(root.path()).expect("canonical root");
+        assert!(read_repository_configuration(&canonical).is_err());
     }
 
     #[test]

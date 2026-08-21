@@ -14,9 +14,12 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 pub use colossus_sidecar_protocol::{
-    ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter, ManagedModelCapabilities,
-    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedReasoningEffort,
-    ManagedRuntimeConfig, ManagedSearchConfig, REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity,
+    ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter, ManagedFieldOverride,
+    ManagedJournalPayloadMode, ManagedMcpCredentialHeader, ManagedMcpOAuthConfig,
+    ManagedMcpResearchTool, ManagedMcpServerConfig, ManagedMcpTransport, ManagedModelCapabilities,
+    ManagedModelConfig, ManagedOtlpProtocol, ManagedProviderConfig, ManagedProviderKind,
+    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig, ManagedSearchKind,
+    ManagedTelemetryConfig, REMOTE_PROVIDER_TIMEOUT_MS, WorkspaceIdentity,
     default_managed_provider_timeout_ms, validate_managed_model_identifier,
     validate_managed_provider_base_url,
 };

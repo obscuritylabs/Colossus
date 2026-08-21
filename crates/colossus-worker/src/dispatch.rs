@@ -8,6 +8,7 @@ pub(super) async fn dispatch(
     operation: WorkerOperation,
     maintenance: &tokio::sync::Mutex<()>,
     approval_mode: &WorkerApprovalModeState,
+    observability_diagnostics: Option<&Arc<dyn Fn() -> Value + Send + Sync>>,
 ) -> Result<Value, WorkerError> {
     match operation {
         WorkerOperation::Ping => Ok(json!({
@@ -19,6 +20,16 @@ pub(super) async fn dispatch(
             "approval_mode": approval_mode.get(),
             "security_posture": runtime.security_posture(),
         })),
+        WorkerOperation::ObservabilityDoctor => {
+            let diagnostics = observability_diagnostics.cloned().ok_or_else(|| {
+                WorkerError::Protocol("host observability diagnostics are unavailable".into())
+            })?;
+            tokio::task::spawn_blocking(move || diagnostics())
+                .await
+                .map_err(|_| {
+                    WorkerError::Protocol("host observability diagnostics failed safely".into())
+                })
+        }
         WorkerOperation::SetApprovalMode {
             approval_mode: mode,
         } => {

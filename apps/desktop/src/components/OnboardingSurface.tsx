@@ -81,7 +81,12 @@ export function OnboardingSurface({
     providerKind !== "open_ai_codex" &&
     (!desktop.provider.configured || providerChanged || replaceCredential);
   const codexReady = desktop.codexAuth.state === "signed_in";
-  const accessRank = { minimal: 0, development: 1, allow_all: 2 } as const;
+  const accessRank = {
+    minimal: 0,
+    pinned: 0,
+    development: 1,
+    allow_all: 2,
+  } as const;
   const boundaryRank = {
     offline_isolated: 0,
     workspace_isolated: 1,
@@ -266,6 +271,9 @@ export function OnboardingSurface({
                   }
                 >
                   <option value="minimal">Minimal — no workspace tools</option>
+                  <option value="pinned">
+                    Pinned — exact tools configured in Settings
+                  </option>
                   <option value="development">
                     Development — approval-gated effects
                   </option>

@@ -8,11 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 15 raises the bounded response frame capacity so a default-permitted
-/// 4 MiB effect result still fits after the authenticated protocol's nested base64
-/// encoding. Older workers retain the smaller response bound, so both sides must
-/// reject the mismatch and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 15;
+/// Version 16 adds secret-free host exporter validation for trusted native Desktop
+/// clients. Older workers cannot validate that request shape, so both sides reject the
+/// mismatch and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 16;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
@@ -63,6 +62,7 @@ impl From<std::io::Error> for WorkerControlError {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub(crate) enum ControlOperation {
     Ping,
+    ObservabilityDoctor,
     SetApprovalMode {
         approval_mode: WorkerApprovalMode,
     },
@@ -73,6 +73,41 @@ pub(crate) enum ControlOperation {
     InspectSessionMap {
         session_id: String,
     },
+    McpServers,
+    McpTools {
+        server: Option<String>,
+    },
+    McpAuthBegin {
+        server: String,
+    },
+    McpAuthComplete {
+        server: String,
+        callback_url: String,
+    },
+    McpAuthStatus {
+        server: String,
+    },
+    McpAuthLogout {
+        server: String,
+    },
+    ProviderDoctor {
+        profile: Option<String>,
+        include_provider_response: bool,
+    },
+    ModelDoctor {
+        profile: Option<String>,
+        include_provider_response: bool,
+    },
+    SearchQuery {
+        role: String,
+        query: String,
+        limit: usize,
+    },
+    SkillList,
+    PackList {
+        limit: usize,
+    },
+    WorkflowList,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -283,6 +318,11 @@ mod tests {
             serde_json::json!({"operation": "ping"})
         );
         assert_eq!(
+            serde_json::to_value(ControlOperation::ObservabilityDoctor)
+                .expect("observability doctor"),
+            serde_json::json!({"operation": "observability_doctor"})
+        );
+        assert_eq!(
             serde_json::to_value(ControlOperation::SetApprovalMode {
                 approval_mode: WorkerApprovalMode::FullAccess,
             })
@@ -313,6 +353,75 @@ mod tests {
                 "operation": "inspect_session_map",
                 "session_id": "session-primary",
             })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::McpTools {
+                server: Some("docs".into()),
+            })
+            .expect("MCP tools"),
+            serde_json::json!({ "operation": "mcp_tools", "server": "docs" })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::McpAuthComplete {
+                server: "docs".into(),
+                callback_url: "http://127.0.0.1:8765/callback?code=opaque".into(),
+            })
+            .expect("MCP OAuth complete"),
+            serde_json::json!({
+                "operation": "mcp_auth_complete",
+                "server": "docs",
+                "callback_url": "http://127.0.0.1:8765/callback?code=opaque"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::ProviderDoctor {
+                profile: Some("openapi".into()),
+                include_provider_response: false,
+            })
+            .expect("provider doctor"),
+            serde_json::json!({
+                "operation": "provider_doctor",
+                "profile": "openapi",
+                "include_provider_response": false,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::ModelDoctor {
+                profile: Some("primary".into()),
+                include_provider_response: false,
+            })
+            .expect("model doctor"),
+            serde_json::json!({
+                "operation": "model_doctor",
+                "profile": "primary",
+                "include_provider_response": false,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::SearchQuery {
+                role: "research".into(),
+                query: "Colossus connectivity test".into(),
+                limit: 1,
+            })
+            .expect("search doctor"),
+            serde_json::json!({
+                "operation": "search_query",
+                "role": "research",
+                "query": "Colossus connectivity test",
+                "limit": 1,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::SkillList).expect("skill list"),
+            serde_json::json!({"operation": "skill_list"})
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::PackList { limit: 256 }).expect("pack list"),
+            serde_json::json!({"operation": "pack_list", "limit": 256})
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::WorkflowList).expect("workflow list"),
+            serde_json::json!({"operation": "workflow_list"})
         );
     }
 }

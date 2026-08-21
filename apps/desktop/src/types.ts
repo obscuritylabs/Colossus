@@ -235,7 +235,7 @@ export interface DesktopStatus {
 }
 
 export type ApprovalMode = "deny" | "ask" | "risk_auto" | "full_access";
-export type AccessProfile = "minimal" | "development" | "allow_all";
+export type AccessProfile = "minimal" | "pinned" | "development" | "allow_all";
 export type ExecutionBoundary =
   "full_access" | "workspace_isolated" | "offline_isolated";
 
@@ -285,6 +285,333 @@ export interface ApplyManagedModelConfigurationRequest {
   roles: Record<string, string>;
   accessProfile: AccessProfile;
   executionBoundary: ExecutionBoundary;
+}
+
+export interface ManagedFieldOverride {
+  fieldId: string;
+  value: unknown;
+}
+
+export interface CatalogRevision<T> {
+  revision: number;
+  value: T;
+}
+
+export interface CatalogEntry<T> {
+  id: string;
+  label: string;
+  currentRevision: number;
+  archived: boolean;
+  revisions: CatalogRevision<T>[];
+}
+
+export type ManagedCredentialKind =
+  "api_key" | "bearer_token" | "client_secret" | "generic_secret";
+
+export interface ManagedCredentialMetadata {
+  id: string;
+  label: string;
+  kind: ManagedCredentialKind;
+  backend: "desktop" | "legacy_provider";
+  createdAtMs: number;
+}
+
+export interface ManagedMcpCredentialHeader {
+  scheme: string | null;
+  credentialId: string;
+}
+
+export interface ManagedMcpOAuth {
+  clientId: string;
+  clientSecretCredentialId: string | null;
+  callbackPort: number;
+  scopes: string[];
+}
+
+export interface ManagedMcpResearchTool {
+  tool: string;
+  title: string | null;
+  arguments: Record<string, unknown>;
+}
+
+export interface ManagedMcpServer {
+  name: string;
+  transport: "stdio" | "streamable_http";
+  command: string | null;
+  args: string[];
+  workingDirectory: string | null;
+  environmentCredentials: Record<string, string>;
+  url: string | null;
+  headers: Record<string, string>;
+  credentialHeaders: Record<string, ManagedMcpCredentialHeader>;
+  allowStateless: boolean;
+  oauth: ManagedMcpOAuth | null;
+  allowedTools: string[];
+  researchTools: ManagedMcpResearchTool[];
+  timeoutMs: number | null;
+  maxOutputBytes: number | null;
+}
+
+export interface ManagedMcpToolDiagnostic {
+  server: string;
+  name: string;
+  title: string | null;
+  description: string | null;
+}
+
+export interface ManagedMcpDiagnostic {
+  server: string;
+  healthy: boolean;
+  tools: ManagedMcpToolDiagnostic[];
+}
+
+export interface ManagedMcpOAuthStatus {
+  server: string;
+  configured: boolean;
+  authenticated: boolean;
+}
+
+export interface ManagedMcpOAuthLogin {
+  server: string;
+  authorizationUrl: string;
+  callbackUrl: string;
+}
+
+export interface ManagedReadinessCheck {
+  name: string;
+  status: "pass" | "fail" | "not_checked" | "not_applicable";
+  detail: string;
+}
+
+export interface ManagedRuntimeDiagnostic {
+  kind: "provider" | "model" | "search" | "telemetry";
+  profile: string;
+  ready: boolean;
+  checks: ManagedReadinessCheck[];
+  resultCount: number | null;
+}
+
+export interface ManagedSkillCatalogEntry {
+  name: string;
+  version: string;
+  description: string;
+  source: string;
+  offlineCompatible: boolean;
+}
+
+export interface ManagedPackCatalogEntry {
+  name: string;
+  version: string;
+  publisher: string;
+  status: "enabled" | "disabled" | "uninstalled" | "unknown";
+  manifestSha256: string;
+  trusted: boolean;
+}
+
+export interface ManagedWorkflowCatalogEntry {
+  name: string;
+  version: string;
+  status: "registered" | "revised";
+  updatedAt: string;
+  revisionHash: string;
+}
+
+export interface ManagedExtensionInventory {
+  skills: ManagedSkillCatalogEntry[];
+  packs: ManagedPackCatalogEntry[];
+  workflows: ManagedWorkflowCatalogEntry[];
+}
+
+export interface ManagedProviderCatalogValue {
+  profile: string;
+  kind: ProviderKind;
+  baseUrl: string;
+  credentialId?: string | null;
+  timeoutMs?: number | null;
+}
+
+export type ManagedModelCatalogValue = ManagedModelConfiguration;
+
+export interface ManagedSearchProvider {
+  profile: string;
+  kind: "searxng" | "serp_api";
+  endpoint: string;
+  credentialId: string | null;
+  authHeader: string | null;
+  timeoutMs: number;
+}
+
+export interface ManagedTelemetryProfile {
+  name: string;
+  endpoint: string | null;
+  protocol: "grpc" | "http_protobuf";
+  timeoutMs: number;
+  tracesEnabled: boolean;
+  traceSampleRatioMillionths: number;
+  metricsEnabled: boolean;
+  metricExportIntervalMs: number;
+  logsOtlp: boolean;
+  logsStdoutJson: boolean;
+  journalPayloads: "disabled" | "metadata" | "full";
+  acknowledgeSensitiveContent: boolean;
+  acknowledgeInsecureTransport: boolean;
+  resourceAttributes: Record<string, string>;
+}
+
+export interface ManagedDefaultOverrides {
+  accessProfile: AccessProfile | null;
+  executionBoundary: ExecutionBoundary | null;
+  terminalEnabled: boolean | null;
+  fieldOverrides: ManagedFieldOverride[];
+}
+
+export interface ManagedGlobalConfiguration {
+  revision: number;
+  providers: CatalogEntry<ManagedProviderCatalogValue>[];
+  models: CatalogEntry<ManagedModelCatalogValue>[];
+  mcpServers: CatalogEntry<ManagedMcpServer>[];
+  searchProviders: CatalogEntry<ManagedSearchProvider>[];
+  telemetryProfiles: CatalogEntry<ManagedTelemetryProfile>[];
+  credentials: ManagedCredentialMetadata[];
+  defaults: {
+    currentRevision: number;
+    revisions: CatalogRevision<ManagedDefaultOverrides>[];
+  };
+}
+
+export interface ManagedCatalogReference {
+  resourceId: string;
+  revision: number;
+}
+
+export interface ManagedSpaceConfiguration {
+  acceptedGlobalRevision: number;
+  catalogRevisions: Record<string, ManagedCatalogReference>;
+  credentialOverrides: Record<string, string>;
+  searchRoles: Record<string, string>;
+  modelRoles: Record<string, string>;
+  accessProfileOverride: AccessProfile | null;
+  executionBoundaryOverride: ExecutionBoundary | null;
+  terminalEnabledOverride: boolean | null;
+  fieldOverrides: ManagedFieldOverride[];
+  import: {
+    relativePath: string;
+    sha256: string;
+    importedAtMs: number;
+  } | null;
+}
+
+export interface ManagedEffectiveValue {
+  fieldId: string;
+  value: unknown;
+  source: "built_in" | "global" | "space";
+}
+
+export interface ManagedSpaceConfigurationSnapshot {
+  id: string;
+  name: string;
+  displayPath: string;
+  archived: boolean;
+  status:
+    | "active"
+    | "update_available"
+    | "draining"
+    | "starting"
+    | "restarting"
+    | "validation_failed"
+    | "runtime_failed";
+  statusMessage: string;
+  pendingGlobalRevision: number | null;
+  configuration: ManagedSpaceConfiguration;
+  effectiveValues: ManagedEffectiveValue[];
+  effectiveYaml: string;
+}
+
+export interface ManagedFieldDescriptor {
+  id: string;
+  section: string;
+  title: string;
+  description: string;
+  scope: "global" | "space" | "both";
+  risk: "low" | "medium" | "high";
+  control: "toggle" | "number" | "text" | "string_list" | "select" | "json";
+  advanced: boolean;
+  defaultValue: unknown;
+  minimum: number | null;
+  maximum: number | null;
+  options: string[];
+}
+
+export interface ManagedLockedInvariant {
+  id: string;
+  title: string;
+  owner: "Desktop";
+  explanation: string;
+}
+
+export interface ManagedSettingsSnapshot {
+  globalConfiguration: ManagedGlobalConfiguration;
+  spaces: ManagedSpaceConfigurationSnapshot[];
+  fieldDescriptors: ManagedFieldDescriptor[];
+  lockedInvariants: ManagedLockedInvariant[];
+}
+
+export interface ImportResourceProposal {
+  kind: "provider" | "model" | "search" | "mcp" | "telemetry";
+  sourceId: string;
+  label: string;
+  detail: string;
+  conflict: boolean;
+  existingResourceId: string | null;
+}
+
+export interface ImportConflictDecision {
+  action: "rename" | "replace" | "skip";
+  renamedSourceId: string | null;
+}
+
+export interface ImportCredentialSlot {
+  slotId: string;
+  label: string;
+  consumers: string[];
+}
+
+export interface RepositoryConfigurationProposal {
+  spaceId: string;
+  relativePath: string;
+  sha256: string;
+  previousSha256: string | null;
+  changedSinceImport: boolean;
+  resources: ImportResourceProposal[];
+  credentialSlots: ImportCredentialSlot[];
+  fieldOverrides: string[];
+  lockedFields: string[];
+  warnings: string[];
+}
+
+export interface SaveGlobalDefaultsRequest {
+  expectedRevision: number;
+  accessProfile: AccessProfile | null;
+  executionBoundary: ExecutionBoundary | null;
+  terminalEnabled: boolean | null;
+  fieldOverrides: ManagedFieldOverride[];
+}
+
+export interface SaveSpaceConfigurationRequest {
+  expectedGlobalRevision: number;
+  spaceId: string;
+  accessProfileOverride: AccessProfile | null;
+  executionBoundaryOverride: ExecutionBoundary | null;
+  terminalEnabledOverride: boolean | null;
+  fieldOverrides: ManagedFieldOverride[];
+  selectedProviderResourceIds: string[];
+  selectedModelResourceIds: string[];
+  selectedMcpResourceIds: string[];
+  selectedSearchResourceIds: string[];
+  selectedTelemetryResourceId: string | null;
+  searchRoles: Record<string, string>;
+  modelRoles: Record<string, string>;
+  credentialOverrides: Record<string, string>;
 }
 
 export type TerminalKind = "colossus_tui" | "shell";

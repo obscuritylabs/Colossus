@@ -80,18 +80,23 @@ pub use macos_verified_process::{
 pub use native_daemon::NativeDaemonLifecycle;
 #[cfg(feature = "sidecar")]
 pub use native_sidecar::NativeSidecarLifecycle;
+#[cfg(feature = "sidecar")]
+pub use native_sidecar::inspect_sidecar_configuration;
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 pub use native_sidecar::verify_macos_executable_identity;
 pub use secret::{CredentialProvider, Secret};
 #[cfg(feature = "sidecar")]
 pub use sidecar::{
     MANAGED_CONFIG_FILENAME, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
-    ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind,
-    ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig, NativeSidecarFailure,
-    NativeSidecarStatus, REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant,
-    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle,
-    SidecarOptions, WorkspaceIdentity, default_managed_provider_timeout_ms,
-    validate_managed_model_identifier, validate_managed_provider_base_url,
+    ManagedFieldOverride, ManagedJournalPayloadMode, ManagedMcpCredentialHeader,
+    ManagedMcpOAuthConfig, ManagedMcpResearchTool, ManagedMcpServerConfig, ManagedMcpTransport,
+    ManagedModelCapabilities, ManagedModelConfig, ManagedOtlpProtocol, ManagedProviderConfig,
+    ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig, ManagedSearchConfig,
+    ManagedSearchKind, ManagedTelemetryConfig, NativeSidecarFailure, NativeSidecarStatus,
+    REMOTE_PROVIDER_TIMEOUT_MS, SidecarApplicationGrant, SidecarApprovalBrokerGrant,
+    SidecarBootstrapConfig, SidecarHostCredential, SidecarLifecycle, SidecarOptions,
+    WorkspaceIdentity, default_managed_provider_timeout_ms, validate_managed_model_identifier,
+    validate_managed_provider_base_url,
 };
 pub use stream::RunUpdates;
 pub use types::{

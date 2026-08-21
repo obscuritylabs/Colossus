@@ -13,7 +13,9 @@ colossus-access.workspace = true
 colossus-api.workspace = true
 colossus-grpc.workspace = true
 colossus-home.workspace = true
+colossus-mcp.workspace = true
 colossus-network.workspace = true
+colossus-observability = { workspace = true, features = ["host-exporters"] }
 colossus-ports.workspace = true
 colossus-provider.workspace = true
 colossus-runtime.workspace = true
@@ -21,6 +23,8 @@ colossus-sandbox.workspace = true
 colossus-sidecar-protocol.workspace = true
 colossus-worker.workspace = true
 getrandom.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
@@ -34,6 +38,7 @@ rustix.workspace = true
 
 [dev-dependencies]
 colossus-sdk = { workspace = true, features = ["sidecar"] }
+colossus-worker-protocol.workspace = true
 keyring.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

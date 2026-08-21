@@ -233,13 +233,18 @@ receipt cannot commit. The bootstrap never elevates, mutates shell profiles, log
 headers or home-directory contents, or treats a package-manager installation as direct
 ownership.
 
-An ordinary packaged installer creates or validates only the empty Colossus home root:
+The CLI package installer creates or validates only the empty Colossus home root:
 absolute `COLOSSUS_HOME` or the user's `.colossus` directory. It rejects linked,
 foreign-owned, or shared directories, verifies that ancestors cannot be replayed by an
 untrusted owner or ACL principal, and applies mode `0700` on Unix or an owner-private
 Windows DACL. It never generates configuration, state, credentials, or instruction
 files. A privileged or system-token install defers home creation until runtime has the
 actual end-user identity, and bootstrap dry-run remains non-mutating.
+
+Windows Desktop separately honors an explicit absolute `COLOSSUS_HOME` but otherwise
+creates its generated home at `%LOCALAPPDATA%\ColossusDesktopHome` under the interactive
+user identity. This keeps Desktop settings, native credentials, and managed runtime
+state out of a pre-existing CLI home whose ACL may permit another local principal.
 
 Runtime update discovery is a second application-owned distribution boundary. The
 standalone `update check` command runs before workspace, configuration, worker, or model

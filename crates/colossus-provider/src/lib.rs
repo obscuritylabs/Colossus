@@ -23,6 +23,7 @@ use colossus_policy::{
     QuarantinedEffectObserver, StreamingEffectExecutor, http_transport_authority_match,
     non_public_network_address,
 };
+use colossus_ports::CredentialResolutionError;
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,12 @@ const MAX_PROVIDER_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_ADDRESSES: usize = 16;
 const MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES: usize = 16 * 1024;
 const MAX_CODEX_REFRESH_RESPONSE_BYTES: usize = 256 * 1024;
+
+impl From<CredentialResolutionError> for ProviderError {
+    fn from(error: CredentialResolutionError) -> Self {
+        Self::Credential(error.to_string())
+    }
+}
 
 mod normalization;
 use normalization::*;

@@ -1,6 +1,12 @@
 //! macOS process launch that binds inherited channels to an exact signed image.
 
-use std::{ffi::OsString, io, path::Path, process::ExitStatus, time::Duration};
+use std::{
+    ffi::{OsStr, OsString},
+    io,
+    path::Path,
+    process::ExitStatus,
+    time::Duration,
+};
 
 use colossus_darwin_process::{
     DarwinChild, SpawnedTty, spawn_suspended_pipes,
@@ -65,7 +71,17 @@ pub(super) async fn spawn_verified(
     path: &Path,
     expected: CodeDirectoryHash,
 ) -> SdkResult<(MacosChild, BootstrapPipes)> {
-    let arguments = [OsString::from("__managed-sidecar-v1")];
+    spawn_verified_mode(path, expected, OsStr::new("__managed-sidecar-v1")).await
+}
+
+/// Spawn an exact path in one fixed private mode, validating its dynamic code identity
+/// before the child executes its first userspace instruction.
+pub(super) async fn spawn_verified_mode(
+    path: &Path,
+    expected: CodeDirectoryHash,
+    mode: &OsStr,
+) -> SdkResult<(MacosChild, BootstrapPipes)> {
+    let arguments = [mode.to_os_string()];
     let mut spawned =
         spawn_suspended_pipes(path, &arguments, &[]).map_err(|_| SdkError::SidecarFailed)?;
     let validation = validate_dynamic_identity(spawned.child.pid(), expected).and_then(|()| {

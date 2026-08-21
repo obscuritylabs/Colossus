@@ -21,6 +21,21 @@ import type {
   GetRunRequest,
   Interaction,
   ListRunsRequest,
+  ManagedCredentialKind,
+  ManagedExtensionInventory,
+  ManagedMcpServer,
+  ManagedMcpDiagnostic,
+  ManagedMcpOAuthLogin,
+  ManagedMcpOAuthStatus,
+  ManagedRuntimeDiagnostic,
+  ManagedModelCatalogValue,
+  ManagedProviderCatalogValue,
+  ManagedSearchProvider,
+  ManagedSettingsSnapshot,
+  ManagedTelemetryProfile,
+  RepositoryConfigurationProposal,
+  SaveGlobalDefaultsRequest,
+  SaveSpaceConfigurationRequest,
   RespondInteractionRequest,
   SearchSpaceThreadsRequest,
   SpaceAttentionEvent,
@@ -227,6 +242,204 @@ export function searchSpaceThreads(
       pageSize: request.pageSize ?? 50,
     },
   });
+}
+
+export function getManagedConfiguration(): Promise<ManagedSettingsSnapshot> {
+  return call("get_managed_configuration");
+}
+
+export function diagnoseManagedMcpServer(
+  spaceId: string,
+  server: string,
+): Promise<ManagedMcpDiagnostic> {
+  return call("diagnose_managed_mcp_server", {
+    request: { spaceId, server },
+  });
+}
+
+export function managedMcpOAuthStatus(
+  spaceId: string,
+  server: string,
+): Promise<ManagedMcpOAuthStatus> {
+  return call("managed_mcp_oauth_status", {
+    request: { spaceId, server },
+  });
+}
+
+export function beginManagedMcpOAuth(
+  spaceId: string,
+  server: string,
+): Promise<ManagedMcpOAuthLogin> {
+  return call("begin_managed_mcp_oauth", {
+    request: { spaceId, server },
+  });
+}
+
+export function completeManagedMcpOAuth(
+  spaceId: string,
+  server: string,
+  callbackUrl: string,
+): Promise<ManagedMcpOAuthStatus> {
+  return call("complete_managed_mcp_oauth", {
+    request: { spaceId, server, callbackUrl },
+  });
+}
+
+export function logoutManagedMcpOAuth(
+  spaceId: string,
+  server: string,
+): Promise<ManagedMcpOAuthStatus> {
+  return call("logout_managed_mcp_oauth", {
+    request: { spaceId, server },
+  });
+}
+
+export function diagnoseManagedProvider(
+  spaceId: string,
+  profile: string,
+): Promise<ManagedRuntimeDiagnostic> {
+  return call("diagnose_managed_provider", {
+    request: { spaceId, profile },
+  });
+}
+
+export function diagnoseManagedModel(
+  spaceId: string,
+  profile: string,
+): Promise<ManagedRuntimeDiagnostic> {
+  return call("diagnose_managed_model", {
+    request: { spaceId, profile },
+  });
+}
+
+export function diagnoseManagedSearch(
+  spaceId: string,
+  role: "agent" | "research",
+): Promise<ManagedRuntimeDiagnostic> {
+  return call("diagnose_managed_search", {
+    request: { spaceId, role },
+  });
+}
+
+export function diagnoseManagedTelemetry(
+  spaceId: string,
+  profile: string,
+): Promise<ManagedRuntimeDiagnostic> {
+  return call("diagnose_managed_telemetry", {
+    request: { spaceId, profile },
+  });
+}
+
+export function getManagedExtensionInventory(
+  spaceId: string,
+): Promise<ManagedExtensionInventory> {
+  return call("get_managed_extension_inventory", { request: { spaceId } });
+}
+
+export function inspectRepositoryConfiguration(
+  spaceId: string,
+): Promise<RepositoryConfigurationProposal> {
+  return call("inspect_repository_configuration", { request: { spaceId } });
+}
+
+export function applyRepositoryConfiguration(request: {
+  spaceId: string;
+  expectedSha256: string;
+  credentialMappings: Record<string, string>;
+  conflictDecisions: Record<
+    string,
+    {
+      action: "rename" | "replace" | "skip";
+      renamedSourceId: string | null;
+    }
+  >;
+}): Promise<void> {
+  return call("apply_repository_configuration", { request });
+}
+
+export function saveGlobalDefaults(
+  request: SaveGlobalDefaultsRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("save_global_defaults", { request });
+}
+
+export function upsertGlobalMcpServer(request: {
+  expectedRevision: number;
+  resourceId: string | null;
+  label: string;
+  server: ManagedMcpServer;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("upsert_global_mcp_server", { request });
+}
+
+export function upsertGlobalProvider(request: {
+  expectedRevision: number;
+  resourceId: string | null;
+  label: string;
+  provider: ManagedProviderCatalogValue;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("upsert_global_provider", { request });
+}
+
+export function upsertGlobalModel(request: {
+  expectedRevision: number;
+  resourceId: string | null;
+  label: string;
+  model: ManagedModelCatalogValue;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("upsert_global_model", { request });
+}
+
+export function upsertGlobalSearchProvider(request: {
+  expectedRevision: number;
+  resourceId: string | null;
+  label: string;
+  search: ManagedSearchProvider;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("upsert_global_search_provider", { request });
+}
+
+export function upsertGlobalTelemetryProfile(request: {
+  expectedRevision: number;
+  resourceId: string | null;
+  label: string;
+  telemetry: ManagedTelemetryProfile;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("upsert_global_telemetry_profile", { request });
+}
+
+export function saveSpaceConfiguration(
+  request: SaveSpaceConfigurationRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("save_space_configuration", { request });
+}
+
+export function applySpaceConfiguration(
+  spaceId: string,
+): Promise<ManagedSettingsSnapshot> {
+  return call("apply_space_configuration", { spaceId });
+}
+
+export function createManagedCredential(request: {
+  expectedRevision: number;
+  label: string;
+  kind: ManagedCredentialKind;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("create_managed_credential", { request });
+}
+
+export function rotateManagedCredential(request: {
+  expectedRevision: number;
+  credentialId: string;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("rotate_managed_credential", { request });
+}
+
+export function deleteManagedCredential(request: {
+  expectedRevision: number;
+  credentialId: string;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("delete_managed_credential", { request });
 }
 
 export function onSpaceStatusChanged(

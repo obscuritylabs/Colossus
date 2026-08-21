@@ -61,6 +61,11 @@ impl WorkerControlClient {
         }
     }
 
+    /// Flush live host-owned OTLP exporters without releasing configuration or payloads.
+    pub async fn observability_doctor(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::ObservabilityDoctor).await
+    }
+
     /// Change the worker-wide mode used outside client-scoped overrides.
     pub async fn set_approval_mode(
         &self,
@@ -119,6 +124,138 @@ impl WorkerControlClient {
             .map_err(|error| WorkerControlError::Protocol(error.to_string()))
     }
 
+    /// Return bounded configured MCP server metadata from the live runtime.
+    pub async fn mcp_servers(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::McpServers).await
+    }
+
+    /// Discover allowlist-filtered MCP tools through the live runtime boundary.
+    pub async fn mcp_tools(
+        &self,
+        server: Option<&str>,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        if server.is_some_and(|server| !valid_mcp_server_name(server)) {
+            return Err(WorkerControlError::Protocol(
+                "MCP server name is invalid".into(),
+            ));
+        }
+        self.call(ControlOperation::McpTools {
+            server: server.map(str::to_owned),
+        })
+        .await
+    }
+
+    /// Begin an MCP OAuth authorization-code flow in the live runtime.
+    pub async fn mcp_oauth_begin(
+        &self,
+        server: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_mcp_server_name(server)?;
+        self.call(ControlOperation::McpAuthBegin {
+            server: server.into(),
+        })
+        .await
+    }
+
+    /// Complete an MCP OAuth flow with the exact loopback callback URL.
+    pub async fn mcp_oauth_complete(
+        &self,
+        server: &str,
+        callback_url: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_mcp_server_name(server)?;
+        if callback_url.is_empty() || callback_url.len() > 8_192 || callback_url.contains('\0') {
+            return Err(WorkerControlError::Protocol(
+                "MCP OAuth callback URL is invalid".into(),
+            ));
+        }
+        self.call(ControlOperation::McpAuthComplete {
+            server: server.into(),
+            callback_url: callback_url.into(),
+        })
+        .await
+    }
+
+    /// Return the live MCP OAuth credential status without credential material.
+    pub async fn mcp_oauth_status(
+        &self,
+        server: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_mcp_server_name(server)?;
+        self.call(ControlOperation::McpAuthStatus {
+            server: server.into(),
+        })
+        .await
+    }
+
+    /// Remove the live MCP OAuth credential through the runtime-owned store.
+    pub async fn mcp_oauth_logout(
+        &self,
+        server: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_mcp_server_name(server)?;
+        self.call(ControlOperation::McpAuthLogout {
+            server: server.into(),
+        })
+        .await
+    }
+
+    /// Exercise one provider catalog endpoint without releasing response bodies.
+    pub async fn provider_doctor(
+        &self,
+        profile: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_profile_name(profile)?;
+        self.call(ControlOperation::ProviderDoctor {
+            profile: Some(profile.into()),
+            include_provider_response: false,
+        })
+        .await
+    }
+
+    /// Exercise one bounded model generation without releasing response bodies.
+    pub async fn model_doctor(
+        &self,
+        profile: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_profile_name(profile)?;
+        self.call(ControlOperation::ModelDoctor {
+            profile: Some(profile.into()),
+            include_provider_response: false,
+        })
+        .await
+    }
+
+    /// Exercise one configured search role with a fixed bounded diagnostic query.
+    pub async fn search_doctor(&self, role: &str) -> Result<serde_json::Value, WorkerControlError> {
+        if !matches!(role, "agent" | "research") {
+            return Err(WorkerControlError::Protocol(
+                "search role is invalid".into(),
+            ));
+        }
+        self.call(ControlOperation::SearchQuery {
+            role: role.into(),
+            query: "Colossus connectivity test".into(),
+            limit: 1,
+        })
+        .await
+    }
+
+    /// Return metadata-only data-skill inventory from the live runtime.
+    pub async fn skills(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::SkillList).await
+    }
+
+    /// Return bounded installed-pack lifecycle metadata from the live runtime.
+    pub async fn packs(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::PackList { limit: 256 }).await
+    }
+
+    /// Return bounded registered-workflow event metadata from the live runtime.
+    pub async fn workflows(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::WorkflowList).await
+    }
+
     async fn call(
         &self,
         operation: ControlOperation,
@@ -163,6 +300,39 @@ impl WorkerControlClient {
             }
             Ok(Err(error)) => Err(WorkerControlError::Io(error)),
         }
+    }
+}
+
+fn validate_mcp_server_name(server: &str) -> Result<(), WorkerControlError> {
+    if valid_mcp_server_name(server) {
+        Ok(())
+    } else {
+        Err(WorkerControlError::Protocol(
+            "MCP server name is invalid".into(),
+        ))
+    }
+}
+
+fn valid_mcp_server_name(server: &str) -> bool {
+    !server.is_empty()
+        && server.len() <= 128
+        && server
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn validate_profile_name(profile: &str) -> Result<(), WorkerControlError> {
+    if !profile.is_empty()
+        && profile.len() <= 128
+        && profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        Ok(())
+    } else {
+        Err(WorkerControlError::Protocol(
+            "managed profile name is invalid".into(),
+        ))
     }
 }
 

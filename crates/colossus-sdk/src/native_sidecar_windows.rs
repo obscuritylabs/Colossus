@@ -9,8 +9,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use colossus_sidecar_protocol::{
-    AckRequest, ActivatedResponse, ChildFrame, FailureCode, MAX_FRAME_BYTES, PROTOCOL_VERSION,
-    ParentFrame, ReadyResponse, WorkspaceIdentity, decode_payload, encode_frame,
+    AckRequest, ActivatedResponse, ChildFrame, ConfigurationInspectionRequest,
+    ConfigurationInspectionResponse, FailureCode, MAX_FRAME_BYTES, PROTOCOL_VERSION, ParentFrame,
+    ReadyResponse, WorkspaceIdentity, decode_payload, encode_frame,
 };
 use colossus_windows_native::{BoundPath, FileIdentity, KillOnCloseJob};
 use sha2::{Digest as _, Sha256};
@@ -55,6 +56,83 @@ const PIPE_PREFIX: &str = r"\\.\pipe\colossus-managed-";
 const PUBLIC_API_DIRECTORY: &str = "public-api";
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
 const CERTIFICATE_FILENAME: &str = "certificate.pem";
+const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
+
+/// Inspect repository YAML with the exact verified sidecar and canonical Rust parser.
+pub async fn inspect_sidecar_configuration(
+    executable: &crate::VerifiedExecutable,
+    yaml: String,
+) -> SdkResult<ConfigurationInspectionResponse> {
+    let request = ConfigurationInspectionRequest {
+        protocol_version: PROTOCOL_VERSION,
+        yaml,
+    };
+    request.validate().map_err(|_| {
+        SdkError::InvalidConfiguration("configuration inspection request is invalid")
+    })?;
+    let verified = verify_executable(executable)?;
+    let system_root = windows_system_root_environment()?;
+    let mut command = Command::new(executable.path());
+    command
+        .arg(CONFIGURATION_INSPECTION_ARGUMENT)
+        .env_clear()
+        .env(WINDOWS_SYSTEM_ROOT_ENVIRONMENT, &system_root)
+        .env(WINDOWS_WINDIR_ENVIRONMENT, &system_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    colossus_windows_native::configure_suspended_process(command.as_std_mut());
+    let mut child = command.spawn().map_err(|_| SdkError::SidecarFailed)?;
+    let (job, _) =
+        match KillOnCloseJob::assign_tokio_child_verify_and_resume(&child, verified.identity) {
+            Ok(verified) => verified,
+            Err(_) => {
+                let _ = child.start_kill();
+                return Err(SdkError::IdentityMismatch);
+            }
+        };
+    let mut stdin = child.stdin.take().ok_or(SdkError::SidecarFailed)?;
+    let mut stdout = child.stdout.take().ok_or(SdkError::SidecarFailed)?;
+    let exchange = async {
+        let frame = encode_frame(&request).map_err(|_| SdkError::SidecarFailed)?;
+        stdin
+            .write_all(&frame)
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        let mut length = [0_u8; 4];
+        stdout
+            .read_exact(&mut length)
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        let length = u32::from_be_bytes(length) as usize;
+        if length == 0 || length > MAX_FRAME_BYTES {
+            return Err(SdkError::SidecarFailed);
+        }
+        let mut payload = vec![0_u8; length];
+        stdout
+            .read_exact(&mut payload)
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        let response: ConfigurationInspectionResponse =
+            decode_payload(&payload).map_err(|_| SdkError::SidecarFailed)?;
+        response.validate().map_err(|_| SdkError::SidecarFailed)?;
+        let status = child.wait().await.map_err(|_| SdkError::SidecarFailed)?;
+        if !status.success() {
+            return Err(SdkError::SidecarFailed);
+        }
+        Ok(response)
+    };
+    let result = timeout(BOOTSTRAP_TIMEOUT, exchange)
+        .await
+        .map_err(|_| SdkError::SidecarFailed)?;
+    drop(job);
+    result
+}
 
 /// Authenticated Windows lifecycle for one app-owned Managed Local runtime.
 pub struct NativeSidecarLifecycle {

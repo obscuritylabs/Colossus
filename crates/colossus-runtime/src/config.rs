@@ -1621,6 +1621,7 @@ pub(super) fn configured_search_profile_with_authority(
 pub(super) fn search_registry(
     config: &RuntimeConfig,
     tls_roots: &AdditionalRootCertificates,
+    credentials: Arc<dyn CredentialResolver>,
 ) -> Result<SearchRegistry, RuntimeError> {
     let resource_authority = configured_resource_authority(&config.sandbox);
     let config = &config.search;
@@ -1629,7 +1630,7 @@ pub(super) fn search_registry(
         .iter()
         .map(|(name, profile)| {
             configured_search_profile_with_authority(name, profile, resource_authority)
-                .map(SearchExecutor::new)
+                .map(|profile| SearchExecutor::with_credentials(profile, Arc::clone(&credentials)))
                 .map(|executor| executor.with_tls_roots(tls_roots.clone()))
         })
         .collect::<Result<Vec<_>, _>>()?;

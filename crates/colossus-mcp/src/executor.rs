@@ -1,4 +1,5 @@
 use super::*;
+use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
     ServiceExt as _,
@@ -24,6 +25,7 @@ use std::{
 pub struct McpExecutor {
     servers: BTreeMap<String, ConfiguredServer>,
     process: Arc<dyn EffectExecutor>,
+    credentials: Arc<dyn CredentialResolver>,
     tls_roots: AdditionalRootCertificates,
     oauth_store: Option<OAuthStoreFactory>,
     oauth_resource_authority: ResourceAuthority,
@@ -82,6 +84,7 @@ impl McpExecutor {
         Ok(Self {
             servers,
             process,
+            credentials: Arc::new(EnvironmentCredentialResolver),
             tls_roots: AdditionalRootCertificates::default(),
             oauth_store: None,
             oauth_resource_authority: ResourceAuthority::Declared,
@@ -91,6 +94,13 @@ impl McpExecutor {
             oauth_max_output_bytes: 1024 * 1024,
             oauth_sessions: tokio::sync::Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Use one shared late-bound credential resolver for every MCP secret surface.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Arc<dyn CredentialResolver>) -> Self {
+        self.credentials = credentials;
+        self
     }
 
     /// Add validated runtime-wide CA roots to remote MCP clients.
@@ -580,6 +590,7 @@ impl McpExecutor {
                 reference,
                 resource_authority,
                 allowed_environment,
+                self.credentials.as_ref(),
             )?);
         }
         manager.configure_client(client).map_err(safe_oauth_error)?;
@@ -677,17 +688,14 @@ fn template_value(value: &Value, query: &str) -> Value {
 
 fn resolve_environment(
     references: &BTreeMap<String, String>,
+    credentials: &dyn CredentialResolver,
 ) -> Result<(BTreeMap<String, String>, Vec<String>), ExecutionError> {
     let mut environment = BTreeMap::new();
     let mut secrets = Vec::new();
     for (child_name, reference) in references {
-        let host_name = environment_reference(reference)
-            .ok_or_else(|| failed("MCP credential reference is invalid"))?;
-        let value = env::var(host_name).map_err(|_| {
-            failed(format!(
-                "MCP credential environment variable {host_name} is unavailable"
-            ))
-        })?;
+        let value = credentials
+            .resolve(reference)
+            .map_err(|_| failed("MCP credential is unavailable"))?;
         secrets.push(value.clone());
         environment.insert(child_name.clone(), value);
     }
@@ -697,6 +705,7 @@ fn resolve_environment(
 fn resolve_http_headers(
     server: &ConfiguredServer,
     permit: &ExecutionPermit,
+    credentials: &dyn CredentialResolver,
 ) -> Result<(HashMap<HeaderName, HeaderValue>, Vec<String>), ExecutionError> {
     let mut headers = HashMap::new();
     for (name, value) in &server.headers {
@@ -708,9 +717,10 @@ fn resolve_http_headers(
     }
     let mut secrets = Vec::new();
     for (name, credential) in &server.credential_headers {
-        let variable = environment_reference(&credential.reference)
+        let reference = credential_reference(&credential.reference)
             .ok_or_else(|| failed("MCP credential reference is invalid"))?;
-        if permit.obligations().resource_authority != ResourceAuthority::Ambient
+        if let CredentialReferenceKind::Environment(variable) = reference
+            && permit.obligations().resource_authority != ResourceAuthority::Ambient
             && !permit
                 .obligations()
                 .allowed_environment
@@ -721,11 +731,9 @@ fn resolve_http_headers(
                 "MCP credential environment variable {variable} is absent from permit obligations"
             )));
         }
-        let secret = env::var(variable).map_err(|_| {
-            failed(format!(
-                "MCP credential environment variable {variable} is unavailable"
-            ))
-        })?;
+        let secret = credentials
+            .resolve(&credential.reference)
+            .map_err(|_| failed("MCP credential is unavailable"))?;
         if secret.is_empty() || secret.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
             return Err(failed("MCP credential resolved to an invalid value"));
         }
@@ -747,10 +755,12 @@ fn resolve_oauth_client_secret(
     reference: &str,
     resource_authority: ResourceAuthority,
     allowed_environment: &[String],
+    credentials: &dyn CredentialResolver,
 ) -> Result<String, McpError> {
-    let variable = environment_reference(reference)
+    let credential = credential_reference(reference)
         .ok_or_else(|| McpError::OAuth("OAuth client secret reference is invalid".into()))?;
-    if resource_authority != ResourceAuthority::Ambient
+    if let CredentialReferenceKind::Environment(variable) = credential
+        && resource_authority != ResourceAuthority::Ambient
         && !allowed_environment
             .iter()
             .any(|allowed| allowed == variable)
@@ -759,11 +769,9 @@ fn resolve_oauth_client_secret(
             "OAuth client secret environment variable {variable} is not permitted"
         )));
     }
-    let secret = env::var(variable).map_err(|_| {
-        McpError::OAuth(format!(
-            "OAuth client secret environment variable {variable} is unavailable"
-        ))
-    })?;
+    let secret = credentials
+        .resolve(reference)
+        .map_err(|_| McpError::OAuth("OAuth client secret is unavailable".into()))?;
     if secret.is_empty() || secret.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
         return Err(McpError::OAuth(
             "OAuth client secret resolved to an invalid value".into(),
@@ -1307,7 +1315,8 @@ impl EffectExecutor for McpExecutor {
                 .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
             let http =
                 HardenedStreamableHttpClient::new(endpoint, &permit, &self.tls_roots).await?;
-            let (headers, mut secrets) = resolve_http_headers(&server, &permit)?;
+            let (headers, mut secrets) =
+                resolve_http_headers(&server, &permit, self.credentials.as_ref())?;
             let timeout = Duration::from_millis(permit.obligations().timeout_ms);
             let call_dispatched = AtomicBool::new(false);
             let result = if server.oauth.is_some() {
@@ -1378,7 +1387,8 @@ impl EffectExecutor for McpExecutor {
                 )),
             };
         }
-        let (environment, secrets) = resolve_environment(&server.environment)?;
+        let (environment, secrets) =
+            resolve_environment(&server.environment, self.credentials.as_ref())?;
         let protocol = protocol_input(&input.operation)?;
         let process = ProcessSpec {
             cwd: server
@@ -1423,5 +1433,45 @@ impl EffectExecutor for McpExecutor {
                     .map_err(|error| operation_error(&input.operation, error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    use colossus_ports::CredentialResolutionError;
+
+    struct HostCredentials;
+
+    impl CredentialResolver for HostCredentials {
+        fn resolve(&self, reference: &str) -> Result<String, CredentialResolutionError> {
+            (reference == "host:mcp-secret")
+                .then(|| "native-secret".to_owned())
+                .ok_or(CredentialResolutionError::Unavailable)
+        }
+    }
+
+    #[test]
+    fn stdio_environment_resolves_injected_host_credentials_late() {
+        let references = BTreeMap::from([("MCP_TOKEN".into(), "host:mcp-secret".into())]);
+
+        let (environment, secrets) =
+            resolve_environment(&references, &HostCredentials).expect("host credential");
+
+        assert_eq!(environment["MCP_TOKEN"], "native-secret");
+        assert_eq!(secrets, ["native-secret"]);
+    }
+
+    #[test]
+    fn oauth_client_secret_resolves_injected_host_credentials_late() {
+        let secret = resolve_oauth_client_secret(
+            "host:mcp-secret",
+            ResourceAuthority::Declared,
+            &[],
+            &HostCredentials,
+        )
+        .expect("host OAuth client secret");
+
+        assert_eq!(secret, "native-secret");
     }
 }

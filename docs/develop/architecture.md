@@ -86,10 +86,13 @@ infrastructure adapters implement ports and are assembled only by the runtime.
   embedded open options, and worker workspace matching all feed the same repository
   context and state identity. An isolating execution boundary may confine resources to
   it; acknowledged full access deliberately does not.
-- Shared home resolution selects absolute `COLOSSUS_HOME` or the platform user home,
-  validates its owner-private no-follow boundary, and derives one opaque partition from
-  canonical workspace path and object identity. Interfaces consume the resolved
-  context; they do not independently invent configuration or state paths.
+- Shared CLI and TUI home resolution selects absolute `COLOSSUS_HOME` or the platform
+  user home, validates its owner-private no-follow boundary, and derives one opaque
+  partition from canonical workspace path and object identity. Windows Desktop honors
+  an explicit `COLOSSUS_HOME`; otherwise its native composition selects the fixed
+  owner-private `ColossusDesktopHome` beneath the user's local application-data
+  directory. Interfaces consume the resolved context; renderer code never invents
+  configuration or state paths.
 - Configuration resolution selects one explicit, repository-local, or user-level
   document without merging. Runtime composition receives the selected source and
   resolved storage path after `storage.location` confinement has succeeded.

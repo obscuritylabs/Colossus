@@ -18,12 +18,16 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
+use crate::managed_configuration::{
+    GlobalConfigurationSetting, SpaceConfigurationSetting, initialize_catalog,
+    validate_configuration,
+};
 
 use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 5;
+const SETTINGS_SCHEMA_VERSION: u16 = 6;
 const SETTINGS_FILE: &str = "settings.json";
 const THREAD_SEARCH_FILE: &str = "thread-search.redb";
 const MANAGED_DIRECTORY: &str = "managed-local";
@@ -33,7 +37,9 @@ const SELF_TEST_DIRECTORY: &str = "self-test";
 const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime-v2";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
 const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
-const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
+#[cfg(windows)]
+const WINDOWS_DESKTOP_HOME_DIRECTORY: &str = "ColossusDesktopHome";
+const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 const MAX_PROVIDER_SECRET_BYTES: usize = 761;
 pub(crate) const LOCAL_TERMINAL_CONSENT_VERSION: u8 = 1;
 pub(crate) const MAX_EXTERNAL_TARGETS: usize = 32;
@@ -71,6 +77,7 @@ pub(crate) const CODEX_BASE_URL: &str = colossus_codex_auth::CODEX_API_BASE_URL;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AccessProfileSetting {
     Minimal,
+    Pinned,
     Development,
     #[default]
     AllowAll,
@@ -151,6 +158,10 @@ pub(crate) struct WorkspaceProfile {
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     pub(crate) terminal_enabled: bool,
+    /// Sparse inherited configuration and pinned global catalog revisions. The legacy
+    /// concrete fields above remain the selected-runtime compatibility projection.
+    #[serde(default)]
+    pub(crate) configuration: SpaceConfigurationSetting,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -173,6 +184,18 @@ impl ProviderSetting {
     }
 }
 
+pub(crate) fn managed_provider_setting_is_valid(provider: &ProviderSetting) -> bool {
+    valid_profile_name(&provider.profile)
+        && provider.timeout_ms != Some(0)
+        && validate_managed_provider_base_url(&provider.base_url).is_ok()
+        && provider
+            .credential_id
+            .as_deref()
+            .is_none_or(valid_opaque_id)
+        && (provider.kind != ProviderKindSetting::Codex
+            || (provider.base_url == CODEX_BASE_URL && provider.credential_id.is_none()))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ModelCapabilitiesSetting {
@@ -191,6 +214,23 @@ pub(crate) struct ModelSetting {
     pub(crate) capabilities: ModelCapabilitiesSetting,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reasoning_effort: Option<ReasoningEffortSetting>,
+}
+
+pub(crate) fn managed_model_setting_is_valid(
+    model: &ModelSetting,
+    provider_profiles: &BTreeSet<&str>,
+) -> bool {
+    let safety = model.context_window_tokens.div_ceil(10).max(512);
+    valid_profile_name(&model.profile)
+        && provider_profiles.contains(model.provider_profile.as_str())
+        && validate_managed_model_identifier(&model.model).is_ok()
+        && model.context_window_tokens >= 1_024
+        && model.max_output_tokens > 0
+        && model
+            .context_window_tokens
+            .checked_sub(model.max_output_tokens)
+            .and_then(|remaining| remaining.checked_sub(safety))
+            .is_some_and(|input| input > 0)
 }
 
 pub(crate) struct SelfTestStorage {
@@ -253,6 +293,9 @@ pub(crate) struct DesktopSettings {
     pub(crate) spaces: Vec<WorkspaceProfile>,
     #[serde(default)]
     pub(crate) selected_space_id: Option<String>,
+    /// Versioned reusable definitions and defaults shared by Desktop Spaces.
+    #[serde(default)]
+    pub(crate) global_configuration: GlobalConfigurationSetting,
     /// Bounded linkage metadata for Space-scoped side conversations. No prompt,
     /// message, tool output, or selected text is persisted here.
     #[serde(default)]
@@ -322,6 +365,7 @@ impl Default for DesktopSettings {
             managed_instance_id: Uuid::now_v7().to_string(),
             spaces: Vec::new(),
             selected_space_id: None,
+            global_configuration: GlobalConfigurationSetting::default(),
             asides: Vec::new(),
             workspace: None,
             providers: Vec::new(),
@@ -342,8 +386,11 @@ impl Default for DesktopSettings {
 
 impl DesktopSettings {
     pub(crate) fn local_terminal_enabled(&self) -> bool {
-        self.terminal_enabled
-            && self.local_terminal_consent_version == LOCAL_TERMINAL_CONSENT_VERSION
+        self.terminal_enabled && self.has_local_terminal_consent()
+    }
+
+    pub(crate) fn has_local_terminal_consent(&self) -> bool {
+        self.local_terminal_consent_version == LOCAL_TERMINAL_CONSENT_VERSION
     }
 
     pub(crate) fn managed_configured(&self) -> bool {
@@ -525,6 +572,10 @@ impl DesktopSettings {
             access_profile: self.access_profile,
             execution_boundary: self.execution_boundary,
             terminal_enabled: self.terminal_enabled,
+            configuration: SpaceConfigurationSetting {
+                accepted_global_revision: self.global_configuration.revision,
+                ..SpaceConfigurationSetting::default()
+            },
         });
         self.activate_space(&id)?;
         Ok(id)
@@ -606,6 +657,10 @@ impl DesktopSettings {
             access_profile: self.access_profile,
             execution_boundary: self.execution_boundary,
             terminal_enabled: self.terminal_enabled,
+            configuration: SpaceConfigurationSetting {
+                accepted_global_revision: self.global_configuration.revision,
+                ..SpaceConfigurationSetting::default()
+            },
         });
         self.selected_space_id = Some(id.clone());
         if self.selected_target_id.as_deref() == Some("managed-local") {
@@ -648,7 +703,7 @@ pub(crate) struct ManagedWorkspaceStorage {
 
 impl SettingsStore {
     pub(crate) fn open_application() -> Result<Self, CommandErrorDto> {
-        let home = ColossusHome::resolve_and_ensure().map_err(home_storage_error)?;
+        let home = resolve_application_home().map_err(home_storage_error)?;
         Self::open_home(home)
     }
 
@@ -715,6 +770,7 @@ impl SettingsStore {
         Err(storage_error())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn load(&self) -> Result<DesktopSettings, CommandErrorDto> {
         let path = self.root.join(SETTINGS_FILE);
         let metadata = match fs::symlink_metadata(&path) {
@@ -765,6 +821,8 @@ impl SettingsStore {
             (migrate_legacy_settings(&bytes, schema_version)?, true)
         } else if schema_version == 4 {
             (migrate_v4_settings(&bytes)?, true)
+        } else if schema_version == 5 {
+            (migrate_v5_settings(&bytes)?, true)
         } else {
             (
                 serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
@@ -772,6 +830,20 @@ impl SettingsStore {
             )
         };
         migrated_settings |= settings.migrate_workspace_to_space();
+        let previous_global = settings.global_configuration.clone();
+        let previous_space_configuration = settings
+            .spaces
+            .iter()
+            .map(|space| space.configuration.clone())
+            .collect::<Vec<_>>();
+        initialize_catalog(&mut settings.global_configuration, &mut settings.spaces);
+        migrated_settings |= previous_global != settings.global_configuration
+            || previous_space_configuration
+                != settings
+                    .spaces
+                    .iter()
+                    .map(|space| space.configuration.clone())
+                    .collect::<Vec<_>>();
         migrated_settings |= settings.archive_stale_same_path_spaces();
         settings.project_selected_space();
         let legacy_workspace_requires_reselection =
@@ -828,9 +900,7 @@ impl SettingsStore {
     }
 
     pub(crate) fn save(&self, settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
-        let mut persisted = settings.clone();
-        persisted.sync_selected_space_projection()?;
-        validate_settings(&persisted)?;
+        let persisted = normalized_settings_snapshot(settings)?;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| storage_error())?;
         if bytes.len() > usize::try_from(MAX_SETTINGS_BYTES).unwrap_or(usize::MAX) {
             return Err(storage_error());
@@ -987,6 +1057,48 @@ impl SettingsStore {
     }
 }
 
+#[cfg(windows)]
+fn resolve_application_home() -> Result<ColossusHome, HomeError> {
+    let root = windows_application_home_root(
+        std::env::var_os("COLOSSUS_HOME"),
+        BaseDirs::new().map(|directories| directories.data_local_dir().to_owned()),
+    )?;
+    ColossusHome::ensure_at(root)
+}
+
+#[cfg(not(windows))]
+fn resolve_application_home() -> Result<ColossusHome, HomeError> {
+    ColossusHome::resolve_and_ensure()
+}
+
+#[cfg(windows)]
+fn windows_application_home_root(
+    configured_home: Option<std::ffi::OsString>,
+    local_data_directory: Option<PathBuf>,
+) -> Result<PathBuf, HomeError> {
+    if let Some(configured_home) = configured_home {
+        let root = PathBuf::from(configured_home);
+        return if root.is_absolute() {
+            Ok(root)
+        } else {
+            Err(HomeError::HomeMustBeAbsolute(root))
+        };
+    }
+    local_data_directory
+        .map(|root| root.join(WINDOWS_DESKTOP_HOME_DIRECTORY))
+        .ok_or(HomeError::HomeDirectoryUnavailable)
+}
+
+pub(crate) fn normalized_settings_snapshot(
+    settings: &DesktopSettings,
+) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut normalized = settings.clone();
+    normalized.sync_selected_space_projection()?;
+    initialize_catalog(&mut normalized.global_configuration, &mut normalized.spaces);
+    validate_settings(&normalized)?;
+    Ok(normalized)
+}
+
 pub(crate) fn validate_workspace(path: &Path) -> Result<WorkspaceSetting, CommandErrorDto> {
     let (canonical, identity) = open_workspace_identity(path)?;
     let display_name = canonical
@@ -1093,6 +1205,7 @@ fn migrate_v1_settings(
         managed_instance_id: legacy.managed_instance_id,
         spaces: Vec::new(),
         selected_space_id: None,
+        global_configuration: GlobalConfigurationSetting::default(),
         asides: Vec::new(),
         workspace: legacy.workspace,
         providers: Vec::new(),
@@ -1130,6 +1243,32 @@ fn migrate_v4_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto>
     object.insert("spaces".into(), serde_json::Value::Array(Vec::new()));
     object.insert("selectedSpaceId".into(), serde_json::Value::Null);
     serde_json::from_value(value).map_err(|_| storage_error())
+}
+
+fn migrate_v5_settings(bytes: &[u8]) -> Result<DesktopSettings, CommandErrorDto> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| storage_error())?;
+    let object = value.as_object_mut().ok_or_else(storage_error)?;
+    if object
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(5)
+    {
+        return Err(storage_error());
+    }
+    object.insert(
+        "schemaVersion".into(),
+        serde_json::Value::from(SETTINGS_SCHEMA_VERSION),
+    );
+    let mut settings: DesktopSettings =
+        serde_json::from_value(value).map_err(|_| storage_error())?;
+    for space in &mut settings.spaces {
+        space.configuration.access_profile_override = Some(space.access_profile);
+        space.configuration.execution_boundary_override = Some(space.execution_boundary);
+        space.configuration.terminal_enabled_override = Some(space.terminal_enabled);
+    }
+    initialize_catalog(&mut settings.global_configuration, &mut settings.spaces);
+    Ok(settings)
 }
 
 fn migrate_legacy_settings(
@@ -1176,16 +1315,18 @@ fn migrate_legacy_settings(
 const fn migrate_legacy_access_profile(profile: AccessProfileSetting) -> AccessProfileSetting {
     match profile {
         AccessProfileSetting::AllowAll => AccessProfileSetting::Development,
-        AccessProfileSetting::Minimal | AccessProfileSetting::Development => profile,
+        AccessProfileSetting::Minimal
+        | AccessProfileSetting::Pinned
+        | AccessProfileSetting::Development => profile,
     }
 }
 
 const fn legacy_execution_boundary(profile: AccessProfileSetting) -> ExecutionBoundarySetting {
     match profile {
         AccessProfileSetting::Minimal => ExecutionBoundarySetting::OfflineIsolated,
-        AccessProfileSetting::Development | AccessProfileSetting::AllowAll => {
-            ExecutionBoundarySetting::WorkspaceIsolated
-        }
+        AccessProfileSetting::Pinned
+        | AccessProfileSetting::Development
+        | AccessProfileSetting::AllowAll => ExecutionBoundarySetting::WorkspaceIsolated,
     }
 }
 
@@ -1205,6 +1346,7 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
         return Err(storage_error());
     }
     validate_workspace_profiles(settings)?;
+    validate_configuration(&settings.global_configuration, &settings.spaces)?;
     let mut aside_sessions = HashSet::with_capacity(settings.asides.len());
     if settings.asides.iter().any(|aside| {
         !settings
@@ -1996,6 +2138,42 @@ mod tests {
         assert!(!relative.message.contains("relative"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_desktop_uses_private_local_storage_unless_home_is_explicit() {
+        let temporary = PrivateTestRoot::in_target("default-home");
+        let local_data = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical local data");
+        let default_home = windows_application_home_root(None, Some(local_data.clone()))
+            .expect("default Desktop home");
+        assert_eq!(
+            default_home,
+            local_data.join(WINDOWS_DESKTOP_HOME_DIRECTORY)
+        );
+        let store = SettingsStore::open_home(
+            ColossusHome::ensure_at(&default_home).expect("private default Desktop home"),
+        )
+        .expect("Desktop store");
+        assert_eq!(store.home_root().expect("home root"), default_home);
+        assert!(default_home.join("desktop").is_dir());
+
+        let explicit = local_data.join("explicit-home");
+        assert_eq!(
+            windows_application_home_root(
+                Some(explicit.clone().into_os_string()),
+                Some(local_data)
+            )
+            .expect("explicit Desktop home"),
+            explicit
+        );
+        assert!(matches!(
+            windows_application_home_root(Some("relative-home".into()), None),
+            Err(HomeError::HomeMustBeAbsolute(path)) if path == Path::new("relative-home")
+        ));
+    }
+
     #[test]
     fn codex_auth_home_is_app_private_storage() {
         let (_guard, root, store) = test_store();
@@ -2065,6 +2243,114 @@ mod tests {
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
         }
+    }
+
+    #[test]
+    fn normalized_snapshot_seeds_catalogs_for_new_onboarding_configuration() {
+        let (_workspace_guard, workspace_path) = test_directory("cfg");
+        let workspace = validate_workspace(&workspace_path).expect("workspace");
+        let mut settings = DesktopSettings::default();
+        let space_id = settings.add_space(workspace).expect("add Space");
+        let configured = configured_settings(ProviderKindSetting::Codex, CODEX_BASE_URL, None);
+        settings.providers = configured.providers;
+        settings.models = configured.models;
+        settings.model_roles = configured.model_roles;
+        settings.access_profile = AccessProfileSetting::Minimal;
+        settings.execution_boundary = ExecutionBoundarySetting::WorkspaceIsolated;
+
+        let normalized = normalized_settings_snapshot(&settings).expect("normalize settings");
+        let space = normalized.space(&space_id).expect("normalized Space");
+        let resolved = crate::managed_configuration::resolve_space_configuration(
+            &normalized.global_configuration,
+            space,
+        )
+        .expect("resolve normalized configuration");
+
+        assert_eq!(resolved.providers, settings.providers);
+        assert_eq!(resolved.models, settings.models);
+        assert_eq!(resolved.model_roles, settings.model_roles);
+        assert_eq!(resolved.access_profile, AccessProfileSetting::Minimal);
+        assert_eq!(
+            resolved.execution_boundary,
+            ExecutionBoundarySetting::WorkspaceIsolated
+        );
+    }
+
+    #[test]
+    fn v5_migration_preserves_space_authority_and_seeds_revisioned_catalogs() {
+        let credential_id = Uuid::now_v7().to_string();
+        let mut settings = configured_settings(
+            ProviderKindSetting::Compatible,
+            OPENROUTER_BASE_URL,
+            Some(credential_id.clone()),
+        );
+        settings.access_profile = AccessProfileSetting::Development;
+        settings.execution_boundary = ExecutionBoundarySetting::WorkspaceIsolated;
+        settings.terminal_enabled = true;
+        settings.spaces.push(WorkspaceProfile {
+            id: "space-one".into(),
+            display_name: "Space One".into(),
+            archived: false,
+            last_opened_at_ms: 42,
+            workspace: WorkspaceSetting {
+                id: "space-one".into(),
+                path: PathBuf::from(r"C:\space-one"),
+                identity: None,
+                display_name: "space-one".into(),
+                display_path: r"C:\space-one".into(),
+            },
+            providers: settings.providers.clone(),
+            models: settings.models.clone(),
+            model_roles: settings.model_roles.clone(),
+            access_profile: settings.access_profile,
+            execution_boundary: settings.execution_boundary,
+            terminal_enabled: settings.terminal_enabled,
+            configuration: SpaceConfigurationSetting::default(),
+        });
+        let mut encoded = serde_json::to_value(settings).expect("settings");
+        encoded["schemaVersion"] = serde_json::Value::from(5);
+        encoded
+            .as_object_mut()
+            .expect("settings object")
+            .remove("globalConfiguration");
+        encoded["spaces"][0]
+            .as_object_mut()
+            .expect("space object")
+            .remove("configuration");
+
+        let migrated =
+            migrate_v5_settings(&serde_json::to_vec(&encoded).expect("schema five settings"))
+                .expect("migrate schema five");
+
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated.global_configuration.providers.len(), 1);
+        assert_eq!(migrated.global_configuration.models.len(), 1);
+        assert_eq!(migrated.global_configuration.credentials.len(), 1);
+        assert_eq!(
+            migrated.global_configuration.credentials[0].id,
+            credential_id
+        );
+        let configuration = &migrated.spaces[0].configuration;
+        assert_eq!(configuration.accepted_global_revision, 1);
+        assert_eq!(
+            configuration.access_profile_override,
+            Some(AccessProfileSetting::Development)
+        );
+        assert_eq!(
+            configuration.execution_boundary_override,
+            Some(ExecutionBoundarySetting::WorkspaceIsolated)
+        );
+        assert_eq!(configuration.terminal_enabled_override, Some(true));
+        assert!(
+            configuration
+                .catalog_revisions
+                .contains_key("provider:primary-provider")
+        );
+        assert!(
+            configuration
+                .catalog_revisions
+                .contains_key("model:primary")
+        );
     }
 
     #[cfg(windows)]

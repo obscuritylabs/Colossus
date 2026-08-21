@@ -4,21 +4,29 @@ use colossus_access::AccessProfile;
 use colossus_api::{ApiScope, ApplicationKind};
 use colossus_grpc::{TlsIdentity, TlsKeySeed};
 use colossus_home::{ColossusHome, ConfinedRoot};
+use colossus_mcp::{
+    McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
+    McpTransportKind,
+};
 use colossus_ports::StoreError;
 use colossus_provider::{
     CODEX_AUTH_ORIGIN, CODEX_CREDENTIAL_REFERENCE, ChatCompletionsOutputTokenParameter,
     CodexAuthStore, ProviderKind,
 };
 use colossus_runtime::{
-    HostCredentialResolver, KeyConfig, ModelCapabilities, ModelProfileConfig, ModelsConfig,
-    ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig, RuntimeError,
-    RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation, WorkspaceIdentityToken,
+    HostCredentialResolver, JournalPayloadMode, KeyConfig, LogSignalConfig, MetricSignalConfig,
+    ModelCapabilities, ModelProfileConfig, ModelsConfig, ObservabilityConfig, OtlpConfig,
+    OtlpProtocol, ProviderProfileConfig, ProvidersConfig, ReasoningEffort, RuntimeConfig,
+    RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig, StorageLocation,
+    TraceSignalConfig, WorkspaceIdentityToken,
 };
 use colossus_sidecar_protocol::{
-    AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
-    FailureResponse, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
-    ManagedExecutionBoundary, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
-    PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
+    AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame,
+    ConfigurationInspectionRequest, ConfigurationInspectionResponse, FailureCode, FailureResponse,
+    MANAGED_EDITABLE_FIELD_IDS, ManagedAccessProfile, ManagedChatCompletionsOutputTokenParameter,
+    ManagedExecutionBoundary, ManagedFieldOverride, ManagedJournalPayloadMode, ManagedMcpTransport,
+    ManagedOtlpProtocol, ManagedProviderKind, ManagedReasoningEffort, ManagedRuntimeConfig,
+    ManagedSearchKind, PROTOCOL_VERSION, ParentFrame, ReadyResponse, SecretString,
     WorkspaceIdentity as BootstrapWorkspaceIdentity, decode_worker_authentication, read_frame,
     write_frame,
 };
@@ -44,6 +52,7 @@ use zeroize::Zeroizing;
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 
 const MANAGED_SIDECAR_ARGUMENT: &str = "__managed-sidecar-v1";
+const CONFIGURATION_INSPECTION_ARGUMENT: &str = "__managed-config-inspection-v1";
 const SANDBOX_HELPER_ARGUMENT: &str = "__sandbox-helper";
 const SANDBOX_PROBE_ARGUMENT: &str = "__sandbox-protection-probe";
 const PUBLIC_API_DIRECTORY: &str = "public-api";
@@ -56,6 +65,11 @@ const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn main_entry() -> ExitCode {
     let argument = std::env::args_os().nth(1);
+    if argument.as_deref() == Some(std::ffi::OsStr::new(CONFIGURATION_INSPECTION_ARGUMENT))
+        && std::env::args_os().nth(2).is_none()
+    {
+        return configuration_inspection_entry();
+    }
     if argument.as_deref() == Some(std::ffi::OsStr::new(SANDBOX_HELPER_ARGUMENT)) {
         return match colossus_sandbox::run_helper_stdio() {
             Ok(()) => ExitCode::SUCCESS,
@@ -114,6 +128,70 @@ pub(crate) fn main_entry() -> ExitCode {
             send_failure(Some(exchange_id), failure);
             ExitCode::FAILURE
         }
+    }
+}
+
+fn configuration_inspection_entry() -> ExitCode {
+    let request = match read_frame::<_, ConfigurationInspectionRequest>(&mut std::io::stdin()) {
+        Ok(request) if request.validate().is_ok() => request,
+        _ => return ExitCode::FAILURE,
+    };
+    let response = inspect_configuration(&request.yaml);
+    if response.validate().is_err() || write_frame(&mut std::io::stdout(), &response).is_err() {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+fn inspect_configuration(yaml: &str) -> ConfigurationInspectionResponse {
+    let parsed = serde_saphyr::from_str::<serde_json::Value>(yaml);
+    let config = RuntimeConfig::from_yaml(yaml);
+    match (parsed, config) {
+        (Ok(document), Ok(config)) => {
+            let Ok(canonical_config) = serde_json::to_value(config) else {
+                return invalid_configuration_inspection();
+            };
+            let mut explicit_field_ids = Vec::new();
+            collect_explicit_field_ids(&document, "", &mut explicit_field_ids);
+            explicit_field_ids.sort();
+            explicit_field_ids.dedup();
+            ConfigurationInspectionResponse {
+                protocol_version: PROTOCOL_VERSION,
+                canonical_config: Some(canonical_config),
+                explicit_field_ids,
+                error_code: None,
+            }
+        }
+        _ => invalid_configuration_inspection(),
+    }
+}
+
+fn invalid_configuration_inspection() -> ConfigurationInspectionResponse {
+    ConfigurationInspectionResponse {
+        protocol_version: PROTOCOL_VERSION,
+        canonical_config: None,
+        explicit_field_ids: Vec::new(),
+        error_code: Some("invalid_configuration".into()),
+    }
+}
+
+fn collect_explicit_field_ids(value: &serde_json::Value, prefix: &str, output: &mut Vec<String>) {
+    if output.len() >= 4096 {
+        return;
+    }
+    match value {
+        serde_json::Value::Object(object) if !object.is_empty() => {
+            for (key, child) in object {
+                let field = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                collect_explicit_field_ids(child, &field, output);
+            }
+        }
+        _ if !prefix.is_empty() && prefix.len() <= 256 => output.push(prefix.to_owned()),
+        _ => {}
     }
 }
 
@@ -348,6 +426,30 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
             return Err(FailureCode::CredentialActivation);
         }
     }
+    let observability =
+        match colossus_observability::ObservabilityGuard::install(&config.observability) {
+            Ok(observability) => observability,
+            Err(_) => {
+                let _ = credentials.revoke_batch(&credential_ids);
+                return Err(FailureCode::RuntimeFailed);
+            }
+        };
+    let observability_diagnostics = observability
+        .as_ref()
+        .map(colossus_observability::ObservabilityGuard::diagnostics)
+        .unwrap_or_default();
+    let server = server.with_observability_diagnostics(move || {
+        serde_json::to_value(observability_diagnostics.force_flush()).unwrap_or_else(|_| {
+            serde_json::json!({
+                "ready": false,
+                "checks": [{
+                    "name": "host",
+                    "status": "fail",
+                    "detail": "The exporter diagnostic failed safely."
+                }]
+            })
+        })
+    });
     let activated_result = {
         let mut output = std::io::stdout().lock();
         write_frame(
@@ -391,6 +493,9 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     // runtime failure). Revoke idempotently on every exit path so neither active
     // bootstrap credential survives the supervised sidecar process.
     let _ = credentials.revoke_batch(&credential_ids);
+    if let Some(observability) = observability {
+        observability.shutdown();
+    }
     serve_result.map_err(|_| FailureCode::RuntimeFailed)
 }
 
@@ -537,34 +642,195 @@ fn managed_runtime_config(
             .search_profiles
             .iter()
             .map(|profile| {
-                (
-                    profile.profile.clone(),
-                    SearchProfileConfig::Searxng {
+                let credential_reference = profile
+                    .credential_id
+                    .as_ref()
+                    .map(|credential| format!("host:{credential}"));
+                let value = match profile.kind {
+                    ManagedSearchKind::Searxng => SearchProfileConfig::Searxng {
                         endpoint: profile.endpoint.clone(),
-                        credential_reference: None,
-                        auth_header: "X-Searxng-Key".into(),
+                        credential_reference,
+                        auth_header: profile
+                            .auth_header
+                            .clone()
+                            .unwrap_or_else(|| "X-Searxng-Key".into()),
                         user_agent: "colossus-desktop/0.10".into(),
                         timeout_ms: profile.timeout_ms,
                     },
-                )
+                    ManagedSearchKind::SerpApi => SearchProfileConfig::SerpApi {
+                        endpoint: profile.endpoint.clone(),
+                        credential_reference: credential_reference
+                            .expect("validated managed SerpAPI credential"),
+                        user_agent: "colossus-desktop/0.10".into(),
+                        timeout_ms: profile.timeout_ms,
+                    },
+                };
+                (profile.profile.clone(), value)
             })
             .collect(),
         roles: managed.search_roles.clone(),
     };
-    let mut network_destinations = managed
-        .providers
+    config.mcp.servers = managed
+        .mcp_servers
         .iter()
-        .filter_map(|provider| provider.base_url.as_deref())
-        .map(|base_url| {
-            url::Url::parse(base_url)
-                .map_err(|_| FailureCode::InvalidConfiguration)
-                .map(|url| url.origin().ascii_serialization())
+        .map(|server| {
+            (
+                server.name.clone(),
+                McpServerConfig {
+                    transport: match server.transport {
+                        ManagedMcpTransport::Stdio => McpTransportKind::Stdio,
+                        ManagedMcpTransport::StreamableHttp => McpTransportKind::StreamableHttp,
+                    },
+                    command: server
+                        .command
+                        .as_deref()
+                        .map_or_else(PathBuf::new, PathBuf::from),
+                    args: server.args.clone(),
+                    working_directory: server.working_directory.as_deref().map(PathBuf::from),
+                    environment: server
+                        .environment_credentials
+                        .iter()
+                        .map(|(name, credential)| (name.clone(), format!("host:{credential}")))
+                        .collect(),
+                    url: server.url.clone(),
+                    headers: server.headers.clone(),
+                    credential_headers: server
+                        .credential_headers
+                        .iter()
+                        .map(|(name, credential)| {
+                            (
+                                name.clone(),
+                                McpCredentialHeaderConfig {
+                                    scheme: credential.scheme.clone(),
+                                    reference: format!("host:{}", credential.credential_id),
+                                },
+                            )
+                        })
+                        .collect(),
+                    allow_stateless: server.allow_stateless,
+                    oauth: server.oauth.as_ref().map(|oauth| McpOAuthConfig {
+                        client_id: oauth.client_id.clone(),
+                        client_secret_reference: oauth
+                            .client_secret_credential_id
+                            .as_ref()
+                            .map(|credential| format!("host:{credential}")),
+                        callback_port: oauth.callback_port,
+                        scopes: oauth.scopes.clone(),
+                    }),
+                    allowed_tools: server.allowed_tools.clone(),
+                    research_tools: server
+                        .research_tools
+                        .iter()
+                        .map(|tool| McpResearchToolConfig {
+                            tool: tool.tool.clone(),
+                            title: tool.title.clone(),
+                            arguments: tool.arguments.clone(),
+                        })
+                        .collect(),
+                    timeout_ms: server.timeout_ms,
+                    max_output_bytes: server.max_output_bytes,
+                    effect_action_prefix: None,
+                    provenance: None,
+                },
+            )
         })
-        .collect::<Result<BTreeSet<_>, _>>()?;
+        .collect();
+    if let Some(telemetry) = &managed.telemetry {
+        config.observability = ObservabilityConfig {
+            enabled: telemetry.traces_enabled
+                || telemetry.metrics_enabled
+                || telemetry.logs_otlp
+                || telemetry.logs_stdout_json
+                || telemetry.journal_payloads != ManagedJournalPayloadMode::Disabled,
+            service_name: telemetry.name.clone(),
+            resource_attributes: telemetry.resource_attributes.clone(),
+            traces: TraceSignalConfig {
+                enabled: telemetry.traces_enabled,
+                sample_ratio: f64::from(telemetry.trace_sample_ratio_millionths) / 1_000_000.0,
+            },
+            metrics: MetricSignalConfig {
+                enabled: telemetry.metrics_enabled,
+                export_interval_ms: telemetry.metric_export_interval_ms,
+            },
+            logs: LogSignalConfig {
+                otlp: telemetry.logs_otlp,
+                stdout_json: telemetry.logs_stdout_json,
+                journal_payloads: match telemetry.journal_payloads {
+                    ManagedJournalPayloadMode::Disabled => JournalPayloadMode::Disabled,
+                    ManagedJournalPayloadMode::Metadata => JournalPayloadMode::Metadata,
+                    ManagedJournalPayloadMode::Full => JournalPayloadMode::Full,
+                },
+                acknowledge_sensitive_content: telemetry.acknowledge_sensitive_content,
+            },
+            otlp: OtlpConfig {
+                endpoint: telemetry.endpoint.clone(),
+                protocol: match telemetry.protocol {
+                    ManagedOtlpProtocol::Grpc => OtlpProtocol::Grpc,
+                    ManagedOtlpProtocol::HttpProtobuf => OtlpProtocol::HttpProtobuf,
+                },
+                timeout_ms: telemetry.timeout_ms,
+                acknowledge_insecure_transport: telemetry.acknowledge_insecure_transport,
+            },
+        };
+    }
+    apply_managed_field_overrides(&mut config, &managed.field_overrides)?;
+    config.sandbox.executables.extend(
+        managed
+            .mcp_servers
+            .iter()
+            .filter_map(|server| server.command.as_deref())
+            .map(PathBuf::from),
+    );
+    config.sandbox.environment.extend(
+        managed
+            .mcp_servers
+            .iter()
+            .flat_map(|server| server.environment_credentials.keys().cloned()),
+    );
+    let mut network_destinations = config
+        .sandbox
+        .network_destinations
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    network_destinations.extend(
+        managed
+            .providers
+            .iter()
+            .filter_map(|provider| provider.base_url.as_deref())
+            .map(|base_url| {
+                url::Url::parse(base_url)
+                    .map_err(|_| FailureCode::InvalidConfiguration)
+                    .map(|url| url.origin().ascii_serialization())
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?,
+    );
     for endpoint in managed
         .search_profiles
         .iter()
         .map(|profile| profile.endpoint.as_str())
+    {
+        let origin = url::Url::parse(endpoint)
+            .map_err(|_| FailureCode::InvalidConfiguration)?
+            .origin()
+            .ascii_serialization();
+        network_destinations.insert(origin);
+    }
+    if let Some(endpoint) = managed
+        .telemetry
+        .as_ref()
+        .and_then(|telemetry| telemetry.endpoint.as_deref())
+    {
+        let origin = url::Url::parse(endpoint)
+            .map_err(|_| FailureCode::InvalidConfiguration)?
+            .origin()
+            .ascii_serialization();
+        network_destinations.insert(origin);
+    }
+    for endpoint in managed
+        .mcp_servers
+        .iter()
+        .filter_map(|server| server.url.as_deref())
     {
         let origin = url::Url::parse(endpoint)
             .map_err(|_| FailureCode::InvalidConfiguration)?
@@ -589,6 +855,79 @@ fn managed_runtime_config(
         .to_yaml()
         .map_err(|_| FailureCode::InvalidConfiguration)?;
     RuntimeConfig::from_yaml(&yaml).map_err(|_| FailureCode::InvalidConfiguration)
+}
+
+fn apply_managed_field_overrides(
+    config: &mut RuntimeConfig,
+    overrides: &[ManagedFieldOverride],
+) -> Result<(), FailureCode> {
+    const LOCKED_FIELDS: [&str; 13] = [
+        "schemaVersion",
+        "storage",
+        "network.caBundlePath",
+        "providers",
+        "models",
+        "search",
+        "mcp",
+        "observability",
+        "sandbox.backend",
+        "memory.indexPath",
+        "skills.user",
+        "packs.installRoot",
+        "workflows.user",
+    ];
+    let agent =
+        serde_json::to_value(&config.agent).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let subagents =
+        serde_json::to_value(&config.subagents).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let mut value =
+        serde_json::to_value(&*config).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let root = value
+        .as_object_mut()
+        .ok_or(FailureCode::InvalidConfiguration)?;
+    root.entry("agent").or_insert(agent);
+    root.entry("subagents").or_insert(subagents);
+    for field in overrides {
+        if !MANAGED_EDITABLE_FIELD_IDS.contains(&field.field_id.as_str())
+            || LOCKED_FIELDS.iter().any(|locked| {
+                field.field_id == *locked
+                    || field
+                        .field_id
+                        .strip_prefix(locked)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+        {
+            return Err(FailureCode::InvalidConfiguration);
+        }
+        replace_existing_configuration_field(&mut value, &field.field_id, field.value.clone())?;
+    }
+    *config = serde_json::from_value(value).map_err(|_| FailureCode::InvalidConfiguration)?;
+    Ok(())
+}
+
+fn replace_existing_configuration_field(
+    root: &mut serde_json::Value,
+    field_id: &str,
+    replacement: serde_json::Value,
+) -> Result<(), FailureCode> {
+    let mut segments = field_id.split('.').peekable();
+    let mut current = root;
+    while let Some(segment) = segments.next() {
+        let object = current
+            .as_object_mut()
+            .ok_or(FailureCode::InvalidConfiguration)?;
+        if segments.peek().is_none() {
+            let field = object
+                .get_mut(segment)
+                .ok_or(FailureCode::InvalidConfiguration)?;
+            *field = replacement;
+            return Ok(());
+        }
+        current = object
+            .get_mut(segment)
+            .ok_or(FailureCode::InvalidConfiguration)?;
+    }
+    Err(FailureCode::InvalidConfiguration)
 }
 
 const fn reasoning_effort(effort: ManagedReasoningEffort) -> ReasoningEffort {
@@ -1188,7 +1527,7 @@ fn connect_windows_bootstrap_pipe() -> Result<File, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use colossus_sidecar_protocol::ManagedProviderConfig;
+    use colossus_sidecar_protocol::{ManagedMcpServerConfig, ManagedProviderConfig};
 
     fn test_managed_runtime() -> ManagedRuntimeConfig {
         ManagedRuntimeConfig {
@@ -1217,6 +1556,9 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
+            telemetry: None,
+            field_overrides: Vec::new(),
         }
     }
 
@@ -1253,12 +1595,256 @@ mod tests {
     }
 
     #[test]
+    fn managed_field_overrides_reach_runtime_without_crossing_locked_boundaries() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.field_overrides = vec![ManagedFieldOverride {
+            field_id: "research.maxSources".into(),
+            value: serde_json::Value::from(7),
+        }];
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("overridden config");
+        assert_eq!(config.research.max_sources, 7);
+
+        managed.providers[0].kind = ManagedProviderKind::OpenAiCompatible;
+        managed.providers[0].base_url = Some("https://example.test/v1".into());
+        managed.providers[0].credential_id = Some("provider-key".into());
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "sandbox.networkDestinations".into(),
+            value: serde_json::json!(["https://additional.example.test"]),
+        };
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("sandbox origin override");
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&"https://additional.example.test".into())
+        );
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&"https://example.test".into())
+        );
+
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "storage.path".into(),
+            value: serde_json::Value::String("outside.redb".into()),
+        };
+        assert_eq!(
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false,)
+                .expect_err("locked storage override"),
+            FailureCode::InvalidConfiguration
+        );
+
+        managed.field_overrides[0] = ManagedFieldOverride {
+            field_id: "access.profile".into(),
+            value: serde_json::json!("allow_all"),
+        };
+        assert_eq!(
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false,)
+                .expect_err("unmanaged access override"),
+            FailureCode::InvalidConfiguration
+        );
+    }
+
+    #[test]
+    fn imported_pinned_desktop_configuration_compiles() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.access_profile = ManagedAccessProfile::Pinned;
+        let overrides = [
+            ("access.tools.include", serde_json::json!(["echo"])),
+            ("access.tools.exclude", serde_json::json!([])),
+            ("access.actions.allow", serde_json::json!([])),
+            ("access.actions.requireApproval", serde_json::json!([])),
+            ("access.actions.deny", serde_json::json!([])),
+            ("workflows.repository", serde_json::json!("workflows")),
+            (
+                "sandbox.profile",
+                serde_json::json!("workspace-development"),
+            ),
+            ("sandbox.allowBrokerFallback", serde_json::json!(false)),
+            ("sandbox.helperPath", serde_json::Value::Null),
+            ("sandbox.ociRuntime", serde_json::Value::Null),
+            ("sandbox.ociImage", serde_json::Value::Null),
+            ("sandbox.ociProxyImage", serde_json::Value::Null),
+            ("sandbox.filesystem", serde_json::json!([])),
+            ("sandbox.executables", serde_json::json!([])),
+            ("sandbox.environment", serde_json::json!([])),
+            (
+                "sandbox.networkDestinations",
+                serde_json::json!(["https://mcp.example.test"]),
+            ),
+            ("sandbox.timeoutMs", serde_json::json!(30_000)),
+            ("sandbox.maxOutputBytes", serde_json::json!(1_048_576)),
+            ("sandbox.maxProcesses", serde_json::json!(4)),
+            ("sandbox.maxMemoryBytes", serde_json::json!(134_217_728)),
+            ("sandbox.maxConcurrency", serde_json::json!(1)),
+            ("agent.maxTurns", serde_json::json!(4)),
+            ("subagents.maxConcurrent", serde_json::json!(2)),
+        ];
+        for (field_id, value) in overrides {
+            managed.field_overrides.push(ManagedFieldOverride {
+                field_id: field_id.into(),
+                value,
+            });
+            managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+                .unwrap_or_else(|_| panic!("managed field override failed: {field_id}"));
+        }
+        managed.mcp_servers.push(ManagedMcpServerConfig {
+            name: "docs".into(),
+            transport: ManagedMcpTransport::StreamableHttp,
+            command: None,
+            args: Vec::new(),
+            working_directory: None,
+            environment_credentials: BTreeMap::new(),
+            url: Some("https://mcp.example.test/services/mcp".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: true,
+            oauth: None,
+            allowed_tools: vec!["search_docs".into()],
+            research_tools: Vec::new(),
+            timeout_ms: Some(5_000),
+            max_output_bytes: Some(1_048_576),
+        });
+        managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("managed MCP configuration");
+    }
+
+    #[test]
+    fn every_serialized_runtime_field_has_managed_configuration_ownership() {
+        let instance = tempfile::tempdir().expect("instance");
+        let config = managed_runtime_config(
+            &test_managed_runtime(),
+            Uuid::now_v7(),
+            instance.path(),
+            None,
+            false,
+        )
+        .expect("managed config");
+        let value = serde_json::to_value(config).expect("serialized RuntimeConfig");
+        let mut fields = BTreeSet::new();
+        collect_configuration_fields(&value, "", &mut fields);
+        let unclassified = fields
+            .into_iter()
+            .filter(|field| !managed_configuration_field_is_classified(field))
+            .collect::<Vec<_>>();
+        assert!(
+            unclassified.is_empty(),
+            "unclassified RuntimeConfig fields: {unclassified:?}"
+        );
+    }
+
+    fn collect_configuration_fields(
+        value: &serde_json::Value,
+        prefix: &str,
+        output: &mut BTreeSet<String>,
+    ) {
+        match value {
+            serde_json::Value::Object(values) if !values.is_empty() => {
+                for (key, value) in values {
+                    let field = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    collect_configuration_fields(value, &field, output);
+                }
+            }
+            _ if !prefix.is_empty() => {
+                output.insert(prefix.into());
+            }
+            _ => {}
+        }
+    }
+
+    fn managed_configuration_field_is_classified(field: &str) -> bool {
+        const TYPED_CATALOGS: [&str; 5] = ["providers", "models", "search", "mcp", "observability"];
+        const LOCKED_INVARIANTS: [&str; 8] = [
+            "schemaVersion",
+            "storage",
+            "network.caBundlePath",
+            "memory.indexPath",
+            "skills.user",
+            "packs.installRoot",
+            "workflows.user",
+            "sandbox.backend",
+        ];
+        const HOST_DERIVED: [&str; 4] = [
+            "access.profile",
+            "research.search",
+            "sandbox.acknowledgeExternalBoundary",
+            "sandbox.acknowledgeDangerFullAccess",
+        ];
+        colossus_sidecar_protocol::MANAGED_EDITABLE_FIELD_IDS
+            .iter()
+            .chain(TYPED_CATALOGS.iter())
+            .chain(LOCKED_INVARIANTS.iter())
+            .chain(HOST_DERIVED.iter())
+            .any(|classified| {
+                field == *classified
+                    || field
+                        .strip_prefix(classified)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+    }
+
+    #[test]
+    fn managed_mcp_credentials_remain_opaque_host_references_in_runtime_config() {
+        use colossus_sidecar_protocol::{
+            ManagedMcpCredentialHeader, ManagedMcpServerConfig, ManagedMcpTransport,
+        };
+
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = ManagedRuntimeConfig::echo(ManagedAccessProfile::Development);
+        managed.mcp_servers = vec![ManagedMcpServerConfig {
+            name: "research".into(),
+            transport: ManagedMcpTransport::StreamableHttp,
+            command: None,
+            args: Vec::new(),
+            working_directory: None,
+            environment_credentials: BTreeMap::new(),
+            url: Some("https://mcp.example.test/service".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::from([(
+                "Authorization".into(),
+                ManagedMcpCredentialHeader {
+                    scheme: Some("Bearer".into()),
+                    credential_id: "native-record".into(),
+                },
+            )]),
+            allow_stateless: false,
+            oauth: None,
+            allowed_tools: vec!["search".into()],
+            research_tools: Vec::new(),
+            timeout_ms: Some(30_000),
+            max_output_bytes: Some(1024 * 1024),
+        }];
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("managed MCP config");
+        let header = &config.mcp.servers["research"].credential_headers["Authorization"];
+
+        assert_eq!(header.reference, "host:native-record");
+        assert_eq!(
+            config.sandbox.network_destinations,
+            ["https://mcp.example.test".to_owned()]
+        );
+    }
+
+    #[test]
     fn managed_search_reaches_the_explicit_route_and_network_allowlist() {
         let instance = tempfile::tempdir().expect("instance");
         let mut managed = test_managed_runtime();
         managed.search_profiles = vec![colossus_sidecar_protocol::ManagedSearchConfig {
             profile: "local-dev-searxng".into(),
+            kind: colossus_sidecar_protocol::ManagedSearchKind::Searxng,
             endpoint: "http://127.0.0.1:8888/search".into(),
+            credential_id: None,
+            auth_header: None,
             timeout_ms: 30_000,
         }];
         managed.search_roles = BTreeMap::from([
@@ -1275,6 +1861,43 @@ mod tests {
                 .sandbox
                 .network_destinations
                 .contains(&"http://127.0.0.1:8888".into())
+        );
+    }
+
+    #[test]
+    fn managed_telemetry_reaches_runtime_and_network_allowlist() {
+        let instance = tempfile::tempdir().expect("instance");
+        let mut managed = test_managed_runtime();
+        managed.telemetry = Some(colossus_sidecar_protocol::ManagedTelemetryConfig {
+            name: "colossus-desktop".into(),
+            endpoint: Some("https://collector.example.test:4317".into()),
+            protocol: ManagedOtlpProtocol::Grpc,
+            timeout_ms: 10_000,
+            traces_enabled: true,
+            trace_sample_ratio_millionths: 250_000,
+            metrics_enabled: true,
+            metric_export_interval_ms: 30_000,
+            logs_otlp: true,
+            logs_stdout_json: false,
+            journal_payloads: ManagedJournalPayloadMode::Metadata,
+            acknowledge_sensitive_content: false,
+            acknowledge_insecure_transport: false,
+            resource_attributes: BTreeMap::from([("service.namespace".into(), "colossus".into())]),
+        });
+
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
+            .expect("managed telemetry config");
+        assert!(config.observability.enabled);
+        assert_eq!(config.observability.traces.sample_ratio, 0.25);
+        assert_eq!(
+            config.observability.logs.journal_payloads,
+            JournalPayloadMode::Metadata
+        );
+        assert!(
+            config
+                .sandbox
+                .network_destinations
+                .contains(&"https://collector.example.test:4317".into())
         );
     }
 
@@ -1574,6 +2197,9 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "main".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
+            telemetry: None,
+            field_overrides: Vec::new(),
         };
 
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
@@ -1631,6 +2257,9 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "main".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
+            telemetry: None,
+            field_overrides: Vec::new(),
         };
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed config");
@@ -1674,6 +2303,9 @@ mod tests {
             roles: BTreeMap::from([("primary".into(), "primary".into())]),
             search_profiles: Vec::new(),
             search_roles: BTreeMap::new(),
+            mcp_servers: Vec::new(),
+            telemetry: None,
+            field_overrides: Vec::new(),
         };
 
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
