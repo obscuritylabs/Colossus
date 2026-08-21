@@ -123,6 +123,7 @@ impl EffectExecutor for PackProcessExecutor {
             args: declaration.args.clone(),
             environment,
             stdin_base64: None,
+            stdin_completion: None,
             timeout_ms: None,
             max_output_bytes: None,
         })

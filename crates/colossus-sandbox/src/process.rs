@@ -116,6 +116,10 @@ pub(super) fn is_sandbox_process_action(action: &str) -> bool {
         )
 }
 
+pub(super) fn is_mcp_process_action(action: &str) -> bool {
+    action.starts_with("pack.mcp.") || matches!(action, "mcp.tools" | "mcp.call")
+}
+
 pub(super) fn sandbox_helper_budget(
     obligations: &PolicyObligations,
     effective_timeout_ms: u64,
@@ -150,6 +154,7 @@ impl EffectExecutor for SandboxProcessExecutor {
         let mut spec: ProcessSpec = serde_json::from_value(request.content.clone())
             .map_err(|error| adapter_failure(format!("invalid process request: {error}")))?;
         validate_process_spec(&spec, &request.resource, permit.obligations())?;
+        validate_stdin_completion(&spec, &request.action)?;
         normalize_path_arguments(&mut spec, permit.obligations())?;
         if permit.obligations().sandbox_backend
             == SandboxBoundaryMode::DangerFullAccess.as_backend()
@@ -442,6 +447,43 @@ pub(super) fn validate_process_spec(
         let length = BASE64.decode(input).map_err(adapter_failure)?.len();
         if u64::try_from(length).map_err(adapter_failure)? > obligations.max_output_bytes {
             return Err(adapter_failure("process stdin exceeds the permitted bound"));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_stdin_completion(
+    spec: &ProcessSpec,
+    action: &str,
+) -> Result<(), ExecutionError> {
+    let Some(completion) = &spec.stdin_completion else {
+        return Ok(());
+    };
+    if !is_mcp_process_action(action) {
+        return Err(adapter_failure(
+            "protocol-aware stdin completion is restricted to MCP process actions",
+        ));
+    }
+    if spec.stdin_base64.is_none() {
+        return Err(adapter_failure(
+            "protocol-aware stdin completion requires process stdin",
+        ));
+    }
+    match completion {
+        ProcessStdinCompletion::JsonRpcResponse {
+            response_id,
+            abort_error_ids,
+        } => {
+            if *response_id <= 0
+                || abort_error_ids.len() > 8
+                || abort_error_ids.iter().any(|id| *id <= 0)
+                || abort_error_ids.contains(response_id)
+                || abort_error_ids.iter().collect::<BTreeSet<_>>().len() != abort_error_ids.len()
+            {
+                return Err(adapter_failure(
+                    "JSON-RPC stdin completion IDs are invalid or exceed their bound",
+                ));
+            }
         }
     }
     Ok(())

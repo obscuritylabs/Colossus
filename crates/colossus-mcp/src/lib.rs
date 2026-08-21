@@ -8,7 +8,7 @@ use colossus_contracts::{
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit, effect_request};
-use colossus_sandbox::ProcessSpec;
+use colossus_sandbox::{ProcessSpec, ProcessStdinCompletion};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, Implementation,
     InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,

@@ -840,17 +840,6 @@ pub(super) fn supervise_windows_job(
     };
     let mut child = colossus_windows_process::spawn(&request)
         .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
-    if let Some(encoded) = &job.process.stdin_base64 {
-        let input = BASE64
-            .decode(encoded)
-            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
-        child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?
-            .write_all(&input)?;
-    }
-    drop(child.stdin.take());
     let stdout = child
         .stdout
         .take()
@@ -867,6 +856,25 @@ pub(super) fn supervise_windows_job(
     }));
     let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
     let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
+    let mut stdin = child.stdin.take();
+    if let Some(encoded) = &job.process.stdin_base64 {
+        let input = BASE64
+            .decode(encoded)
+            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+        let stdin = stdin
+            .as_mut()
+            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?;
+        stdin.write_all(&input)?;
+        stdin.flush()?;
+    }
+    let mut completion = job
+        .process
+        .stdin_completion
+        .as_ref()
+        .map(StdinCompletionMonitor::new);
+    if completion.is_none() {
+        drop(stdin.take());
+    }
     let started = Instant::now();
     let timeout = Duration::from_millis(job.timeout_ms);
     let mut timed_out = false;
@@ -880,6 +888,19 @@ pub(super) fn supervise_windows_job(
                 resource_limit_exceeded = windows_resource_limit(&child)?;
             }
             break code;
+        }
+        if let Some(completion) = completion.as_mut()
+            && stdin.is_some()
+        {
+            let close = {
+                let state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                completion.should_close(&state.stdout, state.truncated)
+            };
+            if close {
+                drop(stdin.take());
+            }
         }
         if let Some(limit) = windows_resource_limit(&child)? {
             resource_limit_exceeded = Some(limit);

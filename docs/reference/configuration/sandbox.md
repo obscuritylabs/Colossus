@@ -122,7 +122,9 @@ time/output bounds, resource supervision where supported, the effect gateway, au
 policy decisions, and approval obligations. `external` also retains exact executable
 and environment-name validation. `danger_full_access` deliberately drops those process
 allowlists and inherits the runtime environment after a process permit is minted.
-Neither mode supplies Colossus filesystem or network isolation.
+Neither mode supplies Colossus filesystem or network isolation. Ambient authority does
+not disable configured time, output, process-count, memory, concurrency, policy, or
+audit bounds.
 
 On Unix, direct-mode timeout and output bounds cover the supervised request and attached
 process group. Process-count, memory, whole-tree termination, and cleanup are
@@ -342,8 +344,8 @@ tool request may narrow them but cannot widen them.
 | --- | --- |
 | `timeoutMs` | Maximum wall time for the supervised effect and attached-group cleanup; isolating backends confirm whole-tree cleanup; must be positive |
 | `maxOutputBytes` | Request/result and captured-output ceiling in bytes; at least `1024` |
-| `maxProcesses` | Maximum process-tree count where the backend supports it; must be positive |
-| `maxMemoryBytes` | Maximum process-tree memory in bytes where supported; must be positive |
+| `maxProcesses` | Maximum process-tree count where the backend supports it; OS threads are not counted as separate processes; must be positive |
+| `maxMemoryBytes` | Maximum process-tree memory in bytes where supported; resident memory is summed once per process; must be positive |
 | `maxConcurrency` | Maximum concurrent effects per actor/run; must be positive |
 
 Minimum `timeoutMs` values are 5,000 for OCI, 10,000 for networked OCI, and 10,000 for
@@ -357,10 +359,10 @@ usage events, tool-call arguments, and visible output. This byte bound is indepe
 of model `maxOutputTokens`; policies and provider-specific declarations may narrow it.
 
 The default memory ceiling is 1 GiB (`1073741824` bytes) and is not reserved when
-Colossus starts. Native supervision measures observed process-tree resident memory, OCI
-uses the effective value as its container memory cap, and Windows applies process and
-job limits. Explicit configuration or external policy can retain stricter deployment
-values.
+Colossus starts. Native supervision measures observed process-tree resident memory once
+per OS process, OCI uses the effective value as its container memory cap, and Windows
+applies process and job limits. Explicit configuration or external policy can retain
+stricter deployment values.
 
 For a two-minute build with a 4 MiB output ceiling and up to two concurrent effects:
 

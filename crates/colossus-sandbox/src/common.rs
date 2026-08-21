@@ -38,6 +38,22 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// Bounded condition that tells the sandbox supervisor when a protocol-aware
+/// child has produced enough output for Colossus to close its standard input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProcessStdinCompletion {
+    /// Close standard input after the requested JSON-RPC response, or after an
+    /// earlier response ID reports an error that makes completion impossible.
+    JsonRpcResponse {
+        /// Final JSON-RPC response ID expected by the caller.
+        response_id: i64,
+        /// Earlier JSON-RPC response IDs whose error responses abort the exchange.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        abort_error_ids: Vec<i64>,
+    },
+}
+
 /// Strict process request carried inside an effect request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +69,10 @@ pub struct ProcessSpec {
     pub environment: BTreeMap<String, String>,
     /// Optional base64-encoded standard input.
     pub stdin_base64: Option<String>,
+    /// Optional bounded protocol condition for delaying standard-input closure.
+    /// Absence preserves one-shot write-then-EOF behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin_completion: Option<ProcessStdinCompletion>,
     /// Optional caller-requested timeout, bounded by the policy maximum.
     #[serde(default)]
     pub timeout_ms: Option<u64>,

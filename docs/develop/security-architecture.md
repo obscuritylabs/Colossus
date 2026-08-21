@@ -157,7 +157,9 @@ network effects may bind any exact canonical HTTP(S) origin, including loopback,
 private, link-local, and metadata destinations. Ambient authority is carried explicitly
 in the policy obligation and permit; it is not encoded as filesystem `/` or network
 `*`, and the Safety Kernel rejects it unless the runtime's danger boundary is
-acknowledged.
+acknowledged. Configured time, output, process-count, memory, and concurrency ceilings
+remain mandatory. Native process accounting counts OS process leaders and sums resident
+memory once per process rather than treating Linux task entries as separate processes.
 The Linux helper is dispatched before the asynchronous CLI runtime starts so it can
 establish and map its rootless user namespace while still single-threaded, then create
 the private mount namespace used to mask protected paths. After mounting those masks,
@@ -303,7 +305,11 @@ request-bound `allowStateless` opt-in permits one top-level remote declaration t
 `Mcp-Session-Id`; stdio and pack-provided servers reject that field. Each discovery page
 and tool call uses a fresh initialized transport, disables request and expired-session
 retries, accepts empty success responses only for one-way JSON-RPC frames, and treats an
-uncertain tool call as `OutcomeUnknown`.
+uncertain tool call as `OutcomeUnknown`. For stdio, the authenticated process job may
+hold stdin open after writing the complete one-shot batch until the final response or an
+initialization error is observed in bounded JSONL stdout. Malformed or truncated output,
+child exit, and the normal effect deadline terminate that hold; stdin is then closed and
+the same resource supervision and process-tree cleanup continue.
 
 Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
 OAuth ceremony to the official Codex CLI and forces its supported file credential store;

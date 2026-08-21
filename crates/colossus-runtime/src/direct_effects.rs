@@ -149,6 +149,7 @@ impl Runtime {
             args,
             environment,
             stdin_base64: None,
+            stdin_completion: None,
             timeout_ms: None,
             max_output_bytes: None,
         };

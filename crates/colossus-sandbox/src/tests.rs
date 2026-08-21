@@ -6,10 +6,11 @@ use super::{
     inherit_ambient_environment, non_public_ip, oci_command, oci_proxy_run_arguments,
     oci_remove_arguments, oci_resource_names, proposed_write_bytes, redact_proxy_credential,
     resolve_oci_origins, sandbox_helper_budget, search_files, sha256_hex, tls_server_name,
-    validate_process_spec,
+    validate_process_spec, validate_stdin_completion,
 };
 #[cfg(unix)]
 use super::{ProcessSpec, execute_sandbox_job, normalize_path_arguments};
+use super::{ProcessStdinCompletion, StdinCompletionMonitor};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{native_helper_diagnostics, native_target_pid};
 use base64::Engine as _;
@@ -218,6 +219,7 @@ fn authenticated_helper_job_rejects_tampering_and_expiry() {
             args: Vec::new(),
             environment: BTreeMap::new(),
             stdin_base64: None,
+            stdin_completion: None,
             timeout_ms: None,
             max_output_bytes: None,
         },
@@ -264,6 +266,156 @@ fn authenticated_helper_job_rejects_tampering_and_expiry() {
     );
 }
 
+#[test]
+fn process_stdin_completion_is_additive_strict_and_mcp_only() {
+    let directory = tempdir().expect("directory");
+    let mut process = super::ProcessSpec {
+        cwd: directory.path().into(),
+        args: Vec::new(),
+        environment: BTreeMap::new(),
+        stdin_base64: Some(BASE64.encode(b"request\n")),
+        stdin_completion: None,
+        timeout_ms: None,
+        max_output_bytes: None,
+    };
+    let serialized = serde_json::to_value(&process).expect("serialize default");
+    assert!(serialized.get("stdin_completion").is_none());
+    let legacy: super::ProcessSpec = serde_json::from_value(serialized).expect("legacy shape");
+    assert_eq!(legacy.stdin_completion, None);
+
+    process.stdin_completion = Some(ProcessStdinCompletion::JsonRpcResponse {
+        response_id: 2,
+        abort_error_ids: vec![1],
+    });
+    validate_stdin_completion(&process, "mcp.call").expect("configured MCP completion");
+    validate_stdin_completion(&process, "pack.mcp.fixture").expect("pack MCP completion");
+    assert!(validate_stdin_completion(&process, "process.spawn").is_err());
+    assert_eq!(
+        serde_json::to_value(&process).expect("serialize completion")["stdin_completion"],
+        json!({
+            "kind": "json_rpc_response",
+            "response_id": 2,
+            "abort_error_ids": [1]
+        })
+    );
+
+    let mut invalid = process.clone();
+    invalid.stdin_base64 = None;
+    assert!(validate_stdin_completion(&invalid, "mcp.tools").is_err());
+    invalid.stdin_base64 = process.stdin_base64.clone();
+    invalid.stdin_completion = Some(ProcessStdinCompletion::JsonRpcResponse {
+        response_id: 1,
+        abort_error_ids: vec![1],
+    });
+    assert!(validate_stdin_completion(&invalid, "mcp.tools").is_err());
+    invalid.stdin_completion = Some(ProcessStdinCompletion::JsonRpcResponse {
+        response_id: 2,
+        abort_error_ids: vec![1, 1],
+    });
+    assert!(validate_stdin_completion(&invalid, "mcp.tools").is_err());
+}
+
+#[test]
+fn json_rpc_stdin_completion_observes_complete_bounded_jsonl() {
+    let completion = ProcessStdinCompletion::JsonRpcResponse {
+        response_id: 2,
+        abort_error_ids: vec![1],
+    };
+    let mut monitor = StdinCompletionMonitor::new(&completion);
+    let mut stdout = br#"{"jsonrpc":"2.0","id":1,"result":{}}
+{"jsonrpc":"2.0","method":"notifications/progress"}
+{"jsonrpc":"2.0","id":2,"result"#
+        .to_vec();
+    assert!(!monitor.should_close(&stdout, false));
+    stdout.extend_from_slice(b":{}}\n");
+    assert!(monitor.should_close(&stdout, false));
+
+    let mut initialization_error = StdinCompletionMonitor::new(&completion);
+    assert!(initialization_error.should_close(
+        br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1}}
+"#,
+        false,
+    ));
+    let mut malformed = StdinCompletionMonitor::new(&completion);
+    assert!(malformed.should_close(b"not-json\n", false));
+    let mut truncated = StdinCompletionMonitor::new(&completion);
+    assert!(truncated.should_close(b"", true));
+}
+
+#[test]
+fn json_rpc_stdin_completion_rejects_oversized_lines_before_eof() {
+    let completion = ProcessStdinCompletion::JsonRpcResponse {
+        response_id: 2,
+        abort_error_ids: vec![1],
+    };
+    let payload = "x".repeat(1024 * 1024);
+
+    let complete_notification = format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"value\":\"{payload}\"}}}}\n"
+    );
+    let mut complete = StdinCompletionMonitor::new(&completion);
+    assert!(complete.should_close(complete_notification.as_bytes(), false));
+
+    let incomplete_notification = format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"value\":\"{payload}"
+    );
+    let mut incomplete = StdinCompletionMonitor::new(&completion);
+    assert!(incomplete.should_close(incomplete_notification.as_bytes(), false));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_process_usage_counts_threaded_program_once() {
+    const CHILD_VARIABLE: &str = "COLOSSUS_THREADED_USAGE_TEST_CHILD";
+    if std::env::var_os(CHILD_VARIABLE).is_some() {
+        for _ in 0..32 {
+            std::thread::spawn(std::thread::park);
+        }
+        println!("threaded-child-ready");
+        std::io::Write::flush(&mut std::io::stdout()).expect("flush readiness");
+        std::thread::park();
+        return;
+    }
+
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::linux_process_usage_counts_threaded_program_once",
+            "--nocapture",
+        ])
+        .env(CHILD_VARIABLE, "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn threaded test child");
+    let stdout = child.stdout.take().expect("child stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let count = std::io::BufRead::read_line(&mut reader, &mut line).expect("read readiness");
+        assert!(count > 0, "threaded child exited before readiness");
+        if line.contains("threaded-child-ready") {
+            break;
+        }
+    }
+
+    let root = sysinfo::Pid::from_u32(child.id());
+    let mut system = sysinfo::System::new();
+    let usage = super::process_tree_usage(&mut system, root);
+    let raw_members = super::process_tree_members(&system, root).len();
+    let leader_memory = system.process(root).expect("leader process").memory();
+    child.kill().expect("kill threaded child");
+    child.wait().expect("wait for threaded child");
+
+    assert!(
+        raw_members > 16,
+        "sysinfo did not expose Linux task entries"
+    );
+    assert_eq!(usage.processes, 1);
+    assert_eq!(usage.memory, leader_memory);
+}
+
 #[cfg(unix)]
 #[test]
 fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
@@ -282,6 +434,7 @@ fn explicit_direct_backends_execute_without_the_native_kernel_sandbox() {
                 args: vec!["direct".into()],
                 environment: BTreeMap::new(),
                 stdin_base64: None,
+                stdin_completion: None,
                 timeout_ms: None,
                 max_output_bytes: None,
             },
@@ -338,6 +491,7 @@ fn direct_backends_do_not_claim_filesystem_confinement_for_cwd_or_argv() {
             args: vec!["/path/outside/declared/filesystem".into()],
             environment: BTreeMap::new(),
             stdin_base64: None,
+            stdin_completion: None,
             timeout_ms: None,
             max_output_bytes: None,
         };
@@ -363,6 +517,7 @@ fn danger_full_access_requires_no_process_resource_allowlists() {
         args: Vec::new(),
         environment: BTreeMap::from([("UNDECLARED_ENVIRONMENT".into(), "available".into())]),
         stdin_base64: None,
+        stdin_completion: None,
         timeout_ms: None,
         max_output_bytes: None,
     };
@@ -566,6 +721,7 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
             args: vec!["check".into()],
             environment: BTreeMap::from([("TOKEN".into(), "secret-value".into())]),
             stdin_base64: None,
+            stdin_completion: None,
             timeout_ms: None,
             max_output_bytes: None,
         },
@@ -637,6 +793,7 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
             .collect::<Vec<_>>();
         assert!(args.contains(&"--network=none".into()));
         assert!(args.contains(&"--pull=never".into()));
+        assert!(!args.contains(&"--interactive".into()));
         assert!(args.contains(&"--read-only".into()));
         assert!(args.contains(&"--cap-drop=ALL".into()));
         assert!(args.contains(&"--user".into()));
@@ -661,6 +818,15 @@ fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
         assert!(command.get_envs().any(|(name, value)| {
             name == "PATH" && value.is_some_and(|value| value == docker_search_path)
         }));
+
+        job.process.stdin_base64 = Some(BASE64.encode(b"request\n"));
+        let interactive = oci_command(&job, None).expect("interactive OCI command");
+        assert!(
+            interactive
+                .get_args()
+                .any(|argument| argument == "--interactive")
+        );
+        job.process.stdin_base64 = None;
 
         job.oci_runtime = Some(podman_runtime.clone());
         let podman = oci_command(&job, None).expect("Podman command");
