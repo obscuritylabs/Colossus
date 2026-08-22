@@ -85,7 +85,8 @@ const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
 const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
-    JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
+    JournalExternalWorkQueue, ProjectedSessionActivityPage, ProjectedSessionActivityReader,
+    ProjectionRunReport, ProjectionWorker, default_handlers,
 };
 pub use colossus_provider::{
     ChatCompletionsOutputTokenParameter, CodexAuthStore, CredentialResolver,
@@ -166,6 +167,7 @@ mod runtime_helpers;
 mod sandbox_boundary;
 mod security_posture;
 mod services;
+mod session_activity;
 mod sessions_context;
 mod subagents;
 mod tool_arguments;

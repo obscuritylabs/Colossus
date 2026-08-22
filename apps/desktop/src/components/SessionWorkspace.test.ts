@@ -58,6 +58,7 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain('aria-current="page">Topology');
     expect(markup).toContain("Conversation");
     expect(markup).toContain("Plans");
+    expect(markup).toContain("Activity");
     expect(markup).toContain("Sources");
     expect(markup).toContain("Resources");
   });

@@ -379,6 +379,95 @@ test("Session Map loads with the native frozen-prototype boundary", async ({
   await expect(page.getByRole("button", { name: /Goals 2/u })).toBeVisible();
 });
 
+test("Session Activity synchronizes timeline, feed, and released inspector content", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${FIXTURE}&view=activity`);
+
+  await expect(
+    page.getByRole("heading", { name: "Session activity", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("form", { name: "Send a prompt" })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("region", { name: "Session activity timeline" }),
+  ).toBeVisible();
+  await expect(page.getByText("Agent", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tools", { exact: true })).toBeVisible();
+  await expect(page.getByText("System", { exact: true })).toBeVisible();
+
+  const toolRow = page
+    .locator(".activity-row", { hasText: "shell.exec" })
+    .first();
+  await toolRow.click();
+  await expect(toolRow).toHaveAttribute("data-selected", "true");
+  const inspector = page.getByRole("complementary", {
+    name: "Activity inspector",
+  });
+  await expect(inspector).toContainText("shell.exec");
+  await inspector.getByRole("button", { name: "Input", exact: true }).click();
+  await expect(inspector.locator("pre")).toContainText("git status --short");
+
+  const timelineTool = page
+    .getByRole("button", { name: /filesystem\.search,/u })
+    .first();
+  await timelineTool.click();
+  await expect(inspector).toContainText("filesystem.search");
+  await expect(
+    page.locator('.activity-row[data-selected="true"]'),
+  ).toContainText("filesystem.search");
+
+  const results = await new AxeBuilder({ page }).analyze();
+  const blockingViolations = results.violations.filter((violation) =>
+    ["critical", "serious"].includes(violation.impact ?? ""),
+  );
+  expect(blockingViolations).toEqual([]);
+});
+
+test("Session Activity search, filters, live state, and compact stacking remain functional", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 740, height: 780 });
+  await page.goto(`${FIXTURE}&view=activity`);
+
+  const search = page.getByRole("searchbox", {
+    name: "Search session activity",
+  });
+  await search.fill("denied");
+  await expect(page.locator(".activity-row")).toHaveCount(1);
+  await expect(page.locator(".activity-row")).toContainText("denied");
+
+  await page.getByRole("button", { name: "Filter", exact: true }).click();
+  const filters = page.getByRole("dialog", { name: "Activity filters" });
+  await filters.getByRole("checkbox", { name: "Tools", exact: true }).check();
+  await filters.getByRole("checkbox", { name: "Failed", exact: true }).check();
+  await expect(page.getByRole("button", { name: "Filter (2)" })).toBeVisible();
+  await expect(page.locator(".activity-row")).toHaveCount(1);
+
+  const live = page.getByRole("button", { name: "Live", exact: true });
+  await live.click();
+  await expect(
+    page.getByRole("button", { name: "Paused", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+
+  const feedBox = await page
+    .getByRole("region", { name: "Session activity feed" })
+    .boundingBox();
+  const inspectorBox = await page
+    .getByRole("complementary", { name: "Activity inspector" })
+    .boundingBox();
+  expect(feedBox).not.toBeNull();
+  expect(inspectorBox).not.toBeNull();
+  expect(inspectorBox!.y).toBeGreaterThanOrEqual(feedBox!.y + feedBox!.height);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBe(0);
+});
+
 test("right-side drawers trap focus, close with Escape, and restore focus", async ({
   page,
 }) => {

@@ -6,25 +6,30 @@ use colossus_api::{
     CreateRunRequest as CoreCreateRunRequest, GetRunRequest as CoreGetRunRequest, IdempotencyKey,
     Interaction as CoreInteraction, InteractionKind as CoreInteractionKind,
     InteractionResponse as CoreInteractionResponse, InteractionStatus as CoreInteractionStatus,
-    ListRunsRequest as CoreListRunsRequest, OutcomeCertainty as CoreOutcomeCertainty,
-    PlanExecutionStrategy as CorePlanExecutionStrategy, PlanRunAction as CorePlanRunAction,
-    PlanStatus as CorePlanStatus, ResearchDepth as CoreResearchDepth,
-    ResearchSourceKind as CoreResearchSourceKind,
+    ListRunsRequest as CoreListRunsRequest,
+    ListSessionActivityRequest as CoreListSessionActivityRequest,
+    OutcomeCertainty as CoreOutcomeCertainty, PlanExecutionStrategy as CorePlanExecutionStrategy,
+    PlanRunAction as CorePlanRunAction, PlanStatus as CorePlanStatus,
+    ResearchDepth as CoreResearchDepth, ResearchSourceKind as CoreResearchSourceKind,
     RespondInteractionRequest as CoreRespondInteractionRequest,
     RestoreThreadRequest as CoreRestoreThreadRequest, Run as CoreRun, RunBranch as CoreRunBranch,
     RunBranchContextMode as CoreRunBranchContextMode, RunMode as CoreRunMode,
     RunStatus as CoreRunStatus, RunUpdate as CoreRunUpdate, RunUpdateKind as CoreRunUpdateKind,
-    ToolActivityState as CoreToolActivityState, WatchRunRequest as CoreWatchRunRequest,
-    validate_public_approval_display,
+    SessionActivity as CoreSessionActivity, SessionActivityKind as CoreSessionActivityKind,
+    SessionActivityLane as CoreSessionActivityLane,
+    SessionActivityStatus as CoreSessionActivityStatus, ToolActivityState as CoreToolActivityState,
+    WatchRunRequest as CoreWatchRunRequest, validate_public_approval_display,
 };
 use colossus_api_proto::v1alpha1::{
     ApprovalInteraction, ApprovalRisk, ArchiveThreadRequest, ArchiveThreadResponse,
     CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, GetRunRequest,
     GetRunResponse, Interaction, InteractionKind, InteractionStatus, ListRunsRequest,
-    ListRunsResponse, OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanStatus,
-    PromptChoice, ReasoningSummary, ResearchDepth, ResearchSourceKind, RespondInteractionRequest,
-    RespondInteractionResponse, RestoreThreadRequest, RestoreThreadResponse, Run, RunCancellation,
-    RunFailed, RunFailure, RunMode, RunNotice, RunResult, RunStateChanged, RunStatus, RunUpdate,
+    ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse, OutcomeCertainty,
+    PageResponse, PlanExecutionStrategy, PlanStatus, PromptChoice, ReasoningSummary, ResearchDepth,
+    ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse,
+    RestoreThreadRequest, RestoreThreadResponse, Run, RunCancellation, RunFailed, RunFailure,
+    RunMode, RunNotice, RunResult, RunStateChanged, RunStatus, RunUpdate, SessionActivity,
+    SessionActivityContent, SessionActivityKind, SessionActivityLane, SessionActivityStatus,
     ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, UserPromptInteraction,
     VisibleOutputDelta, WatchRunRequest, WatchRunResponse,
     agent_run_service_server::AgentRunService, content_part, interaction, plan_run_action,
@@ -258,6 +263,81 @@ impl AgentRunService for AgentRunServiceAdapter {
                 page: Some(PageResponse {
                     next_page_token: response.next_page_token.unwrap_or_default(),
                 }),
+            }))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
+    }
+
+    async fn list_session_activity(
+        &self,
+        request: Request<ListSessionActivityRequest>,
+    ) -> Result<Response<ListSessionActivityResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let span = public_rpc_span(&request, &caller, "ListSessionActivity");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "source_run_id", &request.source_run_id)?;
+            if request.query.len() > 256 || request.query.chars().any(char::is_control) {
+                return Err(invalid(
+                    &caller,
+                    "query",
+                    "query must be at most 256 bytes and contain no control characters",
+                ));
+            }
+            let lanes = request
+                .lanes
+                .into_iter()
+                .map(|value| core_activity_lane(&caller, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            let kinds = request
+                .kinds
+                .into_iter()
+                .map(|value| core_activity_kind(&caller, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            let statuses = request
+                .statuses
+                .into_iter()
+                .map(|value| core_activity_status(&caller, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            let (page_size, page_token) = request.page.map_or((0, None), |page| {
+                let page_token = (!page.page_token.is_empty()).then_some(page.page_token);
+                (page.page_size, page_token)
+            });
+            if let Some(page_token) = page_token.as_deref() {
+                validate_opaque(&caller, "page.page_token", page_token)?;
+            }
+            let response = self
+                .api
+                .list_session_activity(
+                    &caller,
+                    CoreListSessionActivityRequest {
+                        source_run_id: request.source_run_id,
+                        query: request.query,
+                        lanes,
+                        kinds,
+                        statuses,
+                        page_size,
+                        page_token,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            let activities = response
+                .activities
+                .into_iter()
+                .map(proto_activity)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Response::new(ListSessionActivityResponse {
+                activities,
+                page: Some(PageResponse {
+                    next_page_token: response.next_page_token.unwrap_or_default(),
+                }),
+                head_sequence: response.head_sequence,
+                projected_through_sequence: response.projected_through_sequence,
+                caught_up: response.caught_up,
             }))
         }
         .instrument(span.clone())
@@ -649,6 +729,59 @@ fn core_run_status(caller: &CallerContext, value: i32) -> Result<CoreRunStatus, 
     }
 }
 
+fn core_activity_lane(
+    caller: &CallerContext,
+    value: i32,
+) -> Result<CoreSessionActivityLane, Status> {
+    match SessionActivityLane::try_from(value) {
+        Ok(SessionActivityLane::Agent) => Ok(CoreSessionActivityLane::Agent),
+        Ok(SessionActivityLane::Tools) => Ok(CoreSessionActivityLane::Tools),
+        Ok(SessionActivityLane::System) => Ok(CoreSessionActivityLane::System),
+        Ok(SessionActivityLane::Unspecified) | Err(_) => Err(invalid(
+            caller,
+            "lanes",
+            "lanes must not contain unspecified or unknown values",
+        )),
+    }
+}
+
+fn core_activity_kind(
+    caller: &CallerContext,
+    value: i32,
+) -> Result<CoreSessionActivityKind, Status> {
+    match SessionActivityKind::try_from(value) {
+        Ok(SessionActivityKind::User) => Ok(CoreSessionActivityKind::User),
+        Ok(SessionActivityKind::Assistant) => Ok(CoreSessionActivityKind::Assistant),
+        Ok(SessionActivityKind::Tool) => Ok(CoreSessionActivityKind::Tool),
+        Ok(SessionActivityKind::System) => Ok(CoreSessionActivityKind::System),
+        Ok(SessionActivityKind::Unspecified) | Err(_) => Err(invalid(
+            caller,
+            "kinds",
+            "kinds must not contain unspecified or unknown values",
+        )),
+    }
+}
+
+fn core_activity_status(
+    caller: &CallerContext,
+    value: i32,
+) -> Result<CoreSessionActivityStatus, Status> {
+    match SessionActivityStatus::try_from(value) {
+        Ok(SessionActivityStatus::Requested) => Ok(CoreSessionActivityStatus::Requested),
+        Ok(SessionActivityStatus::Running) => Ok(CoreSessionActivityStatus::Running),
+        Ok(SessionActivityStatus::Waiting) => Ok(CoreSessionActivityStatus::Waiting),
+        Ok(SessionActivityStatus::Completed) => Ok(CoreSessionActivityStatus::Completed),
+        Ok(SessionActivityStatus::Failed) => Ok(CoreSessionActivityStatus::Failed),
+        Ok(SessionActivityStatus::Cancelled) => Ok(CoreSessionActivityStatus::Cancelled),
+        Ok(SessionActivityStatus::OutcomeUnknown) => Ok(CoreSessionActivityStatus::OutcomeUnknown),
+        Ok(SessionActivityStatus::Unspecified) | Err(_) => Err(invalid(
+            caller,
+            "statuses",
+            "statuses must not contain unspecified or unknown values",
+        )),
+    }
+}
+
 fn idempotency_key(caller: &CallerContext, value: String) -> Result<IdempotencyKey, Status> {
     IdempotencyKey::new(value).map_err(|error| api_status(with_correlation(error, caller)))
 }
@@ -754,6 +887,58 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
         terminal,
         selected_skills: value.skill_ids,
         archived: value.archived,
+    })
+}
+
+fn proto_activity(value: CoreSessionActivity) -> Result<SessionActivity, Status> {
+    Ok(SessionActivity {
+        activity_id: value.activity_id,
+        run_id: value.run_id,
+        turn: value.turn,
+        lane: match value.lane {
+            CoreSessionActivityLane::Agent => SessionActivityLane::Agent as i32,
+            CoreSessionActivityLane::Tools => SessionActivityLane::Tools as i32,
+            CoreSessionActivityLane::System => SessionActivityLane::System as i32,
+        },
+        kind: match value.kind {
+            CoreSessionActivityKind::User => SessionActivityKind::User as i32,
+            CoreSessionActivityKind::Assistant => SessionActivityKind::Assistant as i32,
+            CoreSessionActivityKind::Tool => SessionActivityKind::Tool as i32,
+            CoreSessionActivityKind::System => SessionActivityKind::System as i32,
+        },
+        title: value.title,
+        summary: value.summary,
+        actor: value.actor,
+        status: value.status.map(|status| match status {
+            CoreSessionActivityStatus::Requested => SessionActivityStatus::Requested as i32,
+            CoreSessionActivityStatus::Running => SessionActivityStatus::Running as i32,
+            CoreSessionActivityStatus::Waiting => SessionActivityStatus::Waiting as i32,
+            CoreSessionActivityStatus::Completed => SessionActivityStatus::Completed as i32,
+            CoreSessionActivityStatus::Failed => SessionActivityStatus::Failed as i32,
+            CoreSessionActivityStatus::Cancelled => SessionActivityStatus::Cancelled as i32,
+            CoreSessionActivityStatus::OutcomeUnknown => {
+                SessionActivityStatus::OutcomeUnknown as i32
+            }
+        }),
+        started_at: Some(parse_timestamp(&value.started_at)?),
+        completed_at: value
+            .completed_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?,
+        duration_ms: value.duration_ms,
+        input: value.input.map(|content| SessionActivityContent {
+            format: content.format,
+            value: content.value,
+        }),
+        result: value.result.map(|content| SessionActivityContent {
+            format: content.format,
+            value: content.value,
+        }),
+        attributes: value.attributes.into_iter().collect(),
+        source_event_types: value.source_event_types,
+        first_sequence: value.first_sequence,
+        last_sequence: value.last_sequence,
     })
 }
 

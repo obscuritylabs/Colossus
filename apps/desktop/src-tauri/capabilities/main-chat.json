@@ -64,6 +64,7 @@
     "allow-read-artifact-content",
     "allow-get-run",
     "allow-list-runs",
+    "allow-list-session-activity",
     "allow-list-asides",
     "allow-watch-run",
     "allow-cancel-run",

@@ -97,6 +97,7 @@ pub struct Runtime {
     pub(super) journal: Arc<dyn EventJournal>,
     pub(super) recovery_reason: Option<String>,
     pub(super) projections: Arc<ProjectionWorker>,
+    pub(super) session_activity: Arc<ProjectedSessionActivityReader>,
     pub(super) audit_exports: Arc<AuditExportService>,
     pub(super) telemetry: Arc<TelemetryService>,
     pub(super) skills_enabled: bool,
@@ -486,6 +487,9 @@ impl Runtime {
             Arc::clone(&projection_store),
             default_handlers(),
         )?);
+        let session_activity = Arc::new(ProjectedSessionActivityReader::new(Arc::clone(
+            &projection_store,
+        )));
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
         let extensions: Arc<dyn ExtensionRepository> =
             Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
@@ -1302,6 +1306,7 @@ impl Runtime {
             journal,
             recovery_reason,
             projections,
+            session_activity,
             audit_exports,
             telemetry,
             skills_enabled: config.skills.enabled,

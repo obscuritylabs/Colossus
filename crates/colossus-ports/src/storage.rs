@@ -68,6 +68,15 @@ pub trait ProjectionStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<(String, Value)>, StoreError>;
 
+    /// List bounded projection-local records in key order after an exclusive key cursor.
+    fn list_after(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        after_key: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError>;
+
     /// Atomically apply mutations and advance an optimistic projection position.
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError>;
 

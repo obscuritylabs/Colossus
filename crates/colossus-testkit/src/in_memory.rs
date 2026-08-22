@@ -331,6 +331,29 @@ impl ProjectionStore for InMemoryProjectionStore {
             .collect())
     }
 
+    fn list_after(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        after_key: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(failure)?
+            .records
+            .iter()
+            .filter(|((name, key), _)| {
+                name == projection
+                    && key.starts_with(key_prefix)
+                    && after_key.is_none_or(|cursor| key.as_str() > cursor)
+            })
+            .take(limit)
+            .map(|((_, key), value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
         let mut state = self.state.lock().map_err(failure)?;
         let actual = state.positions.get(&batch.projection).copied().unwrap_or(0);

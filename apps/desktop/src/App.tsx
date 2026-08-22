@@ -34,6 +34,7 @@ import {
   installDesktopUpdate,
   initializeDesktop,
   listAsides,
+  listSessionActivity,
   listWorkspaceDirectory,
   listRuns,
   onSpaceAttention,
@@ -82,12 +83,6 @@ import type {
 import { WorkSurface } from "./components/WorkSurface";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
-import {
-  buildActivityComparisonFixture,
-  buildOperationsStudioFixture,
-  buildPlanWorkflowFixture,
-  buildSessionMapFixture,
-} from "./dev/operations-studio-fixture";
 import { managedOnboardingRequired } from "./onboarding";
 import {
   enqueueMessage,
@@ -188,6 +183,16 @@ const FIXTURE_SPACE_STARTUP =
 const FIXTURE_CONNECTION_STARTUP =
   FIXTURE_MODE &&
   (FIXTURE_SPACE_STARTUP || FIXTURE_QUERY.get("connecting") === "1");
+const DEVELOPMENT_FIXTURES = import.meta.env.DEV
+  ? await import("./dev/operations-studio-fixture")
+  : null;
+
+function developmentFixtures() {
+  if (DEVELOPMENT_FIXTURES === null) {
+    throw new Error("Development fixtures are unavailable in production.");
+  }
+  return DEVELOPMENT_FIXTURES;
+}
 
 const INITIAL_CONNECTION: ConnectionStatus = FIXTURE_MODE
   ? {
@@ -353,6 +358,7 @@ const INITIAL_DESKTOP: DesktopStatus = {
     files: FIXTURE_MODE,
     artifacts: FIXTURE_MODE,
     planContinuation: FIXTURE_MODE,
+    sessionActivity: FIXTURE_MODE,
     updateAvailable: false,
     agentWorkflows: false,
     attachments: false,
@@ -800,10 +806,10 @@ export default function App() {
     chatReducer,
     FIXTURE_MODE
       ? FIXTURE_SCENARIO === "activity-comparison"
-        ? buildActivityComparisonFixture()
+        ? developmentFixtures().buildActivityComparisonFixture()
         : FIXTURE_SCENARIO === "plan-workflow"
-          ? buildPlanWorkflowFixture()
-          : buildOperationsStudioFixture(
+          ? developmentFixtures().buildPlanWorkflowFixture()
+          : developmentFixtures().buildOperationsStudioFixture(
               FIXTURE_SCENARIO === "interaction-question"
                 ? "user_prompt"
                 : "approval",
@@ -827,7 +833,7 @@ export default function App() {
   const [delegateInspection, setDelegateInspection] =
     useState<ThreadDelegateInspection | null>(null);
   const [sessionMap, setSessionMap] = useState<SessionMap | null>(() =>
-    FIXTURE_MODE ? buildSessionMapFixture() : null,
+    FIXTURE_MODE ? developmentFixtures().buildSessionMapFixture() : null,
   );
   const [sessionMapLoading, setSessionMapLoading] = useState(false);
   const [sessionMapError, setSessionMapError] = useState("");
@@ -3994,7 +4000,7 @@ export default function App() {
       return;
     }
     if (FIXTURE_MODE) {
-      setSessionMap(buildSessionMapFixture());
+      setSessionMap(developmentFixtures().buildSessionMapFixture());
       setSessionMapLoading(false);
       setSessionMapError("");
       return;
@@ -4536,6 +4542,30 @@ export default function App() {
           asideError={asideError}
           asideReadOnly={asideReadOnly}
           planContinuationAvailable={desktop.capabilities.planContinuation}
+          initialSessionWorkspaceView={
+            FIXTURE_QUERY.get("view") === "activity"
+              ? "activity"
+              : "conversation"
+          }
+          sessionActivityAvailable={
+            desktop.capabilities.sessionActivity === true
+          }
+          loadSessionActivity={(request) => {
+            if (FIXTURE_MODE) {
+              return Promise.resolve(
+                developmentFixtures().buildSessionActivityFixture(request),
+              );
+            }
+            const targetId = desktop.selectedTargetId;
+            if (targetId === null) {
+              return Promise.reject(
+                new Error(
+                  "Select a connected Colossus target to inspect activity.",
+                ),
+              );
+            }
+            return listSessionActivity(targetId, request);
+          }}
           activityComparisonEnabled={FIXTURE_SCENARIO === "activity-comparison"}
           planWorkflowAvailable={
             desktop.terminalEnabled &&

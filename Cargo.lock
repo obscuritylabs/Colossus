@@ -877,15 +877,18 @@ name = "colossus-api-runtime"
 version = "0.10.10-preview.3"
 dependencies = [
  "async-trait",
+ "base64",
  "colossus-agent",
  "colossus-api",
  "colossus-contracts",
  "colossus-policy",
  "colossus-ports",
+ "colossus-projection",
  "colossus-runtime",
  "colossus-testkit",
  "futures",
  "getrandom 0.4.3",
+ "hex",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -1369,6 +1372,7 @@ dependencies = [
  "colossus-testkit",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "time",
 ]
 

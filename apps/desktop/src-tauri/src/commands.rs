@@ -12,8 +12,8 @@ use crate::{
     dto::{
         ArtifactContentDto, ArtifactReferenceDto, AsideDto, CancelRunInput, CommandErrorDto,
         CreateRunInput, GetRunDto, GetRunInput, InteractionDto, ListAsidesInput, ListRunsDto,
-        ListRunsInput, RespondInteractionInput, RunDto, ThreadLifecycleDto, ThreadLifecycleInput,
-        WatchEventDto, WatchRunInput,
+        ListRunsInput, ListSessionActivityDto, ListSessionActivityInput, RespondInteractionInput,
+        RunDto, ThreadLifecycleDto, ThreadLifecycleInput, WatchEventDto, WatchRunInput,
     },
     run_list, space_search,
     state::{AppState, SelectedTargetLease, TargetConsentContext, TargetHandle},
@@ -319,6 +319,32 @@ pub(crate) async fn list_runs(
         next_page_token: response
             .page
             .map_or_else(String::new, |page| page.next_page_token),
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_session_activity(
+    state: State<'_, AppState>,
+    target_id: String,
+    request: ListSessionActivityInput,
+) -> Result<ListSessionActivityDto, CommandErrorDto> {
+    let request = request.into_sdk()?;
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let response = target
+        .target
+        .client
+        .list_session_activity(request)
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    Ok(ListSessionActivityDto {
+        activities: response.activities.into_iter().map(Into::into).collect(),
+        next_page_token: response
+            .page
+            .map_or_else(String::new, |page| page.next_page_token),
+        head_sequence: response.head_sequence,
+        projected_through_sequence: response.projected_through_sequence,
+        caught_up: response.caught_up,
     })
 }
 

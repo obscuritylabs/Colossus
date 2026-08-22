@@ -1,6 +1,6 @@
 use colossus_sdk::{
     ApiErrorCode, GetRunRequest, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest,
-    PageResponse, RunStatus, ServerCapabilities,
+    PageResponse, RunStatus, SESSION_ACTIVITY_CAPABILITY, ServerCapabilities,
 };
 use colossus_worker_protocol::{WorkerSessionMap, WorkerThreadDelegateInspection};
 use futures_util::future::join_all;
@@ -2611,6 +2611,7 @@ fn desktop_capabilities(
             && settings.access_profile != AccessProfileSetting::Minimal,
         artifacts: advertised.contains("artifacts.read"),
         plan_continuation: advertised.contains(PLAN_CONTINUATION_CAPABILITY),
+        session_activity: advertised.contains(SESSION_ACTIVITY_CAPABILITY),
         update_available: state.update_available(),
         agent_workflows: advertised.contains("automation.workflows"),
         attachments: advertised.contains("attachments.run_input"),

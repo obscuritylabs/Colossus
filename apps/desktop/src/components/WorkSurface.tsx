@@ -42,8 +42,10 @@ import type {
   ConnectionStatus,
   Interaction,
   InteractionAnswer,
+  ListSessionActivityRequest,
   SessionMap,
   SessionMapResource,
+  SessionActivityPage,
   ThreadDelegateInspection,
 } from "../types";
 import type { AsideDraft } from "./AsidePanel";
@@ -54,6 +56,7 @@ import { ArtifactWorkspace } from "./ArtifactWorkspace";
 import { InteractionCard } from "./InteractionCard";
 import { PlanDetailsPanel } from "./PlanDetailsPanel";
 import { RunTimeline } from "./RunTimeline";
+import { SessionActivityView } from "./SessionActivity";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
 import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
 import {
@@ -102,6 +105,11 @@ interface WorkSurfaceProps {
   planContinuationAvailable: boolean;
   planWorkflowAvailable: boolean;
   activityComparisonEnabled?: boolean;
+  initialSessionWorkspaceView?: SessionWorkspaceView;
+  sessionActivityAvailable?: boolean;
+  loadSessionActivity?: (
+    request: ListSessionActivityRequest,
+  ) => Promise<SessionActivityPage>;
   workNavigationOpen: boolean;
   onConnect: () => void;
   onCancel: () => void;
@@ -178,6 +186,15 @@ export function WorkSurface({
   planContinuationAvailable,
   planWorkflowAvailable,
   activityComparisonEnabled = false,
+  initialSessionWorkspaceView = "conversation",
+  sessionActivityAvailable = false,
+  loadSessionActivity = async () => ({
+    activities: [],
+    nextPageToken: "",
+    headSequence: 0,
+    projectedThroughSequence: 0,
+    caughtUp: true,
+  }),
   workNavigationOpen,
   onConnect,
   onCancel,
@@ -201,7 +218,7 @@ export function WorkSurface({
   onCloseAside,
 }: WorkSurfaceProps) {
   const [sessionWorkspaceView, setSessionWorkspaceView] =
-    useState<SessionWorkspaceView>("conversation");
+    useState<SessionWorkspaceView>(initialSessionWorkspaceView);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedSessionResource, setSelectedSessionResource] =
     useState<SessionMapResource | null>(null);
@@ -297,10 +314,10 @@ export function WorkSurface({
   }
 
   useEffect(() => {
-    setSessionWorkspaceView("conversation");
+    setSessionWorkspaceView(initialSessionWorkspaceView);
     setSelectedPlanId(null);
     updateFollowingLatest(true);
-  }, [selectedSessionId]);
+  }, [initialSessionWorkspaceView, selectedSessionId]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -970,7 +987,7 @@ export function WorkSurface({
         }
       >
         <section
-          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}`}
+          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}`}
           aria-label="Work conversation"
         >
           <div className="work-feed-frame">
@@ -1052,6 +1069,12 @@ export function WorkSurface({
                   artifacts={artifacts}
                   onSelectResource={openSessionResource}
                   onSelectArtifact={openArtifactFromResources}
+                />
+              ) : sessionWorkspaceView === "activity" ? (
+                <SessionActivityView
+                  sourceRunId={view.run.runId}
+                  available={sessionActivityAvailable}
+                  loadPage={loadSessionActivity}
                 />
               ) : sessionWorkspaceView === "plans" ? (
                 <SessionPlansView
@@ -1148,7 +1171,8 @@ export function WorkSurface({
               </button>
             ) : null}
           </div>
-          {sessionWorkspaceView === "topology" ? null : (
+          {sessionWorkspaceView === "topology" ||
+          sessionWorkspaceView === "activity" ? null : (
             <div className="work-composer-dock">
               {view !== undefined && view.pendingInteractions.length > 0 ? (
                 <div

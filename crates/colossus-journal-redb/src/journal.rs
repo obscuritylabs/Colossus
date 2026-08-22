@@ -1782,6 +1782,41 @@ impl ProjectionStore for RedbEventJournal {
         Ok(records)
     }
 
+    fn list_after(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        after_key: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        let namespace = projection_prefix(projection)?;
+        if key_prefix.contains('\0') || after_key.is_some_and(|key| key.contains('\0')) {
+            return Err(StoreError::Adapter(
+                "projection key cursors may not contain NUL".into(),
+            ));
+        }
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let table = read.open_table(PROJECTION_RECORDS).map_err(adapter_error)?;
+        let mut records = Vec::with_capacity(limit.min(1024));
+        for entry in table.range(namespace.as_str()..).map_err(adapter_error)? {
+            if records.len() >= limit {
+                break;
+            }
+            let (stored_key, value) = entry.map_err(adapter_error)?;
+            let Some(key) = stored_key.value().strip_prefix(&namespace) else {
+                break;
+            };
+            if !key.starts_with(key_prefix) || after_key.is_some_and(|cursor| key <= cursor) {
+                continue;
+            }
+            records.push((
+                key.to_owned(),
+                serde_json::from_slice(value.value()).map_err(adapter_error)?,
+            ));
+        }
+        Ok(records)
+    }
+
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
         self.apply_all(std::slice::from_ref(&batch))
     }

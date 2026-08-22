@@ -2,11 +2,13 @@ use crate::{
     ApprovalInteraction, ApprovalRisk, ArtifactPurpose, ArtifactReference, ArtifactState,
     CancelRunResponse, CreateRunRequest, CreateRunResponse, GetRunResponse, InputContentPart,
     Interaction, InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus,
-    ListRunsRequest, ListRunsResponse, MessageContentPart, MessageRole, OutcomeCertainty,
-    PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice,
-    ResearchDepth, ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse, Run,
-    RunBranch, RunBranchContextMode, RunCancellation, RunFailure, RunMode, RunResult, RunStatus,
-    RunTerminal, RunUpdate, RunUpdateKind, SessionMessage, ThreadLifecycle, TokenUsage,
+    ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
+    MessageContentPart, MessageRole, OutcomeCertainty, PageResponse, PlanExecutionStrategy,
+    PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind,
+    RespondInteractionRequest, RespondInteractionResponse, Run, RunBranch, RunBranchContextMode,
+    RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
+    RunUpdateKind, SessionActivity, SessionActivityContent, SessionActivityKind,
+    SessionActivityLane, SessionActivityStatus, SessionMessage, ThreadLifecycle, TokenUsage,
     ToolActivity, ToolActivityState,
 };
 use colossus_api::{self as core, ApiError, ApiErrorReason, ApiResult, CallerContext};
@@ -134,6 +136,119 @@ pub(super) fn list_response(value: core::ListRunsResponse) -> ApiResult<ListRuns
             next_page_token: value.next_page_token.unwrap_or_default(),
         }),
     })
+}
+
+pub(super) fn activity_request(
+    value: ListSessionActivityRequest,
+) -> core::ListSessionActivityRequest {
+    let (page_size, page_token) = value.page.map_or((0, None), |page| {
+        (
+            page.page_size,
+            (!page.page_token.is_empty()).then_some(page.page_token),
+        )
+    });
+    core::ListSessionActivityRequest {
+        source_run_id: value.source_run_id,
+        query: value.query,
+        lanes: value.lanes.into_iter().map(core_activity_lane).collect(),
+        kinds: value.kinds.into_iter().map(core_activity_kind).collect(),
+        statuses: value
+            .statuses
+            .into_iter()
+            .map(core_activity_status)
+            .collect(),
+        page_size,
+        page_token,
+    }
+}
+
+pub(super) fn activity_response(
+    value: core::ListSessionActivityResponse,
+) -> ListSessionActivityResponse {
+    ListSessionActivityResponse {
+        activities: value.activities.into_iter().map(activity).collect(),
+        page: Some(PageResponse {
+            next_page_token: value.next_page_token.unwrap_or_default(),
+        }),
+        head_sequence: value.head_sequence,
+        projected_through_sequence: value.projected_through_sequence,
+        caught_up: value.caught_up,
+    }
+}
+
+fn activity(value: core::SessionActivity) -> SessionActivity {
+    SessionActivity {
+        activity_id: value.activity_id,
+        run_id: value.run_id,
+        turn: value.turn,
+        lane: match value.lane {
+            core::SessionActivityLane::Agent => SessionActivityLane::Agent,
+            core::SessionActivityLane::Tools => SessionActivityLane::Tools,
+            core::SessionActivityLane::System => SessionActivityLane::System,
+        },
+        kind: match value.kind {
+            core::SessionActivityKind::User => SessionActivityKind::User,
+            core::SessionActivityKind::Assistant => SessionActivityKind::Assistant,
+            core::SessionActivityKind::Tool => SessionActivityKind::Tool,
+            core::SessionActivityKind::System => SessionActivityKind::System,
+        },
+        title: value.title,
+        summary: value.summary,
+        actor: value.actor,
+        status: value.status.map(|status| match status {
+            core::SessionActivityStatus::Requested => SessionActivityStatus::Requested,
+            core::SessionActivityStatus::Running => SessionActivityStatus::Running,
+            core::SessionActivityStatus::Waiting => SessionActivityStatus::Waiting,
+            core::SessionActivityStatus::Completed => SessionActivityStatus::Completed,
+            core::SessionActivityStatus::Failed => SessionActivityStatus::Failed,
+            core::SessionActivityStatus::Cancelled => SessionActivityStatus::Cancelled,
+            core::SessionActivityStatus::OutcomeUnknown => SessionActivityStatus::OutcomeUnknown,
+        }),
+        started_at: value.started_at,
+        completed_at: value.completed_at,
+        duration_ms: value.duration_ms,
+        input: value.input.map(|content| SessionActivityContent {
+            format: content.format,
+            value: content.value,
+        }),
+        result: value.result.map(|content| SessionActivityContent {
+            format: content.format,
+            value: content.value,
+        }),
+        attributes: value.attributes,
+        source_event_types: value.source_event_types,
+        first_sequence: value.first_sequence,
+        last_sequence: value.last_sequence,
+    }
+}
+
+fn core_activity_lane(value: SessionActivityLane) -> core::SessionActivityLane {
+    match value {
+        SessionActivityLane::Agent => core::SessionActivityLane::Agent,
+        SessionActivityLane::Tools => core::SessionActivityLane::Tools,
+        SessionActivityLane::System => core::SessionActivityLane::System,
+    }
+}
+
+fn core_activity_kind(value: SessionActivityKind) -> core::SessionActivityKind {
+    match value {
+        SessionActivityKind::User => core::SessionActivityKind::User,
+        SessionActivityKind::Assistant => core::SessionActivityKind::Assistant,
+        SessionActivityKind::Tool => core::SessionActivityKind::Tool,
+        SessionActivityKind::System => core::SessionActivityKind::System,
+    }
+}
+
+fn core_activity_status(value: SessionActivityStatus) -> core::SessionActivityStatus {
+    match value {
+        SessionActivityStatus::Requested => core::SessionActivityStatus::Requested,
+        SessionActivityStatus::Running => core::SessionActivityStatus::Running,
+        SessionActivityStatus::Waiting => core::SessionActivityStatus::Waiting,
+        SessionActivityStatus::Completed => core::SessionActivityStatus::Completed,
+        SessionActivityStatus::Failed => core::SessionActivityStatus::Failed,
+        SessionActivityStatus::Cancelled => core::SessionActivityStatus::Cancelled,
+        SessionActivityStatus::OutcomeUnknown => core::SessionActivityStatus::OutcomeUnknown,
+    }
 }
 
 pub(super) fn cancel_response(value: core::Run) -> ApiResult<CancelRunResponse> {

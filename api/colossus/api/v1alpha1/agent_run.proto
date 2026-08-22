@@ -21,6 +21,9 @@ service AgentRunService {
   // ListRuns returns a stable page of durable runs.
   rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
 
+  // ListSessionActivity returns caller-scoped policy-released canonical activity.
+  rpc ListSessionActivity(ListSessionActivityRequest) returns (ListSessionActivityResponse);
+
   // WatchRun replays updates after an exclusive cursor and then tails live updates.
   rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse);
 
@@ -421,6 +424,130 @@ message ListRunsResponse {
 
   // page identifies the next page.
   PageResponse page = 2;
+}
+
+// SessionActivityLane selects one temporal activity lane.
+enum SessionActivityLane {
+  // SESSION_ACTIVITY_LANE_UNSPECIFIED is rejected at the public boundary.
+  SESSION_ACTIVITY_LANE_UNSPECIFIED = 0;
+  // SESSION_ACTIVITY_LANE_AGENT contains user and assistant work.
+  SESSION_ACTIVITY_LANE_AGENT = 1;
+  // SESSION_ACTIVITY_LANE_TOOLS contains tool and effect lifecycles.
+  SESSION_ACTIVITY_LANE_TOOLS = 2;
+  // SESSION_ACTIVITY_LANE_SYSTEM contains runtime and policy activity.
+  SESSION_ACTIVITY_LANE_SYSTEM = 3;
+}
+
+// SessionActivityKind identifies the human-readable event-table kind.
+enum SessionActivityKind {
+  // SESSION_ACTIVITY_KIND_UNSPECIFIED is rejected at the public boundary.
+  SESSION_ACTIVITY_KIND_UNSPECIFIED = 0;
+  // SESSION_ACTIVITY_KIND_USER is released caller input.
+  SESSION_ACTIVITY_KIND_USER = 1;
+  // SESSION_ACTIVITY_KIND_ASSISTANT is released model activity.
+  SESSION_ACTIVITY_KIND_ASSISTANT = 2;
+  // SESSION_ACTIVITY_KIND_TOOL is released tool activity.
+  SESSION_ACTIVITY_KIND_TOOL = 3;
+  // SESSION_ACTIVITY_KIND_SYSTEM is trusted runtime activity.
+  SESSION_ACTIVITY_KIND_SYSTEM = 4;
+}
+
+// SessionActivityStatus is the released logical lifecycle state.
+enum SessionActivityStatus {
+  // SESSION_ACTIVITY_STATUS_UNSPECIFIED is absent from activities without lifecycle state.
+  SESSION_ACTIVITY_STATUS_UNSPECIFIED = 0;
+  // SESSION_ACTIVITY_STATUS_REQUESTED is accepted but not started.
+  SESSION_ACTIVITY_STATUS_REQUESTED = 1;
+  // SESSION_ACTIVITY_STATUS_RUNNING is actively progressing.
+  SESSION_ACTIVITY_STATUS_RUNNING = 2;
+  // SESSION_ACTIVITY_STATUS_WAITING is awaiting interaction or approval.
+  SESSION_ACTIVITY_STATUS_WAITING = 3;
+  // SESSION_ACTIVITY_STATUS_COMPLETED is a known successful terminal state.
+  SESSION_ACTIVITY_STATUS_COMPLETED = 4;
+  // SESSION_ACTIVITY_STATUS_FAILED is a known failed terminal state.
+  SESSION_ACTIVITY_STATUS_FAILED = 5;
+  // SESSION_ACTIVITY_STATUS_CANCELLED settled without completion.
+  SESSION_ACTIVITY_STATUS_CANCELLED = 6;
+  // SESSION_ACTIVITY_STATUS_OUTCOME_UNKNOWN means an effect may have occurred.
+  SESSION_ACTIVITY_STATUS_OUTCOME_UNKNOWN = 7;
+}
+
+// SessionActivityContent is one bounded policy-released inspector value.
+message SessionActivityContent {
+  // format is the text or JSON rendering hint.
+  string format = 1;
+  // value is bounded released content.
+  string value = 2;
+}
+
+// SessionActivity is one curated logical activity for a caller-owned session.
+message SessionActivity {
+  // activity_id is stable across polling and projection rebuilds.
+  string activity_id = 1;
+  // run_id identifies the owning run when available.
+  optional string run_id = 2;
+  // turn is the one-based model turn when available.
+  optional uint32 turn = 3;
+  // lane positions the activity on the temporal strip.
+  SessionActivityLane lane = 4;
+  // kind selects the event-table presentation.
+  SessionActivityKind kind = 5;
+  // title is a bounded display label.
+  string title = 6;
+  // summary is bounded released descriptive text.
+  string summary = 7;
+  // actor is a coarse released actor label.
+  string actor = 8;
+  // status is the released lifecycle state when applicable.
+  optional SessionActivityStatus status = 9;
+  // started_at is the canonical start or occurrence time.
+  google.protobuf.Timestamp started_at = 10;
+  // completed_at is present only for a trustworthy terminal boundary.
+  google.protobuf.Timestamp completed_at = 11;
+  // duration_ms is present only for paired canonical boundaries.
+  optional uint64 duration_ms = 12;
+  // input is policy-released inspector input.
+  SessionActivityContent input = 13;
+  // result is policy-released inspector result.
+  SessionActivityContent result = 14;
+  // attributes contains small allowlisted metadata values.
+  map<string, string> attributes = 15;
+  // source_event_types names canonical records contributing to this activity.
+  repeated string source_event_types = 16;
+  // first_sequence is the first contributing global journal sequence.
+  uint64 first_sequence = 17;
+  // last_sequence is the latest contributing global journal sequence.
+  uint64 last_sequence = 18;
+}
+
+// ListSessionActivityRequest selects released activity through an owned run.
+message ListSessionActivityRequest {
+  // source_run_id resolves the session through one caller-owned run.
+  string source_run_id = 1;
+  // query searches only released projected fields.
+  string query = 2;
+  // lanes optionally limits results by temporal lane.
+  repeated SessionActivityLane lanes = 3;
+  // kinds optionally limits results by presentation kind.
+  repeated SessionActivityKind kinds = 4;
+  // statuses optionally limits results by released lifecycle state.
+  repeated SessionActivityStatus statuses = 5;
+  // page contains the bounded size and opaque query-bound cursor.
+  PageRequest page = 6;
+}
+
+// ListSessionActivityResponse returns newest-first curated activity.
+message ListSessionActivityResponse {
+  // activities is the newest-first curated page.
+  repeated SessionActivity activities = 1;
+  // page identifies the next matching page.
+  PageResponse page = 2;
+  // head_sequence is the observed canonical journal head.
+  uint64 head_sequence = 3;
+  // projected_through_sequence is the latest applied projection sequence.
+  uint64 projected_through_sequence = 4;
+  // caught_up reports whether the projection reached the observed head.
+  bool caught_up = 5;
 }
 
 // WatchRunRequest selects replay and tail behavior for one run.

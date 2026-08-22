@@ -377,5 +377,6 @@ pub fn default_handlers() -> Vec<Arc<dyn ProjectionHandler>> {
         Arc::new(MemoryProjection),
         Arc::new(WorkflowProjection),
         Arc::new(EffectRecoveryProjection),
+        Arc::new(SessionActivityProjection),
     ]
 }

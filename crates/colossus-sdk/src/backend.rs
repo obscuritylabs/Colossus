@@ -10,9 +10,9 @@ use std::sync::Arc;
 use crate::{
     ApiResult, ArchiveThreadRequest, ArtifactReference, CancelRunRequest, CancelRunResponse,
     CreateRunRequest, CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse,
-    ListRunsRequest, ListRunsResponse, RespondInteractionRequest, RespondInteractionResponse,
-    RestoreThreadRequest, RunUpdateStream, SdkResult, ServerCapabilities, ThreadLifecycle,
-    UploadArtifactRequest, WatchRunRequest,
+    ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
+    RespondInteractionRequest, RespondInteractionResponse, RestoreThreadRequest, RunUpdateStream,
+    SdkResult, ServerCapabilities, ThreadLifecycle, UploadArtifactRequest, WatchRunRequest,
 };
 
 /// Runtime placement used by this client.
@@ -42,6 +42,17 @@ pub trait AgentRunClient: Send + Sync {
 
     /// List caller-visible runs with stable pagination.
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse>;
+
+    /// Return caller-visible canonical session activity.
+    async fn list_session_activity(
+        &self,
+        _request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support session activity",
+        ))
+    }
 
     /// Replay and then tail durable run updates.
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream>;
@@ -166,6 +177,20 @@ impl AgentRunClient for ContextBoundAgentRunClient {
             )
             .await?;
         crate::embedded_projection::list_response(response)
+    }
+
+    async fn list_session_activity(
+        &self,
+        request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        let response = self
+            .api
+            .list_session_activity(
+                &self.caller,
+                crate::embedded_projection::activity_request(request),
+            )
+            .await?;
+        Ok(crate::embedded_projection::activity_response(response))
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {

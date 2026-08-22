@@ -42,7 +42,7 @@ const SessionTopologyGraph = lazy(() =>
 );
 
 export type SessionWorkspaceView =
-  "conversation" | "topology" | "plans" | "sources" | "resources";
+  "conversation" | "topology" | "plans" | "activity" | "sources" | "resources";
 
 const SESSION_TABS: ReadonlyArray<{
   id: SessionWorkspaceView;
@@ -51,6 +51,7 @@ const SESSION_TABS: ReadonlyArray<{
   { id: "conversation", label: "Conversation" },
   { id: "topology", label: "Topology" },
   { id: "plans", label: "Plans" },
+  { id: "activity", label: "Activity" },
   { id: "sources", label: "Sources" },
   { id: "resources", label: "Resources" },
 ];

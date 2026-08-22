@@ -20,6 +20,7 @@ import type {
   DesktopUpdateCheck,
   GetRunRequest,
   Interaction,
+  ListSessionActivityRequest,
   ListRunsRequest,
   ManagedCredentialKind,
   ManagedExtensionInventory,
@@ -46,6 +47,7 @@ import type {
   RunDetails,
   RunPage,
   SessionMap,
+  SessionActivityPage,
   TerminalContext,
   TerminalEvent,
   TerminalKind,
@@ -573,6 +575,13 @@ export function listRuns(
   request: ListRunsRequest,
 ): Promise<RunPage> {
   return call("list_runs", { targetId, request });
+}
+
+export function listSessionActivity(
+  targetId: string,
+  request: ListSessionActivityRequest,
+): Promise<SessionActivityPage> {
+  return call("list_session_activity", { targetId, request });
 }
 
 export function listAsides(

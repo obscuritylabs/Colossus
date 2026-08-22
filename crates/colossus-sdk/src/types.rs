@@ -1,5 +1,5 @@
 use colossus_api::IdempotencyKey;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Authenticated public behaviors advertised by the connected runtime.
 ///
@@ -371,6 +371,131 @@ pub struct ListRunsResponse {
     pub runs: Vec<Run>,
     /// Page continuation.
     pub page: Option<PageResponse>,
+}
+
+/// Timeline lane used by a curated session activity.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SessionActivityLane {
+    /// User, assistant, and model-turn activity.
+    Agent,
+    /// Tool and effect lifecycle activity.
+    Tools,
+    /// Runtime, context, policy, and usage activity.
+    System,
+}
+
+/// Human-readable activity kind used by the event table.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SessionActivityKind {
+    /// Released human or application input.
+    User,
+    /// Released model activity.
+    Assistant,
+    /// Policy-released tool activity.
+    Tool,
+    /// Trusted runtime activity.
+    System,
+}
+
+/// Released lifecycle state for a curated activity.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SessionActivityStatus {
+    /// Accepted but not started.
+    Requested,
+    /// Actively progressing.
+    Running,
+    /// Waiting on user input or approval.
+    Waiting,
+    /// Reached a known successful terminal state.
+    Completed,
+    /// Reached a known failed terminal state.
+    Failed,
+    /// Settled without completing.
+    Cancelled,
+    /// An external effect may have occurred.
+    OutcomeUnknown,
+}
+
+/// One bounded released inspector value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionActivityContent {
+    /// Rendering hint: `text` or `json`.
+    pub format: String,
+    /// Bounded policy-released content.
+    pub value: String,
+}
+
+/// One curated logical activity for a caller-owned session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionActivity {
+    /// Stable logical identifier used for live merging.
+    pub activity_id: String,
+    /// Owning public run when available.
+    pub run_id: Option<String>,
+    /// One-based model turn when available.
+    pub turn: Option<u32>,
+    /// Timeline lane.
+    pub lane: SessionActivityLane,
+    /// Display kind.
+    pub kind: SessionActivityKind,
+    /// Bounded title.
+    pub title: String,
+    /// Bounded released summary.
+    pub summary: String,
+    /// Coarse actor label without an internal identity.
+    pub actor: String,
+    /// Released lifecycle state when applicable.
+    pub status: Option<SessionActivityStatus>,
+    /// UTC start or occurrence time.
+    pub started_at: String,
+    /// UTC completion time when trustworthy.
+    pub completed_at: Option<String>,
+    /// Millisecond duration only for paired canonical boundaries.
+    pub duration_ms: Option<u64>,
+    /// Policy-released input.
+    pub input: Option<SessionActivityContent>,
+    /// Policy-released result.
+    pub result: Option<SessionActivityContent>,
+    /// Small allowlisted metadata values.
+    pub attributes: BTreeMap<String, String>,
+    /// Canonical event types contributing to the logical record.
+    pub source_event_types: Vec<String>,
+    /// First contributing global sequence.
+    pub first_sequence: u64,
+    /// Latest contributing global sequence.
+    pub last_sequence: u64,
+}
+
+/// Caller-scoped session activity query addressed through an owned run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ListSessionActivityRequest {
+    /// Any caller-owned run in the requested session.
+    pub source_run_id: String,
+    /// Case-insensitive search over released activity fields.
+    pub query: String,
+    /// Optional lane filters; empty includes every lane.
+    pub lanes: Vec<SessionActivityLane>,
+    /// Optional kind filters; empty includes every kind.
+    pub kinds: Vec<SessionActivityKind>,
+    /// Optional status filters; empty includes every status.
+    pub statuses: Vec<SessionActivityStatus>,
+    /// Optional bounded page request.
+    pub page: Option<PageRequest>,
+}
+
+/// One eventually consistent newest-first activity page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ListSessionActivityResponse {
+    /// Curated activities matching the request.
+    pub activities: Vec<SessionActivity>,
+    /// Page continuation.
+    pub page: Option<PageResponse>,
+    /// Current authoritative journal head when the page was read.
+    pub head_sequence: u64,
+    /// Latest global sequence applied to the activity projection.
+    pub projected_through_sequence: u64,
+    /// Whether the disposable projection reached the observed journal head.
+    pub caught_up: bool,
 }
 
 /// Replay-and-tail request.

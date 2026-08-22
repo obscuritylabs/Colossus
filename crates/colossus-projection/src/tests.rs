@@ -41,6 +41,17 @@ impl ProjectionStore for RecordingProjectionStore {
         self.inner.list(projection, key_prefix, limit)
     }
 
+    fn list_after(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        after_key: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        self.inner
+            .list_after(projection, key_prefix, after_key, limit)
+    }
+
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
         self.direct_applies.fetch_add(1, Ordering::Relaxed);
         self.inner.apply(batch)
@@ -109,7 +120,7 @@ fn passive_projection_checkpoints_are_grouped() {
 
     let report = worker.run_once(8).expect("projection run");
 
-    assert_eq!(report.applied, 5);
+    assert_eq!(report.applied, 6);
     assert!(report.projections.iter().all(|status| status.position == 1));
     assert_eq!(store.direct_applies.load(Ordering::Relaxed), 1);
     let grouped = store.grouped_applies.lock().expect("grouped applies");
@@ -123,7 +134,8 @@ fn passive_projection_checkpoints_are_grouped() {
             "work-v1",
             "memory-v1",
             "workflows-v1",
-            "effects-recovery-v1"
+            "effects-recovery-v1",
+            "session-activity-v1"
         ]
     );
 }
@@ -187,7 +199,7 @@ fn lag_catches_up_idempotently_and_rebuilds() {
             .iter()
             .all(|item| item.lag == 1)
     );
-    assert_eq!(worker.drain(8, 8).expect("drain").applied, 5);
+    assert_eq!(worker.drain(8, 8).expect("drain").applied, 6);
     assert_eq!(worker.run_once(8).expect("rerun").applied, 0);
     assert_eq!(
         store

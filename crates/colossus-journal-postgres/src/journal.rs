@@ -1612,6 +1612,37 @@ impl ProjectionStore for PostgresEventJournal {
             .collect()
     }
 
+    fn list_after(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        after_key: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        validate_projection(projection)?;
+        if key_prefix.contains('\0') || after_key.is_some_and(|key| key.contains('\0')) {
+            return Err(StoreError::Adapter(
+                "projection key cursors may not contain NUL".into(),
+            ));
+        }
+        let mut client = self.connect()?;
+        let cursor = after_key.unwrap_or("");
+        client
+            .query(
+                "SELECT record_key, value FROM projection_records WHERE projection = $1 AND left(record_key, char_length($2)) = $2 AND record_key > $3 ORDER BY record_key LIMIT $4",
+                &[&projection, &key_prefix, &cursor, &bounded_limit(limit)?],
+            )
+            .map_err(database_error)?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.get(0),
+                    serde_json::from_slice(&row.get::<_, Vec<u8>>(1)).map_err(adapter_error)?,
+                ))
+            })
+            .collect()
+    }
+
     fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
         validate_projection(&batch.projection)?;
         if batch.through_sequence <= batch.expected_position {

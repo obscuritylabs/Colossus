@@ -2,8 +2,9 @@ use crate::{
     AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArchiveThreadRequest,
     ArtifactClient, ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
     CreateRunRequest, CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse,
-    ListRunsRequest, ListRunsResponse, PLAN_CONTINUATION_CAPABILITY, RespondInteractionRequest,
-    RespondInteractionResponse, RestoreThreadRequest, RunUpdates, SdkResult, ServerCapabilities,
+    ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
+    PLAN_CONTINUATION_CAPABILITY, RespondInteractionRequest, RespondInteractionResponse,
+    RestoreThreadRequest, RunUpdates, SESSION_ACTIVITY_CAPABILITY, SdkResult, ServerCapabilities,
     ThreadLifecycle, UploadArtifactRequest, WatchRunRequest,
 };
 use std::{fmt, sync::Arc};
@@ -103,6 +104,24 @@ impl Colossus {
         self.backend.agent_runs().list_runs(request).await
     }
 
+    /// List canonical, policy-released activity for a caller-owned session.
+    pub async fn list_session_activity(
+        &self,
+        request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        if !self
+            .backend
+            .capabilities()
+            .contains(SESSION_ACTIVITY_CAPABILITY)
+        {
+            return Err(session_activity_unavailable());
+        }
+        self.backend
+            .agent_runs()
+            .list_session_activity(request)
+            .await
+    }
+
     /// Replay and tail run updates in order.
     pub async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdates> {
         let client = self.backend.agent_runs();
@@ -176,6 +195,13 @@ fn plan_continuation_unavailable() -> ApiError {
     ApiError::failed_precondition(
         ApiErrorReason::InvalidRunTransition,
         "the connected runtime did not advertise typed Plan continuation",
+    )
+}
+
+fn session_activity_unavailable() -> ApiError {
+    ApiError::failed_precondition(
+        ApiErrorReason::InvalidRunTransition,
+        "the connected runtime did not advertise canonical session activity",
     )
 }
 

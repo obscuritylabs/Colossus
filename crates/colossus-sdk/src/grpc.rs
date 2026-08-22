@@ -4,14 +4,16 @@ use crate::{
     ArtifactState, Backend, BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest,
     CreateRunResponse, CredentialProvider, DownloadedArtifact, FieldViolation, GetRunRequest,
     GetRunResponse, InputContentPart, Interaction, InteractionAnswer, InteractionContent,
-    InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse, MessageContentPart,
-    MessageRole, OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus,
-    PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind, RespondInteractionRequest,
+    InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse,
+    ListSessionActivityRequest, ListSessionActivityResponse, MessageContentPart, MessageRole,
+    OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer,
+    PromptChoice, ResearchDepth, ResearchSourceKind, RespondInteractionRequest,
     RespondInteractionResponse, RestoreThreadRequest, Run, RunBranchContextMode, RunCancellation,
     RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind,
-    RunUpdateStream, SdkError, SdkResult, ServerCapabilities, SessionMessage, ThreadLifecycle,
-    TlsFingerprint, TokenUsage, ToolActivity, ToolActivityState, UploadArtifactRequest,
-    WatchRunRequest,
+    RunUpdateStream, SdkError, SdkResult, ServerCapabilities, SessionActivity,
+    SessionActivityContent, SessionActivityKind, SessionActivityLane, SessionActivityStatus,
+    SessionMessage, ThreadLifecycle, TlsFingerprint, TokenUsage, ToolActivity, ToolActivityState,
+    UploadArtifactRequest, WatchRunRequest,
 };
 use async_trait::async_trait;
 use colossus_api::{RequestId, validate_public_approval_display};
@@ -606,6 +608,71 @@ impl AgentRunClient for GrpcAgentRunClient {
             page: response.page.map(|page| PageResponse {
                 next_page_token: page.next_page_token,
             }),
+        })
+    }
+
+    async fn list_session_activity(
+        &self,
+        request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        validate_identifier(&request.source_run_id)?;
+        validate_text(&request.query, 256)?;
+        if request.lanes.len() > MAX_COLLECTION_ITEMS
+            || request.kinds.len() > MAX_COLLECTION_ITEMS
+            || request.statuses.len() > MAX_COLLECTION_ITEMS
+        {
+            return Err(invalid_request("filters", "too many activity filters"));
+        }
+        let page = request.page.map(|page| proto::PageRequest {
+            page_size: page.page_size,
+            page_token: page.page_token,
+        });
+        let request = self
+            .request(proto::ListSessionActivityRequest {
+                source_run_id: request.source_run_id,
+                query: request.query,
+                lanes: request
+                    .lanes
+                    .into_iter()
+                    .map(proto_activity_lane)
+                    .map(|value| value as i32)
+                    .collect(),
+                kinds: request
+                    .kinds
+                    .into_iter()
+                    .map(proto_activity_kind)
+                    .map(|value| value as i32)
+                    .collect(),
+                statuses: request
+                    .statuses
+                    .into_iter()
+                    .map(proto_activity_status)
+                    .map(|value| value as i32)
+                    .collect(),
+                page,
+            })
+            .await?;
+        let response = self
+            .client()
+            .list_session_activity(request)
+            .await
+            .map_err(read_error_from_status)?
+            .into_inner();
+        if response.activities.len() > MAX_COLLECTION_ITEMS {
+            return Err(protocol_error());
+        }
+        Ok(ListSessionActivityResponse {
+            activities: response
+                .activities
+                .into_iter()
+                .map(activity_from_proto)
+                .collect::<ApiResult<Vec<_>>>()?,
+            page: response.page.map(|page| PageResponse {
+                next_page_token: page.next_page_token,
+            }),
+            head_sequence: response.head_sequence,
+            projected_through_sequence: response.projected_through_sequence,
+            caught_up: response.caught_up,
         })
     }
 
@@ -1536,6 +1603,120 @@ fn proto_run_status(value: RunStatus) -> proto::RunStatus {
         RunStatus::Interrupted => proto::RunStatus::Interrupted,
         RunStatus::OutcomeUnknown => proto::RunStatus::OutcomeUnknown,
     }
+}
+
+fn proto_activity_lane(value: SessionActivityLane) -> proto::SessionActivityLane {
+    match value {
+        SessionActivityLane::Agent => proto::SessionActivityLane::Agent,
+        SessionActivityLane::Tools => proto::SessionActivityLane::Tools,
+        SessionActivityLane::System => proto::SessionActivityLane::System,
+    }
+}
+
+fn proto_activity_kind(value: SessionActivityKind) -> proto::SessionActivityKind {
+    match value {
+        SessionActivityKind::User => proto::SessionActivityKind::User,
+        SessionActivityKind::Assistant => proto::SessionActivityKind::Assistant,
+        SessionActivityKind::Tool => proto::SessionActivityKind::Tool,
+        SessionActivityKind::System => proto::SessionActivityKind::System,
+    }
+}
+
+fn proto_activity_status(value: SessionActivityStatus) -> proto::SessionActivityStatus {
+    match value {
+        SessionActivityStatus::Requested => proto::SessionActivityStatus::Requested,
+        SessionActivityStatus::Running => proto::SessionActivityStatus::Running,
+        SessionActivityStatus::Waiting => proto::SessionActivityStatus::Waiting,
+        SessionActivityStatus::Completed => proto::SessionActivityStatus::Completed,
+        SessionActivityStatus::Failed => proto::SessionActivityStatus::Failed,
+        SessionActivityStatus::Cancelled => proto::SessionActivityStatus::Cancelled,
+        SessionActivityStatus::OutcomeUnknown => proto::SessionActivityStatus::OutcomeUnknown,
+    }
+}
+
+fn activity_from_proto(value: proto::SessionActivity) -> ApiResult<SessionActivity> {
+    validate_identifier(&value.activity_id)?;
+    if let Some(run_id) = &value.run_id {
+        validate_identifier(run_id)?;
+    }
+    if matches!(value.turn, Some(0))
+        || value.first_sequence == 0
+        || value.last_sequence < value.first_sequence
+        || value.attributes.len() > MAX_COLLECTION_ITEMS
+        || value.source_event_types.len() > MAX_COLLECTION_ITEMS
+    {
+        return Err(protocol_error());
+    }
+    validate_text(&value.title, MAX_SUMMARY_BYTES)?;
+    validate_text(&value.summary, MAX_SUMMARY_BYTES)?;
+    validate_text(&value.actor, MAX_SUMMARY_BYTES)?;
+    for (key, attribute) in &value.attributes {
+        validate_identifier(key)?;
+        validate_text(attribute, MAX_SUMMARY_BYTES)?;
+    }
+    for event_type in &value.source_event_types {
+        validate_identifier(event_type)?;
+    }
+    let content = |content: proto::SessionActivityContent| {
+        if !matches!(content.format.as_str(), "text" | "json") {
+            return Err(protocol_error());
+        }
+        validate_text(&content.value, MAX_VISIBLE_TEXT_BYTES)?;
+        Ok(SessionActivityContent {
+            format: content.format,
+            value: content.value,
+        })
+    };
+    let lane = match proto::SessionActivityLane::try_from(value.lane) {
+        Ok(proto::SessionActivityLane::Agent) => SessionActivityLane::Agent,
+        Ok(proto::SessionActivityLane::Tools) => SessionActivityLane::Tools,
+        Ok(proto::SessionActivityLane::System) => SessionActivityLane::System,
+        Ok(proto::SessionActivityLane::Unspecified) | Err(_) => return Err(protocol_error()),
+    };
+    let kind = match proto::SessionActivityKind::try_from(value.kind) {
+        Ok(proto::SessionActivityKind::User) => SessionActivityKind::User,
+        Ok(proto::SessionActivityKind::Assistant) => SessionActivityKind::Assistant,
+        Ok(proto::SessionActivityKind::Tool) => SessionActivityKind::Tool,
+        Ok(proto::SessionActivityKind::System) => SessionActivityKind::System,
+        Ok(proto::SessionActivityKind::Unspecified) | Err(_) => return Err(protocol_error()),
+    };
+    let status = value
+        .status
+        .map(
+            |status| match proto::SessionActivityStatus::try_from(status) {
+                Ok(proto::SessionActivityStatus::Requested) => Ok(SessionActivityStatus::Requested),
+                Ok(proto::SessionActivityStatus::Running) => Ok(SessionActivityStatus::Running),
+                Ok(proto::SessionActivityStatus::Waiting) => Ok(SessionActivityStatus::Waiting),
+                Ok(proto::SessionActivityStatus::Completed) => Ok(SessionActivityStatus::Completed),
+                Ok(proto::SessionActivityStatus::Failed) => Ok(SessionActivityStatus::Failed),
+                Ok(proto::SessionActivityStatus::Cancelled) => Ok(SessionActivityStatus::Cancelled),
+                Ok(proto::SessionActivityStatus::OutcomeUnknown) => {
+                    Ok(SessionActivityStatus::OutcomeUnknown)
+                }
+                Ok(proto::SessionActivityStatus::Unspecified) | Err(_) => Err(protocol_error()),
+            },
+        )
+        .transpose()?;
+    Ok(SessionActivity {
+        activity_id: value.activity_id,
+        run_id: value.run_id,
+        turn: value.turn,
+        lane,
+        kind,
+        title: value.title,
+        summary: value.summary,
+        actor: value.actor,
+        status,
+        started_at: timestamp(required(value.started_at)?)?,
+        completed_at: value.completed_at.map(timestamp).transpose()?,
+        duration_ms: value.duration_ms,
+        input: value.input.map(content).transpose()?,
+        result: value.result.map(content).transpose()?,
+        attributes: value.attributes.into_iter().collect(),
+        source_event_types: value.source_event_types,
+        first_sequence: value.first_sequence,
+        last_sequence: value.last_sequence,
+    })
 }
 
 fn run_status_from_proto(value: i32) -> ApiResult<RunStatus> {
