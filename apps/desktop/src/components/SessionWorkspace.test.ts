@@ -6,7 +6,11 @@ import { buildSessionMapFixture } from "../dev/operations-studio-fixture";
 import type { RunView } from "../state";
 import type { Run } from "../types";
 import type { AgentParticipant } from "./AgentFlow";
-import { SessionTopology, SessionWorkspaceTabs } from "./SessionWorkspace";
+import {
+  SessionPlansView,
+  SessionTopology,
+  SessionWorkspaceTabs,
+} from "./SessionWorkspace";
 
 function runView(runId: string, title: string, minute: number): RunView {
   const run: Run = {
@@ -58,7 +62,7 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain("Resources");
   });
 
-  it("renders released session resources as expandable graph families", () => {
+  it("renders the lazy interactive graph shell and session map controls", () => {
     const first = runView("run-one", "Initial review", 0);
     const second = runView("run-two", "Follow-up review", 1);
     const participants: AgentParticipant[] = [
@@ -107,13 +111,48 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain(
       "Primary session · canonical resources and agent lineage",
     );
-    expect(markup).toContain("Delegated agents <b>3</b>");
-    expect(markup).toContain("Goals <b>2</b>");
-    expect(markup).toContain("Key decisions <b>2</b>");
-    expect(markup).toContain("Memories <b>3</b>");
-    expect(markup).toContain(
-      "Use Rust 1.96 and edition 2024 for implementation work.",
-    );
+    expect(markup).toContain("Loading interactive session map…");
+    expect(markup.match(/role="switch"/g)).toHaveLength(6);
     expect(markup).toContain("Show run lineage");
+  });
+
+  it("makes plan titles readable actions and renders a compact Markdown preview", () => {
+    const plan = runView("run-plan", "make me a simple plan", 2);
+    plan.run.terminal = {
+      type: "result",
+      result: {
+        output: "Plan saved.",
+        planId: "plan-simple",
+        planRevision: 1,
+        planStatus: "draft",
+        profile: "desktop",
+        modelProfile: "primary",
+        providerProfile: "primary-provider",
+        model: "fixture",
+        elapsedSeconds: 2,
+      },
+    };
+    plan.output = `### Simple repository orientation plan
+
+1. **Review project foundations**
+2. Map the application`;
+
+    const markup = renderToStaticMarkup(
+      createElement(SessionPlansView, {
+        views: [plan],
+        workflowAvailable: true,
+        onInspectPlan: vi.fn(),
+        onOpenPlanWorkflow: vi.fn(),
+        onRevisePlan: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain(
+      '<button class="session-plan-title" type="button">make me a simple plan</button>',
+    );
+    expect(markup).toContain('class="markdown-content session-plan-preview"');
+    expect(markup).toContain("<h4>Simple repository orientation plan</h4>");
+    expect(markup).toContain("<strong>Review project foundations</strong>");
+    expect(markup).not.toContain("### Simple repository orientation plan");
   });
 });

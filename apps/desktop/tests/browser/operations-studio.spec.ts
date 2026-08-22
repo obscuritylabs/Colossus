@@ -222,6 +222,36 @@ test("Colossus responses expose copy confirmation", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("plan titles open the rendered plan and previews do not leak Markdown syntax", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=plan-workflow");
+  await page
+    .getByRole("button", { name: "Close details drawer", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Plans", exact: true }).click();
+
+  const card = page.locator(".session-plan-list article");
+  await expect(
+    card.getByRole("heading", { name: "Desktop Plan workflow" }),
+  ).toBeVisible();
+  await expect(card).not.toContainText("## Desktop Plan workflow");
+
+  await card
+    .getByRole("button", { name: "Plan the Desktop release workflow" })
+    .click();
+  const details = page.getByLabel("Thread details", { exact: true });
+  await expect(
+    details.getByRole("heading", {
+      name: "Plan the Desktop release workflow",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    details.getByText("Rendered from the durable plan output"),
+  ).toBeVisible();
+});
+
 test("Session Map expands canonical resources and opens their inspector", async ({
   page,
 }) => {
@@ -257,14 +287,10 @@ test("Session Map expands canonical resources and opens their inspector", async 
     page.getByRole("button", { name: /Review workspace architecture/u }),
   ).toBeVisible();
 
-  const stage = page.locator(".session-map-stage");
-  await stage.evaluate((element) => {
-    element.scrollLeft = element.scrollWidth;
-  });
+  await expect(page.locator(".react-flow")).toBeVisible();
   await page.getByRole("button", { name: "Fit", exact: true }).click();
-  await expect
-    .poll(() => stage.evaluate((element) => element.scrollLeft))
-    .toBe(0);
+  await expect(goals).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".session-map-primary")).toBeVisible();
 
   const feedTopBeforeInspection = await feed.evaluate(
     (element) => element.scrollTop,
@@ -283,6 +309,74 @@ test("Session Map expands canonical resources and opens their inspector", async 
   await expect
     .poll(() => feed.evaluate((element) => element.scrollTop))
     .toBe(feedTopBeforeInspection);
+});
+
+test("Session Map keeps its root visible without horizontal overflow at compact widths", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 760 });
+  await page.goto(FIXTURE);
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+
+  const stage = page.locator(".session-map-stage");
+  const primary = page.locator(".session-map-primary");
+  await expect(primary).toBeVisible();
+  await expect
+    .poll(() =>
+      stage.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )
+    .toBe(0);
+
+  const stageBox = await stage.boundingBox();
+  const primaryBox = await primary.boundingBox();
+  expect(stageBox).not.toBeNull();
+  expect(primaryBox).not.toBeNull();
+  expect(primaryBox!.x).toBeGreaterThanOrEqual(stageBox!.x);
+  expect(primaryBox!.x + primaryBox!.width).toBeLessThanOrEqual(
+    stageBox!.x + stageBox!.width,
+  );
+});
+
+test("Session Map renders its topology with React Flow SVG edges", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(FIXTURE);
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+
+  const flow = page.locator(".react-flow");
+  const primary = page.locator(".session-map-primary");
+  const firstFamily = page.locator(".session-map-family").first();
+  await expect(flow).toBeVisible();
+  await expect(page.locator(".react-flow__edge-path")).toHaveCount(12);
+  await expect(page.locator(".session-map-network")).toHaveCount(0);
+  await expect(page.locator(".session-map-trunk")).toHaveCount(0);
+
+  const primaryBox = await primary.boundingBox();
+  const familyBox = await firstFamily.boundingBox();
+  expect(primaryBox).not.toBeNull();
+  expect(familyBox).not.toBeNull();
+  expect(familyBox!.x).toBeGreaterThan(primaryBox!.x + primaryBox!.width);
+
+  const stageBox = await page.locator(".session-map-stage").boundingBox();
+  const flowBox = await flow.boundingBox();
+  expect(stageBox).not.toBeNull();
+  expect(flowBox).not.toBeNull();
+  expect(Math.abs(flowBox!.x - stageBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(flowBox!.y - stageBox!.y)).toBeLessThanOrEqual(1);
+  expect(stageBox!.width - flowBox!.width).toBeLessThanOrEqual(2);
+  expect(stageBox!.height - flowBox!.height).toBeLessThanOrEqual(2);
+});
+
+test("Session Map loads with the native frozen-prototype boundary", async ({
+  page,
+}) => {
+  await page.addInitScript(() => Object.freeze(Object.prototype));
+  await page.reload();
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+
+  await expect(page.locator(".react-flow")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Goals 2/u })).toBeVisible();
 });
 
 test("right-side drawers trap focus, close with Escape, and restore focus", async ({

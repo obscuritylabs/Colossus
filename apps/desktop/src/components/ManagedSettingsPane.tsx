@@ -23,7 +23,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
+import { type InputHTMLAttributes, useEffect, useMemo, useState } from "react";
 
 import {
   applyRepositoryConfiguration,
@@ -623,6 +623,17 @@ function currentValue<T>(entry: CatalogEntry<T>): T {
     entry.revisions.find(
       (revision) => revision.revision === entry.currentRevision,
     )?.value ?? entry.revisions[entry.revisions.length - 1]!.value
+  );
+}
+
+function SwitchInput(
+  props: Omit<
+    InputHTMLAttributes<HTMLInputElement>,
+    "className" | "role" | "type"
+  >,
+) {
+  return (
+    <input {...props} className="switch-input" type="checkbox" role="switch" />
   );
 }
 
@@ -3121,9 +3132,7 @@ export function SpaceSettingsBody({
                         </button>
                       ) : null}
                     </div>
-                    <input
-                      className="switch-input"
-                      type="checkbox"
+                    <SwitchInput
                       checked={enabled}
                       aria-label={`Enable ${entry.label}`}
                       onChange={(event) =>
@@ -3261,9 +3270,7 @@ export function SpaceSettingsBody({
                   >
                     {enabled ? "Enabled" : "Available"}
                   </span>
-                  <input
-                    className="switch-input"
-                    type="checkbox"
+                  <SwitchInput
                     checked={enabled}
                     aria-label={`Enable ${entry.label}`}
                     onChange={(event) => {
@@ -3527,9 +3534,7 @@ export function SpaceSettingsBody({
                   >
                     {enabled ? "Selected" : "Global"}
                   </span>
-                  <input
-                    className="switch-input"
-                    type="checkbox"
+                  <SwitchInput
                     checked={enabled}
                     aria-label={`Select ${entry.label}`}
                     onChange={(event) => {
@@ -3600,9 +3605,7 @@ export function SpaceSettingsBody({
                   >
                     {enabled ? "Selected" : `r${entry.currentRevision}`}
                   </span>
-                  <input
-                    className="switch-input"
-                    type="checkbox"
+                  <SwitchInput
                     disabled={!providerSelected}
                     checked={enabled}
                     aria-label={`Select ${entry.label}`}
@@ -4903,9 +4906,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>Traces</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.tracesEnabled}
           onChange={(event) =>
             onChange({ ...draft, tracesEnabled: event.target.checked })
@@ -4929,9 +4930,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>Metrics</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.metricsEnabled}
           onChange={(event) =>
             onChange({ ...draft, metricsEnabled: event.target.checked })
@@ -4955,9 +4954,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>OTLP logs</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.logsOtlp}
           onChange={(event) =>
             onChange({ ...draft, logsOtlp: event.target.checked })
@@ -4966,9 +4963,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>JSON stdout</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.logsStdoutJson}
           onChange={(event) =>
             onChange({ ...draft, logsStdoutJson: event.target.checked })
@@ -4994,9 +4989,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>Allow insecure remote transport</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.acknowledgeInsecureTransport}
           onChange={(event) =>
             onChange({

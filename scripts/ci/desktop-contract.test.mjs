@@ -120,6 +120,58 @@ test("repository import keeps its action footer inside compact windows", () => {
   );
 });
 
+test("managed settings render compact switches instead of stretched native checkboxes", () => {
+  const settings = read("apps/desktop/src/components/ManagedSettingsPane.tsx");
+  const styles = read("apps/desktop/src/styles.css");
+  assert.match(
+    settings,
+    /function SwitchInput[\s\S]*className="switch-input"[\s\S]*role="switch"/u,
+  );
+  assert.match(
+    styles,
+    /\.switch-input\s*\{[^}]*width:\s*34px;[^}]*height:\s*18px;[^}]*min-height:\s*18px;[^}]*padding:\s*0;[^}]*appearance:\s*none;[^}]*border-radius:\s*999px;/su,
+  );
+  assert.match(
+    styles,
+    /\.switch-input::after\s*\{[^}]*width:\s*12px;[^}]*height:\s*12px;[^}]*border-radius:\s*50%;/su,
+  );
+  assert.match(
+    styles,
+    /\.switch-input:checked::after\s*\{[^}]*transform:\s*translateX\(16px\);/su,
+  );
+});
+
+test("session map renders compact switches instead of stretched native checkboxes", () => {
+  const workspace = read("apps/desktop/src/components/SessionWorkspace.tsx");
+  const styles = read("apps/desktop/src/styles.css");
+  assert.equal(workspace.match(/role="switch"/gu)?.length, 2);
+  assert.match(
+    styles,
+    /\.session-map-layers input,\s*\.session-map-lineage-toggle input\s*\{[^}]*width:\s*28px;[^}]*height:\s*15px;[^}]*min-height:\s*15px;[^}]*padding:\s*0;[^}]*appearance:\s*none;[^}]*border-radius:\s*999px;/su,
+  );
+  assert.match(
+    styles,
+    /\.session-map-layers input::after,\s*\.session-map-lineage-toggle input::after\s*\{[^}]*width:\s*11px;[^}]*height:\s*11px;[^}]*border-radius:\s*50%;/su,
+  );
+});
+
+test("session topology uses a lazy-loaded read-only React Flow surface", () => {
+  const workspace = read("apps/desktop/src/components/SessionWorkspace.tsx");
+  const graph = read("apps/desktop/src/components/SessionTopologyGraph.tsx");
+  const packageManifest = json("apps/desktop/package.json");
+  assert.equal(packageManifest.dependencies["@xyflow/react"], "12.11.3");
+  assert.match(
+    workspace,
+    /lazy\(\(\)\s*=>\s*import\("\.\/SessionTopologyGraph"\)/u,
+  );
+  assert.match(graph, /<ReactFlow<SessionFlowNode, Edge>/u);
+  assert.match(graph, /type:\s*"step"/u);
+  assert.match(graph, /nodesDraggable=\{false\}/u);
+  assert.match(graph, /nodesConnectable=\{false\}/u);
+  assert.match(graph, /elementsSelectable=\{false\}/u);
+  assert.doesNotMatch(workspace, /session-map-network/u);
+});
+
 test("release and development CSPs preserve the local-only boundary", () => {
   const { security } = json("apps/desktop/src-tauri/tauri.conf.json").app;
   const release = directives(security.csp);
@@ -152,9 +204,20 @@ test("release and development CSPs preserve the local-only boundary", () => {
   const xtermCompatibility = read(
     "apps/desktop/build/xterm-frozen-prototype.ts",
   );
+  const d3ColorCompatibility = read(
+    "apps/desktop/build/d3-color-frozen-prototype.ts",
+  );
   assert.match(vite, /xtermFrozenPrototypeCompatibility\(\)/u);
-  assert.match(vite, /exclude: \["@xterm\/xterm"\]/u);
+  assert.match(vite, /d3ColorFrozenPrototypeCompatibility\(\)/u);
+  assert.match(
+    vite,
+    /exclude:\s*\[[\s\S]*"@xterm\/xterm"[\s\S]*"@xyflow\/system"[\s\S]*"d3-color"[\s\S]*\]/u,
+  );
   assert.match(xtermCompatibility, /Qn\|\|=Object\.create\(null\)/u);
+  assert.match(
+    d3ColorCompatibility,
+    /Object\.defineProperty\(prototype, "constructor"/u,
+  );
 
   const terminalProtocol = read(
     "apps/desktop/src-tauri/src/terminal_protocol.rs",

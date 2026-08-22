@@ -4,7 +4,6 @@ import {
   IconBook2,
   IconCheck,
   IconChecklist,
-  IconChevronDown,
   IconChevronRight,
   IconExternalLink,
   IconFileText,
@@ -16,12 +15,11 @@ import {
   IconRobot,
   IconScale,
   IconSearch,
-  IconSparkles,
   IconTargetArrow,
   IconTopologyStar3,
 } from "@tabler/icons-react";
-import { useMemo, useRef, useState } from "react";
-import type { ComponentType, CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState } from "react";
+import type { ComponentType } from "react";
 
 import { shortDateLabel } from "../presenters";
 import { selectSessionPlans, selectSessionSources } from "../session-resources";
@@ -30,7 +28,18 @@ import type { RunView } from "../state";
 import type { SessionMap, SessionMapResource } from "../types";
 import type { AgentParticipant, AgentWorkState } from "./AgentFlow";
 import type { ArtifactViewItem } from "./ArtifactWorkspace";
+import { MarkdownContent } from "./MarkdownContent";
 import { isWebUri, workspaceSourcePath } from "./ResearchSourcesPanel";
+import type {
+  SessionTopologyFamilyModel,
+  SessionTopologyPrimaryModel,
+} from "./SessionTopologyGraph";
+
+const SessionTopologyGraph = lazy(() =>
+  import("./SessionTopologyGraph").then(({ SessionTopologyGraph }) => ({
+    default: SessionTopologyGraph,
+  })),
+);
 
 export type SessionWorkspaceView =
   "conversation" | "topology" | "plans" | "sources" | "resources";
@@ -236,7 +245,7 @@ export function SessionTopology({
     () => new Set(LAYER_META.map(({ id }) => id)),
   );
   const [showRunLineage, setShowRunLineage] = useState(false);
-  const stageRef = useRef<HTMLDivElement>(null);
+  const [fitRequest, setFitRequest] = useState(0);
   const primary = participants.find(({ kind }) => kind === "primary");
   const opening = views[0];
   const visibleFamilies = useMemo(
@@ -244,19 +253,68 @@ export function SessionTopology({
     [layers],
   );
 
-  function countFor(family: SessionMapFamily): number {
-    if (family === "artifacts") return artifacts.length;
-    return sessionMap === null ? 0 : familyRecords(sessionMap, family).length;
-  }
-
-  function toggleFamily(family: SessionMapFamily) {
+  const toggleFamily = useCallback((family: SessionMapFamily) => {
     setExpanded((current) => {
       const next = new Set(current);
       if (next.has(family)) next.delete(family);
       else next.add(family);
       return next;
     });
-  }
+  }, []);
+
+  const graphPrimary = useMemo<SessionTopologyPrimaryModel | null>(() => {
+    if (primary === undefined || opening === undefined) return null;
+    return {
+      name: primary.name,
+      startedLabel: shortDateLabel(opening.run.createdAt),
+      stateLabel: readableState(primary.state),
+    };
+  }, [opening, primary]);
+
+  const graphFamilies = useMemo<readonly SessionTopologyFamilyModel[]>(() => {
+    if (sessionMap === null) return [];
+    return visibleFamilies.map((family) => {
+      const records =
+        family.id === "artifacts"
+          ? artifacts.map((artifact) => ({
+              id: artifact.id,
+              title: artifact.fileName,
+              meta: `${artifact.mediaType} · ${artifact.sizeLabel}`,
+              statusLabel: artifact.stateLabel,
+              tone: statusTone(
+                artifact.stateLabel.toLowerCase().replaceAll(" ", "_"),
+              ),
+              onSelect: () => onSelectArtifact(artifact.id),
+            }))
+          : familyRecords(sessionMap, family.id).map((record) => {
+              const status = recordStatus(record);
+              return {
+                id: recordId(record),
+                title: recordTitle(record),
+                meta: recordMeta(record, showRunLineage),
+                statusLabel: status.replaceAll("_", " "),
+                tone: statusTone(status),
+                onSelect: () => onSelectResource(record),
+              };
+            });
+      return {
+        ...family,
+        count: records.length,
+        open: expanded.has(family.id),
+        records,
+        onToggle: () => toggleFamily(family.id),
+      };
+    });
+  }, [
+    artifacts,
+    expanded,
+    onSelectArtifact,
+    onSelectResource,
+    sessionMap,
+    showRunLineage,
+    toggleFamily,
+    visibleFamilies,
+  ]);
 
   return (
     <section className="session-map" aria-labelledby="session-topology-title">
@@ -270,7 +328,7 @@ export function SessionTopology({
             type="button"
             onClick={() => {
               setExpanded(new Set(["memories"]));
-              stageRef.current?.scrollTo({ top: 0, left: 0 });
+              setFitRequest((current) => current + 1);
             }}
           >
             <IconArrowsMaximize size={15} stroke={1.6} /> Fit
@@ -287,7 +345,7 @@ export function SessionTopology({
         </div>
       </header>
 
-      <div ref={stageRef} className="session-map-stage">
+      <div className="session-map-stage">
         <aside className="session-map-layers" aria-label="Session map layers">
           <header>
             <IconAdjustments size={15} stroke={1.6} />
@@ -298,6 +356,7 @@ export function SessionTopology({
               <span>{layer.label}</span>
               <input
                 type="checkbox"
+                role="switch"
                 checked={layers.has(layer.id)}
                 onChange={() =>
                   setLayers((current) => {
@@ -318,7 +377,8 @@ export function SessionTopology({
           </div>
         ) : sessionMap === null ||
           opening === undefined ||
-          primary === undefined ? (
+          primary === undefined ||
+          graphPrimary === null ? (
           <div className="session-view-empty">
             <IconTopologyStar3 size={26} stroke={1.5} aria-hidden="true" />
             <strong>Session map unavailable</strong>
@@ -328,130 +388,30 @@ export function SessionTopology({
             </span>
           </div>
         ) : (
-          <div
-            className="session-map-network"
-            style={
-              { "--map-row-count": visibleFamilies.length } as CSSProperties
+          <Suspense
+            fallback={
+              <div className="session-map-loading" role="status">
+                <span /> Loading interactive session map…
+              </div>
             }
           >
-            <article className="session-map-primary">
-              <span aria-hidden="true">
-                <IconSparkles size={20} stroke={1.65} />
-              </span>
-              <div>
-                <strong>{primary.name}</strong>
-                <small>Started {shortDateLabel(opening.run.createdAt)}</small>
-              </div>
-              <em>
-                <i /> {readableState(primary.state)}
-              </em>
-            </article>
-            <div className="session-map-trunk" aria-hidden="true" />
-            {visibleFamilies.map((family, index) => {
-              const Icon = family.icon;
-              const records =
-                family.id === "artifacts"
-                  ? []
-                  : familyRecords(sessionMap, family.id);
-              const open = expanded.has(family.id);
-              const count = countFor(family.id);
-              return (
-                <div
-                  className="session-map-row"
-                  style={{ "--map-row": index + 1 } as CSSProperties}
-                  key={family.id}
-                >
-                  <button
-                    className={`session-map-family family-${family.layer}`}
-                    type="button"
-                    aria-expanded={open}
-                    onClick={() => toggleFamily(family.id)}
-                  >
-                    <span aria-hidden="true">
-                      <Icon size={18} stroke={1.6} />
-                    </span>
-                    <span>
-                      <strong>
-                        {family.label} <b>{count}</b>
-                      </strong>
-                      <small>
-                        {count === 0
-                          ? "No released records"
-                          : `${count} released`}
-                      </small>
-                    </span>
-                    <IconChevronDown
-                      size={15}
-                      stroke={1.6}
-                      aria-hidden="true"
-                    />
-                  </button>
-                  {open ? (
-                    <ol className="session-map-children">
-                      {family.id === "artifacts"
-                        ? artifacts.map((artifact) => (
-                            <li key={artifact.id}>
-                              <button
-                                type="button"
-                                onClick={() => onSelectArtifact(artifact.id)}
-                              >
-                                <span>
-                                  <strong>{artifact.fileName}</strong>
-                                  <small>
-                                    {artifact.mediaType} · {artifact.sizeLabel}
-                                  </small>
-                                </span>
-                                <IconChevronRight size={15} />
-                              </button>
-                            </li>
-                          ))
-                        : records.map((record) => {
-                            const status = recordStatus(record);
-                            return (
-                              <li key={`${record.family}:${recordId(record)}`}>
-                                <button
-                                  type="button"
-                                  onClick={() => onSelectResource(record)}
-                                >
-                                  <span>
-                                    <strong>{recordTitle(record)}</strong>
-                                    <small>
-                                      {recordMeta(record, showRunLineage)}
-                                    </small>
-                                  </span>
-                                  <em className={`tone-${statusTone(status)}`}>
-                                    <i /> {status.replaceAll("_", " ")}
-                                  </em>
-                                  <IconChevronRight
-                                    size={15}
-                                    stroke={1.6}
-                                    aria-hidden="true"
-                                  />
-                                </button>
-                              </li>
-                            );
-                          })}
-                      {count === 0 ? (
-                        <li className="session-map-child-empty">
-                          No released records in this family.
-                        </li>
-                      ) : null}
-                    </ol>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
+            <SessionTopologyGraph
+              primary={graphPrimary}
+              families={graphFamilies}
+              fitRequest={fitRequest}
+            />
+          </Suspense>
         )}
+        <label className="session-map-lineage-toggle">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={showRunLineage}
+            onChange={(event) => setShowRunLineage(event.currentTarget.checked)}
+          />
+          <span>Show run lineage</span>
+        </label>
       </div>
-      <label className="session-map-lineage-toggle">
-        <input
-          type="checkbox"
-          checked={showRunLineage}
-          onChange={(event) => setShowRunLineage(event.currentTarget.checked)}
-        />
-        <span>Show run lineage</span>
-      </label>
       {error !== "" && sessionMap !== null ? (
         <p className="session-map-stale-note">{error}</p>
       ) : null}
@@ -509,15 +469,27 @@ export function SessionPlansView({
                   <IconListDetails size={18} stroke={1.6} />
                 </span>
                 <div>
-                  <strong>{plan.sourceRunTitle}</strong>
+                  <button
+                    className="session-plan-title"
+                    type="button"
+                    onClick={() => onInspectPlan(plan)}
+                  >
+                    {plan.sourceRunTitle}
+                  </button>
                   <small>
                     Run {plan.runIndex} · Revision {plan.revision} ·{" "}
                     {planStatus(plan)}
                   </small>
-                  <p>
-                    {plan.output ||
-                      "The plan was saved without a released preview."}
-                  </p>
+                  {plan.output.trim() === "" ? (
+                    <p className="session-plan-preview-fallback">
+                      The plan was saved without a released preview.
+                    </p>
+                  ) : (
+                    <MarkdownContent
+                      className="session-plan-preview"
+                      content={plan.output}
+                    />
+                  )}
                 </div>
                 <div className="session-resource-actions">
                   <button type="button" onClick={() => onInspectPlan(plan)}>
