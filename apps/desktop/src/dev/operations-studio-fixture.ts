@@ -39,7 +39,7 @@ export function buildSessionMapFixture(): SessionMap {
         task: "Review the Desktop IPC and credential boundaries.",
         role: "security",
         status: "completed",
-        finalOutput: "No cross-Space control path was found.",
+        finalOutput: "No cross-Workspace control path was found.",
         error: "",
         createdAt: "2026-07-20T14:31:00Z",
         updatedAt: "2026-07-20T14:34:00Z",
@@ -97,7 +97,7 @@ export function buildSessionMapFixture(): SessionMap {
       },
       {
         id: "fixture-task-tests",
-        title: "Verify selected-Space isolation",
+        title: "Verify selected-Workspace isolation",
         description: "Add negative IPC and renderer contract coverage.",
         status: "in_progress",
         createdAt: "2026-07-20T14:30:10Z",
@@ -158,10 +158,11 @@ export function buildSessionMapFixture(): SessionMap {
         status: "active",
         priority: "high",
         title: "Fail closed on identity drift",
-        decision: "Stop the affected Space when workspace identity changes.",
+        decision:
+          "Stop the affected Workspace when workspace identity changes.",
         intent: "Avoid silently operating on a different folder object.",
         appliesWhen:
-          "The selected Space no longer matches its canonical identity.",
+          "The selected Workspace no longer matches its canonical identity.",
         rationale: "An explicit reselection is safer than path-only recovery.",
         createdAt: "2026-07-20T14:31:00Z",
         updatedAt: "2026-07-20T14:31:00Z",
@@ -478,7 +479,14 @@ const SESSION_ACTIVITY_FIXTURE: SessionActivity[] = [
         format: "text",
         value: "The requested destination was not released by policy.",
       },
-      attributes: { policy: "denied" },
+      attributes: {
+        action: "network.fetch",
+        action_category: "network",
+        policy_outcome: "deny",
+        reason_code: "policy_denied",
+        resource_authority: "declared",
+        sandbox_boundary: "broker",
+      },
       sourceEventTypes: ["tool.call.requested.v1", "effect.denied.v1"],
       lastSequence: 14,
     },
@@ -492,6 +500,14 @@ const SESSION_ACTIVITY_FIXTURE: SessionActivity[] = [
     "The native sidecar binds the selected workspace identity before runtime composition.",
     "2026-07-20T14:31:02.689Z",
     {
+      runId: "fixture-run-security-reviewer",
+      actor: "Subagent · security-reviewer",
+      attributes: {
+        run_role: "subagent",
+        subagent_id: "fixture-subagent-security-reviewer",
+        subagent_role: "security-reviewer",
+        parent_run_id: SELECTED_RUN_ID,
+      },
       result: {
         format: "text",
         value:
@@ -796,14 +812,54 @@ const SESSION_ACTIVITY_FIXTURE: SessionActivity[] = [
   ),
 ].sort((left, right) => right.firstSequence - left.firstSequence);
 
+const SESSION_ACTIVITY_LIVE_FIXTURE: SessionActivity[] = [
+  activity(
+    42,
+    5,
+    "system",
+    "system",
+    "Live checkpoint",
+    "Projection advanced to the newest released records.",
+    "2026-07-20T14:33:17.000Z",
+    { sourceEventTypes: ["projection.checkpoint.v1"] },
+  ),
+  activity(
+    43,
+    5,
+    "agent",
+    "assistant",
+    "Live response",
+    "A newly released assistant activity arrived while following live.",
+    "2026-07-20T14:33:20.000Z",
+    {
+      completedAt: "2026-07-20T14:33:20.180Z",
+      durationMs: 180,
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+];
+
+interface SessionActivityFixtureOptions {
+  liveActivityCount?: number;
+}
+
 export function buildSessionActivityFixture(
   request: ListSessionActivityRequest,
+  options: SessionActivityFixtureOptions = {},
 ): SessionActivityPage {
+  const liveActivityCount = Math.min(
+    Math.max(options.liveActivityCount ?? 0, 0),
+    SESSION_ACTIVITY_LIVE_FIXTURE.length,
+  );
+  const fixtureActivities = [
+    ...SESSION_ACTIVITY_LIVE_FIXTURE.slice(0, liveActivityCount),
+    ...SESSION_ACTIVITY_FIXTURE,
+  ].sort((left, right) => right.firstSequence - left.firstSequence);
   const query = request.query?.trim().toLocaleLowerCase() ?? "";
   const lanes = request.lanes ?? [];
   const kinds = request.kinds ?? [];
   const statuses = request.statuses ?? [];
-  const matching = SESSION_ACTIVITY_FIXTURE.filter((item) => {
+  const matching = fixtureActivities.filter((item) => {
     if (lanes.length > 0 && !lanes.includes(item.lane)) return false;
     if (kinds.length > 0 && !kinds.includes(item.kind)) return false;
     if (
@@ -835,8 +891,8 @@ export function buildSessionActivityFixture(
   return {
     activities: page,
     nextPageToken: nextOffset < matching.length ? `fixture:${nextOffset}` : "",
-    headSequence: 41,
-    projectedThroughSequence: 41,
+    headSequence: 41 + liveActivityCount,
+    projectedThroughSequence: 41 + liveActivityCount,
     caughtUp: true,
   };
 }

@@ -4,7 +4,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 
 /// Stable rebuildable projection containing policy-released session activity.
-pub const SESSION_ACTIVITY_PROJECTION: &str = "session-activity-v1";
+pub const SESSION_ACTIVITY_PROJECTION: &str = "session-activity-v4";
 
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_SUMMARY_BYTES: usize = 2_048;
@@ -108,9 +108,12 @@ impl ProjectionHandler for SessionActivityProjection {
             | "tool.call.started.v1"
             | "tool.call.completed.v1"
             | "tool.call.cancelled.v1" => project_tool_lifecycle(store, session_id, event, payload),
+            "subagent.queued.v1" | "subagent.status_changed.v1" => {
+                project_subagent_lifecycle(store, session_id, event, payload)
+            }
             "plan.written.v1" => project_plan(session_id, event, payload),
             "run.started.v1" | "run.completed.v1" | "run.cancelled.v1" | "run.max_turns.v1"
-            | "error.v1" => project_run_lifecycle(session_id, event, payload),
+            | "error.v1" => project_run_lifecycle(store, session_id, event, payload),
             "effect.started.v1"
             | "effect.completed.v1"
             | "effect.failed.v1"
@@ -122,7 +125,7 @@ impl ProjectionHandler for SessionActivityProjection {
                 EventClassification::Policy | EventClassification::Approval
             ) =>
             {
-                project_policy_activity(store, session_id, event)
+                project_policy_activity(store, session_id, event, payload)
             }
             // Streaming content, raw session messages, raw provider output, routine indexing,
             // and unrelated domain records are intentionally absent from this released view.
@@ -241,25 +244,31 @@ fn project_released_update(
                     insert_attribute(&mut attributes, field, &value);
                 }
             }
-            Ok(upsert_new(
+            let run_id = event.context.run_id.as_deref().unwrap_or_default();
+            let turn = payload_turn(kind);
+            update_logical(
+                store,
                 session_id,
                 event,
-                format!("usage:{}", event.event_id),
-                "system",
-                "system",
-                "Token usage",
-                &format!("{total} tokens used"),
-                "System",
-                Some("completed"),
-                None,
-                None,
-                None,
-                attributes,
-            )?)
+                &format!("usage:{run_id}:{}", turn.unwrap_or_default()),
+                |record| {
+                    record.run_id = event.context.run_id.clone();
+                    record.turn = turn;
+                    record.lane = "system".into();
+                    record.kind = "system".into();
+                    record.title = "Token usage".into();
+                    record.summary = format!("{total} tokens used");
+                    record.actor = "System".into();
+                    record.status = Some("completed".into());
+                    record.completed_at = None;
+                    record.duration_ms = None;
+                    record.attributes = attributes;
+                },
+            )
         }
         "interaction" => project_interaction(session_id, event, kind),
         "notice" => project_notice(session_id, event, kind),
-        "state" => project_released_state(session_id, event, kind),
+        "state" => project_released_state(store, session_id, event, kind),
         "result" => project_released_result(store, session_id, event, kind),
         "failure" | "cancellation" => project_released_terminal(session_id, event, kind),
         _ => Ok(Vec::new()),
@@ -288,7 +297,7 @@ fn project_released_tool(
             record.run_id = event.context.run_id.clone();
             record.lane = "tools".into();
             record.kind = "tool".into();
-            record.actor = "Assistant".into();
+            set_assistant_actor(record, event);
             if let Some(name) = activity.get("tool_name").and_then(Value::as_str) {
                 record.title = bounded(name, MAX_ATTRIBUTE_BYTES);
             }
@@ -335,6 +344,10 @@ fn project_released_message(
         && let Some(logical_id) = lookup_value(store, &model_lookup(session_id, run_id))?
     {
         return update_logical(store, session_id, event, &logical_id, |record| {
+            record.run_id = event.context.run_id.clone();
+            record.lane = "agent".into();
+            record.kind = "assistant".into();
+            set_assistant_actor(record, event);
             record.title = "Assistant response".into();
             record.summary = preview(&text);
             record.result = Some(content("text", text.clone()));
@@ -355,7 +368,7 @@ fn project_released_message(
             "agent",
             "assistant",
             "Assistant response",
-            "Assistant",
+            assistant_actor(event),
             None,
             Some(content("text", text.clone())),
         ),
@@ -426,7 +439,7 @@ fn project_context(
 }
 
 fn project_model_request(
-    _store: &dyn ProjectionStore,
+    store: &dyn ProjectionStore,
     session_id: &str,
     event: &EventEnvelope,
     payload: &Value,
@@ -447,21 +460,17 @@ fn project_model_request(
             insert_attribute(&mut attributes, field, &value);
         }
     }
-    let mut mutations = upsert_new(
-        session_id,
-        event,
-        logical_id.clone(),
-        "agent",
-        "assistant",
-        "Assistant turn",
-        "Model request prepared",
-        "Assistant",
-        Some("running"),
-        turn,
-        None,
-        None,
-        attributes,
-    )?;
+    let mut mutations = update_logical(store, session_id, event, &logical_id, |record| {
+        record.run_id = event.context.run_id.clone();
+        record.turn = turn;
+        record.lane = "agent".into();
+        record.kind = "assistant".into();
+        record.title = "Assistant turn".into();
+        record.summary = "Model request prepared".into();
+        set_assistant_actor(record, event);
+        record.status = Some("running".into());
+        record.attributes = attributes;
+    })?;
     if !run_id.is_empty() {
         mutations.push(ProjectionMutation::Upsert {
             key: model_lookup(session_id, run_id),
@@ -508,7 +517,7 @@ fn project_tool_lifecycle(
             record.turn = payload_turn_value(payload).or(record.turn);
             record.lane = "tools".into();
             record.kind = "tool".into();
-            record.actor = "Assistant".into();
+            set_assistant_actor(record, event);
             if let Some(name) = payload.get("name").and_then(Value::as_str) {
                 record.title = bounded(name, MAX_ATTRIBUTE_BYTES);
             }
@@ -588,7 +597,70 @@ fn project_plan(
     )
 }
 
+fn project_subagent_lifecycle(
+    store: &dyn ProjectionStore,
+    session_id: &str,
+    event: &EventEnvelope,
+    payload: &Value,
+) -> Result<Vec<ProjectionMutation>, StoreError> {
+    let Some(record_value) = payload.get("record") else {
+        return Ok(Vec::new());
+    };
+    let Some(subagent_id) = record_value.get("id").and_then(Value::as_str) else {
+        return Ok(Vec::new());
+    };
+    let role = record_value
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("delegated agent");
+    let status = record_value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("queued");
+    let activity_status = match status {
+        "queued" => "requested",
+        "interrupted" => "failed",
+        value => value,
+    };
+    let parent_run_id = record_value
+        .get("parent_run_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let child_run_id = record_value.get("child_run_id").and_then(Value::as_str);
+    let logical_id = format!("subagent:{subagent_id}");
+    update_logical(store, session_id, event, &logical_id, |activity| {
+        activity.run_id = child_run_id
+            .or((!parent_run_id.is_empty()).then_some(parent_run_id))
+            .map(str::to_owned);
+        activity.lane = "agent".into();
+        activity.kind = "assistant".into();
+        activity.title = format!("Subagent · {}", bounded(role, MAX_ATTRIBUTE_BYTES));
+        activity.summary = format!("Delegated agent is {}", status.replace('_', " "));
+        activity.actor = format!("Subagent · {}", bounded(role, MAX_ATTRIBUTE_BYTES));
+        activity.status = Some(activity_status.into());
+        insert_attribute(&mut activity.attributes, "run_role", "subagent");
+        insert_attribute(&mut activity.attributes, "subagent_id", subagent_id);
+        insert_attribute(&mut activity.attributes, "subagent_role", role);
+        insert_attribute(&mut activity.attributes, "subagent_status", status);
+        if !parent_run_id.is_empty() {
+            insert_attribute(&mut activity.attributes, "parent_run_id", parent_run_id);
+        }
+        if let Some(child_run_id) = child_run_id {
+            insert_attribute(&mut activity.attributes, "child_run_id", child_run_id);
+        }
+        if let Some(started_at) = record_value.get("started_at").and_then(Value::as_str) {
+            activity.started_at = bounded(started_at, MAX_ATTRIBUTE_BYTES);
+        }
+        if terminal_status(activity_status)
+            && let Some(completed_at) = record_value.get("completed_at").and_then(Value::as_str)
+        {
+            finish_record(activity, completed_at);
+        }
+    })
+}
+
 fn project_run_lifecycle(
+    store: &dyn ProjectionStore,
     session_id: &str,
     event: &EventEnvelope,
     payload: &Value,
@@ -604,20 +676,28 @@ fn project_run_lifecycle(
     if let Some(turn) = payload.get("turn").and_then(scalar) {
         insert_attribute(&mut attributes, "turn", &turn);
     }
-    upsert_new(
+    let run_id = event.context.run_id.as_deref().unwrap_or_default();
+    update_logical(
+        store,
         session_id,
         event,
-        format!("run:{}", event.event_id),
-        "system",
-        "system",
-        title,
-        title,
-        "System",
-        Some(status),
-        payload_turn_value(payload),
-        None,
-        None,
-        attributes,
+        &format!("run-lifecycle:{run_id}"),
+        |record| {
+            record.run_id = event.context.run_id.clone();
+            record.turn = payload_turn_value(payload).or(record.turn);
+            record.lane = "system".into();
+            record.kind = "system".into();
+            record.title = title.into();
+            record.summary = title.into();
+            record.actor = "System".into();
+            record.status = Some(status.into());
+            for (key, value) in attributes {
+                insert_attribute(&mut record.attributes, &key, &value);
+            }
+            if terminal_status(status) {
+                finish_record(record, &event.occurred_at);
+            }
+        },
     )
 }
 
@@ -626,7 +706,7 @@ fn project_effect_lifecycle(
     session_id: &str,
     event: &EventEnvelope,
 ) -> Result<Vec<ProjectionMutation>, StoreError> {
-    let Some(call_id) = event.actor.id.strip_prefix("tool-call:") else {
+    let Some(call_id) = tool_call_id(&event.actor.id) else {
         if matches!(
             event.event_type.as_str(),
             "effect.failed.v1"
@@ -667,8 +747,23 @@ fn project_policy_activity(
     store: &dyn ProjectionStore,
     session_id: &str,
     event: &EventEnvelope,
+    payload: &Value,
 ) -> Result<Vec<ProjectionMutation>, StoreError> {
-    if let Some(call_id) = event.actor.id.strip_prefix("tool-call:") {
+    let mut details = policy_attributes(payload);
+    if !details.contains_key("reason_code") {
+        let reason_code = match event.event_type.as_str() {
+            "approval.requested.v1" => Some("approval_requested"),
+            "approval.granted.v1" => Some("approval_granted"),
+            "approval.denied.v1" => Some("approval_denied"),
+            "approval.error.v1" => Some("approval_provider_failed"),
+            "policy.error.v1" => Some("policy_evaluation_failed"),
+            _ => None,
+        };
+        if let Some(reason_code) = reason_code {
+            insert_attribute(&mut details, "reason_code", reason_code);
+        }
+    }
+    if let Some(call_id) = tool_call_id(&event.actor.id) {
         let run_id = event.context.run_id.as_deref().unwrap_or_default();
         return update_logical(
             store,
@@ -676,6 +771,9 @@ fn project_policy_activity(
             event,
             &format!("tool:{run_id}:{call_id}"),
             |record| {
+                for (key, value) in &details {
+                    insert_attribute(&mut record.attributes, key, value);
+                }
                 if matches!(
                     event.event_type.as_str(),
                     "approval.denied.v1" | "approval.error.v1" | "policy.error.v1"
@@ -688,12 +786,114 @@ fn project_policy_activity(
             },
         );
     }
-    system_event(
+
+    let outcome = details.get("policy_outcome").map(String::as_str);
+    if event.event_type == "policy.decided.v1" && outcome == Some("allow") {
+        // Routine unbound allow decisions are audit evidence, not useful session
+        // activity. Tool-bound decisions were attached above; retain standalone
+        // rows only when a decision requires attention.
+        return Ok(Vec::new());
+    }
+    let (title, summary, status) = match (event.event_type.as_str(), outcome) {
+        ("policy.decided.v1", Some("deny")) => (
+            "Policy denied".into(),
+            policy_summary(&details, "Policy denied this operation"),
+            Some("failed"),
+        ),
+        ("policy.decided.v1", Some("require_approval")) => (
+            "Approval required".into(),
+            policy_summary(&details, "Policy requires approval for this operation"),
+            Some("waiting"),
+        ),
+        _ => (
+            human_event_type(&event.event_type),
+            "Policy or approval state changed".into(),
+            event_status(&event.event_type),
+        ),
+    };
+    upsert_new(
         session_id,
         event,
-        human_event_type(&event.event_type),
-        "Policy activity",
+        format!("system:{}", event.event_id),
+        "system",
+        "system",
+        &title,
+        &summary,
+        "System",
+        status,
+        None,
+        None,
+        None,
+        details,
     )
+}
+
+fn tool_call_id(actor_id: &str) -> Option<&str> {
+    actor_id
+        .strip_prefix("tool-call:")
+        .or_else(|| {
+            actor_id
+                .rsplit_once(":tool-call:")
+                .map(|(_, call_id)| call_id)
+        })
+        .filter(|call_id| !call_id.is_empty())
+}
+
+fn policy_attributes(payload: &Value) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::new();
+    for (source, target) in [
+        ("decision_id", "decision_id"),
+        ("policy_revision", "policy_revision"),
+        ("outcome", "policy_outcome"),
+        ("action", "action"),
+        ("phase", "effect_phase"),
+        ("sandbox_backend", "sandbox_boundary"),
+        ("require_post_effect", "post_effect_review"),
+        ("resource_authority", "resource_authority"),
+        ("error_kind", "reason_code"),
+    ] {
+        if let Some(value) = payload.get(source).and_then(scalar) {
+            insert_attribute(&mut attributes, target, &value);
+        }
+    }
+    if let Some(action) = attributes.get("action").cloned()
+        && let Some((category, _)) = action.split_once('.')
+    {
+        insert_attribute(&mut attributes, "action_category", category);
+    }
+    if !attributes.contains_key("reason_code") {
+        let reason_code = match attributes.get("policy_outcome").map(String::as_str) {
+            Some("deny") => Some("policy_denied"),
+            Some("require_approval") => Some("approval_required"),
+            Some("allow") => Some("policy_allowed"),
+            _ => None,
+        };
+        if let Some(reason_code) = reason_code {
+            insert_attribute(&mut attributes, "reason_code", reason_code);
+        }
+    }
+    attributes
+}
+
+fn policy_summary(attributes: &BTreeMap<String, String>, fallback: &str) -> String {
+    let mut details = Vec::new();
+    if let Some(action) = attributes.get("action") {
+        details.push(action.clone());
+    }
+    if let Some(boundary) = attributes.get("sandbox_boundary") {
+        details.push(format!("{boundary} sandbox"));
+    }
+    if let Some(authority) = attributes.get("resource_authority") {
+        details.push(format!("{authority} authority"));
+    }
+    if let Some(revision) = attributes.get("policy_revision") {
+        details.push(format!("policy {revision}"));
+    }
+    if details.is_empty() {
+        fallback.into()
+    } else {
+        details.join(" · ")
+    }
 }
 
 fn project_interaction(
@@ -746,7 +946,7 @@ fn project_notice(
         .and_then(|notice| notice.get("reason"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if reason.starts_with("run.phase.") {
+    if reason.starts_with("run.phase.") || reason == "model.final_output" {
         return Ok(Vec::new());
     }
     let message = kind
@@ -773,6 +973,7 @@ fn project_notice(
 }
 
 fn project_released_state(
+    store: &dyn ProjectionStore,
     session_id: &str,
     event: &EventEnvelope,
     kind: &Map<String, Value>,
@@ -781,20 +982,37 @@ fn project_released_state(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("running");
-    upsert_new(
+    let activity_status = match status {
+        "queued" => "requested",
+        "cancelling" => "running",
+        "interrupted" => "failed",
+        value => value,
+    };
+    let run_id = event.context.run_id.as_deref().unwrap_or_default();
+    update_logical(
+        store,
         session_id,
         event,
-        format!("state:{}", event.event_id),
-        "system",
-        "system",
-        &format!("Run {}", status.replace('_', " ")),
-        "Public run state changed",
-        "System",
-        Some(status),
-        None,
-        None,
-        None,
-        BTreeMap::new(),
+        &format!("run-lifecycle:{run_id}"),
+        |record| {
+            let title = match status {
+                "running" => "Run started".into(),
+                "completed" => "Run completed".into(),
+                "cancelled" => "Run cancelled".into(),
+                "failed" | "interrupted" | "outcome_unknown" => "Run failed".into(),
+                value => format!("Run {}", value.replace('_', " ")),
+            };
+            record.run_id = event.context.run_id.clone();
+            record.lane = "system".into();
+            record.kind = "system".into();
+            record.title = title;
+            record.summary = "Run lifecycle changed".into();
+            record.actor = "System".into();
+            record.status = Some(activity_status.into());
+            if terminal_status(activity_status) {
+                finish_record(record, &event.occurred_at);
+            }
+        },
     )
 }
 
@@ -814,6 +1032,10 @@ fn project_released_result(
         && let Some(logical_id) = lookup_value(store, &model_lookup(session_id, run_id))?
     {
         return update_logical(store, session_id, event, &logical_id, |record| {
+            record.run_id = event.context.run_id.clone();
+            record.lane = "agent".into();
+            record.kind = "assistant".into();
+            set_assistant_actor(record, event);
             record.title = "Assistant response".into();
             record.summary = preview(&output);
             record.result = Some(content("text", output.clone()));
@@ -829,7 +1051,7 @@ fn project_released_result(
         "assistant",
         "Assistant response",
         &preview(&output),
-        "Assistant",
+        assistant_actor(event),
         Some("completed"),
         None,
         None,
@@ -918,8 +1140,9 @@ fn upsert_new(
     turn: Option<u32>,
     input: Option<ProjectedActivityContent>,
     result: Option<ProjectedActivityContent>,
-    attributes: BTreeMap<String, String>,
+    mut attributes: BTreeMap<String, String>,
 ) -> Result<Vec<ProjectionMutation>, StoreError> {
+    insert_lineage_attributes(&mut attributes, event);
     let record = ProjectedSessionActivity {
         activity_id: logical_id.clone(),
         session_id: session_id.into(),
@@ -929,7 +1152,7 @@ fn upsert_new(
         kind: kind.into(),
         title: bounded(title, MAX_ATTRIBUTE_BYTES),
         summary: bounded(summary, MAX_SUMMARY_BYTES),
-        actor: actor.into(),
+        actor: activity_actor(event, actor).into(),
         status: status.map(str::to_owned),
         started_at: event.occurred_at.clone(),
         completed_at: status
@@ -990,6 +1213,10 @@ fn update_logical(
         },
     };
     update(&mut record);
+    insert_lineage_attributes(&mut record.attributes, event);
+    if record.actor == "Assistant" && is_subagent_event(event) {
+        record.actor = "Subagent".into();
+    }
     record.last_sequence = event.global_sequence;
     push_source_event(&mut record, &event.event_type);
     if record.started_at.is_empty() {
@@ -1170,6 +1397,49 @@ fn actor_label(actor: ActorType) -> &'static str {
     }
 }
 
+fn assistant_actor(event: &EventEnvelope) -> &'static str {
+    if is_subagent_event(event) {
+        "Subagent"
+    } else {
+        "Assistant"
+    }
+}
+
+fn set_assistant_actor(record: &mut ProjectedSessionActivity, event: &EventEnvelope) {
+    record.actor = if is_subagent_event(event)
+        || record.attributes.get("run_role").map(String::as_str) == Some("subagent")
+    {
+        "Subagent".into()
+    } else {
+        "Assistant".into()
+    };
+}
+
+fn activity_actor<'a>(event: &EventEnvelope, fallback: &'a str) -> &'a str {
+    if fallback == "Assistant" && is_subagent_event(event) {
+        "Subagent"
+    } else {
+        fallback
+    }
+}
+
+fn is_subagent_event(event: &EventEnvelope) -> bool {
+    event.context.subagent_id.is_some() || event.actor.actor_type == ActorType::Subagent
+}
+
+fn insert_lineage_attributes(attributes: &mut BTreeMap<String, String>, event: &EventEnvelope) {
+    if let Some(subagent_id) = event.context.subagent_id.as_deref() {
+        insert_attribute(attributes, "run_role", "subagent");
+        insert_attribute(attributes, "subagent_id", subagent_id);
+    } else if event.actor.actor_type == ActorType::Subagent {
+        insert_attribute(attributes, "run_role", "subagent");
+    } else if event.context.workflow_id.is_some() || event.actor.actor_type == ActorType::Workflow {
+        insert_attribute(attributes, "run_role", "workflow");
+    } else if event.context.run_id.is_some() && !attributes.contains_key("run_role") {
+        insert_attribute(attributes, "run_role", "primary");
+    }
+}
+
 fn human_event_type(event_type: &str) -> String {
     let value = event_type.strip_suffix(".v1").unwrap_or(event_type);
     let mut words = value.replace(['.', '_'], " ");
@@ -1346,6 +1616,316 @@ mod tests {
         let encoded = serde_json::to_string(activity).expect("encode");
         assert!(!encoded.contains("must-not-project"));
         assert_eq!(activity.duration_ms, Some(1_000));
+    }
+
+    #[test]
+    fn coalesces_subagent_policy_and_effect_events_into_the_tool_activity() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        apply(
+            &store,
+            &mut position,
+            &event(1, "tool.call.requested.v1", "run-a"),
+            json!({
+                "turn": 1,
+                "call_id": "call-a",
+                "name": "filesystem.read"
+            }),
+        );
+
+        let mut policy_event = event(2, "policy.decided.v1", "run-a");
+        policy_event.classification = EventClassification::Policy;
+        policy_event.actor = Actor {
+            actor_type: ActorType::Subagent,
+            id: "subagent:agent-a:tool-call:call-a".into(),
+        };
+        apply(
+            &store,
+            &mut position,
+            &policy_event,
+            json!({
+                "decision_id": "decision-a",
+                "policy_revision": "builtin-v1",
+                "outcome": "allow",
+                "resource_authority": "declared",
+                "reason": "private path /Users/example/.ssh/id_rsa",
+                "audit_labels": {"private": "must-not-project"}
+            }),
+        );
+
+        let mut effect_event = event(3, "effect.started.v1", "run-a");
+        effect_event.classification = EventClassification::Effect;
+        effect_event.actor = Actor {
+            actor_type: ActorType::Subagent,
+            id: "subagent:agent-a:tool-call:call-a".into(),
+        };
+        apply(&store, &mut position, &effect_event, json!({}));
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        assert_eq!(page.records.len(), 1);
+        let activity = &page.records[0].1;
+        assert_eq!(activity.kind, "tool");
+        assert_eq!(
+            activity
+                .attributes
+                .get("policy_outcome")
+                .map(String::as_str),
+            Some("allow")
+        );
+        assert_eq!(
+            activity
+                .attributes
+                .get("resource_authority")
+                .map(String::as_str),
+            Some("declared")
+        );
+        assert!(
+            activity
+                .source_event_types
+                .contains(&"effect.started.v1".into())
+        );
+        let encoded = serde_json::to_string(activity).expect("encode");
+        assert!(!encoded.contains("/Users/example"));
+        assert!(!encoded.contains("must-not-project"));
+    }
+
+    #[test]
+    fn standalone_policy_decisions_expose_only_allowlisted_details() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        let mut policy_event = event(1, "policy.decided.v1", "run-a");
+        policy_event.classification = EventClassification::Policy;
+        apply(
+            &store,
+            &mut position,
+            &policy_event,
+            json!({
+                "decision_id": "decision-a",
+                "policy_revision": "builtin-v1",
+                "outcome": "require_approval",
+                "action": "process.spawn",
+                "phase": "pre_effect",
+                "sandbox_backend": "native",
+                "require_post_effect": true,
+                "resource_authority": "ambient",
+                "reason": "secret policy explanation",
+                "audit_labels": {"credential": "must-not-project"}
+            }),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        let activity = &page.records[0].1;
+        assert_eq!(activity.title, "Approval required");
+        assert_eq!(activity.status.as_deref(), Some("waiting"));
+        assert_eq!(
+            activity
+                .attributes
+                .get("policy_revision")
+                .map(String::as_str),
+            Some("builtin-v1")
+        );
+        assert_eq!(
+            activity
+                .attributes
+                .get("resource_authority")
+                .map(String::as_str),
+            Some("ambient")
+        );
+        assert_eq!(
+            activity
+                .attributes
+                .get("action_category")
+                .map(String::as_str),
+            Some("process")
+        );
+        assert_eq!(
+            activity
+                .attributes
+                .get("sandbox_boundary")
+                .map(String::as_str),
+            Some("native")
+        );
+        assert_eq!(
+            activity.attributes.get("reason_code").map(String::as_str),
+            Some("approval_required")
+        );
+        let encoded = serde_json::to_string(activity).expect("encode");
+        assert!(!encoded.contains("secret policy explanation"));
+        assert!(!encoded.contains("must-not-project"));
+    }
+
+    #[test]
+    fn routine_unbound_policy_allows_stay_in_audit_instead_of_the_activity_feed() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        let mut policy_event = event(1, "policy.decided.v1", "run-a");
+        policy_event.classification = EventClassification::Policy;
+        apply(
+            &store,
+            &mut position,
+            &policy_event,
+            json!({
+                "decision_id": "decision-a",
+                "policy_revision": "builtin-v1",
+                "outcome": "allow",
+                "resource_authority": "declared"
+            }),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        assert!(
+            reader
+                .list_page("session-a", None, 10)
+                .expect("page")
+                .records
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn subagent_lineage_is_released_without_task_or_output_content() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        apply(
+            &store,
+            &mut position,
+            &event(1, "subagent.status_changed.v1", "parent-run"),
+            json!({
+                "record": {
+                    "id": "agent-a",
+                    "session_id": "session-a",
+                    "parent_run_id": "parent-run",
+                    "parent_call_id": "call-a",
+                    "task": "inspect /private/secret",
+                    "role": "security-reviewer",
+                    "status": "completed",
+                    "child_session_id": "child-session",
+                    "child_run_id": "child-run",
+                    "final_output": "private child output",
+                    "error": "",
+                    "created_at": "2026-08-21T09:13:58Z",
+                    "updated_at": "2026-08-21T09:14:01Z",
+                    "started_at": "2026-08-21T09:14:00Z",
+                    "completed_at": "2026-08-21T09:14:01Z"
+                }
+            }),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        let activity = &page.records[0].1;
+        assert_eq!(activity.run_id.as_deref(), Some("child-run"));
+        assert_eq!(activity.actor, "Subagent · security-reviewer");
+        assert_eq!(activity.status.as_deref(), Some("completed"));
+        assert_eq!(
+            activity.attributes.get("parent_run_id").map(String::as_str),
+            Some("parent-run")
+        );
+        assert_eq!(activity.duration_ms, Some(1_000));
+        let encoded = serde_json::to_string(activity).expect("encode");
+        assert!(!encoded.contains("/private/secret"));
+        assert!(!encoded.contains("private child output"));
+        assert!(!encoded.contains("child-session"));
+    }
+
+    #[test]
+    fn child_model_results_keep_assistant_kind_and_subagent_actor() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        let mut request = event(1, "model.request.prepared.v1", "child-run");
+        request.context.subagent_id = Some("agent-a".into());
+        request.actor.actor_type = ActorType::Subagent;
+        apply(&store, &mut position, &request, json!({"turn": 1}));
+
+        // Public run updates can be emitted by the API system actor; the model
+        // activity must retain lineage established by canonical child events.
+        let result = event(2, "api.run.update.v1", "child-run");
+        apply(
+            &store,
+            &mut position,
+            &result,
+            json!({"kind": {"type": "result", "result": {"output": "released"}}}),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        assert_eq!(page.records.len(), 1);
+        let activity = &page.records[0].1;
+        assert_eq!(activity.kind, "assistant");
+        assert_eq!(activity.lane, "agent");
+        assert_eq!(activity.actor, "Subagent");
+        assert_eq!(
+            activity.attributes.get("run_role").map(String::as_str),
+            Some("subagent")
+        );
+    }
+
+    #[test]
+    fn run_state_usage_and_final_output_notice_are_coalesced() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        apply(
+            &store,
+            &mut position,
+            &event(1, "run.started.v1", "run-a"),
+            json!({}),
+        );
+        apply(
+            &store,
+            &mut position,
+            &event(2, "api.run.update.v1", "run-a"),
+            json!({"kind": {"type": "state", "status": "running"}}),
+        );
+        for (sequence, total) in [(3, 10), (4, 25)] {
+            apply(
+                &store,
+                &mut position,
+                &event(sequence, "api.run.update.v1", "run-a"),
+                json!({
+                    "kind": {
+                        "type": "usage",
+                        "usage": {"input_tokens": total, "output_tokens": 0, "total_tokens": total}
+                    }
+                }),
+            );
+        }
+        apply(
+            &store,
+            &mut position,
+            &event(5, "api.run.update.v1", "run-a"),
+            json!({
+                "kind": {
+                    "type": "notice",
+                    "notice": {
+                        "reason": "model.final_output",
+                        "message": "the final visible output is available in the run result"
+                    }
+                }
+            }),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        assert_eq!(page.records.len(), 2);
+        assert_eq!(
+            page.records
+                .iter()
+                .filter(|(_, activity)| activity.title == "Token usage")
+                .count(),
+            1
+        );
+        assert!(
+            page.records
+                .iter()
+                .any(|(_, activity)| activity.summary == "25 tokens used")
+        );
+        assert!(
+            page.records
+                .iter()
+                .all(|(_, activity)| activity.title != "Run notice")
+        );
     }
 
     #[test]

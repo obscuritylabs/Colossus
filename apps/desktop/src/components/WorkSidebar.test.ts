@@ -64,6 +64,7 @@ const BASE_PROPS: ComponentProps<typeof WorkSidebar> = {
   terminalAvailable: true,
   activeSessionId: RUN.sessionId,
   pinnedSessionIds: new Set(),
+  resolveThreadTitle: (_spaceId, _sessionId, fallback) => fallback,
   query: "",
   searchScope: "space",
   includeArchived: false,
@@ -98,6 +99,7 @@ const BASE_PROPS: ComponentProps<typeof WorkSidebar> = {
   onArchiveSpace: vi.fn(),
   onRestoreSpace: vi.fn(),
   onArchiveThread: vi.fn(),
+  onRenameThread: vi.fn(),
   onToggleThreadPinned: vi.fn(),
   onRestoreThread: vi.fn(),
   onSelectSurface: vi.fn(),
@@ -122,14 +124,14 @@ describe("WorkSidebar", () => {
   it("shows workspace context once and uses the durable run title", () => {
     const markup = renderSidebar();
 
-    expect(markup).toContain('id="spaces-heading">Spaces</span>');
+    expect(markup).toContain('id="spaces-heading">Workspaces</span>');
     expect(markup).toContain("Colossus");
     expect(markup).toContain("Improve the Work sidebar");
     expect(markup).toContain('aria-label="New thread in Colossus"');
     expect(markup).not.toContain('class="button primary new-work"');
     expect(markup).toContain("Capabilities");
     expect(markup).toContain("Connections");
-    expect(markup).toContain('aria-label="Resize Space sidebar"');
+    expect(markup).toContain('aria-label="Resize Workspace sidebar"');
     expect(markup).toContain('aria-valuemin="260"');
     expect(markup).toContain('aria-valuemax="480"');
     expect(markup).not.toContain("<strong>Primary</strong>");
@@ -337,6 +339,48 @@ describe("WorkSidebar", () => {
     expect(markup).toContain(
       'aria-label="Thread actions for Improve the Work sidebar"',
     );
+    expect(markup).toContain('aria-label="Rename Improve the Work sidebar"');
+  });
+
+  it("uses a saved thread name throughout the sidebar", () => {
+    const markup = renderSidebar({
+      resolveThreadTitle: (_spaceId, sessionId, fallback) =>
+        sessionId === RUN.sessionId ? "Desktop naming polish" : fallback,
+      spaceThreadPreviews: new Map([
+        [
+          "space-research",
+          [
+            {
+              spaceId: "space-research",
+              spaceName: "Research Lab",
+              targetId: "space-research",
+              runId: RUN.runId,
+              sessionId: RUN.sessionId,
+              title: RUN.title,
+              mode: RUN.mode,
+              status: RUN.status,
+              updatedAt: RUN.updatedAt,
+              archived: false,
+              threadArchived: false,
+              attention: false,
+            },
+          ],
+        ],
+      ]),
+      spaces: [
+        SPACE,
+        {
+          ...SPACE,
+          spaceId: "space-research",
+          targetId: "space-research",
+          displayName: "Research Lab",
+          selected: false,
+        },
+      ],
+    });
+
+    expect(markup).toContain("Desktop naming polish");
+    expect(markup).toContain('aria-label="Rename Desktop naming polish"');
   });
 
   it("keeps local pin controls available while the app connects", () => {
@@ -393,7 +437,7 @@ describe("WorkSidebar", () => {
       ],
     });
 
-    expect(markup).toContain("Include archived Spaces and threads");
+    expect(markup).toContain("Include archived Workspaces and threads");
     expect(markup).toContain("· Archived");
     expect(markup).toContain('aria-label="Restore Improve the Work sidebar"');
   });
@@ -432,9 +476,9 @@ describe("WorkSidebar", () => {
       ],
     });
 
-    expect(markup).toContain("All Spaces");
+    expect(markup).toContain("All Workspaces");
     expect(markup).toContain('aria-label="Thread search scope"');
-    expect(openingButtonTag(markup, "All Spaces")).toContain(
+    expect(openingButtonTag(markup, "All Workspaces")).toContain(
       'aria-pressed="true"',
     );
     expect(openingInputTag(markup, "Search threads")).not.toContain("disabled");

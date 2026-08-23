@@ -888,7 +888,7 @@ pub enum ManagedJournalPayloadMode {
     Full,
 }
 
-/// One immutable, secret-free telemetry profile pinned by a Space.
+/// One immutable, secret-free telemetry profile pinned by a Workspace.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedTelemetryConfig {
@@ -1154,7 +1154,7 @@ pub struct ManagedRuntimeConfig {
     /// Version-pinned MCP definitions compiled by Desktop.
     #[serde(default)]
     pub mcp_servers: Vec<ManagedMcpServerConfig>,
-    /// Optional immutable telemetry profile selected by this Space.
+    /// Optional immutable telemetry profile selected by this Workspace.
     #[serde(default)]
     pub telemetry: Option<ManagedTelemetryConfig>,
     /// Sparse ordinary configuration fields compiled after typed catalogs and before

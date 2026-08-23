@@ -342,7 +342,7 @@ fn bounded_text(value: &str, maximum_bytes: usize) -> String {
 fn index_error() -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "desktop_search_index",
-        "The Desktop search index is unavailable. Open the Space to rebuild it.",
+        "The Desktop search index is unavailable. Open the Workspace to rebuild it.",
         true,
     )
 }

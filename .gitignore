@@ -1,6 +1,8 @@
 target/
 dist/
 site/
+/node_modules/
+/.playwright-cli/
 output/playwright/
 .DS_Store
 design-qa.md

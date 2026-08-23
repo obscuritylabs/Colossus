@@ -14,7 +14,7 @@ import {
   IconSparkles,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
@@ -106,6 +106,7 @@ interface WorkSurfaceProps {
   planWorkflowAvailable: boolean;
   activityComparisonEnabled?: boolean;
   initialSessionWorkspaceView?: SessionWorkspaceView;
+  onSessionWorkspaceViewChange?: (view: SessionWorkspaceView) => void;
   sessionActivityAvailable?: boolean;
   loadSessionActivity?: (
     request: ListSessionActivityRequest,
@@ -150,6 +151,8 @@ const STARTERS = [
   "Coordinate an implementation and security review",
 ];
 
+const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
+
 export function WorkSurface({
   title,
   view,
@@ -187,6 +190,7 @@ export function WorkSurface({
   planWorkflowAvailable,
   activityComparisonEnabled = false,
   initialSessionWorkspaceView = "conversation",
+  onSessionWorkspaceViewChange = IGNORE_SESSION_WORKSPACE_VIEW,
   sessionActivityAvailable = false,
   loadSessionActivity = async () => ({
     activities: [],
@@ -219,6 +223,13 @@ export function WorkSurface({
 }: WorkSurfaceProps) {
   const [sessionWorkspaceView, setSessionWorkspaceView] =
     useState<SessionWorkspaceView>(initialSessionWorkspaceView);
+  const changeSessionWorkspaceView = useCallback(
+    (next: SessionWorkspaceView) => {
+      setSessionWorkspaceView(next);
+      onSessionWorkspaceViewChange(next);
+    },
+    [onSessionWorkspaceViewChange],
+  );
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedSessionResource, setSelectedSessionResource] =
     useState<SessionMapResource | null>(null);
@@ -314,10 +325,14 @@ export function WorkSurface({
   }
 
   useEffect(() => {
-    setSessionWorkspaceView(initialSessionWorkspaceView);
+    changeSessionWorkspaceView(initialSessionWorkspaceView);
     setSelectedPlanId(null);
     updateFollowingLatest(true);
-  }, [initialSessionWorkspaceView, selectedSessionId]);
+  }, [
+    changeSessionWorkspaceView,
+    initialSessionWorkspaceView,
+    selectedSessionId,
+  ]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -949,7 +964,7 @@ export function WorkSurface({
       {view === undefined ? null : (
         <SessionWorkspaceTabs
           active={sessionWorkspaceView}
-          onChange={setSessionWorkspaceView}
+          onChange={changeSessionWorkspaceView}
         />
       )}
 
@@ -1093,7 +1108,7 @@ export function WorkSurface({
                 <SessionResourcesView
                   views={conversationViews}
                   artifacts={artifacts}
-                  onChangeView={setSessionWorkspaceView}
+                  onChangeView={changeSessionWorkspaceView}
                   onSelectArtifact={openArtifactFromResources}
                 />
               ) : (

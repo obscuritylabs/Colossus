@@ -7,7 +7,12 @@ import type { SessionActivity } from "../types";
 import {
   SessionActivityView,
   activityGroups,
+  clampTimelineRange,
+  historyTokenAfterHeadRefresh,
   mergeActivities,
+  panTimelineRange,
+  timelineExtent,
+  zoomTimelineRange,
 } from "./SessionActivity";
 
 function fixtureActivities(): SessionActivity[] {
@@ -65,6 +70,87 @@ describe("SessionActivityView", () => {
     ).toBe("Updated released summary");
   });
 
+  it("keeps the historical cursor when a live head refresh succeeds", () => {
+    expect(historyTokenAfterHeadRefresh("older-page", "new-head", true)).toBe(
+      "older-page",
+    );
+    expect(historyTokenAfterHeadRefresh("older-page", "new-head", false)).toBe(
+      "new-head",
+    );
+  });
+
+  it("derives the timeline extent from released start and completion times", () => {
+    const [sample] = fixtureActivities();
+    if (sample === undefined) throw new Error("fixture must include activity");
+    const startedAt = Date.parse("2026-08-22T12:00:00.000Z");
+    const completedAt = Date.parse("2026-08-22T12:02:00.000Z");
+
+    expect(
+      timelineExtent([
+        {
+          ...sample,
+          startedAt: new Date(startedAt).toISOString(),
+          completedAt: new Date(completedAt).toISOString(),
+        },
+      ]),
+    ).toEqual({ start: startedAt, end: completedAt });
+    expect(timelineExtent([], completedAt)).toEqual({
+      start: completedAt - 60_000,
+      end: completedAt,
+    });
+  });
+
+  it("clamps panning to the loaded activity extent", () => {
+    const extent = { start: 0, end: 100_000 };
+    const range = { start: 20_000, end: 50_000 };
+
+    expect(panTimelineRange(range, extent, 90_000)).toEqual({
+      start: 70_000,
+      end: 100_000,
+    });
+    expect(panTimelineRange(range, extent, -90_000)).toEqual({
+      start: 0,
+      end: 30_000,
+    });
+    expect(
+      clampTimelineRange({ start: -10_000, end: 150_000 }, extent),
+    ).toEqual(extent);
+  });
+
+  it("zooms around the requested time and honors the minimum span", () => {
+    const extent = { start: 0, end: 100_000 };
+    const range = { start: 20_000, end: 60_000 };
+
+    expect(zoomTimelineRange(range, extent, 0.5, 20_000)).toEqual({
+      start: 20_000,
+      end: 40_000,
+    });
+    expect(zoomTimelineRange(range, extent, 100)).toEqual(extent);
+    expect(
+      zoomTimelineRange({ start: 20_000, end: 21_000 }, extent, 0.01),
+    ).toEqual({ start: 20_000, end: 21_000 });
+  });
+
+  it("groups delegated runs with their released role and parent lineage", () => {
+    const [sample] = fixtureActivities();
+    if (sample === undefined) throw new Error("fixture must include activity");
+    const [group] = activityGroups([
+      {
+        ...sample,
+        runId: "child-run",
+        attributes: {
+          run_role: "subagent",
+          subagent_role: "security-reviewer",
+          parent_run_id: "parent-run",
+        },
+      },
+    ]);
+
+    expect(group?.runRole).toBe("subagent");
+    expect(group?.subagentRole).toBe("security-reviewer");
+    expect(group?.parentRunId).toBe("parent-run");
+  });
+
   it("provides realistic filtering and released inspector payloads", () => {
     const page = buildSessionActivityFixture({
       sourceRunId: "fixture-run-desktop-release",
@@ -79,5 +165,26 @@ describe("SessionActivityView", () => {
     expect(page.activities[0]?.result?.value).toContain(
       "not released by policy",
     );
+  });
+
+  it("stages deterministic head records for live-follow acceptance tests", () => {
+    const request = {
+      sourceRunId: "fixture-run-desktop-release",
+      pageSize: 100,
+    };
+
+    const initial = buildSessionActivityFixture(request);
+    const firstPoll = buildSessionActivityFixture(request, {
+      liveActivityCount: 1,
+    });
+    const secondPoll = buildSessionActivityFixture(request, {
+      liveActivityCount: 2,
+    });
+
+    expect(initial.activities).toHaveLength(27);
+    expect(firstPoll.activities[0]?.title).toBe("Live checkpoint");
+    expect(firstPoll.headSequence).toBe(42);
+    expect(secondPoll.activities[0]?.title).toBe("Live response");
+    expect(secondPoll.headSequence).toBe(43);
   });
 });

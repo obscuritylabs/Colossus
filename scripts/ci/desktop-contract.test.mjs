@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -22,6 +23,13 @@ const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 function read(relative) {
   return readFileSync(join(repository, relative), "utf8");
+}
+
+function filesUnder(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    return entry.isDirectory() ? filesUnder(path) : [path];
+  });
 }
 
 function json(relative) {
@@ -40,6 +48,21 @@ function directives(policy) {
 function digest(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
+
+test("Desktop dropdowns use the app-owned accessible select control", () => {
+  const sourceRoot = join(repository, "apps/desktop/src");
+  const nativeSelects = filesUnder(sourceRoot)
+    .filter((path) => path.endsWith(".tsx") && !path.endsWith(".test.tsx"))
+    .filter((path) => /<select\b/u.test(readFileSync(path, "utf8")))
+    .map((path) => path.slice(repository.length + 1));
+
+  assert.deepEqual(nativeSelects, []);
+  const dropdown = read("apps/desktop/src/components/DropdownSelect.tsx");
+  assert.match(dropdown, /role="combobox"/u);
+  assert.match(dropdown, /role="listbox"/u);
+  assert.match(dropdown, /role="option"/u);
+  assert.match(dropdown, /createPortal/u);
+});
 
 test("Tauri bundles only the two native-owned executables", () => {
   const config = json("apps/desktop/src-tauri/tauri.conf.json");
@@ -152,6 +175,14 @@ test("session map renders compact switches instead of stretched native checkboxe
   assert.match(
     styles,
     /\.session-map-layers input::after,\s*\.session-map-lineage-toggle input::after\s*\{[^}]*width:\s*11px;[^}]*height:\s*11px;[^}]*border-radius:\s*50%;/su,
+  );
+});
+
+test("conversation activity markers stay centered on their timeline rail", () => {
+  const styles = read("apps/desktop/src/styles.css");
+  assert.match(
+    styles,
+    /\.run-activity-thread \.compact-tool-activity::before,\s*\.run-activity-thread \.activity-thought::before,\s*\.run-activity-thread \.feed-entry::before\s*\{[^}]*left:\s*-39px;[^}]*box-sizing:\s*border-box;[^}]*width:\s*8px;[^}]*height:\s*8px;/su,
   );
 });
 
@@ -434,8 +465,13 @@ test("session map inspection is selected-Space scoped and releases bounded canon
   assert.match(projection, /list_research_runs\(Some\(session_id\)/u);
 
   const renderer = read("apps/desktop/src/App.tsx");
-  assert.match(renderer, /getSessionMap\(run\.runId\)/u);
-  assert.match(renderer, /next\.sessionId === run\.sessionId/u);
+  assert.match(renderer, /getSessionMap\(runId\)/u);
+  assert.match(renderer, /next\.sessionId === sessionId/u);
+  assert.match(renderer, /activeSessionWorkspaceView !== "topology"/u);
+  assert.match(
+    renderer,
+    /requestSessionMap\(run\.runId, run\.sessionId, false\)/u,
+  );
 });
 
 test("Aside context stays canonical, selected-Space scoped, and out of metadata search", () => {

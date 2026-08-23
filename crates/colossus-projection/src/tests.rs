@@ -12,9 +12,10 @@ use colossus_ports::{
 use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
 use serde_json::{Value, json};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Barrier, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 #[derive(Default)]
 struct RecordingProjectionStore {
@@ -135,7 +136,7 @@ fn passive_projection_checkpoints_are_grouped() {
             "memory-v1",
             "workflows-v1",
             "effects-recovery-v1",
-            "session-activity-v1"
+            "session-activity-v4"
         ]
     );
 }
@@ -296,6 +297,74 @@ impl ProjectionHandler for NoopProjection {
     ) -> Result<Vec<ProjectionMutation>, StoreError> {
         Ok(Vec::new())
     }
+}
+
+struct SlowProjection {
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+}
+
+impl SlowProjection {
+    fn new() -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ProjectionHandler for SlowProjection {
+    fn name(&self) -> &'static str {
+        "slow-v1"
+    }
+
+    fn project(
+        &self,
+        _store: &dyn ProjectionStore,
+        _event: &colossus_contracts::EventEnvelope,
+        _payload: &Value,
+    ) -> Result<Vec<ProjectionMutation>, StoreError> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(50));
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn concurrent_drains_are_serialized() {
+    const CALLERS: usize = 8;
+
+    let journal = Arc::new(InMemoryEventJournal::default());
+    journal
+        .append(event("session:one", 0, "session.created.v1", json!({})))
+        .expect("append");
+    let store = Arc::new(InMemoryProjectionStore::default());
+    let projection = Arc::new(SlowProjection::new());
+    let journal_port: Arc<dyn EventJournal> = journal;
+    let store_port: Arc<dyn ProjectionStore> = store.clone();
+    let worker = Arc::new(
+        ProjectionWorker::new(journal_port, store_port, vec![projection.clone()]).expect("worker"),
+    );
+    let start = Arc::new(Barrier::new(CALLERS));
+    let callers = (0..CALLERS)
+        .map(|_| {
+            let worker = worker.clone();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                worker.drain(1, 1)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for caller in callers {
+        caller.join().expect("caller").expect("drain");
+    }
+
+    assert_eq!(projection.max_active.load(Ordering::SeqCst), 1);
+    assert_eq!(store.position("slow-v1").expect("position"), 1);
 }
 
 #[test]

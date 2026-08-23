@@ -1,11 +1,15 @@
 import {
   IconAlertTriangle,
+  IconArrowsHorizontal,
+  IconBroadcast,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconClock,
   IconCopy,
   IconFilter,
+  IconFocus2,
+  IconHandGrab,
   IconPlayerPause,
   IconPlayerPlay,
   IconRefresh,
@@ -14,11 +18,17 @@ import {
   IconSettings,
   IconTool,
   IconUser,
+  IconX,
   IconZoomIn,
   IconZoomOut,
+  IconZoomScan,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type {
+  KeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
+} from "react";
 
 import type {
   ListSessionActivityRequest,
@@ -32,6 +42,10 @@ import type {
 const LIVE_INTERVAL_MS = 3_000;
 const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE = 100;
+const MAX_TIMELINE_ACTIVITIES = 500;
+const DEFAULT_TIMELINE_SPAN_MS = 60_000;
+const MIN_TIMELINE_SPAN_MS = 1_000;
+const TIMELINE_PAN_STEP = 0.1;
 
 type ActivityInspectorTab = "summary" | "input" | "result" | "timing";
 
@@ -53,10 +67,39 @@ interface ActivityGroup {
   key: string;
   runId: string | null;
   turn: number | null;
+  runRole: string;
+  subagentRole: string | null;
+  parentRunId: string | null;
   activities: SessionActivity[];
   newestSequence: number;
   startedAt: string;
 }
+
+export interface TimelineRange {
+  start: number;
+  end: number;
+}
+
+type TimelineNavigationMode = "pan" | "range";
+
+interface TimelineNavigationState {
+  range: TimelineRange | null;
+  follow: boolean;
+}
+
+type TimelineDrag =
+  | {
+      kind: "pan";
+      pointerId: number;
+      startX: number;
+      startRange: TimelineRange;
+    }
+  | {
+      kind: "range";
+      pointerId: number;
+      startX: number;
+      startTime: number;
+    };
 
 const EMPTY_FILTERS: ActivityFilters = { lanes: [], kinds: [], statuses: [] };
 
@@ -80,6 +123,7 @@ const STATUS_OPTIONS: ReadonlyArray<{
   value: SessionActivityStatus;
   label: string;
 }> = [
+  { value: "requested", label: "Requested" },
   { value: "running", label: "Running" },
   { value: "waiting", label: "Waiting" },
   { value: "completed", label: "Completed" },
@@ -109,6 +153,14 @@ function mergeActivities(
   );
 }
 
+function historyTokenAfterHeadRefresh(
+  current: string,
+  incoming: string,
+  merge: boolean,
+): string {
+  return merge ? current : incoming;
+}
+
 function activityGroups(
   activities: readonly SessionActivity[],
 ): ActivityGroup[] {
@@ -119,11 +171,23 @@ function activityGroups(
       key,
       runId: activity.runId,
       turn: activity.turn,
+      runRole: activity.attributes.run_role ?? "primary",
+      subagentRole: activity.attributes.subagent_role ?? null,
+      parentRunId: activity.attributes.parent_run_id ?? null,
       activities: [],
       newestSequence: activity.lastSequence,
       startedAt: activity.startedAt,
     };
     group.activities.push(activity);
+    if (activity.attributes.run_role !== undefined) {
+      group.runRole = activity.attributes.run_role;
+    }
+    if (activity.attributes.subagent_role !== undefined) {
+      group.subagentRole = activity.attributes.subagent_role;
+    }
+    if (activity.attributes.parent_run_id !== undefined) {
+      group.parentRunId = activity.attributes.parent_run_id;
+    }
     group.newestSequence = Math.max(
       group.newestSequence,
       activity.lastSequence,
@@ -182,10 +246,20 @@ function durationLabel(durationMs: number | null): string {
 }
 
 function groupLabel(group: ActivityGroup): string {
-  if (group.turn !== null) {
-    return `Turn ${group.turn}`;
+  const turn = group.turn === null ? "Run activity" : `Turn ${group.turn}`;
+  if (group.runRole === "subagent") {
+    return group.subagentRole === null
+      ? `Subagent · ${turn}`
+      : `Subagent · ${group.subagentRole} · ${turn}`;
   }
-  return group.runId === null ? "Session" : "Run activity";
+  if (group.runRole === "workflow") {
+    return `Workflow · ${turn}`;
+  }
+  return group.runId === null ? "Session" : `Primary · ${turn}`;
+}
+
+function shortId(value: string): string {
+  return value.length <= 12 ? value : `${value.slice(0, 8)}…`;
 }
 
 function activityIcon(activity: SessionActivity) {
@@ -228,44 +302,373 @@ function activityRequest(
   };
 }
 
+function rangeSpan(range: TimelineRange): number {
+  return Math.max(range.end - range.start, MIN_TIMELINE_SPAN_MS);
+}
+
+export function timelineExtent(
+  activities: readonly SessionActivity[],
+  fallbackNow = Date.now(),
+): TimelineRange {
+  let earliest = Number.POSITIVE_INFINITY;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const activity of activities) {
+    const started = Date.parse(activity.startedAt);
+    const completed =
+      activity.completedAt === null
+        ? Number.NaN
+        : Date.parse(activity.completedAt);
+    if (Number.isFinite(started)) {
+      earliest = Math.min(earliest, started);
+      latest = Math.max(latest, started);
+    }
+    if (Number.isFinite(completed)) {
+      earliest = Math.min(earliest, completed);
+      latest = Math.max(latest, completed);
+    }
+  }
+  if (!Number.isFinite(earliest) || !Number.isFinite(latest)) {
+    latest = fallbackNow;
+    earliest = latest - DEFAULT_TIMELINE_SPAN_MS;
+  }
+  return {
+    start: Math.min(earliest, latest - DEFAULT_TIMELINE_SPAN_MS),
+    end: latest,
+  };
+}
+
+export function clampTimelineRange(
+  range: TimelineRange,
+  extent: TimelineRange,
+): TimelineRange {
+  const extentSpan = Math.max(extent.end - extent.start, MIN_TIMELINE_SPAN_MS);
+  const span = Math.min(
+    Math.max(range.end - range.start, MIN_TIMELINE_SPAN_MS),
+    extentSpan,
+  );
+  let start = range.start;
+  if (start < extent.start) {
+    start = extent.start;
+  }
+  if (start + span > extent.end) {
+    start = extent.end - span;
+  }
+  return { start, end: start + span };
+}
+
+export function panTimelineRange(
+  range: TimelineRange,
+  extent: TimelineRange,
+  deltaMs: number,
+): TimelineRange {
+  return clampTimelineRange(
+    { start: range.start + deltaMs, end: range.end + deltaMs },
+    extent,
+  );
+}
+
+export function zoomTimelineRange(
+  range: TimelineRange,
+  extent: TimelineRange,
+  scale: number,
+  anchor = (range.start + range.end) / 2,
+): TimelineRange {
+  const currentSpan = rangeSpan(range);
+  const extentSpan = rangeSpan(extent);
+  const nextSpan = Math.min(
+    Math.max(currentSpan * scale, MIN_TIMELINE_SPAN_MS),
+    extentSpan,
+  );
+  const anchorRatio = Math.min(
+    1,
+    Math.max(0, (anchor - range.start) / currentSpan),
+  );
+  const start = anchor - nextSpan * anchorRatio;
+  return clampTimelineRange({ start, end: start + nextSpan }, extent);
+}
+
+function normalizeTimelineRange(left: number, right: number): TimelineRange {
+  return left <= right
+    ? { start: left, end: right }
+    : { start: right, end: left };
+}
+
+function timelineZoomLabel(
+  extent: TimelineRange,
+  range: TimelineRange,
+): string {
+  const zoom = rangeSpan(extent) / rangeSpan(range);
+  return `${zoom < 10 ? zoom.toFixed(1) : Math.round(zoom)}×`;
+}
+
+function timelineRangeLabel(range: TimelineRange): string {
+  return `${shortTime(new Date(range.start).toISOString())} – ${shortTime(
+    new Date(range.end).toISOString(),
+  )} · ${durationLabel(range.end - range.start)}`;
+}
+
 function ActivityTimeline({
   activities,
   selectedId,
-  zoom,
+  live,
   onSelect,
 }: {
   activities: readonly SessionActivity[];
   selectedId: string | null;
-  zoom: number;
+  live: boolean;
   onSelect: (activity: SessionActivity) => void;
 }) {
-  const range = useMemo(() => {
-    const timestamps = activities
-      .flatMap((activity) => [activity.startedAt, activity.completedAt])
-      .filter((value): value is string => value !== null)
-      .map(Date.parse)
-      .filter(Number.isFinite);
-    const latest =
-      timestamps.length === 0 ? Date.now() : Math.max(...timestamps);
-    const earliest =
-      timestamps.length === 0 ? latest - 60_000 : Math.min(...timestamps);
-    const fullSpan = Math.max(latest - earliest, 60_000);
-    const visibleSpan = Math.max(fullSpan / zoom, 10_000);
-    return { start: latest - visibleSpan, end: latest, span: visibleSpan };
-  }, [activities, zoom]);
+  const extent = useMemo(() => timelineExtent(activities), [activities]);
+  const [navigation, setNavigation] = useState<TimelineNavigationState>({
+    range: null,
+    follow: true,
+  });
+  const [mode, setMode] = useState<TimelineNavigationMode>("pan");
+  const [selection, setSelection] = useState<TimelineRange | null>(null);
+  const [dragSelection, setDragSelection] = useState<TimelineRange | null>(
+    null,
+  );
+  const [dragging, setDragging] = useState<TimelineDrag["kind"] | "none">(
+    "none",
+  );
+  const firstTrackRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<TimelineDrag | null>(null);
+  const initializedWithActivity = useRef(false);
+
+  useEffect(() => {
+    if (activities.length === 0 || initializedWithActivity.current) {
+      return;
+    }
+    initializedWithActivity.current = true;
+    setNavigation({ range: extent, follow: true });
+  }, [activities.length, extent]);
+
+  const viewRange = useMemo(() => {
+    const requested = navigation.range ?? extent;
+    if (!navigation.follow) {
+      return clampTimelineRange(requested, extent);
+    }
+    const span = Math.min(rangeSpan(requested), rangeSpan(extent));
+    return clampTimelineRange(
+      { start: extent.end - span, end: extent.end },
+      extent,
+    );
+  }, [extent, navigation]);
+  const viewSpan = rangeSpan(viewRange);
+  const visibleSelection = dragSelection ?? selection;
+  const selectionStyle = useMemo(() => {
+    if (
+      visibleSelection === null ||
+      visibleSelection.end < viewRange.start ||
+      visibleSelection.start > viewRange.end
+    ) {
+      return null;
+    }
+    const start = Math.max(visibleSelection.start, viewRange.start);
+    const end = Math.min(visibleSelection.end, viewRange.end);
+    return {
+      left: `${((start - viewRange.start) / viewSpan) * 100}%`,
+      width: `${Math.max(((end - start) / viewSpan) * 100, 0.2)}%`,
+    };
+  }, [viewRange, viewSpan, visibleSelection]);
   const ticks = Array.from({ length: 7 }, (_, index) => {
-    const time = range.start + (range.span * index) / 6;
+    const time = viewRange.start + (viewSpan * index) / 6;
     return {
       left: `${(index / 6) * 100}%`,
       label: shortTime(new Date(time).toISOString()),
     };
   });
+
+  const manuallySetRange = (range: TimelineRange) => {
+    setNavigation({ range: clampTimelineRange(range, extent), follow: false });
+  };
+
+  const pointerTime = (clientX: number): number | null => {
+    const bounds = firstTrackRef.current?.getBoundingClientRect();
+    if (bounds === undefined || bounds.width <= 0) {
+      return null;
+    }
+    const fraction = Math.min(
+      1,
+      Math.max(0, (clientX - bounds.left) / bounds.width),
+    );
+    return viewRange.start + fraction * viewSpan;
+  };
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    if (
+      event.button !== 0 ||
+      !(event.target instanceof Element) ||
+      event.target.closest("button") !== null
+    ) {
+      return;
+    }
+    const trackBounds = firstTrackRef.current?.getBoundingClientRect();
+    if (
+      trackBounds === undefined ||
+      event.clientX < trackBounds.left ||
+      event.clientX > trackBounds.right
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setNavigation({ range: viewRange, follow: false });
+    if (mode === "pan") {
+      setDragging("pan");
+      dragRef.current = {
+        kind: "pan",
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startRange: viewRange,
+      };
+      return;
+    }
+    const startTime = pointerTime(event.clientX);
+    if (startTime === null) {
+      return;
+    }
+    dragRef.current = {
+      kind: "range",
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startTime,
+    };
+    setDragging("range");
+    setSelection(null);
+    setDragSelection({ start: startTime, end: startTime });
+  };
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const trackBounds = firstTrackRef.current?.getBoundingClientRect();
+    if (trackBounds === undefined || trackBounds.width <= 0) {
+      return;
+    }
+    event.preventDefault();
+    if (drag.kind === "pan") {
+      const deltaMs =
+        (-(event.clientX - drag.startX) / trackBounds.width) *
+        rangeSpan(drag.startRange);
+      manuallySetRange(panTimelineRange(drag.startRange, extent, deltaMs));
+      return;
+    }
+    const currentTime = pointerTime(event.clientX);
+    if (currentTime !== null) {
+      setDragSelection(normalizeTimelineRange(drag.startTime, currentTime));
+    }
+  };
+
+  const finishPointerGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (drag.kind === "range") {
+      const currentTime = pointerTime(event.clientX);
+      const moved = Math.abs(event.clientX - drag.startX) >= 4;
+      setSelection(
+        moved && currentTime !== null
+          ? normalizeTimelineRange(drag.startTime, currentTime)
+          : null,
+      );
+      setDragSelection(null);
+    }
+    dragRef.current = null;
+    setDragging("none");
+  };
+
+  const cancelPointerGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    setDragging("none");
+    setDragSelection(null);
+  };
+
+  const zoomBy = (scale: number, anchor?: number) => {
+    manuallySetRange(zoomTimelineRange(viewRange, extent, scale, anchor));
+  };
+
+  const panBy = (fraction: number) => {
+    manuallySetRange(panTimelineRange(viewRange, extent, viewSpan * fraction));
+  };
+
+  const handleWheel = (event: ReactWheelEvent<HTMLElement>) => {
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      const anchor = pointerTime(event.clientX) ?? undefined;
+      zoomBy(event.deltaY < 0 ? 0.8 : 1.25, anchor);
+      return;
+    }
+    const horizontalDelta =
+      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+        ? event.deltaX
+        : event.shiftKey
+          ? event.deltaY
+          : 0;
+    if (horizontalDelta !== 0) {
+      event.preventDefault();
+      panBy(horizontalDelta / 500);
+    }
+  };
+
+  const handleKeyboardNavigation = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      panBy(event.key === "ArrowLeft" ? -TIMELINE_PAN_STEP : TIMELINE_PAN_STEP);
+    } else if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      zoomBy(0.8);
+    } else if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      zoomBy(1.25);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setNavigation({ range: extent, follow: false });
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setNavigation({ range: viewRange, follow: true });
+    } else if (event.key === "Escape") {
+      setSelection(null);
+      setDragSelection(null);
+    }
+  };
+
+  const zoomLabel = timelineZoomLabel(extent, viewRange);
+  const atFullExtent = viewSpan >= rangeSpan(extent) - 1;
+  const atMinimumSpan = viewSpan <= MIN_TIMELINE_SPAN_MS + 1;
   return (
     <section
       className="activity-timeline"
       aria-label="Session activity timeline"
+      aria-describedby="activity-timeline-help"
+      data-mode={mode}
+      data-dragging={dragging}
+      onKeyDown={handleKeyboardNavigation}
+      onPointerCancel={cancelPointerGesture}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishPointerGesture}
+      onWheel={handleWheel}
+      tabIndex={0}
     >
-      {LANES.map(({ lane, label }) => (
+      <span className="sr-only" id="activity-timeline-help">
+        Use Pan mode to drag through time, or Range mode to drag-select an
+        interval. Arrow keys pan, plus and minus zoom, Home fits all activity,
+        End follows live activity, and Escape clears the selected range.
+      </span>
+      {LANES.map(({ lane, label }, laneIndex) => (
         <div className="activity-timeline-lane" key={lane}>
           <span className="activity-timeline-label">
             {lane === "agent" ? (
@@ -277,20 +680,40 @@ function ActivityTimeline({
             )}
             {label}
           </span>
-          <div className="activity-timeline-track">
+          <div
+            className="activity-timeline-track"
+            data-timeline-track=""
+            ref={laneIndex === 0 ? firstTrackRef : undefined}
+          >
+            {selectionStyle === null ? null : (
+              <span
+                className="activity-timeline-selection"
+                aria-hidden="true"
+                style={selectionStyle}
+              />
+            )}
             {activities
               .filter((activity) => activity.lane === lane)
               .map((activity) => {
                 const started = Date.parse(activity.startedAt);
-                if (!Number.isFinite(started) || started < range.start) {
+                if (!Number.isFinite(started)) {
                   return null;
                 }
-                const completed = activity.completedAt
+                const parsedCompleted = activity.completedAt
                   ? Date.parse(activity.completedAt)
                   : started;
-                const left = ((started - range.start) / range.span) * 100;
+                const completed = Number.isFinite(parsedCompleted)
+                  ? Math.max(parsedCompleted, started)
+                  : started;
+                if (started > viewRange.end || completed < viewRange.start) {
+                  return null;
+                }
+                const visibleStart = Math.max(started, viewRange.start);
+                const visibleEnd = Math.min(completed, viewRange.end);
+                const left =
+                  ((visibleStart - viewRange.start) / viewSpan) * 100;
                 const width = Math.max(
-                  ((Math.max(completed, started) - started) / range.span) * 100,
+                  ((visibleEnd - visibleStart) / viewSpan) * 100,
                   0.75,
                 );
                 return (
@@ -318,6 +741,110 @@ function ActivityTimeline({
             {tick.label}
           </span>
         ))}
+      </div>
+      <div className="activity-timeline-navigator">
+        <div
+          className="activity-navigation-modes"
+          role="group"
+          aria-label="Timeline interaction mode"
+        >
+          <button
+            type="button"
+            aria-label="Pan timeline"
+            aria-pressed={mode === "pan"}
+            title="Pan timeline (drag)"
+            onClick={() => setMode("pan")}
+          >
+            <IconHandGrab size={15} stroke={1.7} aria-hidden="true" />
+            Pan
+          </button>
+          <button
+            type="button"
+            aria-label="Select time range"
+            aria-pressed={mode === "range"}
+            title="Select a time range (drag)"
+            onClick={() => setMode("range")}
+          >
+            <IconArrowsHorizontal size={15} stroke={1.7} aria-hidden="true" />
+            Range
+          </button>
+        </div>
+        <div className="activity-range-readout" role="status">
+          {selection === null ? (
+            <span>
+              {navigation.follow && live ? "Following newest activity" : ""}
+            </span>
+          ) : (
+            <>
+              <span>{timelineRangeLabel(selection)}</span>
+              <button
+                type="button"
+                aria-label="Clear selected time range"
+                onClick={() => setSelection(null)}
+              >
+                <IconX size={14} stroke={1.8} aria-hidden="true" />
+              </button>
+            </>
+          )}
+        </div>
+        <div
+          className="activity-zoom-controls"
+          aria-label="Timeline navigation"
+        >
+          <button
+            type="button"
+            aria-label="Zoom out"
+            disabled={atFullExtent}
+            onClick={() => zoomBy(1.6)}
+          >
+            <IconZoomOut size={16} stroke={1.7} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="Fit entire timeline"
+            title="Fit all activity (Home)"
+            onClick={() => setNavigation({ range: extent, follow: false })}
+          >
+            <IconFocus2 size={15} stroke={1.7} aria-hidden="true" />
+            {zoomLabel}
+          </button>
+          <button
+            type="button"
+            aria-label="Zoom in"
+            disabled={atMinimumSpan}
+            onClick={() => zoomBy(0.625)}
+          >
+            <IconZoomIn size={16} stroke={1.7} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="Zoom to selected time range"
+            disabled={selection === null}
+            title="Zoom to selected range"
+            onClick={() => {
+              if (selection !== null) {
+                manuallySetRange(selection);
+              }
+            }}
+          >
+            <IconZoomScan size={16} stroke={1.7} aria-hidden="true" />
+            Range
+          </button>
+          <button
+            type="button"
+            className="activity-follow-live"
+            aria-label="Follow live activity"
+            aria-pressed={navigation.follow}
+            data-live={live}
+            title="Keep the current time span pinned to the newest activity (End)"
+            onClick={() =>
+              setNavigation({ range: viewRange, follow: !navigation.follow })
+            }
+          >
+            <IconBroadcast size={16} stroke={1.7} aria-hidden="true" />
+            Follow
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -380,6 +907,20 @@ function ActivityInspector({ activity }: { activity: SessionActivity | null }) {
                 <dt>Actor</dt>
                 <dd>{activity.actor}</dd>
               </div>
+              <div>
+                <dt>Run</dt>
+                <dd title={activity.runId ?? undefined}>
+                  {activity.runId === null ? "—" : shortId(activity.runId)}
+                </dd>
+              </div>
+              {activity.attributes.parent_run_id === undefined ? null : (
+                <div>
+                  <dt>Parent run</dt>
+                  <dd title={activity.attributes.parent_run_id}>
+                    {shortId(activity.attributes.parent_run_id)}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt>Sequence</dt>
                 <dd>
@@ -467,20 +1008,35 @@ export function SessionActivityView({
   const [filters, setFilters] = useState<ActivityFilters>(EMPTY_FILTERS);
   const [filterOpen, setFilterOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [nextPageToken, setNextPageToken] = useState("");
+  const [historyPageToken, setHistoryPageToken] = useState("");
   const [caughtUp, setCaughtUp] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState("");
+  const [initialError, setInitialError] = useState("");
+  const [refreshError, setRefreshError] = useState("");
+  const [historyError, setHistoryError] = useState("");
   const [live, setLive] = useState(true);
-  const [zoom, setZoom] = useState(1);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const requestGeneration = useRef(0);
+  const liveRequestInFlight = useRef(false);
   const loadPageRef = useRef(loadPage);
   const [debouncedQuery, setDebouncedQuery] = useState(query);
   const groups = useMemo(() => activityGroups(activities), [activities]);
   const selected =
     activities.find((activity) => activity.activityId === selectedId) ?? null;
+  const timelineActivities = useMemo(() => {
+    if (activities.length <= MAX_TIMELINE_ACTIVITIES) {
+      return activities;
+    }
+    const latest = activities.slice(0, MAX_TIMELINE_ACTIVITIES);
+    if (
+      selected === null ||
+      latest.some((activity) => activity.activityId === selected.activityId)
+    ) {
+      return latest;
+    }
+    return [...latest.slice(0, -1), selected];
+  }, [activities, selected]);
   const filterCount =
     filters.lanes.length + filters.kinds.length + filters.statuses.length;
 
@@ -501,12 +1057,19 @@ export function SessionActivityView({
       if (!available) {
         return;
       }
+      if (merge && liveRequestInFlight.current) {
+        return;
+      }
       const generation = merge
         ? requestGeneration.current
         : ++requestGeneration.current;
-      if (!merge) {
+      if (merge) {
+        liveRequestInFlight.current = true;
+      } else {
         setLoading(true);
-        setError("");
+        setInitialError("");
+        setRefreshError("");
+        setHistoryError("");
       }
       try {
         const page = await loadPageRef.current(
@@ -518,19 +1081,31 @@ export function SessionActivityView({
         setActivities((current) =>
           merge ? mergeActivities(current, page.activities) : page.activities,
         );
-        setNextPageToken(page.nextPageToken);
+        setHistoryPageToken((current) =>
+          historyTokenAfterHeadRefresh(current, page.nextPageToken, merge),
+        );
         setCaughtUp(page.caughtUp);
-        setError("");
+        if (merge) {
+          setRefreshError("");
+        } else {
+          setInitialError("");
+        }
       } catch (caught: unknown) {
         if (generation === requestGeneration.current) {
-          setError(
+          const message =
             caught instanceof Error
               ? caught.message
-              : "Session activity is unavailable.",
-          );
+              : "Session activity is unavailable.";
+          if (merge) {
+            setRefreshError(message);
+          } else {
+            setInitialError(message);
+          }
         }
       } finally {
-        if (!merge && generation === requestGeneration.current) {
+        if (merge) {
+          liveRequestInFlight.current = false;
+        } else if (generation === requestGeneration.current) {
           setLoading(false);
         }
       }
@@ -542,7 +1117,15 @@ export function SessionActivityView({
     setActivities([]);
     setSelectedId(null);
     setExpanded(new Set());
+    setHistoryPageToken("");
+    setLoadingMore(false);
+    setHistoryError("");
+    liveRequestInFlight.current = false;
     void fetchFirstPage(false);
+    return () => {
+      requestGeneration.current += 1;
+      liveRequestInFlight.current = false;
+    };
   }, [fetchFirstPage]);
 
   useEffect(() => {
@@ -611,25 +1194,34 @@ export function SessionActivityView({
   };
 
   const loadMore = async () => {
-    if (nextPageToken === "" || loadingMore) {
+    if (historyPageToken === "" || loadingMore) {
       return;
     }
+    const generation = requestGeneration.current;
     setLoadingMore(true);
+    setHistoryError("");
     try {
       const page = await loadPageRef.current(
-        activityRequest(sourceRunId, debouncedQuery, filters, nextPageToken),
+        activityRequest(sourceRunId, debouncedQuery, filters, historyPageToken),
       );
+      if (generation !== requestGeneration.current) {
+        return;
+      }
       setActivities((current) => mergeActivities(current, page.activities));
-      setNextPageToken(page.nextPageToken);
+      setHistoryPageToken(page.nextPageToken);
       setCaughtUp(page.caughtUp);
     } catch (caught: unknown) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "More activity could not be loaded.",
-      );
+      if (generation === requestGeneration.current) {
+        setHistoryError(
+          caught instanceof Error
+            ? caught.message
+            : "More activity could not be loaded.",
+        );
+      }
     } finally {
-      setLoadingMore(false);
+      if (generation === requestGeneration.current) {
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -773,35 +1365,27 @@ export function SessionActivityView({
           Catching up to the canonical journal…
         </div>
       ) : null}
+      {refreshError !== "" ? (
+        <div className="activity-degraded-live" role="alert">
+          <IconAlertTriangle size={15} stroke={1.7} aria-hidden="true" />
+          <span>
+            <strong>Live refresh failed.</strong> Showing the last successful
+            activity snapshot. {refreshError}
+          </span>
+          <button type="button" onClick={() => void fetchFirstPage(true)}>
+            Retry now
+          </button>
+        </div>
+      ) : null}
 
       <div className="activity-timeline-shell">
         <ActivityTimeline
-          activities={activities}
+          activities={timelineActivities}
+          key={sourceRunId}
+          live={live}
           selectedId={selectedId}
-          zoom={zoom}
           onSelect={selectActivity}
         />
-        <div className="activity-zoom-controls" aria-label="Timeline zoom">
-          <button
-            type="button"
-            aria-label="Zoom out"
-            disabled={zoom <= 1}
-            onClick={() => setZoom((current) => Math.max(1, current - 0.5))}
-          >
-            <IconZoomOut size={16} stroke={1.7} aria-hidden="true" />
-          </button>
-          <button type="button" onClick={() => setZoom(1)}>
-            {zoom.toFixed(1)}×
-          </button>
-          <button
-            type="button"
-            aria-label="Zoom in"
-            disabled={zoom >= 4}
-            onClick={() => setZoom((current) => Math.min(4, current + 0.5))}
-          >
-            <IconZoomIn size={16} stroke={1.7} aria-hidden="true" />
-          </button>
-        </div>
       </div>
 
       {loading ? (
@@ -810,11 +1394,11 @@ export function SessionActivityView({
           <h3>Loading session activity</h3>
           <p>Reading the curated session projection.</p>
         </div>
-      ) : error !== "" && activities.length === 0 ? (
+      ) : initialError !== "" && activities.length === 0 ? (
         <div className="session-activity-state" role="alert">
           <IconAlertTriangle size={24} stroke={1.5} aria-hidden="true" />
           <h3>Session activity could not be loaded</h3>
-          <p>{error}</p>
+          <p>{initialError}</p>
           <button type="button" onClick={() => void fetchFirstPage(false)}>
             <IconRefresh size={16} stroke={1.7} aria-hidden="true" />
             Retry
@@ -824,15 +1408,33 @@ export function SessionActivityView({
         <div className="session-activity-state">
           <IconSearch size={24} stroke={1.5} aria-hidden="true" />
           <h3>
-            {query || filterCount > 0
-              ? "No matching activity"
-              : "No activity yet"}
+            {historyPageToken !== ""
+              ? "No matches in the latest activity"
+              : query || filterCount > 0
+                ? "No matching activity"
+                : "No activity yet"}
           </h3>
           <p>
-            {query || filterCount > 0
-              ? "Adjust the search or filters to see more events."
-              : "Released session events will appear here as the run progresses."}
+            {historyPageToken !== ""
+              ? "Continue into earlier canonical history to look for matching activity."
+              : query || filterCount > 0
+                ? "Adjust the search or filters to see more events."
+                : "Released session events will appear here as the run progresses."}
           </p>
+          {historyError !== "" ? (
+            <p className="activity-inline-error" role="alert">
+              {historyError}
+            </p>
+          ) : null}
+          {historyPageToken !== "" ? (
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={() => void loadMore()}
+            >
+              {loadingMore ? "Searching…" : "Search earlier activity"}
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="activity-split-pane">
@@ -874,9 +1476,17 @@ export function SessionActivityView({
                         aria-hidden="true"
                       />
                     )}
-                    <strong>{groupLabel(group)}</strong>
+                    <span className="activity-group-title">
+                      <strong>{groupLabel(group)}</strong>
+                      {group.parentRunId === null ? null : (
+                        <small>Parent run {shortId(group.parentRunId)}</small>
+                      )}
+                    </span>
                     <span>{shortTime(group.startedAt)}</span>
-                    <span>{group.activities.length} events</span>
+                    <span>
+                      {group.activities.length}{" "}
+                      {group.activities.length === 1 ? "event" : "events"}
+                    </span>
                   </button>
                   {isExpanded
                     ? group.activities.map((activity) => (
@@ -914,10 +1524,15 @@ export function SessionActivityView({
                 </div>
               );
             })}
-            {error !== "" ? (
-              <p className="activity-inline-error">{error}</p>
+            {historyError !== "" ? (
+              <div className="activity-history-error" role="alert">
+                <span>{historyError}</span>
+                <button type="button" onClick={() => void loadMore()}>
+                  Retry loading earlier activity
+                </button>
+              </div>
             ) : null}
-            {nextPageToken !== "" ? (
+            {historyPageToken !== "" ? (
               <button
                 className="activity-load-more"
                 type="button"
@@ -940,4 +1555,4 @@ export function SessionActivityView({
   );
 }
 
-export { activityGroups, mergeActivities };
+export { activityGroups, historyTokenAfterHeadRefresh, mergeActivities };

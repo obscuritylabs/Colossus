@@ -39,7 +39,7 @@ const COPY = {
   connections: {
     kicker: "Runtime routing",
     title: "Connections",
-    description: "Managed Spaces and external daemon connections.",
+    description: "Managed Workspaces and external daemon connections.",
   },
   settings: {
     kicker: "Desktop runtime",

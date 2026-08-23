@@ -54,7 +54,7 @@ pub enum ResearchDepth {
 /// Explicit evidence lane enabled for Research.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResearchSourceKind {
-    /// Selected Space repository evidence.
+    /// Selected Workspace repository evidence.
     Repo,
     /// Configured web-search evidence.
     Web,

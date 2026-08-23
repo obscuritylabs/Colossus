@@ -81,6 +81,7 @@ import type {
   SpaceStartup,
 } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
+import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
 import { managedOnboardingRequired } from "./onboarding";
@@ -134,6 +135,12 @@ import {
   storeThreadPins,
 } from "./thread-pins";
 import {
+  readStoredThreadNames,
+  setThreadName,
+  storeThreadNames,
+  threadNameForWorkspace,
+} from "./thread-names";
+import {
   TargetRouteRegistry,
   selectedTargetRouteChanged,
   watchDurableRun,
@@ -178,6 +185,8 @@ const FIXTURE_MODE =
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
+const FIXTURE_ACTIVITY_LIVE =
+  FIXTURE_MODE && FIXTURE_QUERY.get("activityLive") === "1";
 const FIXTURE_SPACE_STARTUP =
   FIXTURE_MODE && FIXTURE_QUERY.get("spaceStartup") === "1";
 const FIXTURE_CONNECTION_STARTUP =
@@ -539,7 +548,7 @@ function buildDelegateFixture(
   const startedAt = "2026-07-20T14:35:10Z";
   const finishedAt = "2026-07-20T14:35:24Z";
   const output =
-    "No cross-space control path was found. Session ownership remains bound to the selected Space, and the reviewed process boundary does not expose another Space's run authority.";
+    "No cross-workspace control path was found. Session ownership remains bound to the selected Workspace, and the reviewed process boundary does not expose another Workspace's run authority.";
   const run: Run = {
     ...parent,
     runId,
@@ -599,7 +608,7 @@ function buildDelegateFixture(
       callId: "delegate-session",
       toolName: "repo.search",
       state: "started",
-      input: '{"query":"selected Space session boundary"}',
+      input: '{"query":"selected Workspace session boundary"}',
     },
     {
       sequence: 4,
@@ -607,7 +616,7 @@ function buildDelegateFixture(
       callId: "delegate-session",
       toolName: "repo.search",
       state: "completed",
-      preview: "Matched selected-Space routing and ownership checks.",
+      preview: "Matched selected-Workspace routing and ownership checks.",
     },
     {
       sequence: 5,
@@ -838,6 +847,10 @@ export default function App() {
   const [sessionMapLoading, setSessionMapLoading] = useState(false);
   const [sessionMapError, setSessionMapError] = useState("");
   const sessionMapRequest = useRef<symbol | null>(null);
+  const [activeSessionWorkspaceView, setActiveSessionWorkspaceView] =
+    useState<SessionWorkspaceView>(
+      FIXTURE_QUERY.get("view") === "activity" ? "activity" : "conversation",
+    );
   const [asideHistory, setAsideHistory] = useState<readonly Aside[]>([]);
   const [asideBusy, setAsideBusy] = useState(false);
   const [asideError, setAsideError] = useState<CommandError | null>(null);
@@ -864,6 +877,14 @@ export default function App() {
       ),
     [desktop.selectedSpaceId, storedThreadPins],
   );
+  const [storedThreadNames, setStoredThreadNames] = useState(
+    readStoredThreadNames,
+  );
+  const resolveThreadTitle = useCallback(
+    (spaceId: string | null, sessionId: string, fallback: string) =>
+      threadNameForWorkspace(storedThreadNames, spaceId, sessionId) ?? fallback,
+    [storedThreadNames],
+  );
   const [releaseChannel, setReleaseChannel] = useState(
     INITIAL_DESKTOP.releaseChannel,
   );
@@ -876,6 +897,7 @@ export default function App() {
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
     useState<WorkspaceFileOpenRequest | null>(null);
   const workspaceFileOpenSequence = useRef(0);
+  const fixtureActivityStartedAt = useRef<number | null>(null);
   const [spaceStartup, setSpaceStartup] = useState<SpaceStartup | null>(() =>
     FIXTURE_SPACE_STARTUP
       ? { spaceId: "fixture-research", displayName: "Research Lab" }
@@ -1024,6 +1046,18 @@ export default function App() {
       run.sessionId,
       !pinnedThreadSessionIds.has(run.sessionId),
     );
+  }
+
+  function handleRenameThread(run: Run, name: string) {
+    const spaceId = desktopRef.current.selectedSpaceId;
+    if (spaceId === null) {
+      return;
+    }
+    setStoredThreadNames((current) => {
+      const next = setThreadName(current, spaceId, run.sessionId, name);
+      storeThreadNames(next);
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -1518,7 +1552,7 @@ export default function App() {
       setSpaceSearchResults([]);
       setSpaceSearchCursor("");
       setSpaceSearchBusy(false);
-      setSpaceSearchError("Select a Space before searching it.");
+      setSpaceSearchError("Select a Workspace before searching it.");
       return;
     }
 
@@ -3302,7 +3336,7 @@ export default function App() {
     );
     setSpaceStartup({
       spaceId,
-      displayName: requestedSpace?.displayName ?? "Space",
+      displayName: requestedSpace?.displayName ?? "Workspace",
     });
     connectingRef.current = true;
     if (!FIXTURE_MODE) {
@@ -3360,7 +3394,7 @@ export default function App() {
     if (connectingRef.current || submitInFlight.current) {
       return;
     }
-    setSpaceStartup({ spaceId: null, displayName: "New Space" });
+    setSpaceStartup({ spaceId: null, displayName: "New Workspace" });
     connectingRef.current = true;
     setConnecting(true);
     setActionError(null);
@@ -3419,7 +3453,7 @@ export default function App() {
     setActionError(null);
     const displayName =
       desktopRef.current.spaces.find((space) => space.spaceId === spaceId)
-        ?.displayName ?? "Space";
+        ?.displayName ?? "Workspace";
     setSpaceActionFeedback({
       tone: "progress",
       message: `Archiving ${displayName}…`,
@@ -3471,7 +3505,7 @@ export default function App() {
     setActionError(null);
     const displayName =
       desktopRef.current.spaces.find((space) => space.spaceId === spaceId)
-        ?.displayName ?? "Space";
+        ?.displayName ?? "Workspace";
     setSpaceActionFeedback({
       tone: "progress",
       message: `Restoring ${displayName}…`,
@@ -3550,7 +3584,7 @@ export default function App() {
         throw new CommandFailure({
           ...FALLBACK_ACTION_ERROR,
           code: "target_changed",
-          message: "The Space changed before the thread could be opened.",
+          message: "The Workspace changed before the thread could be opened.",
         });
       }
       const details = await getRun(route.targetId, { runId: result.runId });
@@ -3622,7 +3656,7 @@ export default function App() {
       setActionError({
         ...FALLBACK_ACTION_ERROR,
         code: "target_changed",
-        message: "The thread is no longer bound to the selected Space.",
+        message: "The thread is no longer bound to the selected Workspace.",
       });
       return;
     }
@@ -3713,7 +3747,7 @@ export default function App() {
         throw new CommandFailure({
           ...FALLBACK_ACTION_ERROR,
           code: "target_changed",
-          message: "The Space changed before the thread could be restored.",
+          message: "The Workspace changed before the thread could be restored.",
         });
       }
       const before = await getRun(route.targetId, { runId: result.runId });
@@ -3990,6 +4024,41 @@ export default function App() {
     activeRun === undefined
       ? null
       : (targetRoutes.current?.routeForRun(activeRun.runId) ?? null);
+  const requestSessionMap = useCallback(
+    async (runId: string, sessionId: string, showLoading: boolean) => {
+      if (sessionMapRequest.current !== null) {
+        return;
+      }
+      const request = Symbol(runId);
+      sessionMapRequest.current = request;
+      if (showLoading) {
+        setSessionMapLoading(true);
+      }
+      setSessionMapError("");
+      try {
+        const next = await getSessionMap(runId);
+        if (
+          sessionMapRequest.current === request &&
+          next.sessionId === sessionId
+        ) {
+          setSessionMap(next);
+        }
+      } catch (error: unknown) {
+        if (sessionMapRequest.current === request) {
+          if (showLoading) {
+            setSessionMap(null);
+          }
+          setSessionMapError(commandError(error).message);
+        }
+      } finally {
+        if (sessionMapRequest.current === request) {
+          sessionMapRequest.current = null;
+          setSessionMapLoading(false);
+        }
+      }
+    },
+    [],
+  );
   useEffect(() => {
     const run = activeRun;
     if (run === undefined) {
@@ -4010,44 +4079,44 @@ export default function App() {
       setSessionMap(null);
       setSessionMapLoading(false);
       setSessionMapError(
-        "Session resources are available for Managed Local Spaces.",
+        "Session resources are available for Managed Local Workspaces.",
       );
       return;
     }
-    const request = Symbol(run.runId);
-    sessionMapRequest.current = request;
-    setSessionMapLoading(true);
-    setSessionMapError("");
-    void getSessionMap(run.runId)
-      .then((next) => {
-        if (
-          sessionMapRequest.current === request &&
-          next.sessionId === run.sessionId
-        ) {
-          setSessionMap(next);
-        }
-      })
-      .catch((error: unknown) => {
-        if (sessionMapRequest.current === request) {
-          setSessionMap(null);
-          setSessionMapError(commandError(error).message);
-        }
-      })
-      .finally(() => {
-        if (sessionMapRequest.current === request) {
-          setSessionMapLoading(false);
-        }
-      });
+    void requestSessionMap(run.runId, run.sessionId, true);
     return () => {
-      if (sessionMapRequest.current === request) {
-        sessionMapRequest.current = null;
-      }
+      sessionMapRequest.current = null;
     };
   }, [
     activeRoute?.generation,
     activeRoute?.kind,
     activeRun?.runId,
     activeRun?.sessionId,
+    requestSessionMap,
+  ]);
+  useEffect(() => {
+    const run = activeRun;
+    if (
+      activeSessionWorkspaceView !== "topology" ||
+      run === undefined ||
+      FIXTURE_MODE ||
+      activeRoute?.kind !== "managed_local"
+    ) {
+      return undefined;
+    }
+    void requestSessionMap(run.runId, run.sessionId, false);
+    const timer = window.setInterval(
+      () => void requestSessionMap(run.runId, run.sessionId, false),
+      3_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [
+    activeRoute?.generation,
+    activeRoute?.kind,
+    activeRun?.runId,
+    activeRun?.sessionId,
+    activeSessionWorkspaceView,
+    requestSessionMap,
   ]);
   const activeQueuedMessages = useMemo(
     () =>
@@ -4219,7 +4288,7 @@ export default function App() {
         participant.parentRunId !== parentRunId)
     ) {
       setDelegateError(
-        "This delegated run is not available in the selected Space.",
+        "This delegated run is not available in the selected Workspace.",
       );
       setDelegateLoading(false);
       return;
@@ -4260,13 +4329,17 @@ export default function App() {
   );
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
   const workspaceFilesAvailable = desktop.capabilities.files;
+  const generatedTitle =
+    openingRun?.title ?? conversationViews[0]?.run.title ?? activeRun?.title;
   const title =
-    activeRun === undefined
+    activeRun === undefined || generatedTitle === undefined
       ? "New work"
       : safeDisplayLabel(
-          openingRun?.title ??
-            conversationViews[0]?.run.title ??
-            activeRun.title,
+          resolveThreadTitle(
+            desktop.selectedSpaceId,
+            activeRun.sessionId,
+            generatedTitle,
+          ),
           agentRoleLabel(activeRun.role),
           160,
         );
@@ -4418,6 +4491,7 @@ export default function App() {
           terminalAvailable={terminalAvailable}
           activeSessionId={activeRun?.sessionId ?? null}
           pinnedSessionIds={pinnedThreadSessionIds}
+          resolveThreadTitle={resolveThreadTitle}
           query={workQuery}
           searchScope={searchScope}
           includeArchived={includeArchivedSearch}
@@ -4458,6 +4532,7 @@ export default function App() {
           onArchiveSpace={(spaceId) => void handleArchiveSpace(spaceId)}
           onRestoreSpace={(spaceId) => void handleRestoreSpace(spaceId)}
           onArchiveThread={(run) => void handleArchiveThread(run)}
+          onRenameThread={handleRenameThread}
           onToggleThreadPinned={handleToggleThreadPinned}
           onRestoreThread={(result) => void handleRestoreThread(result)}
           onSelectSurface={selectSurface}
@@ -4514,7 +4589,7 @@ export default function App() {
           selectedSpaceName={
             desktop.spaces.find(
               (space) => space.spaceId === desktop.selectedSpaceId,
-            )?.displayName ?? "Current Space"
+            )?.displayName ?? "Current Workspace"
           }
           threadPinned={
             activeRun !== undefined &&
@@ -4547,13 +4622,24 @@ export default function App() {
               ? "activity"
               : "conversation"
           }
+          onSessionWorkspaceViewChange={setActiveSessionWorkspaceView}
           sessionActivityAvailable={
             desktop.capabilities.sessionActivity === true
           }
           loadSessionActivity={(request) => {
             if (FIXTURE_MODE) {
+              let liveActivityCount = 0;
+              if (FIXTURE_ACTIVITY_LIVE && request.pageToken === "") {
+                const now = Date.now();
+                fixtureActivityStartedAt.current ??= now;
+                const elapsed = now - fixtureActivityStartedAt.current;
+                liveActivityCount =
+                  elapsed >= 5_000 ? 2 : elapsed >= 2_000 ? 1 : 0;
+              }
               return Promise.resolve(
-                developmentFixtures().buildSessionActivityFixture(request),
+                developmentFixtures().buildSessionActivityFixture(request, {
+                  liveActivityCount,
+                }),
               );
             }
             const targetId = desktop.selectedTargetId;

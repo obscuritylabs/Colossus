@@ -199,23 +199,23 @@ pub(crate) async fn create_run(
         target.target.consent,
         TargetConsentContext::ManagedLocal
     ) {
-        let space = settings
-            .space(&target_id)
-            .ok_or_else(|| CommandErrorDto::invalid("targetId", "The managed Space is unknown."))?;
+        let space = settings.space(&target_id).ok_or_else(|| {
+            CommandErrorDto::invalid("targetId", "The managed Workspace is unknown.")
+        })?;
         if space.configuration.accepted_global_revision < settings.global_configuration.revision {
             return Err(CommandErrorDto::busy(
-                "This Space has a pending configuration update. Review and apply it before starting new work.",
+                "This Workspace has a pending configuration update. Review and apply it before starting new work.",
             ));
         }
         if state.configuration_draining_for(&target_id).await {
             return Err(CommandErrorDto::busy(
-                "This Space is draining active work before applying configuration. Wait for the restart to finish.",
+                "This Workspace is draining active work before applying configuration. Wait for the restart to finish.",
             ));
         }
         let guard = state.run_creation_guard_for(&target_id).await;
         if state.configuration_draining_for(&target_id).await {
             return Err(CommandErrorDto::busy(
-                "This Space is draining active work before applying configuration. Wait for the restart to finish.",
+                "This Workspace is draining active work before applying configuration. Wait for the restart to finish.",
             ));
         }
         Some(guard)
@@ -418,7 +418,7 @@ fn require_selected_space(
     } else {
         Err(CommandErrorDto::local_sanitized(
             "space_not_selected",
-            "Select this Space before using its Asides.",
+            "Select this Workspace before using its Asides.",
             true,
         ))
     }

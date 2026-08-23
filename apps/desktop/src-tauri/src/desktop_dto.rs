@@ -195,11 +195,11 @@ impl SpaceSummaryDto {
             }
             .into(),
             message: if profile.archived {
-                "Archived Space".into()
+                "Archived Workspace".into()
             } else if provider_configured {
                 "Starts when selected".into()
             } else {
-                "Configure a provider to start this Space".into()
+                "Configure a provider to start this Workspace".into()
             },
             selected,
             attention_count: 0,

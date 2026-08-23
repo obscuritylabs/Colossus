@@ -113,7 +113,7 @@ export function SessionMapDetailsPanel({
       </div>
 
       <dl>
-        <Detail label="Space">{spaceName}</Detail>
+        <Detail label="Workspace">{spaceName}</Detail>
         <Detail label="Status">{readable(status)}</Detail>
         <Detail label="Updated">
           {shortDateLabel(resourceUpdatedAt(resource))}

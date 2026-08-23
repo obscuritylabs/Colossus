@@ -28,6 +28,7 @@ import type { RunView } from "../state";
 import type { SessionMap, SessionMapResource } from "../types";
 import type { AgentParticipant, AgentWorkState } from "./AgentFlow";
 import type { ArtifactViewItem } from "./ArtifactWorkspace";
+import { DropdownSelect } from "./DropdownSelect";
 import { MarkdownContent } from "./MarkdownContent";
 import { isWebUri, workspaceSourcePath } from "./ResearchSourcesPanel";
 import type {
@@ -339,9 +340,9 @@ export function SessionTopology({
           </button>
           <label>
             <span className="sr-only">Session map scope</span>
-            <select defaultValue="session">
+            <DropdownSelect defaultValue="session">
               <option value="session">Entire session</option>
-            </select>
+            </DropdownSelect>
           </label>
         </div>
       </header>

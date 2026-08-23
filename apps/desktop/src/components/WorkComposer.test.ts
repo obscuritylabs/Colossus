@@ -82,7 +82,7 @@ describe("WorkComposer capabilities", () => {
 
     expect(markup).toContain("Ask a source-backed question");
     expect(markup).toContain("Research depth");
-    expect(markup).toContain("This Space");
+    expect(markup).toContain("This Workspace");
     expect(markup).toContain("Connections");
     expect(markup).toContain("Research settings");
     expect(markup).toContain('aria-label="Close research settings"');
@@ -90,9 +90,9 @@ describe("WorkComposer capabilities", () => {
     expect(markup).toContain("Search across your workspace");
     expect(markup).toContain("Search the public web");
     expect(markup).toContain("Search your connected apps");
-    expect(markup).toContain("Sources: This Space, Web, Connections");
+    expect(markup).toContain("Sources: This Workspace, Web, Connections");
     expect(markup).toContain(
-      'aria-label="Research controls, sources This Space, Web, Connections"',
+      'aria-label="Research controls, sources This Workspace, Web, Connections"',
     );
   });
 
@@ -158,7 +158,7 @@ describe("WorkComposer capabilities", () => {
 });
 
 describe("WorkComposer permission mode", () => {
-  it("shows every native permission choice and selects the current mode", () => {
+  it("shows the app-owned permission control with the current mode", () => {
     const markup = renderComposer(false, {
       mode: "execute",
       researchDepth: "standard",
@@ -167,14 +167,9 @@ describe("WorkComposer permission mode", () => {
     });
 
     expect(markup).toContain('aria-label="Permission mode"');
-    expect(markup).toContain('<option value="deny">Deny</option>');
-    expect(markup).toContain('<option value="ask">Ask</option>');
-    expect(markup).toContain(
-      '<option value="risk_auto" selected="">Risk auto</option>',
-    );
-    expect(markup).toContain(
-      '<option value="full_access">Full access</option>',
-    );
+    expect(markup).toContain('role="combobox"');
+    expect(markup).toContain('<span class="app-select-value">Risk auto</span>');
+    expect(markup).not.toContain("<select");
   });
 
   it("disables switching when Managed Local cannot accept a live change", () => {

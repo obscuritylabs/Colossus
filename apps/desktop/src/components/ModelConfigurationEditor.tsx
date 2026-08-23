@@ -14,6 +14,7 @@ import {
   REMOTE_PROVIDER_TIMEOUT_MS,
   automaticProviderTimeoutMs,
 } from "../providerTimeout";
+import { DropdownSelect } from "./DropdownSelect";
 
 const ROLES = [
   "primary",
@@ -285,7 +286,7 @@ export function ModelConfigurationEditor({
           </label>
           <label>
             <span>Protocol</span>
-            <select
+            <DropdownSelect
               value={provider.providerKind}
               disabled={busy}
               onChange={(event) => {
@@ -305,7 +306,7 @@ export function ModelConfigurationEditor({
               <option value="open_ai_codex">
                 ChatGPT subscription (Codex)
               </option>
-            </select>
+            </DropdownSelect>
           </label>
           <label className="provider-wide-field">
             <span>Base URL</span>
@@ -326,7 +327,7 @@ export function ModelConfigurationEditor({
           </label>
           <label>
             <span>Timeout</span>
-            <select
+            <DropdownSelect
               value={provider.timeoutMs === null ? "automatic" : "custom"}
               disabled={busy}
               onChange={(event) =>
@@ -342,7 +343,7 @@ export function ModelConfigurationEditor({
                 Automatic · {timeoutLabel(provider.effectiveTimeoutMs)}
               </option>
               <option value="custom">Custom</option>
-            </select>
+            </DropdownSelect>
           </label>
           {provider.timeoutMs !== null ? (
             <label>
@@ -382,7 +383,7 @@ export function ModelConfigurationEditor({
           ) : (
             <label>
               <span>Credential</span>
-              <select
+              <DropdownSelect
                 value={provider.credentialAction}
                 disabled={busy}
                 onChange={(event) =>
@@ -394,7 +395,7 @@ export function ModelConfigurationEditor({
                 <option value="none">No credential</option>
                 <option value="reuse">Reuse stored credential</option>
                 <option value="replace">Enter or replace natively</option>
-              </select>
+              </DropdownSelect>
             </label>
           )}
           {providers.length > 1 ? (
@@ -454,7 +455,7 @@ export function ModelConfigurationEditor({
           </label>
           <label>
             <span>Provider profile</span>
-            <select
+            <DropdownSelect
               value={model.providerProfile}
               disabled={busy}
               onChange={(event) =>
@@ -466,7 +467,7 @@ export function ModelConfigurationEditor({
                   {profile}
                 </option>
               ))}
-            </select>
+            </DropdownSelect>
           </label>
           <label className="provider-wide-field">
             <span>Provider model ID</span>
@@ -513,7 +514,7 @@ export function ModelConfigurationEditor({
           </label>
           <label>
             <span>Reasoning effort</span>
-            <select
+            <DropdownSelect
               value={model.reasoningEffort ?? "provider-default"}
               disabled={busy}
               onChange={(event) =>
@@ -531,7 +532,7 @@ export function ModelConfigurationEditor({
                   {effort === "xhigh" ? "Extra high" : effort}
                 </option>
               ))}
-            </select>
+            </DropdownSelect>
           </label>
           <label>
             <input
@@ -610,7 +611,7 @@ export function ModelConfigurationEditor({
         {ROLES.map((role) => (
           <label key={role}>
             <span>{role.replaceAll("_", " ")}</span>
-            <select
+            <DropdownSelect
               value={roles[role] ?? ""}
               disabled={busy}
               onChange={(event) =>
@@ -625,12 +626,12 @@ export function ModelConfigurationEditor({
                   {profile}
                 </option>
               ))}
-            </select>
+            </DropdownSelect>
           </label>
         ))}
         <label className="provider-wide-field">
           <span>Access profile</span>
-          <select
+          <DropdownSelect
             value={accessProfile}
             disabled={busy}
             onChange={(event) =>
@@ -650,11 +651,11 @@ export function ModelConfigurationEditor({
             <option value="allow_all">
               Allow all — every declared built-in tool
             </option>
-          </select>
+          </DropdownSelect>
         </label>
         <label className="provider-wide-field">
           <span>Execution boundary</span>
-          <select
+          <DropdownSelect
             value={executionBoundary}
             disabled={busy}
             onChange={(event) =>
@@ -667,7 +668,7 @@ export function ModelConfigurationEditor({
             <option value="full_access">Full access — unsafe</option>
             <option value="workspace_isolated">Workspace isolated</option>
             <option value="offline_isolated">Offline isolated</option>
-          </select>
+          </DropdownSelect>
         </label>
       </fieldset>
 

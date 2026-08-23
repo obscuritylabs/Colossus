@@ -602,9 +602,19 @@ async fn deny_never_reaches_adapter() {
         .expect_err("deny");
     assert!(matches!(error, GatewayError::Denied(_)));
     assert_eq!(executor.calls.load(Ordering::Acquire), 0);
-    let names = journal
-        .read_global(1, 20)
-        .expect("events")
+    let events = journal.read_global(1, 20).expect("events");
+    let policy_event = events
+        .iter()
+        .find(|event| event.event_type == "policy.decided.v1")
+        .expect("policy decision event");
+    let policy_payload = journal
+        .decrypt_payload(policy_event)
+        .expect("policy decision payload");
+    assert_eq!(policy_payload["action"], "filesystem.write");
+    assert_eq!(policy_payload["phase"], "pre_effect");
+    assert_eq!(policy_payload["sandbox_backend"], "broker");
+    assert!(policy_payload["require_post_effect"].is_boolean());
+    let names = events
         .into_iter()
         .map(|event| event.event_type)
         .collect::<Vec<_>>();

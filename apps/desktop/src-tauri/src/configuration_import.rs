@@ -107,7 +107,7 @@ pub(crate) async fn inspect_repository_configuration(
     let settings = settings_store()?.load()?;
     let space = settings
         .space(&request.space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     let (sha256, inspection) = inspect_source(&settings, &request.space_id).await?;
     let canonical = inspection
         .canonical_config
@@ -143,7 +143,7 @@ async fn inspect_source(
 > {
     let space = settings
         .space(space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     let root = revalidate_workspace(&space.workspace)?;
     let source = read_repository_configuration(&root)?;
     let sha256 = hex::encode(Sha256::digest(source.as_bytes()));
@@ -289,7 +289,7 @@ fn apply_imported_configuration(
         .spaces
         .iter_mut()
         .find(|space| space.id == space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     space.configuration.accepted_global_revision = current_revision;
     space.configuration.catalog_revisions.retain(|key, _| {
         (key.starts_with("provider:") || key.starts_with("model:")) && !replace_model_stack
@@ -1146,7 +1146,7 @@ fn import_warnings(canonical: &Value, explicit_fields: &[String]) -> Vec<String>
             });
     if has_runtime_only_models {
         warnings.push(
-            "The built-in echo provider and its models are runtime-only. Desktop will keep this Space's existing provider and model selection."
+            "The built-in echo provider and its models are runtime-only. Desktop will keep this Workspace's existing provider and model selection."
                 .into(),
         );
     }

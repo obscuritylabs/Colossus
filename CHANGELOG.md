@@ -8,11 +8,35 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Added a canonical, source-filterable session activity projection and Desktop trajectory
+  view for inspecting run, model, tool, policy, usage, and subagent events.
+- Added a live React Flow session topology that uses the full available pane and refreshes
+  while the topology tab is active.
+- Added persistent, Workspace-scoped thread names to the Desktop thread actions menu.
+
+### Changed
+
+- Renamed the Desktop's user-facing `Space` terminology to `Workspace` while retaining the
+  existing persisted settings and native command schema for compatibility.
+- Replaced native Desktop selects with accessible, app-owned dropdowns that have consistent
+  sizing, keyboard navigation, and styling across platforms.
+
+### Fixed
+
+- Centered Desktop run-timeline markers and normalized toggle sizing in settings and the
+  session map.
+- Prevented stale paginated activity responses from being merged after a session, search,
+  or filter change.
+- Preserved required-field validation and unavailable-value disclosure in the app-owned
+  dropdown control.
+
 ## [0.10.10-preview.3] - 2026-08-21
 
 ### Added
 
-- Added a revisioned global and Space managed-configuration control plane with
+- Added a revisioned global and Workspace managed-configuration control plane with
   effective-value provenance, validation, immutable resource revisions, repository
   import, diagnostics, and runtime lifecycle handling.
 - Added enhanced Desktop settings for providers, models, credentials, MCP, telemetry,
@@ -52,20 +76,20 @@ include breaking changes while the public API is still settling.
 
 - Committed Desktop activity to one timeline view and replaced generic tool and research
   event names with concise, task-oriented labels.
-- Refined the Space sidebar with a trailing new-thread action, persistent local pinning
+- Refined the Workspace sidebar with a trailing new-thread action, persistent local pinning
   during startup, and one contextual control for loading older threads.
 - Reworked Research settings into a compact, accessible popover with persistent depth
   and evidence-source selections.
 
 ### Fixed
 
-- Rebound explicitly reselected folders to their existing Space and repaired stale
+- Rebound explicitly reselected folders to their existing Workspace and repaired stale
   same-path duplicates after a folder object is replaced.
-- Made Space archive and restore visible and functional in the Desktop development
-  fixture, selected the next active Space after archiving the current one, and surfaced
-  native lifecycle failures beside the Space controls.
+- Made Workspace archive and restore visible and functional in the Desktop development
+  fixture, selected the next active Workspace after archiving the current one, and surfaced
+  native lifecycle failures beside the Workspace controls.
 - Retried bounded transient run-list admission failures during Desktop startup and
-  background Space inspection instead of exposing a spurious empty or failed state.
+  background Workspace inspection instead of exposing a spurious empty or failed state.
 - Kept thread action menus usable across WebKit focus transitions and preserved pin
   changes across reloads.
 
@@ -75,8 +99,8 @@ include breaking changes while the public API is still settling.
 
 - Added a canonical Desktop session topology that visualizes delegated agents, goals,
   tasks, plans, key decisions, memories, research, sources, and artifacts in a dedicated
-  tab with bounded, Space-scoped inspection.
-- Added a Slack-style multi-Space navigation surface, thread pinning and archiving,
+  tab with bounded, workspace-scoped inspection.
+- Added a Slack-style multi-workspace navigation surface, thread pinning and archiving,
   background attention routing, side conversations, queued and redirected follow-ups,
   research mode, source inspection, plan review, and thread/session details.
 
