@@ -136,7 +136,7 @@ fn passive_projection_checkpoints_are_grouped() {
             "memory-v1",
             "workflows-v1",
             "effects-recovery-v1",
-            "session-activity-v4"
+            "session-activity-v5"
         ]
     );
 }

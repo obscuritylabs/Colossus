@@ -4,7 +4,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 
 /// Stable rebuildable projection containing policy-released session activity.
-pub const SESSION_ACTIVITY_PROJECTION: &str = "session-activity-v4";
+pub const SESSION_ACTIVITY_PROJECTION: &str = "session-activity-v5";
 
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_SUMMARY_BYTES: usize = 2_048;
@@ -100,6 +100,7 @@ impl ProjectionHandler for SessionActivityProjection {
             return Ok(Vec::new());
         };
         match event.event_type.as_str() {
+            "session.message.appended.v1" => project_session_message(session_id, event, payload),
             "api.run.update.v1" => project_released_update(store, session_id, event, payload),
             "context.prepared.v1" => project_context(session_id, event, payload),
             "model.request.prepared.v1" => project_model_request(store, session_id, event, payload),
@@ -127,8 +128,8 @@ impl ProjectionHandler for SessionActivityProjection {
             {
                 project_policy_activity(store, session_id, event, payload)
             }
-            // Streaming content, raw session messages, raw provider output, routine indexing,
-            // and unrelated domain records are intentionally absent from this released view.
+            // Streaming content, non-user session messages, raw provider output, routine
+            // indexing, and unrelated domain records are intentionally absent from this view.
             _ => Ok(Vec::new()),
         }
     }
@@ -273,6 +274,41 @@ fn project_released_update(
         "failure" | "cancellation" => project_released_terminal(session_id, event, kind),
         _ => Ok(Vec::new()),
     }
+}
+
+fn project_session_message(
+    session_id: &str,
+    event: &EventEnvelope,
+    payload: &Value,
+) -> Result<Vec<ProjectionMutation>, StoreError> {
+    let Some(message) = payload.get("message").and_then(Value::as_object) else {
+        return Ok(Vec::new());
+    };
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return Ok(Vec::new());
+    }
+    let Some(text) = message.get("content").and_then(Value::as_str) else {
+        return Ok(Vec::new());
+    };
+    let logical_id = payload.get("sequence").and_then(Value::as_u64).map_or_else(
+        || format!("message:{}", event.event_id),
+        |sequence| format!("message:{sequence}"),
+    );
+    upsert_new(
+        session_id,
+        event,
+        logical_id,
+        "agent",
+        "user",
+        "User message",
+        &preview(text),
+        "User",
+        Some("completed"),
+        None,
+        Some(content("text", bounded(text, MAX_TEXT_BYTES))),
+        None,
+        BTreeMap::new(),
+    )
 }
 
 fn project_released_tool(
@@ -1084,7 +1120,11 @@ fn project_released_terminal(
             .and_then(|value| value.get("message"))
             .and_then(Value::as_str)
             .unwrap_or("Run failed");
-        ("Run failed", "failed", detail)
+        if kind.get("status").and_then(Value::as_str) == Some("outcome_unknown") {
+            ("Run outcome unknown", "outcome_unknown", detail)
+        } else {
+            ("Run failed", "failed", detail)
+        }
     };
     upsert_new(
         session_id,
@@ -1222,15 +1262,20 @@ fn update_logical(
     if record.started_at.is_empty() {
         record.started_at.clone_from(&event.occurred_at);
     }
-    let mut mutations = vec![ProjectionMutation::Upsert {
-        key: key.clone(),
+    let next_key = record_key(session_id, event.global_sequence, logical_id);
+    let mut mutations = Vec::new();
+    if key != next_key {
+        mutations.push(ProjectionMutation::Delete { key });
+    }
+    mutations.push(ProjectionMutation::Upsert {
+        key: next_key.clone(),
         value: serde_json::to_value(record)
             .map_err(|error| StoreError::Adapter(error.to_string()))?,
-    }];
-    if existing_key.is_none() {
+    });
+    if existing_key.as_deref() != Some(next_key.as_str()) {
         mutations.push(ProjectionMutation::Upsert {
             key: lookup,
-            value: Value::String(key),
+            value: Value::String(next_key),
         });
     }
     Ok(mutations)
@@ -1925,6 +1970,132 @@ mod tests {
             page.records
                 .iter()
                 .all(|(_, activity)| activity.title != "Run notice")
+        );
+    }
+
+    #[test]
+    fn canonical_user_messages_are_projected_without_non_user_session_messages() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        let mut user_event = event(1, "session.message.appended.v1", "run-a");
+        user_event.actor.actor_type = ActorType::User;
+        apply(
+            &store,
+            &mut position,
+            &user_event,
+            json!({
+                "run_id": "run-a",
+                "sequence": 1,
+                "message": {
+                    "role": "user",
+                    "content": "Inspect the session activity projection",
+                    "tool_call_id": null,
+                    "tool_calls": []
+                }
+            }),
+        );
+        apply(
+            &store,
+            &mut position,
+            &event(2, "session.message.appended.v1", "run-a"),
+            json!({
+                "run_id": "run-a",
+                "sequence": 2,
+                "message": {
+                    "role": "assistant",
+                    "content": "raw provider output",
+                    "tool_call_id": null,
+                    "tool_calls": []
+                }
+            }),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        assert_eq!(page.records.len(), 1);
+        let activity = &page.records[0].1;
+        assert_eq!(activity.activity_id, "message:1");
+        assert_eq!(activity.kind, "user");
+        assert_eq!(activity.actor, "User");
+        assert_eq!(
+            activity.input.as_ref().map(|input| input.value.as_str()),
+            Some("Inspect the session activity projection")
+        );
+        assert!(
+            !serde_json::to_string(activity)
+                .expect("encode")
+                .contains("raw provider output")
+        );
+    }
+
+    #[test]
+    fn outcome_unknown_failures_preserve_uncertain_effect_status() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        apply(
+            &store,
+            &mut position,
+            &event(1, "api.run.update.v1", "run-a"),
+            json!({
+                "kind": {
+                    "type": "failure",
+                    "status": "outcome_unknown",
+                    "failure": {
+                        "code": "effect_outcome_unknown",
+                        "message": "The external effect may have completed",
+                        "outcome": "unknown"
+                    }
+                }
+            }),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let page = reader.list_page("session-a", None, 10).expect("page");
+        let activity = &page.records[0].1;
+        assert_eq!(activity.title, "Run outcome unknown");
+        assert_eq!(activity.status.as_deref(), Some("outcome_unknown"));
+    }
+
+    #[test]
+    fn logical_updates_move_to_the_head_without_leaving_stale_records() {
+        let store = InMemoryProjectionStore::default();
+        let mut position = 0;
+        apply(
+            &store,
+            &mut position,
+            &event(1, "tool.call.requested.v1", "run-a"),
+            json!({"turn": 1, "call_id": "call-a", "name": "filesystem.read"}),
+        );
+        for sequence in 2..=3 {
+            apply(
+                &store,
+                &mut position,
+                &event(sequence, "context.prepared.v1", "run-a"),
+                json!({"turn": sequence, "message_count": sequence}),
+            );
+        }
+        apply(
+            &store,
+            &mut position,
+            &event(4, "tool.call.completed.v1", "run-a"),
+            json!({"call_id": "call-a", "name": "filesystem.read", "exit_code": 0}),
+        );
+
+        let reader = ProjectedSessionActivityReader::new(Arc::new(store));
+        let head = reader.list_page("session-a", None, 1).expect("head");
+        assert_eq!(head.records[0].1.activity_id, "tool:run-a:call-a");
+        assert_eq!(head.records[0].1.status.as_deref(), Some("completed"));
+        assert_eq!(head.records[0].1.first_sequence, 1);
+        assert_eq!(head.records[0].1.last_sequence, 4);
+
+        let all = reader.list_page("session-a", None, 10).expect("all");
+        assert_eq!(all.records.len(), 3);
+        assert_eq!(
+            all.records
+                .iter()
+                .filter(|(_, activity)| activity.activity_id == "tool:run-a:call-a")
+                .count(),
+            1
         );
     }
 
