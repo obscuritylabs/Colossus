@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.4] - 2026-08-25
+
 ### Added
 
 - Added a canonical, source-filterable session activity projection and Desktop trajectory
