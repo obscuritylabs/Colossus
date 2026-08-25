@@ -27,6 +27,8 @@ include breaking changes while the public API is still settling.
 
 ### Fixed
 
+- Kept stdio MCP input open through the final JSON-RPC response and bounded completion-line
+  scanning so local MCP servers can finish requests without premature EOF or unbounded reads.
 - Centered Desktop run-timeline markers and normalized toggle sizing in settings and the
   session map.
 - Prevented stale paginated activity responses from being merged after a session, search,
