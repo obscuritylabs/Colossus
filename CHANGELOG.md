@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.4] - 2026-08-25
+
 ### Added
 
 - Added a canonical, source-filterable session activity projection and Desktop trajectory
@@ -25,6 +27,10 @@ include breaking changes while the public API is still settling.
 
 ### Fixed
 
+- Kept stdio MCP input open through the final JSON-RPC response and bounded completion-line
+  scanning so local MCP servers can finish requests without premature EOF or unbounded reads.
+- Prevented delayed Workspace drawer initialization from stealing focus after a user changes
+  the thread-search scope.
 - Centered Desktop run-timeline markers and normalized toggle sizing in settings and the
   session map.
 - Prevented stale paginated activity responses from being merged after a session, search,

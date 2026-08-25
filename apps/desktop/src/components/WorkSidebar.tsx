@@ -365,8 +365,12 @@ export function WorkSidebar({
     }
 
     const focusTimer = window.setTimeout(() => {
-      if (focusSearchWhenOpened.current) {
-        focusSearchWhenOpened.current = false;
+      const shouldFocusSearch = focusSearchWhenOpened.current;
+      focusSearchWhenOpened.current = false;
+      if (sidebarRef.current?.contains(document.activeElement)) {
+        return;
+      }
+      if (shouldFocusSearch) {
         searchRef.current?.focus();
       } else {
         closeButtonRef.current?.focus();
