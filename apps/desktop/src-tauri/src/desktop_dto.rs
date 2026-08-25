@@ -195,11 +195,11 @@ impl SpaceSummaryDto {
             }
             .into(),
             message: if profile.archived {
-                "Archived Space".into()
+                "Archived Workspace".into()
             } else if provider_configured {
                 "Starts when selected".into()
             } else {
-                "Configure a provider to start this Space".into()
+                "Configure a provider to start this Workspace".into()
             },
             selected,
             attention_count: 0,
@@ -345,6 +345,7 @@ pub(crate) struct DesktopCapabilitiesDto {
     pub(crate) files: bool,
     pub(crate) artifacts: bool,
     pub(crate) plan_continuation: bool,
+    pub(crate) session_activity: bool,
     pub(crate) update_available: bool,
     pub(crate) agent_workflows: bool,
     pub(crate) attachments: bool,

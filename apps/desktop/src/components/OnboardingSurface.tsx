@@ -20,6 +20,7 @@ import {
   runOfflineSelfTest,
   submitManagedRuntimeConfiguration,
 } from "../onboarding";
+import { DropdownSelect } from "./DropdownSelect";
 import { ModelConfigurationEditor } from "./ModelConfigurationEditor";
 
 interface OnboardingSurfaceProps {
@@ -141,16 +142,16 @@ export function OnboardingSurface({
               : "Start Colossus in this app"}
           </h1>
           <p>
-            Add a folder-backed Space, then choose its provider and execution
-            boundary. The app supervises a local runtime while credentials
-            remain behind native storage boundaries.
+            Add a folder-backed Workspace, then choose its provider and
+            execution boundary. The app supervises a local runtime while
+            credentials remain behind native storage boundaries.
           </p>
         </div>
 
         <ol className="onboarding-steps" aria-label="Setup progress">
           <li className={desktop.workspace === null ? "is-active" : "is-done"}>
             <span>1</span>
-            Space
+            Workspace
           </li>
           <li className={desktop.workspace === null ? "" : "is-active"}>
             <span>2</span>
@@ -169,7 +170,7 @@ export function OnboardingSurface({
                 <IconFolder size={25} stroke={1.5} />
               </span>
               <div>
-                <h2>Add your first Space</h2>
+                <h2>Add your first Workspace</h2>
                 <p>
                   This folder is the repository context and relative-path
                   anchor. Full access can reach beyond it; choose an isolated
@@ -184,7 +185,7 @@ export function OnboardingSurface({
                 disabled={busy}
                 onClick={() => void onChooseWorkspace()}
               >
-                Add Space from folder
+                Add Workspace from folder
                 <IconArrowRight size={16} stroke={1.8} aria-hidden="true" />
               </button>
             </div>
@@ -220,14 +221,14 @@ export function OnboardingSurface({
                 disabled={busy}
                 onClick={() => void onChooseWorkspace()}
               >
-                Add another Space
+                Add another Workspace
               </button>
             </div>
 
             <div className="provider-fields">
               <label>
                 <span>Provider protocol</span>
-                <select
+                <DropdownSelect
                   value={providerKind}
                   disabled={busy}
                   onChange={(event) => {
@@ -245,7 +246,7 @@ export function OnboardingSurface({
                   <option value="open_ai_codex">
                     ChatGPT subscription (Codex)
                   </option>
-                </select>
+                </DropdownSelect>
               </label>
               <label>
                 <span>Model</span>
@@ -260,7 +261,7 @@ export function OnboardingSurface({
               </label>
               <label className="provider-wide-field">
                 <span>Access profile</span>
-                <select
+                <DropdownSelect
                   value={accessProfile}
                   disabled={busy}
                   onChange={(event) =>
@@ -280,11 +281,11 @@ export function OnboardingSurface({
                   <option value="allow_all">
                     Allow all — every declared built-in tool
                   </option>
-                </select>
+                </DropdownSelect>
               </label>
               <label className="provider-wide-field">
                 <span>Execution boundary</span>
-                <select
+                <DropdownSelect
                   value={executionBoundary}
                   disabled={busy}
                   onChange={(event) =>
@@ -297,7 +298,7 @@ export function OnboardingSurface({
                   <option value="full_access">Full access — unsafe</option>
                   <option value="workspace_isolated">Workspace isolated</option>
                   <option value="offline_isolated">Offline isolated</option>
-                </select>
+                </DropdownSelect>
               </label>
             </div>
 

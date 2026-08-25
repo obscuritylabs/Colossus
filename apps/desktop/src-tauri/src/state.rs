@@ -359,35 +359,38 @@ fn managed_health_from_sidecar_status(status: NativeSidecarStatus) -> ManagedHea
     match status {
         NativeSidecarStatus::Starting => ManagedHealth {
             state: ManagedRuntimeStateDto::Starting,
-            message: "Starting this Space’s managed runtime…".into(),
+            message: "Starting this Workspace’s managed runtime…".into(),
             failure_code: None,
         },
         NativeSidecarStatus::Ready => ManagedHealth {
             state: ManagedRuntimeStateDto::Ready,
-            message: "This Space is ready.".into(),
+            message: "This Workspace is ready.".into(),
             failure_code: None,
         },
         NativeSidecarStatus::Restarting => ManagedHealth {
             state: ManagedRuntimeStateDto::Restarting,
-            message: "This Space’s runtime exited unexpectedly and is restarting safely…".into(),
+            message: "This Workspace’s runtime exited unexpectedly and is restarting safely…"
+                .into(),
             failure_code: None,
         },
         NativeSidecarStatus::Stopping => ManagedHealth {
             state: ManagedRuntimeStateDto::Stopping,
-            message: "Stopping this Space safely…".into(),
+            message: "Stopping this Workspace safely…".into(),
             failure_code: None,
         },
         NativeSidecarStatus::Failed(NativeSidecarFailure::WorkspaceIdentityChanged) => {
             ManagedHealth {
                 state: ManagedRuntimeStateDto::Failed,
-                message: "This Space’s folder identity changed. Select the folder again.".into(),
+                message: "This Workspace’s folder identity changed. Select the folder again."
+                    .into(),
                 failure_code: Some(RuntimeFailureCodeDto::Permission),
             }
         }
         NativeSidecarStatus::Failed(NativeSidecarFailure::SupervisionFailed) => ManagedHealth {
             state: ManagedRuntimeStateDto::Failed,
-            message: "This Space stopped after repeated restart failures. Restart it to continue."
-                .into(),
+            message:
+                "This Workspace stopped after repeated restart failures. Restart it to continue."
+                    .into(),
             failure_code: Some(RuntimeFailureCodeDto::CrashLoop),
         },
     }
@@ -1201,7 +1204,7 @@ impl AppState {
         for runtime in runtimes {
             *runtime.health.write().await = ManagedHealth {
                 state: ManagedRuntimeStateDto::Stopping,
-                message: "Stopping this Space safely…".into(),
+                message: "Stopping this Workspace safely…".into(),
                 failure_code: None,
             };
             runtime.worker.write().await.take();

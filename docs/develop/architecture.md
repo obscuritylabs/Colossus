@@ -105,9 +105,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
   acknowledged danger runtime envelope.
 - CLI and TUI construct requests, invoke application services, and render typed results.
 - Desktop persists folder-backed `WorkspaceProfile` records and presents them as
-  Spaces. One natively selected Space projects its workspace, provider/model, access,
+  Workspaces. One natively selected Workspace projects its workspace, provider/model, access,
   execution-boundary, and terminal configuration into the existing command boundary;
-  renderer actions cannot nominate a background Space. A native manager may retain up
+  renderer actions cannot nominate a background Workspace. A native manager may retain up
   to four independently supervised sidecars and evicts only the least-recently-used
   idle entry.
 - Desktop Asides create a separate session through the exact canonical end of the
@@ -118,7 +118,7 @@ infrastructure adapters implement ports and are assembled only by the runtime.
   assistant tool-call records, tool results, and their payloads are not copied into the
   Aside.
 - Desktop workspace browsing remains an interface-only, read-only view. Its native
-  commands accept the opaque selected-Space workspace identity plus a validated
+  commands accept the opaque selected-Workspace identity plus a validated
   relative path; they do not add model, tool, policy, state, or mutation logic to the
   renderer.
 - Desktop's native Managed Local permission selector uses the narrow authenticated

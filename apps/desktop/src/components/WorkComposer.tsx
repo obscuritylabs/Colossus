@@ -24,6 +24,7 @@ import type {
 } from "../types";
 import { USE_CONFIGURED_MAX_TURNS } from "../types";
 import type { QueuedMessage } from "../message-queue";
+import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
 
 const RESEARCH_DEPTH_OPTIONS = [
@@ -35,7 +36,7 @@ const RESEARCH_DEPTH_OPTIONS = [
 const RESEARCH_SOURCE_OPTIONS = [
   {
     value: "repo",
-    label: "This Space",
+    label: "This Workspace",
     description: "Search across your workspace",
     Icon: IconFolder,
   },
@@ -154,7 +155,7 @@ export function WorkComposer({
   const researchSourceSummary = researchSources
     .map((source) =>
       source === "repo"
-        ? "This Space"
+        ? "This Workspace"
         : source === "web"
           ? "Web"
           : "Connections",
@@ -207,7 +208,7 @@ export function WorkComposer({
           <label className={`approval-mode-control mode-${approvalMode}`}>
             <IconShieldCheck size={15} stroke={1.7} aria-hidden="true" />
             <span className="sr-only">Permission mode</span>
-            <select
+            <DropdownSelect
               aria-label="Permission mode"
               value={approvalMode}
               disabled={
@@ -221,7 +222,7 @@ export function WorkComposer({
               <option value="ask">Ask</option>
               <option value="risk_auto">Risk auto</option>
               <option value="full_access">Full access</option>
-            </select>
+            </DropdownSelect>
           </label>
         ) : null}
         <details

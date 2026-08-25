@@ -3,11 +3,12 @@ use crate::{
     BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
     CredentialProvider, DownloadedArtifact, GetRunRequest, GetRunResponse, GrpcBackend,
     GrpcConnectOptions, Interaction, InteractionAnswer, InteractionContent, InteractionStatus,
-    ListRunsRequest, ListRunsResponse, MacosCodeSigningRequirement, NativeSidecarFailure,
-    NativeSidecarStatus, RespondInteractionRequest, RespondInteractionResponse,
-    RestoreThreadRequest, RunUpdateKind, RunUpdateStream, SdkError, SdkResult, Secret,
-    ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, ThreadLifecycle,
-    TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
+    ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
+    MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
+    RespondInteractionRequest, RespondInteractionResponse, RestoreThreadRequest, RunUpdateKind,
+    RunUpdateStream, SdkError, SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig,
+    SidecarLifecycle, SidecarOptions, ThreadLifecycle, TlsFingerprint, UploadArtifactRequest,
+    WatchRunRequest,
 };
 #[cfg(test)]
 use crate::{ApiError, ApiErrorReason};
@@ -1238,6 +1239,17 @@ impl AgentRunClient for SwitchingAgentRunClient {
 
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
         self.current().await.primary.list_runs(request).await
+    }
+
+    async fn list_session_activity(
+        &self,
+        request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        self.current()
+            .await
+            .primary
+            .list_session_activity(request)
+            .await
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {

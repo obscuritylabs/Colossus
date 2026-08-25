@@ -487,22 +487,22 @@ of the validated structured tool input so an operator can see what actually ran.
 Requested, denied, and cancelled-before-start calls do not release that execution input.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
 
-Desktop Spaces are native-owned folder bindings, persisted as neutral
-`WorkspaceProfile` records. The renderer can add a Space only through the native folder
+Desktop Workspaces are native-owned folder bindings, persisted as neutral
+`WorkspaceProfile` records. The renderer can add a Workspace only through the native folder
 picker, and duplicate canonical object identities are rejected or explicitly restored
 from archive. At most four Managed Local sidecars remain live. Starting a fifth evicts
 only the least-recently-used sidecar with no queued, running, waiting, cancelling, or
-terminal work; an all-busy set fails without changing selection. Each live Space owns
+terminal work; an all-busy set fails without changing selection. Each live Workspace owns
 its lifecycle generation, health, worker control client, approval mode, terminal
 context, and last-use state. Approval resets to Ask on every start or restart, and one
-Space's failure cannot replace another Space's state.
+Workspace's failure cannot replace another Workspace's state.
 
 All renderer-issued run, response, cancellation, permission, file, and terminal actions
-remain bound to the natively selected Space. Switching closes selected terminal sessions
+remain bound to the natively selected Workspace. Switching closes selected terminal sessions
 before activating the new context but does not stop background runs. Native status
 refreshes read only released run summaries from live sidecars and publish bounded
 `space-status-changed` and `space-attention` events. Global thread search uses a
-replaceable app-private redb index containing only bounded Space/run/session IDs, Space
+replaceable app-private redb index containing only bounded Workspace/run/session IDs, Workspace
 name, title, mode, status, timestamp, and attention state. It never stores prompts,
 messages, tool input/output, secrets, credentials, or canonical paths.
 
@@ -536,7 +536,7 @@ Linux executes the verified bytes from a sealed, non-writable `memfd`; other Uni
 platforms do not expose Managed Local until they provide an equivalent pre-instruction
 binding.
 
-Every Managed Local Space binds its selected workspace by object identity rather than
+Every Managed Local Workspace binds its selected workspace by object identity rather than
 by pathname alone. On macOS, Desktop derives a versioned opaque digest from the device,
 inode, and birth timestamp read from one opened no-follow directory descriptor. It
 persists that digest in owner-private settings, includes it in the managed state
@@ -623,7 +623,7 @@ or convert every effect adapter to descriptor-relative operations before relying
 this boundary.
 
 Desktop's dedicated local Tauri terminal window can operate native-owned PTYs using
-opaque window-bound sessions and the selected Space's fixed native workspace context. The main
+opaque window-bound sessions and the selected Workspace's fixed native workspace context. The main
 renderer may request that window and one of the closed terminal kinds, but it cannot
 open or control a PTY. The terminal DTO accepts only `colossus_tui` or `shell`; it
 rejects renderer-selected processes, paths, working directories, environments, and

@@ -100,7 +100,7 @@ function FleetView({
   return (
     <>
       <SurfaceHeader
-        eyebrow="Capabilities / This Space"
+        eyebrow="Capabilities / This Workspace"
         title="Derived capability catalog"
         description="A read-only view derived from the selected sidecar, access profile, tools, skills, workflows, and agents."
       />
@@ -134,7 +134,7 @@ function FleetView({
                 <span>
                   <strong>Workspace tools</strong>
                   <small>
-                    The selected Space advertises bounded file browsing and
+                    The selected Workspace advertises bounded file browsing and
                     workspace-aware tool execution.
                   </small>
                 </span>
@@ -434,7 +434,7 @@ function ConnectionsView({
       <SurfaceHeader
         eyebrow="Connections / Runtime routing"
         title="Connections"
-        description="Spaces own local sidecars. External daemons remain shared connection targets."
+        description="Workspaces own local sidecars. External daemons remain shared connection targets."
       />
       <div className="overview-scroll">
         <section className="overview-section">
@@ -443,7 +443,7 @@ function ConnectionsView({
               <p className="eyebrow">Folder-backed runtimes</p>
               <h3>
                 {desktop.spaces.filter((space) => !space.archived).length}{" "}
-                Spaces
+                Workspaces
               </h3>
             </div>
             <span className="status-chip tone-neutral">Up to 4 live</span>
@@ -722,7 +722,7 @@ function SettingsView({
           </div>
           <div>
             <p className="eyebrow">Managed Local</p>
-            <h3>{desktop.workspace?.displayName ?? "Add a Space"}</h3>
+            <h3>{desktop.workspace?.displayName ?? "Add a Workspace"}</h3>
             <p>
               {desktop.workspace?.displayPath ??
                 "Workspace authority has not been granted to this app yet."}
@@ -751,7 +751,7 @@ function SettingsView({
               disabled={connecting}
               onClick={onChooseWorkspace}
             >
-              Add Space
+              Add Workspace
             </button>
             <button
               className="button secondary"
@@ -1040,13 +1040,13 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
         ref={navigationTriggerRef}
         className="button secondary compact work-navigation-button operations-navigation-button"
         type="button"
-        aria-label="Open Space navigation"
+        aria-label="Open Workspace navigation"
         aria-controls="work-navigation"
         aria-expanded={props.workNavigationOpen}
         onClick={props.onOpenWorkNavigation}
       >
         <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
-        <span className="compact-action-copy">Spaces</span>
+        <span className="compact-action-copy">Workspaces</span>
       </button>
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
       {props.surface === "library" ? (

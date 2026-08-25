@@ -501,6 +501,10 @@ impl EffectGateway {
                 "outcome": decision.outcome,
                 "reason": decision.reason,
                 "audit_labels": decision.obligations.audit_labels,
+                "action": request.action,
+                "phase": request.phase,
+                "sandbox_backend": decision.obligations.sandbox_backend,
+                "require_post_effect": decision.obligations.require_post_effect,
                 "resource_authority": decision.obligations.resource_authority,
             }),
         )?;

@@ -7,7 +7,9 @@ use crate::server::{
     MAX_CONNECTION_AGE, MAX_GLOBAL_CONCURRENT_REQUESTS, MAX_REQUEST_MESSAGE_BYTES,
     MAX_REQUEST_SETUP_DURATION, MAX_RESPONSE_MESSAGE_BYTES, RESERVED_UNARY_REQUEST_HEADROOM,
 };
-use colossus_api::{CallerContext, PLAN_CONTINUATION_CAPABILITY, scopes};
+use colossus_api::{
+    CallerContext, PLAN_CONTINUATION_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, scopes,
+};
 use colossus_api_proto::v1alpha1::{
     ApiLimit, Capability, DeploymentMode, GetReadinessRequest, GetReadinessResponse,
     GetServerInfoRequest, GetServerInfoResponse, ReadinessCheck, ReadinessStatus, ServerInfo,
@@ -112,6 +114,7 @@ impl SystemService for SystemServiceAdapter {
         let capabilities = [
             ("agent_runs.create", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
+            (SESSION_ACTIVITY_CAPABILITY, scopes::RUNS_READ),
             ("agent_runs.cancel", scopes::RUNS_CONTROL),
             ("prompts.respond", scopes::PROMPTS_RESPOND),
             ("approvals.respond", scopes::APPROVALS_RESPOND),
@@ -441,6 +444,7 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert!(enabled.contains("agent_runs.delegation"));
         assert!(enabled.contains("plans.continue"));
+        assert!(enabled.contains(SESSION_ACTIVITY_CAPABILITY));
         assert!(enabled.contains("artifacts.read"));
         assert!(enabled.contains("artifacts.upload"));
         assert!(enabled.contains("attachments.run_input"));
@@ -464,6 +468,7 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert!(disabled.contains("agent_runs.delegation"));
         assert!(disabled.contains(PLAN_CONTINUATION_CAPABILITY));
+        assert!(disabled.contains(SESSION_ACTIVITY_CAPABILITY));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 use colossus_sdk::{
     ApiErrorCode, GetRunRequest, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest,
-    PageResponse, RunStatus, ServerCapabilities,
+    PageResponse, RunStatus, SESSION_ACTIVITY_CAPABILITY, ServerCapabilities,
 };
 use colossus_worker_protocol::{WorkerSessionMap, WorkerThreadDelegateInspection};
 use futures_util::future::join_all;
@@ -469,7 +469,7 @@ async fn apply_workspace_picker_selection(
         if !existing.archived {
             return Err(CommandErrorDto::invalid(
                 "workspace",
-                "That folder already belongs to an active Space.",
+                "That folder already belongs to an active Workspace.",
             ));
         }
         if !confirm_restore_space(app, &existing.display_name).await? {
@@ -492,7 +492,7 @@ async fn apply_workspace_picker_selection(
             && state.terminal_session_active()
         {
             return Err(CommandErrorDto::busy(
-                "Close this Space's terminal sessions before selecting its folder again.",
+                "Close this Workspace's terminal sessions before selecting its folder again.",
             ));
         }
         settings.rebind_space_workspace(&existing.id, workspace.clone())?;
@@ -539,7 +539,8 @@ async fn stop_rebound_runtime_for_selection(
     if let Some(target) = state.target(rebound_space_id).await
         && target.client.close().await.is_err()
     {
-        let close_error = CommandErrorDto::busy("The previous Space runtime is still stopping.");
+        let close_error =
+            CommandErrorDto::busy("The previous Workspace runtime is still stopping.");
         restore_space_rebind_after_failure(
             state,
             store,
@@ -612,7 +613,7 @@ async fn start_selected_space_runtime(
                 space_id,
                 ManagedHealth {
                     state: ManagedRuntimeStateDto::NeedsProvider,
-                    message: "Configure a provider to start this Space.".into(),
+                    message: "Configure a provider to start this Workspace.".into(),
                     failure_code: None,
                 },
             )
@@ -724,10 +725,12 @@ async fn confirm_restore_space(app: &AppHandle, name: &str) -> Result<bool, Comm
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
-            .message(format!("{name} is archived. Restore and open this Space?"))
-            .title("Restore Space")
+            .message(format!(
+                "{name} is archived. Restore and open this Workspace?"
+            ))
+            .title("Restore Workspace")
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Restore Space".into(),
+                "Restore Workspace".into(),
                 "Cancel".into(),
             ))
             .blocking_show()
@@ -736,7 +739,7 @@ async fn confirm_restore_space(app: &AppHandle, name: &str) -> Result<bool, Comm
     .map_err(|_| {
         CommandErrorDto::local_sanitized(
             "space_confirmation",
-            "The native Space confirmation could not be opened.",
+            "The native Workspace confirmation could not be opened.",
             true,
         )
     })
@@ -791,7 +794,10 @@ pub(crate) async fn search_space_threads(
         .as_ref()
         .is_some_and(|space_id| settings.space(space_id).is_none())
     {
-        return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+        return Err(CommandErrorDto::invalid(
+            "spaceId",
+            "The Workspace is unknown.",
+        ));
     }
     refresh_live_space_search_index(&state, &settings).await;
     let offset = if request.cursor.is_empty() {
@@ -918,7 +924,7 @@ pub(crate) async fn rename_space(
     if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
         return Err(CommandErrorDto::invalid(
             "displayName",
-            "Space names must be 1–80 visible characters.",
+            "Workspace names must be 1–80 visible characters.",
         ));
     }
     let _guard = connect_guard(&state)?;
@@ -928,7 +934,7 @@ pub(crate) async fn rename_space(
         .spaces
         .iter_mut()
         .find(|space| space.id == space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     name.clone_into(&mut space.display_name);
     store.save(&settings)?;
     desktop_status_from(&state, &settings).await
@@ -943,12 +949,15 @@ pub(crate) async fn archive_space(
     let store = settings_store()?;
     let mut settings = store.load()?;
     if settings.space(&space_id).is_none() {
-        return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+        return Err(CommandErrorDto::invalid(
+            "spaceId",
+            "The Workspace is unknown.",
+        ));
     }
     reject_active_managed_runs_for(&state, &space_id).await?;
     if settings.selected_space_id.as_deref() == Some(&space_id) && state.terminal_session_active() {
         return Err(CommandErrorDto::busy(
-            "Close this Space's terminal sessions before archiving it.",
+            "Close this Workspace's terminal sessions before archiving it.",
         ));
     }
     if settings.selected_space_id.as_deref() == Some(&space_id) {
@@ -959,7 +968,7 @@ pub(crate) async fn archive_space(
             .client
             .close()
             .await
-            .map_err(|_| CommandErrorDto::busy("The Space runtime is still stopping."))?;
+            .map_err(|_| CommandErrorDto::busy("The Workspace runtime is still stopping."))?;
     }
     state.remove_managed_space_runtime(&space_id).await;
     if let Some(space) = settings
@@ -1003,7 +1012,7 @@ pub(crate) async fn restore_space(
         .spaces
         .iter_mut()
         .find(|space| space.id == space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     space.archived = false;
     store.save(&settings)?;
     desktop_status_from(&state, &settings).await
@@ -1972,7 +1981,7 @@ pub(crate) async fn get_thread_delegate(
     let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
         CommandErrorDto::invalid(
             "jobId",
-            "Select a Space before inspecting a delegated agent.",
+            "Select a Workspace before inspecting a delegated agent.",
         )
     })?;
     if state.selected_target_id().await.as_deref() != Some(space_id)
@@ -1980,7 +1989,7 @@ pub(crate) async fn get_thread_delegate(
     {
         return Err(CommandErrorDto::local_sanitized(
             "delegate_inspection_unavailable",
-            "Delegated agent details are available only for the selected Managed Local Space.",
+            "Delegated agent details are available only for the selected Managed Local Workspace.",
             false,
         ));
     }
@@ -2018,27 +2027,27 @@ pub(crate) async fn get_session_map(
     let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
         CommandErrorDto::invalid(
             "sourceRunId",
-            "Select a Space before inspecting its session map.",
+            "Select a Workspace before inspecting its session map.",
         )
     })?;
     if !state.managed_lifecycle_ready_for(space_id).await {
         return Err(CommandErrorDto::local_sanitized(
             "session_map_unavailable",
-            "The session map is available only for the selected Managed Local Space.",
+            "The session map is available only for the selected Managed Local Workspace.",
             false,
         ));
     }
     let target = state.selected_target(space_id).await.ok_or_else(|| {
         CommandErrorDto::local_sanitized(
             "session_map_unavailable",
-            "Select this Managed Local Space before inspecting its session map.",
+            "Select this Managed Local Workspace before inspecting its session map.",
             true,
         )
     })?;
     if !state.run_is_bound(&target, &source_run_id).await {
         return Err(CommandErrorDto::invalid(
             "sourceRunId",
-            "Refresh this Space's work before inspecting the session map.",
+            "Refresh this Workspace's work before inspecting the session map.",
         ));
     }
     let _unary_slot = target.target.try_unary_slot().ok_or_else(|| {
@@ -2082,7 +2091,7 @@ pub(crate) async fn set_approval_mode(
     let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
         CommandErrorDto::invalid(
             "approvalMode",
-            "Select a Space before changing permission mode.",
+            "Select a Workspace before changing permission mode.",
         )
     })?;
     if state.selected_target_id().await.as_deref() != Some(space_id)
@@ -2611,6 +2620,7 @@ fn desktop_capabilities(
             && settings.access_profile != AccessProfileSetting::Minimal,
         artifacts: advertised.contains("artifacts.read"),
         plan_continuation: advertised.contains(PLAN_CONTINUATION_CAPABILITY),
+        session_activity: advertised.contains(SESSION_ACTIVITY_CAPABILITY),
         update_available: state.update_available(),
         agent_workflows: advertised.contains("automation.workflows"),
         attachments: advertised.contains("attachments.run_input"),
@@ -2640,12 +2650,12 @@ async fn selected_managed_health(
         Some(space_id) if managed_connected => state.managed_health_for(space_id).await,
         Some(_) if !settings.managed_configured() => ManagedHealth {
             state: ManagedRuntimeStateDto::NeedsProvider,
-            message: "Configure a provider to start this Space.".into(),
+            message: "Configure a provider to start this Workspace.".into(),
             failure_code: None,
         },
         Some(_) => ManagedHealth {
             state: ManagedRuntimeStateDto::Starting,
-            message: "This Space starts when selected.".into(),
+            message: "This Workspace starts when selected.".into(),
             failure_code: None,
         },
         None => ManagedHealth::default(),

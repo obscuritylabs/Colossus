@@ -8,17 +8,21 @@ use crate::{
     writer::RunWriter,
 };
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use colossus_api::{
     AgentRunApi, ApiError, ApiErrorReason, ApiResult, ApplicationPrincipal, ArchiveThreadRequest,
     ArtifactApi, ArtifactPurpose, ArtifactState, CallerContext, CancelRunRequest, ContentPart,
     CreateRunRequest, CreateRunResponse, EventSourcedArtifactApi, EventSourcedRunRepository,
-    GetRunRequest, Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun,
-    OutcomeCertainty, PlanExecutionStrategy as PublicPlanExecutionStrategy, PlanRunAction,
+    GetRunRequest, Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse,
+    ListSessionActivityRequest, ListSessionActivityResponse, NewRun, OutcomeCertainty,
+    PlanExecutionStrategy as PublicPlanExecutionStrategy, PlanRunAction,
     PlanStatus as PublicPlanStatus, RequestId, ResearchDepth as PublicResearchDepth,
     ResearchSourceKind as PublicResearchSourceKind, RespondInteractionRequest,
     RestoreThreadRequest, Run, RunBranchContextMode, RunCancellation, RunExecutionRequest,
     RunFailure, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind, RunUpdateStream,
-    ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest, scopes,
+    SessionActivity, SessionActivityContent, SessionActivityKind, SessionActivityLane,
+    SessionActivityStatus, ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState,
+    WatchRunRequest, scopes,
 };
 use colossus_contracts::{
     ActorType, AgentRunCancellation, AgentRunMode, AgentRunOutcome, AgentRunResult,
@@ -27,8 +31,10 @@ use colossus_contracts::{
     ResearchSourceKind, RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
+use colossus_projection::ProjectedSessionActivity;
 use colossus_runtime::{ResearchRunContext, Runtime, RuntimeError};
 use futures::FutureExt as _;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     panic::AssertUnwindSafe,
@@ -45,6 +51,9 @@ const WATCH_CHANNEL_SIZE: usize = 8;
 const MAX_PENDING_RECOVERIES: usize = 256;
 const MAX_RENDERED_INPUT_BYTES: usize = 1_048_576;
 const MAX_TOOL_ACTIVITY_PREVIEW_BYTES: usize = 65_536;
+const MAX_SESSION_ACTIVITY_SCAN: usize = 1_024;
+const SESSION_ACTIVITY_READ_PAGE_SIZE: usize = 128;
+const MAX_SESSION_ACTIVITY_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 const TOOL_ACTIVITY_PREVIEW_TRUNCATION: &str = "\n… preview truncated";
 
 #[derive(Clone)]
@@ -1369,6 +1378,102 @@ impl AgentRunApi for RuntimeAgentRunApi {
         self.repository.list_runs(caller, &request)
     }
 
+    async fn list_session_activity(
+        &self,
+        caller: &CallerContext,
+        request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        request
+            .validate()
+            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        let source = self
+            .repository
+            .get_run(caller, &request.source_run_id)?
+            .ok_or_else(|| missing_run(caller))?;
+        self.runtime
+            .drain_projections_bounded(256, 16)
+            .map_err(|error| activity_runtime_error(caller, error))?;
+        let (head_sequence, _) = self
+            .runtime
+            .journal()
+            .head()
+            .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+        let digest = activity_query_digest(caller, &source.session_id, &request)?;
+        let mut cursor = request
+            .page_token
+            .as_deref()
+            .map(|token| decode_activity_cursor(caller, token, &digest))
+            .transpose()?;
+        let page_size = request.bounded_page_size();
+        let mut activities = Vec::with_capacity(page_size);
+        let mut scanned = 0_usize;
+        let mut has_more = false;
+        let mut projected_through_sequence = 0_u64;
+        let mut next_cursor = cursor.clone();
+        let mut response_bytes = 0_usize;
+        'pages: while scanned < MAX_SESSION_ACTIVITY_SCAN && activities.len() < page_size {
+            let page = self
+                .runtime
+                .session_activity_page(
+                    &source.session_id,
+                    cursor.as_deref(),
+                    SESSION_ACTIVITY_READ_PAGE_SIZE,
+                )
+                .map_err(|error| activity_runtime_error(caller, error))?;
+            projected_through_sequence = page.projected_through_sequence;
+            if page.records.is_empty() {
+                has_more = false;
+                break;
+            }
+            has_more = page.has_more;
+            for (index, (key, projected)) in page.records.iter().enumerate() {
+                scanned = scanned.saturating_add(1);
+                let activity = public_activity(projected)
+                    .map_err(|error| ApiError::from_store(&error, caller.request_id()))?;
+                if activity_matches(&activity, &request) {
+                    let activity_bytes = session_activity_response_size(&activity);
+                    if !activities.is_empty()
+                        && response_bytes.saturating_add(activity_bytes)
+                            > MAX_SESSION_ACTIVITY_RESPONSE_BYTES
+                    {
+                        has_more = true;
+                        break 'pages;
+                    }
+                    response_bytes = response_bytes.saturating_add(activity_bytes);
+                    activities.push(activity);
+                    if activities.len() == page_size {
+                        next_cursor = Some(key.clone());
+                        has_more = index + 1 < page.records.len() || page.has_more;
+                        break 'pages;
+                    }
+                }
+                next_cursor = Some(key.clone());
+                if scanned == MAX_SESSION_ACTIVITY_SCAN {
+                    has_more = index + 1 < page.records.len() || page.has_more;
+                    break 'pages;
+                }
+            }
+            if !page.has_more {
+                has_more = false;
+                break;
+            }
+            cursor = page.next_key;
+        }
+        let next_page_token = if has_more {
+            next_cursor.map(|key| encode_activity_cursor(&digest, &key))
+        } else {
+            None
+        };
+        Ok(ListSessionActivityResponse {
+            activities,
+            next_page_token,
+            head_sequence,
+            projected_through_sequence,
+            caught_up: projected_through_sequence >= head_sequence,
+        })
+    }
+
     async fn watch_run(
         &self,
         caller: &CallerContext,
@@ -2026,6 +2131,191 @@ fn update_is_terminal(kind: &RunUpdateKind) -> bool {
             | RunUpdateKind::Failure { .. }
             | RunUpdateKind::Cancellation { .. }
     )
+}
+
+fn public_activity(projected: &ProjectedSessionActivity) -> Result<SessionActivity, StoreError> {
+    let lane = match projected.lane.as_str() {
+        "agent" => SessionActivityLane::Agent,
+        "tools" => SessionActivityLane::Tools,
+        "system" => SessionActivityLane::System,
+        value => {
+            return Err(StoreError::Verification(format!(
+                "session activity lane {value} is invalid"
+            )));
+        }
+    };
+    let kind = match projected.kind.as_str() {
+        "user" => SessionActivityKind::User,
+        "assistant" => SessionActivityKind::Assistant,
+        "tool" => SessionActivityKind::Tool,
+        "system" => SessionActivityKind::System,
+        value => {
+            return Err(StoreError::Verification(format!(
+                "session activity kind {value} is invalid"
+            )));
+        }
+    };
+    let status = projected
+        .status
+        .as_deref()
+        .map(|value| match value {
+            "requested" | "queued" => Ok(SessionActivityStatus::Requested),
+            "started" | "running" => Ok(SessionActivityStatus::Running),
+            "waiting" | "pending" => Ok(SessionActivityStatus::Waiting),
+            "completed" | "responded" => Ok(SessionActivityStatus::Completed),
+            "failed" | "denied" => Ok(SessionActivityStatus::Failed),
+            "cancelled" | "expired" | "interrupted" => Ok(SessionActivityStatus::Cancelled),
+            "outcome_unknown" => Ok(SessionActivityStatus::OutcomeUnknown),
+            value => Err(StoreError::Verification(format!(
+                "session activity status {value} is invalid"
+            ))),
+        })
+        .transpose()?;
+    let map_content =
+        |content: &colossus_projection::ProjectedActivityContent| SessionActivityContent {
+            format: content.format.clone(),
+            value: content.value.clone(),
+        };
+    Ok(SessionActivity {
+        activity_id: projected.activity_id.clone(),
+        run_id: projected.run_id.clone(),
+        turn: projected.turn,
+        lane,
+        kind,
+        title: projected.title.clone(),
+        summary: projected.summary.clone(),
+        actor: projected.actor.clone(),
+        status,
+        started_at: projected.started_at.clone(),
+        completed_at: projected.completed_at.clone(),
+        duration_ms: projected.duration_ms,
+        input: projected.input.as_ref().map(map_content),
+        result: projected.result.as_ref().map(map_content),
+        attributes: projected.attributes.clone(),
+        source_event_types: projected.source_event_types.clone(),
+        first_sequence: projected.first_sequence,
+        last_sequence: projected.last_sequence,
+    })
+}
+
+fn activity_matches(activity: &SessionActivity, request: &ListSessionActivityRequest) -> bool {
+    if !request.lanes.is_empty() && !request.lanes.contains(&activity.lane) {
+        return false;
+    }
+    if !request.kinds.is_empty() && !request.kinds.contains(&activity.kind) {
+        return false;
+    }
+    if !request.statuses.is_empty()
+        && activity
+            .status
+            .is_none_or(|status| !request.statuses.contains(&status))
+    {
+        return false;
+    }
+    let query = request.query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    activity_search_values(activity).any(|value| value.to_lowercase().contains(&query))
+}
+
+fn activity_search_values(activity: &SessionActivity) -> impl Iterator<Item = &str> {
+    [
+        Some(activity.title.as_str()),
+        Some(activity.summary.as_str()),
+        Some(activity.actor.as_str()),
+        activity
+            .input
+            .as_ref()
+            .map(|content| content.value.as_str()),
+        activity
+            .result
+            .as_ref()
+            .map(|content| content.value.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(activity.attributes.keys().map(String::as_str))
+    .chain(activity.attributes.values().map(String::as_str))
+    .chain(activity.source_event_types.iter().map(String::as_str))
+}
+
+fn session_activity_response_size(activity: &SessionActivity) -> usize {
+    const STRUCTURAL_OVERHEAD_BYTES: usize = 256;
+    activity_search_values(activity)
+        .map(str::len)
+        .sum::<usize>()
+        .saturating_add(activity.activity_id.len())
+        .saturating_add(activity.run_id.as_deref().map_or(0, str::len))
+        .saturating_add(activity.started_at.len())
+        .saturating_add(activity.completed_at.as_deref().map_or(0, str::len))
+        .saturating_add(STRUCTURAL_OVERHEAD_BYTES)
+}
+
+fn activity_query_digest(
+    caller: &CallerContext,
+    session_id: &str,
+    request: &ListSessionActivityRequest,
+) -> ApiResult<String> {
+    let canonical = serde_json::to_vec(&(
+        caller.principal().application_id(),
+        session_id,
+        request.query.trim().to_lowercase(),
+        &request.lanes,
+        &request.kinds,
+        &request.statuses,
+    ))
+    .map_err(|_| {
+        ApiError::from_store(
+            &StoreError::Adapter("session activity query encoding failed".into()),
+            caller.request_id(),
+        )
+    })?;
+    Ok(hex::encode(Sha256::digest(canonical)))
+}
+
+fn encode_activity_cursor(digest: &str, key: &str) -> String {
+    format!("{digest}.{}", URL_SAFE_NO_PAD.encode(key.as_bytes()))
+}
+
+fn decode_activity_cursor(
+    caller: &CallerContext,
+    token: &str,
+    expected_digest: &str,
+) -> ApiResult<String> {
+    let Some((digest, encoded_key)) = token.split_once('.') else {
+        return Err(invalid_activity_cursor(caller));
+    };
+    if digest != expected_digest {
+        return Err(invalid_activity_cursor(caller));
+    }
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded_key)
+        .map_err(|_| invalid_activity_cursor(caller))?;
+    let key = String::from_utf8(bytes).map_err(|_| invalid_activity_cursor(caller))?;
+    if key.is_empty() || key.len() > 2_048 || key.contains('\0') {
+        return Err(invalid_activity_cursor(caller));
+    }
+    Ok(key)
+}
+
+fn invalid_activity_cursor(caller: &CallerContext) -> ApiError {
+    ApiError::invalid(
+        ApiErrorReason::InvalidArgument,
+        "page_token",
+        "page_token is invalid for this session activity query",
+    )
+    .with_correlation_id(caller.request_id().clone())
+}
+
+fn activity_runtime_error(caller: &CallerContext, error: RuntimeError) -> ApiError {
+    match error {
+        RuntimeError::Store(store) => ApiError::from_store(&store, caller.request_id()),
+        _ => ApiError::from_store(
+            &StoreError::Adapter("session activity is temporarily unavailable".into()),
+            caller.request_id(),
+        ),
+    }
 }
 
 fn missing_run(caller: &CallerContext) -> ApiError {

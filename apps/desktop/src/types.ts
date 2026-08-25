@@ -254,6 +254,7 @@ export interface DesktopCapabilities {
   files: boolean;
   artifacts: boolean;
   planContinuation: boolean;
+  sessionActivity?: boolean;
   updateAvailable: boolean;
   agentWorkflows: boolean;
   attachments: boolean;
@@ -1051,6 +1052,61 @@ export interface RunDetails {
 export interface RunPage {
   runs: Run[];
   nextPageToken: string;
+}
+
+export type SessionActivityLane = "agent" | "tools" | "system";
+export type SessionActivityKind = "user" | "assistant" | "tool" | "system";
+export type SessionActivityStatus =
+  | "requested"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "outcome_unknown";
+
+export interface SessionActivityContent {
+  format: "text" | "json";
+  value: string;
+}
+
+export interface SessionActivity {
+  activityId: string;
+  runId: string | null;
+  turn: number | null;
+  lane: SessionActivityLane;
+  kind: SessionActivityKind;
+  title: string;
+  summary: string;
+  actor: string;
+  status: SessionActivityStatus | null;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  input: SessionActivityContent | null;
+  result: SessionActivityContent | null;
+  attributes: Record<string, string>;
+  sourceEventTypes: string[];
+  firstSequence: number;
+  lastSequence: number;
+}
+
+export interface ListSessionActivityRequest {
+  sourceRunId: string;
+  query?: string;
+  lanes?: SessionActivityLane[];
+  kinds?: SessionActivityKind[];
+  statuses?: SessionActivityStatus[];
+  pageSize?: number;
+  pageToken?: string;
+}
+
+export interface SessionActivityPage {
+  activities: SessionActivity[];
+  nextPageToken: string;
+  headSequence: number;
+  projectedThroughSequence: number;
+  caughtUp: boolean;
 }
 
 /** Create-run API sentinel that selects the server's configured turn bound. */

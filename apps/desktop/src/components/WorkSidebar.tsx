@@ -37,6 +37,10 @@ import {
   clampWorkSidebarWidth,
   defaultWorkSidebarWidth,
 } from "../sidebar-width";
+import {
+  MAX_THREAD_NAME_CHARACTERS,
+  normalizeThreadName,
+} from "../thread-names";
 import type {
   ConnectionState,
   DesktopCapabilities,
@@ -70,6 +74,11 @@ interface WorkSidebarProps {
   terminalAvailable: boolean;
   activeSessionId: string | null;
   pinnedSessionIds: ReadonlySet<string>;
+  resolveThreadTitle: (
+    spaceId: string | null,
+    sessionId: string,
+    fallback: string,
+  ) => string;
   query: string;
   searchScope: SpaceSearchScope;
   includeArchived: boolean;
@@ -104,6 +113,7 @@ interface WorkSidebarProps {
   onArchiveSpace: (spaceId: string) => void;
   onRestoreSpace: (spaceId: string) => void;
   onArchiveThread: (run: Run) => void;
+  onRenameThread: (run: Run, name: string) => void;
   onToggleThreadPinned: (run: Run) => void;
   onRestoreThread: (result: SpaceSearchResult) => void;
   onSelectSurface: (surface: WorkspaceSurface) => void;
@@ -172,6 +182,7 @@ export function WorkSidebar({
   terminalAvailable,
   activeSessionId,
   pinnedSessionIds,
+  resolveThreadTitle,
   query,
   searchScope,
   includeArchived,
@@ -206,6 +217,7 @@ export function WorkSidebar({
   onArchiveSpace,
   onRestoreSpace,
   onArchiveThread,
+  onRenameThread,
   onToggleThreadPinned,
   onRestoreThread,
   onSelectSurface,
@@ -231,14 +243,30 @@ export function WorkSidebar({
     useState(sidebarWidth);
   const [renameSpaceId, setRenameSpaceId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [renameThreadSessionId, setRenameThreadSessionId] = useState<
+    string | null
+  >(null);
+  const [renameThreadDraft, setRenameThreadDraft] = useState("");
   const [threadShelfOpen, setThreadShelfOpen] = useState(true);
   const [showAllRecent, setShowAllRecent] = useState(false);
   const [expandedSpaceIds, setExpandedSpaceIds] = useState<ReadonlySet<string>>(
     new Set(),
   );
+  const displayRuns = useMemo(
+    () =>
+      runs.map((run) => {
+        const title = resolveThreadTitle(
+          selectedSpaceId,
+          run.sessionId,
+          run.title,
+        );
+        return title === run.title ? run : { ...run, title };
+      }),
+    [resolveThreadTitle, runs, selectedSpaceId],
+  );
   const groups = useMemo(
-    () => selectRecentWork(runs, { query: "", pinnedSessionIds }),
-    [pinnedSessionIds, runs],
+    () => selectRecentWork(displayRuns, { query: "", pinnedSessionIds }),
+    [displayRuns, pinnedSessionIds],
   );
   const hasRecentGroup = groups.some((group) => group.key === "recent");
   const runsById = useMemo(
@@ -261,7 +289,7 @@ export function WorkSidebar({
   const actionsDisabled = disabled || spaceStartup !== null;
   const searching = query.trim() !== "";
   // These are stable information-architecture destinations, even when the
-  // selected Space currently has no entries for a catalog. The destination's
+  // selected Workspace currently has no entries for a catalog. The destination's
   // empty state explains that absence without making the navigation itself
   // appear to change as sidecar capabilities come and go.
   const visibleDestinations = DESTINATIONS;
@@ -288,6 +316,8 @@ export function WorkSidebar({
 
   useEffect(() => {
     setThreadShelfOpen(true);
+    setRenameThreadSessionId(null);
+    setRenameThreadDraft("");
   }, [displayedSpace?.spaceId]);
 
   useEffect(() => {
@@ -395,6 +425,21 @@ export function WorkSidebar({
     setRenameDraft("");
   }
 
+  function beginThreadRename(run: Run, title: string) {
+    setRenameThreadSessionId(run.sessionId);
+    setRenameThreadDraft(title);
+  }
+
+  function submitThreadRename(run: Run) {
+    const name = normalizeThreadName(renameThreadDraft);
+    if (name === null) {
+      return;
+    }
+    onRenameThread(run, name);
+    setRenameThreadSessionId(null);
+    setRenameThreadDraft("");
+  }
+
   function chooseSearchScope(scope: SpaceSearchScope) {
     onSearchScopeChange(scope);
     searchRef.current?.focus();
@@ -431,12 +476,12 @@ export function WorkSidebar({
       id="work-navigation"
       role={drawerOpen ? "dialog" : undefined}
       aria-modal={drawerOpen ? true : undefined}
-      aria-label={drawerOpen ? "Space navigation" : "Colossus navigation"}
+      aria-label={drawerOpen ? "Workspace navigation" : "Colossus navigation"}
     >
       <div
         className="sidebar-resize-handle"
         role="separator"
-        aria-label="Resize Space sidebar"
+        aria-label="Resize Workspace sidebar"
         aria-orientation="vertical"
         aria-valuemin={MIN_WORK_SIDEBAR_WIDTH}
         aria-valuemax={MAX_WORK_SIDEBAR_WIDTH}
@@ -510,7 +555,7 @@ export function WorkSidebar({
 
       <section className="space-shelves" aria-labelledby="spaces-heading">
         <div className="space-shelves-heading">
-          <span id="spaces-heading">Spaces</span>
+          <span id="spaces-heading">Workspaces</span>
           <details
             className="space-library-menu"
             onBlur={(event) => {
@@ -520,8 +565,8 @@ export function WorkSidebar({
             }}
           >
             <summary
-              aria-label="Manage Spaces"
-              title="Manage Spaces"
+              aria-label="Manage Workspaces"
+              title="Manage Workspaces"
               role="button"
             >
               <IconDots size={16} stroke={1.9} aria-hidden="true" />
@@ -538,12 +583,12 @@ export function WorkSidebar({
                 }}
               >
                 <IconPlus size={15} stroke={1.8} aria-hidden="true" />
-                Add Space from folder
+                Add Workspace from folder
               </button>
               {selectedSpace !== undefined ? (
                 <>
                   <div className="space-library-separator" />
-                  <span className="space-library-label">Current Space</span>
+                  <span className="space-library-label">Current Workspace</span>
                   <button
                     type="button"
                     disabled={actionsDisabled}
@@ -669,7 +714,7 @@ export function WorkSidebar({
             onClick={() => chooseSearchScope("all")}
           >
             <IconWorld size={13} stroke={1.8} aria-hidden="true" />
-            All Spaces
+            All Workspaces
           </button>
           <button
             type="button"
@@ -678,7 +723,7 @@ export function WorkSidebar({
             onClick={() => chooseSearchScope("space")}
           >
             <IconFolder size={13} stroke={1.8} aria-hidden="true" />
-            This Space
+            This Workspace
           </button>
         </div>
         {searchScope === "all" ? (
@@ -690,7 +735,7 @@ export function WorkSidebar({
                 onIncludeArchivedChange(event.target.checked)
               }
             />
-            Include archived Spaces and threads
+            Include archived Workspaces and threads
           </label>
         ) : null}
       </section>
@@ -704,7 +749,7 @@ export function WorkSidebar({
             onClick={onCreateSpace}
           >
             <IconPlus size={16} stroke={1.8} aria-hidden="true" />
-            Add a Space
+            Add a Workspace
           </button>
         ) : (
           <div
@@ -775,7 +820,7 @@ export function WorkSidebar({
                 }}
               >
                 <label>
-                  <span className="sr-only">Space name</span>
+                  <span className="sr-only">Workspace name</span>
                   <input
                     autoFocus
                     maxLength={80}
@@ -817,6 +862,11 @@ export function WorkSidebar({
                   const status = presentRunStatus(result.status);
                   const restoring =
                     threadLifecycleBusySessionId === result.sessionId;
+                  const title = resolveThreadTitle(
+                    result.spaceId,
+                    result.sessionId,
+                    result.title,
+                  );
                   return (
                     <div
                       className="work-item-row"
@@ -829,7 +879,7 @@ export function WorkSidebar({
                         onClick={() => onSelectSearchResult(result)}
                       >
                         <span className="work-item-copy">
-                          <strong>{result.title}</strong>
+                          <strong>{title}</strong>
                           <span>
                             {result.spaceName} · {runModeLabel(result.mode)} ·{" "}
                             {result.threadArchived
@@ -849,7 +899,7 @@ export function WorkSidebar({
                         <button
                           className="work-item-action"
                           type="button"
-                          aria-label={`Restore ${result.title}`}
+                          aria-label={`Restore ${title}`}
                           title="Restore thread"
                           disabled={actionsDisabled || restoring}
                           onClick={() => onRestoreThread(result)}
@@ -905,6 +955,8 @@ export function WorkSidebar({
                         const pinned = pinnedSessionIds.has(run.sessionId);
                         const archiving =
                           threadLifecycleBusySessionId === run.sessionId;
+                        const renaming =
+                          renameThreadSessionId === run.sessionId;
                         return (
                           <div
                             className={`work-item-row${
@@ -914,126 +966,209 @@ export function WorkSidebar({
                             }`}
                             key={item.runId}
                           >
-                            <button
-                              className="work-item"
-                              type="button"
-                              aria-current={
-                                activeSessionId === run.sessionId
-                                  ? "page"
-                                  : undefined
-                              }
-                              disabled={actionsDisabled}
-                              onClick={() => onSelect(run)}
-                            >
-                              <span className="work-item-copy">
-                                <strong>{item.title}</strong>
-                                <span>
-                                  {item.modeLabel} · {item.updatedLabel}
-                                </span>
-                              </span>
-                              <span
-                                className={`work-item-state tone-${item.statusTone}`}
-                                title={item.statusCopy}
-                              >
-                                {statusIcon(item.statusTone)}
-                                <span className="sr-only">
-                                  {item.statusLabel}
-                                </span>
-                              </span>
-                            </button>
-                            <details
-                              className="thread-actions-menu"
-                              onBlur={(event) => {
-                                const menu = event.currentTarget;
-                                window.requestAnimationFrame(() => {
-                                  if (!menu.contains(document.activeElement)) {
-                                    menu.removeAttribute("open");
-                                  }
-                                });
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === "Escape") {
+                            {renaming ? (
+                              <form
+                                className="thread-rename-form"
+                                onSubmit={(event) => {
                                   event.preventDefault();
-                                  event.currentTarget.removeAttribute("open");
-                                  event.currentTarget
-                                    .querySelector("summary")
-                                    ?.focus();
-                                }
-                              }}
-                            >
-                              <summary
-                                className="work-item-action"
-                                role="button"
-                                aria-haspopup="menu"
-                                aria-label={`Thread actions for ${item.title}`}
-                                title="Thread actions"
+                                  submitThreadRename(run);
+                                }}
                               >
-                                <IconDots
-                                  size={17}
-                                  stroke={1.9}
-                                  aria-hidden="true"
-                                />
-                              </summary>
-                              <div
-                                className="thread-actions-popover"
-                                aria-label={`Actions for ${item.title}`}
-                              >
+                                <label>
+                                  <span className="sr-only">Thread name</span>
+                                  <input
+                                    autoFocus
+                                    required
+                                    maxLength={MAX_THREAD_NAME_CHARACTERS}
+                                    value={renameThreadDraft}
+                                    aria-label="Thread name"
+                                    onChange={(event) =>
+                                      setRenameThreadDraft(event.target.value)
+                                    }
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Escape") {
+                                        event.preventDefault();
+                                        setRenameThreadSessionId(null);
+                                        setRenameThreadDraft("");
+                                      }
+                                    }}
+                                  />
+                                </label>
                                 <button
+                                  className="thread-rename-action"
                                   type="button"
-                                  aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
-                                  aria-pressed={pinned}
-                                  disabled={spaceStartup !== null}
-                                  onClick={(event) => {
-                                    event.currentTarget
-                                      .closest("details")
-                                      ?.removeAttribute("open");
-                                    onToggleThreadPinned(run);
+                                  aria-label="Cancel thread rename"
+                                  title="Cancel"
+                                  onClick={() => {
+                                    setRenameThreadSessionId(null);
+                                    setRenameThreadDraft("");
                                   }}
                                 >
-                                  <IconPin
-                                    size={15}
+                                  <IconX
+                                    size={14}
                                     stroke={1.8}
-                                    fill={pinned ? "currentColor" : "none"}
                                     aria-hidden="true"
                                   />
-                                  {pinned ? "Unpin" : "Pin"}
                                 </button>
                                 <button
+                                  className="thread-rename-action is-save"
+                                  type="submit"
+                                  aria-label="Save thread name"
+                                  title="Save"
+                                >
+                                  <IconCheck
+                                    size={14}
+                                    stroke={2}
+                                    aria-hidden="true"
+                                  />
+                                </button>
+                              </form>
+                            ) : (
+                              <>
+                                <button
+                                  className="work-item"
                                   type="button"
-                                  aria-label={`Archive ${item.title}`}
-                                  title={
-                                    isTerminalStatus(run.status)
-                                      ? "Archive thread"
-                                      : "Finish or cancel this thread before archiving"
+                                  aria-current={
+                                    activeSessionId === run.sessionId
+                                      ? "page"
+                                      : undefined
                                   }
-                                  disabled={
-                                    actionsDisabled ||
-                                    archiving ||
-                                    !isTerminalStatus(run.status)
-                                  }
-                                  onClick={(event) => {
-                                    event.currentTarget
-                                      .closest("details")
-                                      ?.removeAttribute("open");
-                                    onArchiveThread(run);
+                                  disabled={actionsDisabled}
+                                  onClick={() => onSelect(run)}
+                                >
+                                  <span className="work-item-copy">
+                                    <strong>{item.title}</strong>
+                                    <span>
+                                      {item.modeLabel} · {item.updatedLabel}
+                                    </span>
+                                  </span>
+                                  <span
+                                    className={`work-item-state tone-${item.statusTone}`}
+                                    title={item.statusCopy}
+                                  >
+                                    {statusIcon(item.statusTone)}
+                                    <span className="sr-only">
+                                      {item.statusLabel}
+                                    </span>
+                                  </span>
+                                </button>
+                                <details
+                                  className="thread-actions-menu"
+                                  onBlur={(event) => {
+                                    const menu = event.currentTarget;
+                                    window.requestAnimationFrame(() => {
+                                      if (
+                                        !menu.contains(document.activeElement)
+                                      ) {
+                                        menu.removeAttribute("open");
+                                      }
+                                    });
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      event.currentTarget.removeAttribute(
+                                        "open",
+                                      );
+                                      event.currentTarget
+                                        .querySelector("summary")
+                                        ?.focus();
+                                    }
                                   }}
                                 >
-                                  {archiving ? (
-                                    <IconLoader2
-                                      className="spin-icon"
-                                      size={15}
-                                    />
-                                  ) : (
-                                    <IconArchive
-                                      size={15}
-                                      stroke={1.8}
+                                  <summary
+                                    className="work-item-action"
+                                    role="button"
+                                    aria-haspopup="menu"
+                                    aria-label={`Thread actions for ${item.title}`}
+                                    title="Thread actions"
+                                  >
+                                    <IconDots
+                                      size={17}
+                                      stroke={1.9}
                                       aria-hidden="true"
                                     />
-                                  )}
-                                  {archiving ? "Archiving…" : "Archive"}
-                                </button>
-                              </div>
-                            </details>
+                                  </summary>
+                                  <div
+                                    className="thread-actions-popover"
+                                    aria-label={`Actions for ${item.title}`}
+                                  >
+                                    <button
+                                      type="button"
+                                      aria-label={`Rename ${item.title}`}
+                                      disabled={spaceStartup !== null}
+                                      onClick={(event) => {
+                                        event.currentTarget
+                                          .closest("details")
+                                          ?.removeAttribute("open");
+                                        beginThreadRename(run, item.title);
+                                      }}
+                                    >
+                                      <IconPencil
+                                        size={15}
+                                        stroke={1.8}
+                                        aria-hidden="true"
+                                      />
+                                      Rename
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
+                                      aria-pressed={pinned}
+                                      disabled={spaceStartup !== null}
+                                      onClick={(event) => {
+                                        event.currentTarget
+                                          .closest("details")
+                                          ?.removeAttribute("open");
+                                        onToggleThreadPinned(run);
+                                      }}
+                                    >
+                                      <IconPin
+                                        size={15}
+                                        stroke={1.8}
+                                        fill={pinned ? "currentColor" : "none"}
+                                        aria-hidden="true"
+                                      />
+                                      {pinned ? "Unpin" : "Pin"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label={`Archive ${item.title}`}
+                                      title={
+                                        isTerminalStatus(run.status)
+                                          ? "Archive thread"
+                                          : "Finish or cancel this thread before archiving"
+                                      }
+                                      disabled={
+                                        actionsDisabled ||
+                                        archiving ||
+                                        !isTerminalStatus(run.status)
+                                      }
+                                      onClick={(event) => {
+                                        event.currentTarget
+                                          .closest("details")
+                                          ?.removeAttribute("open");
+                                        onArchiveThread(run);
+                                      }}
+                                    >
+                                      {archiving ? (
+                                        <IconLoader2
+                                          className="spin-icon"
+                                          size={15}
+                                        />
+                                      ) : (
+                                        <IconArchive
+                                          size={15}
+                                          stroke={1.8}
+                                          aria-hidden="true"
+                                        />
+                                      )}
+                                      {archiving ? "Archiving…" : "Archive"}
+                                    </button>
+                                  </div>
+                                </details>
+                              </>
+                            )}
                           </div>
                         );
                       })}
@@ -1072,7 +1207,7 @@ export function WorkSidebar({
               <p className="work-list-empty">
                 {searching
                   ? "No threads match this search."
-                  : "Threads in this Space will appear here."}
+                  : "Threads in this Workspace will appear here."}
               </p>
             ) : null}
           </nav>
@@ -1117,7 +1252,7 @@ export function WorkSidebar({
         </div>
 
         {otherSpaces.length > 0 ? (
-          <nav className="space-shelf-list" aria-label="Other Spaces">
+          <nav className="space-shelf-list" aria-label="Other Workspaces">
             {otherSpaces.map((space) => {
               const starting = spaceStartup?.spaceId === space.spaceId;
               const expanded = expandedSpaceIds.has(space.spaceId);
@@ -1210,12 +1345,17 @@ export function WorkSidebar({
                       previewItems.length > 0 ? (
                       previewItems.map((result) => {
                         const status = presentRunStatus(result.status);
+                        const title = resolveThreadTitle(
+                          result.spaceId,
+                          result.sessionId,
+                          result.title,
+                        );
                         return (
                           <button
                             className="space-thread-preview-item"
                             type="button"
                             key={`${result.spaceId}:${result.runId}`}
-                            aria-label={`Open ${result.title} in ${space.displayName}`}
+                            aria-label={`Open ${title} in ${space.displayName}`}
                             disabled={actionsDisabled || result.threadArchived}
                             onClick={() => onSelectSearchResult(result)}
                           >
@@ -1226,7 +1366,7 @@ export function WorkSidebar({
                               {statusIcon(status.tone)}
                             </span>
                             <span className="space-thread-preview-copy">
-                              <strong>{result.title}</strong>
+                              <strong>{title}</strong>
                               <small>
                                 {runModeLabel(result.mode)} ·{" "}
                                 {shortDateLabel(result.updatedAt)}
@@ -1248,7 +1388,7 @@ export function WorkSidebar({
         ) : null}
       </div>
 
-      <nav className="space-destinations" aria-label="Space destinations">
+      <nav className="space-destinations" aria-label="Workspace destinations">
         {visibleDestinations.map(({ id, label, Icon }) => (
           <button
             type="button"

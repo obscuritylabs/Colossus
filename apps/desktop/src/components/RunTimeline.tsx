@@ -42,6 +42,7 @@ import type {
   SessionMessage,
   ToolActivity,
 } from "../types";
+import { DropdownSelect } from "./DropdownSelect";
 import { MarkdownContent } from "./MarkdownContent";
 import { researchSources } from "./ResearchSourcesPanel";
 
@@ -1051,7 +1052,7 @@ function PlanResultCard({
             <div className="plan-goal-action">
               <label>
                 <span className="sr-only">Goal iteration budget</span>
-                <select
+                <DropdownSelect
                   aria-label="Goal iteration budget"
                   value={goalIterations}
                   disabled={busyAction !== null}
@@ -1063,7 +1064,7 @@ function PlanResultCard({
                   <option value={5}>5 iterations</option>
                   <option value={10}>10 iterations</option>
                   <option value={20}>20 iterations</option>
-                </select>
+                </DropdownSelect>
               </label>
               <button
                 className="button secondary compact"

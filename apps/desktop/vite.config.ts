@@ -1,13 +1,30 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+import { d3ColorFrozenPrototypeCompatibility } from "./build/d3-color-frozen-prototype";
 import { xtermFrozenPrototypeCompatibility } from "./build/xterm-frozen-prototype";
 
 export default defineConfig({
-  plugins: [xtermFrozenPrototypeCompatibility(), react()],
+  plugins: [
+    d3ColorFrozenPrototypeCompatibility(),
+    xtermFrozenPrototypeCompatibility(),
+    react(),
+  ],
   optimizeDeps: {
     // Dependency pre-bundling bypasses the compatibility transform above.
-    exclude: ["@xterm/xterm"],
+    exclude: [
+      "@xterm/xterm",
+      "@xyflow/system",
+      "d3-color",
+      "d3-dispatch",
+      "d3-drag",
+      "d3-ease",
+      "d3-interpolate",
+      "d3-selection",
+      "d3-timer",
+      "d3-transition",
+      "d3-zoom",
+    ],
   },
   clearScreen: false,
   server: {

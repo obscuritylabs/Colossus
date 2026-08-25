@@ -73,6 +73,7 @@ const COMMANDS: &[&str] = &[
     "read_artifact_content",
     "get_run",
     "list_runs",
+    "list_session_activity",
     "list_asides",
     "watch_run",
     "cancel_run",

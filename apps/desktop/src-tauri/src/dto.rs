@@ -3,12 +3,13 @@ use colossus_sdk::{
     ArtifactPurpose, ArtifactReference, ArtifactState, CancelRunRequest, CreateRunRequest,
     FieldViolation, GetRunRequest, IdempotencyKey, InputContentPart, Interaction,
     InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest,
-    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PlanExecutionStrategy,
-    PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind,
-    RespondInteractionRequest, RestoreThreadRequest, Run, RunBranch, RunBranchContextMode,
-    RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
-    RunUpdateKind, SdkError, SessionMessage, TokenUsage, ToolActivity, ToolActivityState,
-    WatchRunRequest,
+    ListSessionActivityRequest, MessageContentPart, MessageRole, OutcomeCertainty, PageRequest,
+    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth,
+    ResearchSourceKind, RespondInteractionRequest, RestoreThreadRequest, Run, RunBranch,
+    RunBranchContextMode, RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal,
+    RunUpdate, RunUpdateKind, SdkError, SessionActivity, SessionActivityContent,
+    SessionActivityKind, SessionActivityLane, SessionActivityStatus, SessionMessage, TokenUsage,
+    ToolActivity, ToolActivityState, WatchRunRequest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1219,6 +1220,179 @@ pub(crate) struct ListRunsDto {
     pub(crate) next_page_token: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionActivityLaneDto {
+    Agent,
+    Tools,
+    System,
+}
+
+impl From<SessionActivityLaneDto> for SessionActivityLane {
+    fn from(value: SessionActivityLaneDto) -> Self {
+        match value {
+            SessionActivityLaneDto::Agent => Self::Agent,
+            SessionActivityLaneDto::Tools => Self::Tools,
+            SessionActivityLaneDto::System => Self::System,
+        }
+    }
+}
+
+impl From<SessionActivityLane> for SessionActivityLaneDto {
+    fn from(value: SessionActivityLane) -> Self {
+        match value {
+            SessionActivityLane::Agent => Self::Agent,
+            SessionActivityLane::Tools => Self::Tools,
+            SessionActivityLane::System => Self::System,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionActivityKindDto {
+    User,
+    Assistant,
+    Tool,
+    System,
+}
+
+impl From<SessionActivityKindDto> for SessionActivityKind {
+    fn from(value: SessionActivityKindDto) -> Self {
+        match value {
+            SessionActivityKindDto::User => Self::User,
+            SessionActivityKindDto::Assistant => Self::Assistant,
+            SessionActivityKindDto::Tool => Self::Tool,
+            SessionActivityKindDto::System => Self::System,
+        }
+    }
+}
+
+impl From<SessionActivityKind> for SessionActivityKindDto {
+    fn from(value: SessionActivityKind) -> Self {
+        match value {
+            SessionActivityKind::User => Self::User,
+            SessionActivityKind::Assistant => Self::Assistant,
+            SessionActivityKind::Tool => Self::Tool,
+            SessionActivityKind::System => Self::System,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionActivityStatusDto {
+    Requested,
+    Running,
+    Waiting,
+    Completed,
+    Failed,
+    Cancelled,
+    OutcomeUnknown,
+}
+
+impl From<SessionActivityStatusDto> for SessionActivityStatus {
+    fn from(value: SessionActivityStatusDto) -> Self {
+        match value {
+            SessionActivityStatusDto::Requested => Self::Requested,
+            SessionActivityStatusDto::Running => Self::Running,
+            SessionActivityStatusDto::Waiting => Self::Waiting,
+            SessionActivityStatusDto::Completed => Self::Completed,
+            SessionActivityStatusDto::Failed => Self::Failed,
+            SessionActivityStatusDto::Cancelled => Self::Cancelled,
+            SessionActivityStatusDto::OutcomeUnknown => Self::OutcomeUnknown,
+        }
+    }
+}
+
+impl From<SessionActivityStatus> for SessionActivityStatusDto {
+    fn from(value: SessionActivityStatus) -> Self {
+        match value {
+            SessionActivityStatus::Requested => Self::Requested,
+            SessionActivityStatus::Running => Self::Running,
+            SessionActivityStatus::Waiting => Self::Waiting,
+            SessionActivityStatus::Completed => Self::Completed,
+            SessionActivityStatus::Failed => Self::Failed,
+            SessionActivityStatus::Cancelled => Self::Cancelled,
+            SessionActivityStatus::OutcomeUnknown => Self::OutcomeUnknown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionActivityContentDto {
+    pub(crate) format: String,
+    pub(crate) value: String,
+}
+
+impl From<SessionActivityContent> for SessionActivityContentDto {
+    fn from(value: SessionActivityContent) -> Self {
+        Self {
+            format: value.format,
+            value: value.value,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionActivityDto {
+    pub(crate) activity_id: String,
+    pub(crate) run_id: Option<String>,
+    pub(crate) turn: Option<u32>,
+    pub(crate) lane: SessionActivityLaneDto,
+    pub(crate) kind: SessionActivityKindDto,
+    pub(crate) title: String,
+    pub(crate) summary: String,
+    pub(crate) actor: String,
+    pub(crate) status: Option<SessionActivityStatusDto>,
+    pub(crate) started_at: String,
+    pub(crate) completed_at: Option<String>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) input: Option<SessionActivityContentDto>,
+    pub(crate) result: Option<SessionActivityContentDto>,
+    pub(crate) attributes: std::collections::BTreeMap<String, String>,
+    pub(crate) source_event_types: Vec<String>,
+    pub(crate) first_sequence: u64,
+    pub(crate) last_sequence: u64,
+}
+
+impl From<SessionActivity> for SessionActivityDto {
+    fn from(value: SessionActivity) -> Self {
+        Self {
+            activity_id: value.activity_id,
+            run_id: value.run_id,
+            turn: value.turn,
+            lane: value.lane.into(),
+            kind: value.kind.into(),
+            title: value.title,
+            summary: value.summary,
+            actor: value.actor,
+            status: value.status.map(Into::into),
+            started_at: value.started_at,
+            completed_at: value.completed_at,
+            duration_ms: value.duration_ms,
+            input: value.input.map(Into::into),
+            result: value.result.map(Into::into),
+            attributes: value.attributes,
+            source_event_types: value.source_event_types,
+            first_sequence: value.first_sequence,
+            last_sequence: value.last_sequence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ListSessionActivityDto {
+    pub(crate) activities: Vec<SessionActivityDto>,
+    pub(crate) next_page_token: String,
+    pub(crate) head_sequence: u64,
+    pub(crate) projected_through_sequence: u64,
+    pub(crate) caught_up: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RunModeInput {
@@ -1504,6 +1678,58 @@ impl ListRunsInput {
                 page_token: self.page_token,
             }),
             include_archived: self.include_archived,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ListSessionActivityInput {
+    source_run_id: String,
+    #[serde(default)]
+    query: String,
+    #[serde(default)]
+    lanes: Vec<SessionActivityLaneDto>,
+    #[serde(default)]
+    kinds: Vec<SessionActivityKindDto>,
+    #[serde(default)]
+    statuses: Vec<SessionActivityStatusDto>,
+    #[serde(default = "activity_page_size")]
+    page_size: u32,
+    #[serde(default)]
+    page_token: String,
+}
+
+const fn activity_page_size() -> u32 {
+    100
+}
+
+impl ListSessionActivityInput {
+    pub(crate) fn into_sdk(self) -> Result<ListSessionActivityRequest, CommandErrorDto> {
+        validate_identifier(&self.source_run_id, "sourceRunId")?;
+        if self.query.len() > 256 || self.query.chars().any(char::is_control) {
+            return Err(CommandErrorDto::invalid(
+                "query",
+                "Activity search must be at most 256 bytes and contain no control characters.",
+            ));
+        }
+        validate_optional_opaque(&self.page_token, "pageToken")?;
+        if self.lanes.len() > 3 || self.kinds.len() > 4 || self.statuses.len() > 7 {
+            return Err(CommandErrorDto::invalid(
+                "filters",
+                "Activity filters contain duplicate or unsupported values.",
+            ));
+        }
+        Ok(ListSessionActivityRequest {
+            source_run_id: self.source_run_id,
+            query: self.query,
+            lanes: self.lanes.into_iter().map(Into::into).collect(),
+            kinds: self.kinds.into_iter().map(Into::into).collect(),
+            statuses: self.statuses.into_iter().map(Into::into).collect(),
+            page: Some(PageRequest {
+                page_size: self.page_size.clamp(1, 100),
+                page_token: self.page_token,
+            }),
         })
     }
 }

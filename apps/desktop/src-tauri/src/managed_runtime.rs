@@ -131,7 +131,10 @@ pub(crate) async fn start(
     let normalized_settings = normalized_settings_snapshot(settings)?;
     let settings = &normalized_settings;
     let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
-        CommandErrorDto::invalid("spaceId", "Select a Space before starting Managed Local.")
+        CommandErrorDto::invalid(
+            "spaceId",
+            "Select a Workspace before starting Managed Local.",
+        )
     })?;
     let lifecycle_generation = state.begin_managed_lifecycle_for(space_id).await;
     let restore_selection = state.selected_target_id().await.as_deref() == Some(space_id);
@@ -317,7 +320,7 @@ pub(crate) async fn drain_active_runs_for_configuration(
         .await
         .ok_or_else(|| {
             CommandErrorDto::busy(
-                "This Space is already applying a configuration update. Wait for it to finish.",
+                "This Workspace is already applying a configuration update. Wait for it to finish.",
             )
         })?;
     state
@@ -389,7 +392,7 @@ fn idle_lru_candidate(
         return Ok(Some(target_id.clone()));
     }
     Err(CommandErrorDto::busy(
-        "Four Spaces are already running active work. Switch to one of them or finish a run before starting another Space.",
+        "Four Workspaces are already running active work. Switch to one of them or finish a run before starting another Workspace.",
     ))
 }
 
@@ -937,7 +940,7 @@ pub(crate) fn preflight_runtime_configuration(
 ) -> Result<(), CommandErrorDto> {
     let space = settings
         .space(space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     let resolved = resolve_space_configuration(&settings.global_configuration, space)?;
     managed_runtime_config(&resolved).validate().map_err(|_| {
         CommandErrorDto::local_sanitized(
@@ -1524,7 +1527,7 @@ mod tests {
 
         let error = idle_lru_candidate(&candidates).expect_err("all busy");
         assert_eq!(error.code, "busy");
-        assert!(error.message.contains("Four Spaces"));
+        assert!(error.message.contains("Four Workspaces"));
     }
 
     #[test]

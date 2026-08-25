@@ -18,8 +18,10 @@ const UNTITLED_RUN: &str = "Untitled work";
 
 /// Authenticated server capability for exact-revision Plan continuation.
 pub const PLAN_CONTINUATION_CAPABILITY: &str = "plans.continue";
+/// Authenticated server capability for caller-scoped canonical session activity.
+pub const SESSION_ACTIVITY_CAPABILITY: &str = "sessions.activity";
 
-use std::pin::Pin;
+use std::{collections::BTreeMap, pin::Pin};
 
 /// Persistent public run lifecycle state.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -127,7 +129,7 @@ pub enum ResearchDepth {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResearchSourceKind {
-    /// Selected Space repository evidence.
+    /// Selected Workspace repository evidence.
     Repo,
     /// Configured web-search evidence.
     Web,
@@ -1267,6 +1269,172 @@ pub struct ListRunsResponse {
     pub next_page_token: Option<String>,
 }
 
+/// Timeline lane used by a curated session activity.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionActivityLane {
+    /// User, assistant, and model-turn activity.
+    Agent,
+    /// Tool and effect lifecycle activity.
+    Tools,
+    /// Runtime, context, policy, and usage activity.
+    System,
+}
+
+/// Human-readable activity kind used by the event table.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionActivityKind {
+    /// Released human or application input.
+    User,
+    /// Released model activity.
+    Assistant,
+    /// Policy-released tool activity.
+    Tool,
+    /// Trusted runtime activity.
+    System,
+}
+
+/// Released lifecycle state for a curated activity.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionActivityStatus {
+    /// Accepted but not started.
+    Requested,
+    /// Actively progressing.
+    Running,
+    /// Waiting on user input or approval.
+    Waiting,
+    /// Reached a known successful terminal state.
+    Completed,
+    /// Reached a known failed terminal state.
+    Failed,
+    /// Settled without completing.
+    Cancelled,
+    /// An external effect may have occurred.
+    OutcomeUnknown,
+}
+
+/// One bounded released inspector value.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionActivityContent {
+    /// Rendering hint: `text` or `json`.
+    pub format: String,
+    /// Bounded policy-released content.
+    pub value: String,
+}
+
+/// One curated logical activity for a caller-owned session.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionActivity {
+    /// Stable logical identifier used for live merging.
+    pub activity_id: String,
+    /// Owning public run when available.
+    pub run_id: Option<String>,
+    /// One-based model turn when available.
+    pub turn: Option<u32>,
+    /// Timeline lane.
+    pub lane: SessionActivityLane,
+    /// Display kind.
+    pub kind: SessionActivityKind,
+    /// Bounded title.
+    pub title: String,
+    /// Bounded released summary.
+    pub summary: String,
+    /// Coarse actor label without an internal identity.
+    pub actor: String,
+    /// Released lifecycle state when applicable.
+    pub status: Option<SessionActivityStatus>,
+    /// UTC start or occurrence time.
+    pub started_at: String,
+    /// UTC completion time when trustworthy.
+    pub completed_at: Option<String>,
+    /// Millisecond duration only for paired canonical boundaries.
+    pub duration_ms: Option<u64>,
+    /// Policy-released input.
+    pub input: Option<SessionActivityContent>,
+    /// Policy-released result.
+    pub result: Option<SessionActivityContent>,
+    /// Small allowlisted metadata values.
+    pub attributes: BTreeMap<String, String>,
+    /// Canonical event types contributing to the logical record.
+    pub source_event_types: Vec<String>,
+    /// First contributing global sequence.
+    pub first_sequence: u64,
+    /// Latest contributing global sequence.
+    pub last_sequence: u64,
+}
+
+/// Caller-scoped session activity query addressed through an owned run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSessionActivityRequest {
+    /// Any caller-owned run in the requested session.
+    pub source_run_id: String,
+    /// Case-insensitive search over released activity fields.
+    pub query: String,
+    /// Optional lane filters; empty includes every lane.
+    #[serde(default)]
+    pub lanes: Vec<SessionActivityLane>,
+    /// Optional kind filters; empty includes every kind.
+    #[serde(default)]
+    pub kinds: Vec<SessionActivityKind>,
+    /// Optional status filters; empty includes every status.
+    #[serde(default)]
+    pub statuses: Vec<SessionActivityStatus>,
+    /// Bounded page size; zero selects the default.
+    pub page_size: u32,
+    /// Opaque continuation token bound to this exact query.
+    pub page_token: Option<String>,
+}
+
+impl ListSessionActivityRequest {
+    /// Validate bounded public request fields.
+    pub fn validate(&self) -> ApiResult<()> {
+        token(&self.source_run_id, "source_run_id", MAX_IDENTIFIER_BYTES)?;
+        bounded_text(&self.query, "query", 256, true)?;
+        if self
+            .page_token
+            .as_ref()
+            .is_some_and(|value| value.len() > 4_096)
+        {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "page_token",
+                "page_token must be at most 4096 bytes",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the default or clamped page size.
+    pub fn bounded_page_size(&self) -> usize {
+        if self.page_size == 0 {
+            100
+        } else {
+            usize::try_from(self.page_size).unwrap_or(100).clamp(1, 100)
+        }
+    }
+}
+
+/// One eventually consistent newest-first activity page.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSessionActivityResponse {
+    /// Curated activities matching the request.
+    pub activities: Vec<SessionActivity>,
+    /// Opaque token for the next matching page.
+    pub next_page_token: Option<String>,
+    /// Current authoritative journal head when the page was read.
+    pub head_sequence: u64,
+    /// Latest global sequence applied to the activity projection.
+    pub projected_through_sequence: u64,
+    /// Whether the disposable projection reached the observed journal head.
+    pub caught_up: bool,
+}
+
 /// Replay-and-tail request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1382,6 +1550,18 @@ pub trait AgentRunApi: Send + Sync {
         caller: &CallerContext,
         request: ListRunsRequest,
     ) -> ApiResult<ListRunsResponse>;
+
+    /// Return one caller-scoped page of policy-released canonical session activity.
+    async fn list_session_activity(
+        &self,
+        _caller: &CallerContext,
+        _request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support session activity",
+        ))
+    }
 
     /// Replay updates after an exclusive cursor and then tail live updates.
     async fn watch_run(

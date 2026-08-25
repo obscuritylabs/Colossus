@@ -373,19 +373,22 @@ async fn worker_for(
 ) -> Result<colossus_worker_protocol::WorkerControlClient, CommandErrorDto> {
     let settings = settings_store()?.load()?;
     if settings.space(space_id).is_none() {
-        return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+        return Err(CommandErrorDto::invalid(
+            "spaceId",
+            "The Workspace is unknown.",
+        ));
     }
     if !state.managed_lifecycle_ready_for(space_id).await {
         return Err(CommandErrorDto::local_sanitized(
             "managed_diagnostic_unavailable",
-            "Start this Space before running managed diagnostics.",
+            "Start this Workspace before running managed diagnostics.",
             true,
         ));
     }
     state.managed_worker_for(space_id).await.ok_or_else(|| {
         CommandErrorDto::local_sanitized(
             "managed_diagnostic_unavailable",
-            "The managed diagnostic channel is unavailable. Restart the Space and retry.",
+            "The managed diagnostic channel is unavailable. Restart the Workspace and retry.",
             true,
         )
     })

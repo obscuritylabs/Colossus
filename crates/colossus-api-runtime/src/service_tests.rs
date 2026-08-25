@@ -7,10 +7,10 @@ use colossus_api::{
     AgentRunApi, ApiScope, ApplicationKind, ApplicationPrincipal, CallerContext, CancelRunRequest,
     ContentPart, CreateArtifactUploadRequest, CreateRunRequest, EventSourcedArtifactApi,
     EventSourcedRunRepository, GetRunRequest, IdempotencyKey, InteractionKind, InteractionResponse,
-    NewRun, OutcomeCertainty, PlanRunAction, PlanStatus as PublicPlanStatus, RequestId,
-    ResearchDepth, ResearchSourceKind, RespondInteractionRequest, Run, RunBranch,
-    RunBranchContextMode, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
-    WatchRunRequest, scopes,
+    ListSessionActivityRequest, NewRun, OutcomeCertainty, PlanRunAction,
+    PlanStatus as PublicPlanStatus, RequestId, ResearchDepth, ResearchSourceKind,
+    RespondInteractionRequest, Run, RunBranch, RunBranchContextMode, RunMode, RunRepository,
+    RunResult, RunStatus, RunUpdateKind, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
     DecisionOutcome, EventEnvelope, ModelMessageRole, NewEvent, PlanStep, PolicyDecision,
@@ -374,6 +374,27 @@ fn caller_with_scopes_and_tools(
     )
 }
 
+fn caller_with_exact_scopes(
+    application_id: &str,
+    request_id: &str,
+    exact_scopes: &[&str],
+) -> CallerContext {
+    CallerContext::authenticated(
+        ApplicationPrincipal::authenticated(
+            application_id,
+            format!("credential-{request_id}"),
+            ApplicationKind::Enrolled,
+            exact_scopes
+                .iter()
+                .map(|scope| ApiScope::new(*scope).expect("scope")),
+            ["primary".to_owned()],
+            std::iter::empty(),
+        )
+        .expect("principal"),
+        RequestId::new(request_id).expect("request id"),
+    )
+}
+
 async fn research_preserves_tool_ceiling_and_public_conversation_boundary(runtime: Arc<Runtime>) {
     let service = service(Arc::clone(&runtime), RunAdmissionConfig::default());
     let application_id = format!("app:research-owner-{}", Uuid::now_v7().simple());
@@ -592,6 +613,131 @@ async fn wait_terminal(service: &RuntimeAgentRunApi, caller: &CallerContext, run
     })
     .await
     .expect("run became terminal")
+}
+
+async fn session_activity_is_owner_scoped_authorized_and_query_bound(runtime: Arc<Runtime>) {
+    let service = service(runtime, RunAdmissionConfig::default());
+    let application_id = format!("app:activity-owner-{}", Uuid::now_v7().simple());
+    let owner = caller(&application_id, "activity-owner");
+    let created = service
+        .create_run(
+            &owner,
+            request(
+                &format!("activity-{}", Uuid::now_v7().simple()),
+                "Inspect the canonical activity projection",
+            ),
+        )
+        .await
+        .expect("create activity source")
+        .run;
+    let source = wait_terminal(&service, &owner, &created.id).await;
+
+    let first = service
+        .list_session_activity(
+            &owner,
+            ListSessionActivityRequest {
+                source_run_id: source.id.clone(),
+                query: String::new(),
+                lanes: Vec::new(),
+                kinds: Vec::new(),
+                statuses: Vec::new(),
+                page_size: 1,
+                page_token: None,
+            },
+        )
+        .await
+        .expect("list first activity page");
+    assert_eq!(first.activities.len(), 1);
+    assert!(first.projected_through_sequence <= first.head_sequence);
+    let page_token = first
+        .next_page_token
+        .clone()
+        .expect("a completed run has more than one logical activity");
+
+    let second = service
+        .list_session_activity(
+            &owner,
+            ListSessionActivityRequest {
+                source_run_id: source.id.clone(),
+                query: String::new(),
+                lanes: Vec::new(),
+                kinds: Vec::new(),
+                statuses: Vec::new(),
+                page_size: 1,
+                page_token: Some(page_token.clone()),
+            },
+        )
+        .await
+        .expect("list second activity page");
+    assert_eq!(second.activities.len(), 1);
+    assert_ne!(
+        first.activities[0].activity_id,
+        second.activities[0].activity_id
+    );
+
+    let altered_query = service
+        .list_session_activity(
+            &owner,
+            ListSessionActivityRequest {
+                source_run_id: source.id.clone(),
+                query: "different query".into(),
+                lanes: Vec::new(),
+                kinds: Vec::new(),
+                statuses: Vec::new(),
+                page_size: 1,
+                page_token: Some(page_token),
+            },
+        )
+        .await
+        .expect_err("activity cursor is bound to the exact query");
+    assert_eq!(
+        altered_query.reason,
+        colossus_api::ApiErrorReason::InvalidArgument
+    );
+
+    let foreign = caller(
+        &format!("app:activity-foreign-{}", Uuid::now_v7().simple()),
+        "activity-foreign",
+    );
+    let hidden = service
+        .list_session_activity(
+            &foreign,
+            ListSessionActivityRequest {
+                source_run_id: source.id.clone(),
+                query: String::new(),
+                lanes: Vec::new(),
+                kinds: Vec::new(),
+                statuses: Vec::new(),
+                page_size: 10,
+                page_token: None,
+            },
+        )
+        .await
+        .expect_err("foreign caller cannot resolve the source run");
+    assert_eq!(hidden.reason, colossus_api::ApiErrorReason::RunNotFound);
+
+    let execute_only = caller_with_exact_scopes(
+        &application_id,
+        "activity-execute-only",
+        &[scopes::RUNS_EXECUTE],
+    );
+    let denied = service
+        .list_session_activity(
+            &execute_only,
+            ListSessionActivityRequest {
+                source_run_id: source.id,
+                query: String::new(),
+                lanes: Vec::new(),
+                kinds: Vec::new(),
+                statuses: Vec::new(),
+                page_size: 10,
+                page_token: None,
+            },
+        )
+        .await
+        .expect_err("runs:read is required");
+    assert_eq!(denied.reason, colossus_api::ApiErrorReason::ScopeDenied);
+    wait_inactive(&service).await;
 }
 
 async fn plan_continuation_is_bound_to_owner_source_session_and_exact_revision(
@@ -1287,6 +1433,10 @@ fn runtime_service_conformance() {
             ))
             .await;
             research_preserves_tool_ceiling_and_public_conversation_boundary(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            session_activity_is_owner_scoped_authorized_and_query_bound(Arc::clone(
                 &fixture.runtime,
             ))
             .await;

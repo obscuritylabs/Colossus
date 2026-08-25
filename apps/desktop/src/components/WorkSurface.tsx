@@ -14,7 +14,7 @@ import {
   IconSparkles,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
@@ -42,8 +42,10 @@ import type {
   ConnectionStatus,
   Interaction,
   InteractionAnswer,
+  ListSessionActivityRequest,
   SessionMap,
   SessionMapResource,
+  SessionActivityPage,
   ThreadDelegateInspection,
 } from "../types";
 import type { AsideDraft } from "./AsidePanel";
@@ -54,6 +56,7 @@ import { ArtifactWorkspace } from "./ArtifactWorkspace";
 import { InteractionCard } from "./InteractionCard";
 import { PlanDetailsPanel } from "./PlanDetailsPanel";
 import { RunTimeline } from "./RunTimeline";
+import { SessionActivityView } from "./SessionActivity";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
 import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
 import {
@@ -102,6 +105,12 @@ interface WorkSurfaceProps {
   planContinuationAvailable: boolean;
   planWorkflowAvailable: boolean;
   activityComparisonEnabled?: boolean;
+  initialSessionWorkspaceView?: SessionWorkspaceView;
+  onSessionWorkspaceViewChange?: (view: SessionWorkspaceView) => void;
+  sessionActivityAvailable?: boolean;
+  loadSessionActivity?: (
+    request: ListSessionActivityRequest,
+  ) => Promise<SessionActivityPage>;
   workNavigationOpen: boolean;
   onConnect: () => void;
   onCancel: () => void;
@@ -142,6 +151,8 @@ const STARTERS = [
   "Coordinate an implementation and security review",
 ];
 
+const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
+
 export function WorkSurface({
   title,
   view,
@@ -178,6 +189,16 @@ export function WorkSurface({
   planContinuationAvailable,
   planWorkflowAvailable,
   activityComparisonEnabled = false,
+  initialSessionWorkspaceView = "conversation",
+  onSessionWorkspaceViewChange = IGNORE_SESSION_WORKSPACE_VIEW,
+  sessionActivityAvailable = false,
+  loadSessionActivity = async () => ({
+    activities: [],
+    nextPageToken: "",
+    headSequence: 0,
+    projectedThroughSequence: 0,
+    caughtUp: true,
+  }),
   workNavigationOpen,
   onConnect,
   onCancel,
@@ -201,7 +222,14 @@ export function WorkSurface({
   onCloseAside,
 }: WorkSurfaceProps) {
   const [sessionWorkspaceView, setSessionWorkspaceView] =
-    useState<SessionWorkspaceView>("conversation");
+    useState<SessionWorkspaceView>(initialSessionWorkspaceView);
+  const changeSessionWorkspaceView = useCallback(
+    (next: SessionWorkspaceView) => {
+      setSessionWorkspaceView(next);
+      onSessionWorkspaceViewChange(next);
+    },
+    [onSessionWorkspaceViewChange],
+  );
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedSessionResource, setSelectedSessionResource] =
     useState<SessionMapResource | null>(null);
@@ -297,10 +325,14 @@ export function WorkSurface({
   }
 
   useEffect(() => {
-    setSessionWorkspaceView("conversation");
+    changeSessionWorkspaceView(initialSessionWorkspaceView);
     setSelectedPlanId(null);
     updateFollowingLatest(true);
-  }, [selectedSessionId]);
+  }, [
+    changeSessionWorkspaceView,
+    initialSessionWorkspaceView,
+    selectedSessionId,
+  ]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -932,7 +964,7 @@ export function WorkSurface({
       {view === undefined ? null : (
         <SessionWorkspaceTabs
           active={sessionWorkspaceView}
-          onChange={setSessionWorkspaceView}
+          onChange={changeSessionWorkspaceView}
         />
       )}
 
@@ -970,7 +1002,7 @@ export function WorkSurface({
         }
       >
         <section
-          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}`}
+          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}`}
           aria-label="Work conversation"
         >
           <div className="work-feed-frame">
@@ -1053,6 +1085,12 @@ export function WorkSurface({
                   onSelectResource={openSessionResource}
                   onSelectArtifact={openArtifactFromResources}
                 />
+              ) : sessionWorkspaceView === "activity" ? (
+                <SessionActivityView
+                  sourceRunId={view.run.runId}
+                  available={sessionActivityAvailable}
+                  loadPage={loadSessionActivity}
+                />
               ) : sessionWorkspaceView === "plans" ? (
                 <SessionPlansView
                   views={conversationViews}
@@ -1070,7 +1108,7 @@ export function WorkSurface({
                 <SessionResourcesView
                   views={conversationViews}
                   artifacts={artifacts}
-                  onChangeView={setSessionWorkspaceView}
+                  onChangeView={changeSessionWorkspaceView}
                   onSelectArtifact={openArtifactFromResources}
                 />
               ) : (
@@ -1148,7 +1186,8 @@ export function WorkSurface({
               </button>
             ) : null}
           </div>
-          {sessionWorkspaceView === "topology" ? null : (
+          {sessionWorkspaceView === "topology" ||
+          sessionWorkspaceView === "activity" ? null : (
             <div className="work-composer-dock">
               {view !== undefined && view.pendingInteractions.length > 0 ? (
                 <div

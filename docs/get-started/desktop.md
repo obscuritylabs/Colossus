@@ -114,36 +114,36 @@ the explicit offline self-test when you only need to validate local startup.
 
 ### Manage inherited configuration
 
-Open **Settings** and switch between **Global** and **Space**. Global resources are
+Open **Settings** and switch between **Global** and **Workspace**. Global resources are
 immutable revisioned definitions for providers, models, credentials, MCP servers,
-search, and telemetry. A Space pins the exact revisions it uses. Saving a Global edit
-does not change a running Space; the Space shows an update and must review and apply it.
-Space edits apply only to that Space after configuration preflight and any required
+search, and telemetry. A Workspace pins the exact revisions it uses. Saving a Global edit
+does not change a running Workspace; the Workspace shows an update and must review and apply it.
+Workspace edits apply only to that Workspace after configuration preflight and any required
 native authority confirmation.
 
 Each ordinary setting shows whether its effective value comes from the Colossus
-built-in default, a Global override, or a Space override. **Inherit** removes an
+built-in default, a Global override, or a Workspace override. **Inherit** removes an
 override instead of copying the current value. The read-only effective YAML view is
 sanitized and marks Desktop-owned runtime identities and private storage paths.
 
-Use **Import config** in a Space to inspect `.colossus/config.yaml` without modifying
-the repository. Desktop proposes reusable catalog resources, Space overrides, and
+Use **Import config** in a Workspace to inspect `.colossus/config.yaml` without modifying
+the repository. Desktop proposes reusable catalog resources, Workspace overrides, and
 native credential mappings. Same-name conflicts require **Rename**, **Replace**, or
 **Skip**. Re-import compares the stored source hash before applying any changes.
 Repository `env:` references must map to native credentials; secret values and static
 MCP headers never cross into the WebView.
 
-For an active Space, provider, model, search, MCP, and OTLP health checks run through that
-Space's authenticated worker using its accepted revisions, CA trust, credentials,
+For an active Workspace, provider, model, search, MCP, and OTLP health checks run through that
+Workspace's authenticated worker using its accepted revisions, CA trust, credentials,
 network grants, and sandbox. MCP OAuth status, login completion, and logout remain
 runtime-owned; Desktop exposes only bounded status and authorization metadata. The OTLP
 check emits bounded diagnostic signals and flushes the live host-owned exporters. Its
 result contains only per-signal pass, fail, or disabled status, never collector errors,
 endpoints, headers, credentials, or payloads.
 
-Applying a Space edit while work is active moves the Space to **Draining**. Existing runs
+Applying a Workspace edit while work is active moves the Workspace to **Draining**. Existing runs
 finish against their pinned configuration, new runs are rejected, and Desktop restarts
-the Space only after the active set is empty. A bounded drain timeout leaves the current
+the Workspace only after the active set is empty. A bounded drain timeout leaves the current
 runtime and persisted settings unchanged.
 
 ### 4. Start work

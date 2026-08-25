@@ -19,14 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentRunService_CreateRun_FullMethodName          = "/colossus.api.v1alpha1.AgentRunService/CreateRun"
-	AgentRunService_GetRun_FullMethodName             = "/colossus.api.v1alpha1.AgentRunService/GetRun"
-	AgentRunService_ListRuns_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
-	AgentRunService_WatchRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/WatchRun"
-	AgentRunService_CancelRun_FullMethodName          = "/colossus.api.v1alpha1.AgentRunService/CancelRun"
-	AgentRunService_ArchiveThread_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/ArchiveThread"
-	AgentRunService_RestoreThread_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/RestoreThread"
-	AgentRunService_RespondInteraction_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/RespondInteraction"
+	AgentRunService_CreateRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/CreateRun"
+	AgentRunService_GetRun_FullMethodName              = "/colossus.api.v1alpha1.AgentRunService/GetRun"
+	AgentRunService_ListRuns_FullMethodName            = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
+	AgentRunService_ListSessionActivity_FullMethodName = "/colossus.api.v1alpha1.AgentRunService/ListSessionActivity"
+	AgentRunService_WatchRun_FullMethodName            = "/colossus.api.v1alpha1.AgentRunService/WatchRun"
+	AgentRunService_CancelRun_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/CancelRun"
+	AgentRunService_ArchiveThread_FullMethodName       = "/colossus.api.v1alpha1.AgentRunService/ArchiveThread"
+	AgentRunService_RestoreThread_FullMethodName       = "/colossus.api.v1alpha1.AgentRunService/RestoreThread"
+	AgentRunService_RespondInteraction_FullMethodName  = "/colossus.api.v1alpha1.AgentRunService/RespondInteraction"
 )
 
 // AgentRunServiceClient is the client API for AgentRunService service.
@@ -41,6 +42,8 @@ type AgentRunServiceClient interface {
 	GetRun(ctx context.Context, in *GetRunRequest, opts ...grpc.CallOption) (*GetRunResponse, error)
 	// ListRuns returns a stable page of durable runs.
 	ListRuns(ctx context.Context, in *ListRunsRequest, opts ...grpc.CallOption) (*ListRunsResponse, error)
+	// ListSessionActivity returns caller-scoped policy-released canonical activity.
+	ListSessionActivity(ctx context.Context, in *ListSessionActivityRequest, opts ...grpc.CallOption) (*ListSessionActivityResponse, error)
 	// WatchRun replays updates after an exclusive cursor and then tails live updates.
 	WatchRun(ctx context.Context, in *WatchRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRunResponse], error)
 	// CancelRun requests idempotent cooperative cancellation.
@@ -85,6 +88,16 @@ func (c *agentRunServiceClient) ListRuns(ctx context.Context, in *ListRunsReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListRunsResponse)
 	err := c.cc.Invoke(ctx, AgentRunService_ListRuns_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) ListSessionActivity(ctx context.Context, in *ListSessionActivityRequest, opts ...grpc.CallOption) (*ListSessionActivityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionActivityResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_ListSessionActivity_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +175,8 @@ type AgentRunServiceServer interface {
 	GetRun(context.Context, *GetRunRequest) (*GetRunResponse, error)
 	// ListRuns returns a stable page of durable runs.
 	ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error)
+	// ListSessionActivity returns caller-scoped policy-released canonical activity.
+	ListSessionActivity(context.Context, *ListSessionActivityRequest) (*ListSessionActivityResponse, error)
 	// WatchRun replays updates after an exclusive cursor and then tails live updates.
 	WatchRun(*WatchRunRequest, grpc.ServerStreamingServer[WatchRunResponse]) error
 	// CancelRun requests idempotent cooperative cancellation.
@@ -190,6 +205,9 @@ func (UnimplementedAgentRunServiceServer) GetRun(context.Context, *GetRunRequest
 }
 func (UnimplementedAgentRunServiceServer) ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListRuns not implemented")
+}
+func (UnimplementedAgentRunServiceServer) ListSessionActivity(context.Context, *ListSessionActivityRequest) (*ListSessionActivityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessionActivity not implemented")
 }
 func (UnimplementedAgentRunServiceServer) WatchRun(*WatchRunRequest, grpc.ServerStreamingServer[WatchRunResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchRun not implemented")
@@ -277,6 +295,24 @@ func _AgentRunService_ListRuns_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AgentRunServiceServer).ListRuns(ctx, req.(*ListRunsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunService_ListSessionActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionActivityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).ListSessionActivity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_ListSessionActivity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).ListSessionActivity(ctx, req.(*ListSessionActivityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -382,6 +418,10 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListRuns",
 			Handler:    _AgentRunService_ListRuns_Handler,
+		},
+		{
+			MethodName: "ListSessionActivity",
+			Handler:    _AgentRunService_ListSessionActivity_Handler,
 		},
 		{
 			MethodName: "CancelRun",

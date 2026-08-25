@@ -550,7 +550,7 @@ fn workspace_read_error() -> CommandErrorDto {
 fn repository_configuration_unavailable() -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "repository_configuration_unavailable",
-        "No readable .colossus/config.yaml was found in this Space.",
+        "No readable .colossus/config.yaml was found in this Workspace.",
         false,
     )
 }

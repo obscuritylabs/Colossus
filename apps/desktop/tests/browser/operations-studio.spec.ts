@@ -44,13 +44,95 @@ test("minimum layout and capability-driven controls remain accessible", async ({
   expect(blockingViolations).toEqual([]);
 });
 
-test("Space archive and restore update the sidebar and confirm the outcome", async ({
+test("settings dropdowns use styled app-owned menus with keyboard support", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+  await expect(page.locator("select")).toHaveCount(0);
+  const accessProfile = page.getByRole("combobox", {
+    name: "Access profile",
+    exact: true,
+  });
+  await accessProfile.click();
+
+  const listbox = page.getByRole("listbox");
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option")).toHaveCount(5);
+  await expect(
+    listbox.getByRole("option", { name: "Allow all", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+
+  await accessProfile.press("ArrowUp");
+  await accessProfile.press("Enter");
+  await expect(accessProfile).toContainText("Development");
+  await accessProfile.click();
+  await listbox.getByRole("option", { name: "Allow all", exact: true }).click();
+  await expect(accessProfile).toContainText("Allow all");
+
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Telemetry", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Edit Local collector", exact: true })
+    .click();
+  const protocol = page.getByRole("combobox", {
+    name: "Protocol",
+    exact: true,
+  });
+  await protocol.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(2);
+
+  const results = await new AxeBuilder({ page })
+    .include(".app-select-popover")
+    .analyze();
+  const blockingViolations = results.violations.filter((violation) =>
+    ["critical", "serious"].includes(violation.impact ?? ""),
+  );
+  expect(blockingViolations).toEqual([]);
+
+  await protocol.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+});
+
+test("required app-owned dropdowns retain form validation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.getByRole("button", { name: "Add model", exact: true }).click();
+
+  const provider = page.getByRole("combobox", {
+    name: "Provider",
+    exact: true,
+  });
+  await provider.click();
+  await page
+    .getByRole("option", { name: "Select provider", exact: true })
+    .click();
+  await page.getByRole("textbox", { name: "Label" }).fill("Validation model");
+  await page.getByRole("textbox", { name: "Profile" }).fill("validation-model");
+  await page
+    .getByRole("textbox", { name: "Model identifier" })
+    .fill("fixture-validation");
+  await page.getByRole("button", { name: "Save revision" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Add model", exact: true }),
+  ).toBeVisible();
+  await expect(provider).toBeFocused();
+  await expect(provider).toHaveAttribute("aria-invalid", "true");
+});
+
+test("Workspace archive and restore update the sidebar and confirm the outcome", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.goto(FIXTURE);
 
-  await page.getByRole("button", { name: "Manage Spaces" }).click();
+  await page.getByRole("button", { name: "Manage Workspaces" }).click();
   await page.getByRole("button", { name: "Archive Colossus" }).click();
 
   await expect(page.getByRole("status")).toContainText("Archived Colossus.");
@@ -61,7 +143,7 @@ test("Space archive and restore update the sidebar and confirm the outcome", asy
     "Research Lab",
   );
 
-  await page.getByRole("button", { name: "Manage Spaces" }).click();
+  await page.getByRole("button", { name: "Manage Workspaces" }).click();
   const restore = page.getByRole("button", { name: "Restore Colossus" });
   await expect(restore).toBeVisible();
   await restore.click();
@@ -85,7 +167,7 @@ test("Research settings expose depth and evidence choices and restore focus", as
   await expect(researchMode).toBeChecked();
 
   const settingsTrigger = page.getByLabel(
-    "Research controls, sources This Space",
+    "Research controls, sources This Workspace",
   );
   await settingsTrigger.click();
 
@@ -94,19 +176,19 @@ test("Research settings expose depth and evidence choices and restore focus", as
   ).toBeVisible();
   await expect(page.getByRole("radio", { name: "Standard" })).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: /This Space/u }),
+    page.getByRole("checkbox", { name: /This Workspace/u }),
   ).toBeChecked();
 
   await page.locator(".research-depth-option", { hasText: "Deep" }).click();
   await page.locator(".research-source-option", { hasText: "Web" }).click();
   await expect(page.getByRole("radio", { name: "Deep" })).toBeChecked();
   await expect(
-    page.getByLabel("Research controls, sources This Space, Web"),
+    page.getByLabel("Research controls, sources This Workspace, Web"),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Close research settings" }).click();
   const updatedTrigger = page.getByLabel(
-    "Research controls, sources This Space, Web",
+    "Research controls, sources This Workspace, Web",
   );
   await expect(updatedTrigger).toBeFocused();
 
@@ -222,6 +304,36 @@ test("Colossus responses expose copy confirmation", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("plan titles open the rendered plan and previews do not leak Markdown syntax", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=plan-workflow");
+  await page
+    .getByRole("button", { name: "Close details drawer", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Plans", exact: true }).click();
+
+  const card = page.locator(".session-plan-list article");
+  await expect(
+    card.getByRole("heading", { name: "Desktop Plan workflow" }),
+  ).toBeVisible();
+  await expect(card).not.toContainText("## Desktop Plan workflow");
+
+  await card
+    .getByRole("button", { name: "Plan the Desktop release workflow" })
+    .click();
+  const details = page.getByLabel("Thread details", { exact: true });
+  await expect(
+    details.getByRole("heading", {
+      name: "Plan the Desktop release workflow",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    details.getByText("Rendered from the durable plan output"),
+  ).toBeVisible();
+});
+
 test("Session Map expands canonical resources and opens their inspector", async ({
   page,
 }) => {
@@ -257,14 +369,10 @@ test("Session Map expands canonical resources and opens their inspector", async 
     page.getByRole("button", { name: /Review workspace architecture/u }),
   ).toBeVisible();
 
-  const stage = page.locator(".session-map-stage");
-  await stage.evaluate((element) => {
-    element.scrollLeft = element.scrollWidth;
-  });
+  await expect(page.locator(".react-flow")).toBeVisible();
   await page.getByRole("button", { name: "Fit", exact: true }).click();
-  await expect
-    .poll(() => stage.evaluate((element) => element.scrollLeft))
-    .toBe(0);
+  await expect(goals).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".session-map-primary")).toBeVisible();
 
   const feedTopBeforeInspection = await feed.evaluate(
     (element) => element.scrollTop,
@@ -283,6 +391,376 @@ test("Session Map expands canonical resources and opens their inspector", async 
   await expect
     .poll(() => feed.evaluate((element) => element.scrollTop))
     .toBe(feedTopBeforeInspection);
+});
+
+test("Session Map keeps its root visible without horizontal overflow at compact widths", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 920, height: 760 });
+  await page.goto(FIXTURE);
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+
+  const stage = page.locator(".session-map-stage");
+  const primary = page.locator(".session-map-primary");
+  await expect(primary).toBeVisible();
+  await expect
+    .poll(() =>
+      stage.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )
+    .toBe(0);
+
+  const stageBox = await stage.boundingBox();
+  const primaryBox = await primary.boundingBox();
+  expect(stageBox).not.toBeNull();
+  expect(primaryBox).not.toBeNull();
+  expect(primaryBox!.x).toBeGreaterThanOrEqual(stageBox!.x);
+  expect(primaryBox!.x + primaryBox!.width).toBeLessThanOrEqual(
+    stageBox!.x + stageBox!.width,
+  );
+});
+
+test("Session Map renders its topology with React Flow SVG edges", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(FIXTURE);
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+
+  const flow = page.locator(".react-flow");
+  const primary = page.locator(".session-map-primary");
+  const firstFamily = page.locator(".session-map-family").first();
+  await expect(flow).toBeVisible();
+  await expect(page.locator(".react-flow__edge-path")).toHaveCount(12);
+  await expect(page.locator(".session-map-network")).toHaveCount(0);
+  await expect(page.locator(".session-map-trunk")).toHaveCount(0);
+
+  const primaryBox = await primary.boundingBox();
+  const familyBox = await firstFamily.boundingBox();
+  expect(primaryBox).not.toBeNull();
+  expect(familyBox).not.toBeNull();
+  expect(familyBox!.x).toBeGreaterThan(primaryBox!.x + primaryBox!.width);
+
+  const stageBox = await page.locator(".session-map-stage").boundingBox();
+  const flowBox = await flow.boundingBox();
+  expect(stageBox).not.toBeNull();
+  expect(flowBox).not.toBeNull();
+  expect(Math.abs(flowBox!.x - stageBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(flowBox!.y - stageBox!.y)).toBeLessThanOrEqual(1);
+  expect(stageBox!.width - flowBox!.width).toBeLessThanOrEqual(2);
+  expect(stageBox!.height - flowBox!.height).toBeLessThanOrEqual(2);
+});
+
+test("Session Map loads with the native frozen-prototype boundary", async ({
+  page,
+}) => {
+  await page.addInitScript(() => Object.freeze(Object.prototype));
+  await page.reload();
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+
+  await expect(page.locator(".react-flow")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Goals 2/u })).toBeVisible();
+});
+
+test("Session Activity synchronizes timeline, feed, and released inspector content", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${FIXTURE}&view=activity`);
+
+  await expect(
+    page.getByRole("heading", { name: "Session activity", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("form", { name: "Send a prompt" })).toHaveCount(
+    0,
+  );
+  const timeline = page.getByRole("region", {
+    name: "Session activity timeline",
+  });
+  await expect(timeline).toBeVisible();
+  await expect(timeline.getByText("Agent", { exact: true })).toBeVisible();
+  await expect(timeline.getByText("Tools", { exact: true })).toBeVisible();
+  await expect(timeline.getByText("System", { exact: true })).toBeVisible();
+
+  const toolRow = page
+    .locator(".activity-row", { hasText: "shell.exec" })
+    .first();
+  await toolRow.click();
+  await expect(toolRow).toHaveAttribute("data-selected", "true");
+  const inspector = page.getByRole("complementary", {
+    name: "Activity inspector",
+  });
+  await expect(inspector).toContainText("shell.exec");
+  await inspector.getByRole("button", { name: "Input", exact: true }).click();
+  await expect(inspector.locator("pre")).toContainText("git status --short");
+
+  const timelineTool = page
+    .getByRole("button", { name: /filesystem\.search,/u })
+    .first();
+  await timelineTool.click();
+  await expect(inspector).toContainText("filesystem.search");
+  await expect(
+    page.locator('.activity-row[data-selected="true"]'),
+  ).toContainText("filesystem.search");
+
+  const follow = timeline.getByRole("button", {
+    name: "Follow live activity",
+  });
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+  await timeline.getByRole("button", { name: "Zoom in" }).click();
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+
+  await timeline.getByRole("button", { name: "Select time range" }).click();
+  const firstTrack = timeline.locator(".activity-timeline-track").first();
+  const trackBox = await firstTrack.boundingBox();
+  expect(trackBox).not.toBeNull();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.2,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.55,
+    trackBox!.y + trackBox!.height / 2,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  await expect(timeline.locator(".activity-timeline-selection")).toHaveCount(3);
+
+  const zoomToRange = timeline.getByRole("button", {
+    name: "Zoom to selected time range",
+  });
+  await expect(zoomToRange).toBeEnabled();
+  await zoomToRange.click();
+  await follow.click();
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+  await timeline.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("End");
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+  const results = await new AxeBuilder({ page })
+    .include(".session-activity")
+    .analyze();
+  const blockingViolations = results.violations.filter((violation) =>
+    ["critical", "serious"].includes(violation.impact ?? ""),
+  );
+  expect(blockingViolations).toEqual([]);
+});
+
+test("Session Activity timeline navigation supports mouse, wheel, range, fit, and keyboard input", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${FIXTURE}&view=activity`);
+
+  const timeline = page.getByRole("region", {
+    name: "Session activity timeline",
+  });
+  const axis = timeline.locator(".activity-timeline-axis span");
+  const firstTrack = timeline.locator(".activity-timeline-track").first();
+  const trackBox = await firstTrack.boundingBox();
+  expect(trackBox).not.toBeNull();
+
+  const follow = timeline.getByRole("button", {
+    name: "Follow live activity",
+  });
+  const fit = timeline.getByRole("button", {
+    name: "Fit entire timeline",
+  });
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+  await expect(fit).toContainText("1.0×");
+
+  await timeline.getByRole("button", { name: "Zoom in" }).click();
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  await expect(fit).not.toContainText("1.0×");
+
+  const beforeDragPan = await axis.allTextContents();
+  await timeline.getByRole("button", { name: "Pan timeline" }).click();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.68,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.42,
+    trackBox!.y + trackBox!.height / 2,
+    { steps: 6 },
+  );
+  await page.mouse.up();
+  expect(await axis.allTextContents()).not.toEqual(beforeDragPan);
+
+  await timeline.getByRole("button", { name: "Select time range" }).click();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.76,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.3,
+    trackBox!.y + trackBox!.height / 2,
+    { steps: 6 },
+  );
+  await page.mouse.up();
+  await expect(timeline.locator(".activity-timeline-selection")).toHaveCount(3);
+  await expect(timeline.getByRole("status")).toContainText("–");
+
+  await timeline.focus();
+  await page.keyboard.press("Escape");
+  await expect(timeline.locator(".activity-timeline-selection")).toHaveCount(0);
+
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.4,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.4 + 2,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.mouse.up();
+  await expect(timeline.locator(".activity-timeline-selection")).toHaveCount(0);
+
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.2,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width * 0.55,
+    trackBox!.y + trackBox!.height / 2,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  const zoomToRange = timeline.getByRole("button", {
+    name: "Zoom to selected time range",
+  });
+  await zoomToRange.click();
+  await expect(fit).not.toContainText("1.0×");
+  await fit.click();
+  await expect(fit).toContainText("1.0×");
+  await expect(
+    timeline.getByRole("button", { name: "Zoom out" }),
+  ).toBeDisabled();
+
+  await page.mouse.move(
+    trackBox!.x + trackBox!.width / 2,
+    trackBox!.y + trackBox!.height / 2,
+  );
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -160);
+  await page.keyboard.up("Control");
+  await expect(fit).not.toContainText("1.0×");
+
+  const beforeWheelPan = await axis.allTextContents();
+  await firstTrack.dispatchEvent("wheel", {
+    clientX: trackBox!.x + trackBox!.width / 2,
+    deltaX: 180,
+    deltaY: 0,
+  });
+  expect(await axis.allTextContents()).not.toEqual(beforeWheelPan);
+
+  await timeline.focus();
+  await page.keyboard.press("Home");
+  await expect(fit).toContainText("1.0×");
+  await page.keyboard.press("+");
+  await expect(fit).not.toContainText("1.0×");
+  const beforeKeyboardPan = await axis.allTextContents();
+  await page.keyboard.press("ArrowLeft");
+  expect(await axis.allTextContents()).not.toEqual(beforeKeyboardPan);
+  await page.keyboard.press("End");
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+});
+
+test("Session Activity Follow tracks new records and manual navigation holds its viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${FIXTURE}&view=activity&activityLive=1`);
+
+  const timeline = page.getByRole("region", {
+    name: "Session activity timeline",
+  });
+  const axis = timeline.locator(".activity-timeline-axis span");
+  const follow = timeline.getByRole("button", {
+    name: "Follow live activity",
+  });
+  const initialAxis = await axis.allTextContents();
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText("27 curated events", { exact: true }),
+  ).toBeVisible();
+
+  await expect(
+    timeline.getByRole("button", { name: /Live checkpoint,/u }),
+  ).toBeVisible({ timeout: 7_000 });
+  await expect(
+    page.getByText("28 curated events", { exact: true }),
+  ).toBeVisible();
+  expect(await axis.allTextContents()).not.toEqual(initialAxis);
+
+  await timeline.getByRole("button", { name: "Zoom in" }).click();
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  const heldAxis = await axis.allTextContents();
+
+  await expect(
+    page.getByText("29 curated events", { exact: true }),
+  ).toBeVisible({ timeout: 7_000 });
+  await expect(
+    timeline.getByRole("button", { name: /Live response,/u }),
+  ).toHaveCount(0);
+  expect(await axis.allTextContents()).toEqual(heldAxis);
+
+  await follow.click();
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    timeline.getByRole("button", { name: /Live response,/u }),
+  ).toBeVisible();
+  expect(await axis.allTextContents()).not.toEqual(heldAxis);
+});
+
+test("Session Activity search, filters, live state, and compact stacking remain functional", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 740, height: 780 });
+  await page.goto(`${FIXTURE}&view=activity`);
+
+  const search = page.getByRole("searchbox", {
+    name: "Search session activity",
+  });
+  await search.fill("denied");
+  await expect(page.locator(".activity-row")).toHaveCount(1);
+  await expect(page.locator(".activity-row")).toContainText("denied");
+
+  await page.getByRole("button", { name: "Filter", exact: true }).click();
+  const filters = page.getByRole("dialog", { name: "Activity filters" });
+  await filters.getByRole("checkbox", { name: "Tools", exact: true }).check();
+  await filters.getByRole("checkbox", { name: "Failed", exact: true }).check();
+  await expect(page.getByRole("button", { name: "Filter (2)" })).toBeVisible();
+  await expect(page.locator(".activity-row")).toHaveCount(1);
+
+  const live = page.getByRole("button", { name: "Live", exact: true });
+  await live.click();
+  await expect(
+    page.getByRole("button", { name: "Paused", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+
+  const feedBox = await page
+    .getByRole("region", { name: "Session activity feed" })
+    .boundingBox();
+  const inspectorBox = await page
+    .getByRole("complementary", { name: "Activity inspector" })
+    .boundingBox();
+  expect(feedBox).not.toBeNull();
+  expect(inspectorBox).not.toBeNull();
+  expect(inspectorBox!.y).toBeGreaterThanOrEqual(feedBox!.y + feedBox!.height);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBe(0);
 });
 
 test("right-side drawers trap focus, close with Escape, and restore focus", async ({
@@ -316,7 +794,7 @@ test("right-side drawers trap focus, close with Escape, and restore focus", asyn
   await expect(artifactsTrigger).toBeFocused();
 });
 
-test("Space navigation and approvals are keyboard-operable", async ({
+test("Workspace navigation and approvals are keyboard-operable", async ({
   page,
 }) => {
   const navigationTrigger = page.getByRole("button", {
@@ -324,7 +802,9 @@ test("Space navigation and approvals are keyboard-operable", async ({
   });
   await navigationTrigger.click();
 
-  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  const navigation = page.getByRole("dialog", {
+    name: "Workspace navigation",
+  });
   await expect(navigation).toBeVisible();
   await expect(
     navigation.getByRole("button", { name: "Close navigation" }),
@@ -345,22 +825,24 @@ test("Space navigation and approvals are keyboard-operable", async ({
   await expect(page.getByLabel("Required response")).toHaveCount(0);
 });
 
-test("responsive Space navigation remains reachable from catalog surfaces", async ({
+test("responsive Workspace navigation remains reachable from catalog surfaces", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Open work navigation" }).click();
   await page
-    .getByRole("dialog", { name: "Space navigation" })
+    .getByRole("dialog", { name: "Workspace navigation" })
     .getByRole("button", { name: "Capabilities", exact: true })
     .click();
 
   const navigationTrigger = page.getByRole("button", {
-    name: "Open Space navigation",
+    name: "Open Workspace navigation",
   });
   await expect(navigationTrigger).toBeVisible();
   await navigationTrigger.click();
 
-  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  const navigation = page.getByRole("dialog", {
+    name: "Workspace navigation",
+  });
   const close = navigation.getByRole("button", { name: "Close navigation" });
   await expect(close).toBeVisible();
   await close.click();
@@ -368,7 +850,7 @@ test("responsive Space navigation remains reachable from catalog surfaces", asyn
   await expect(navigationTrigger).toBeFocused();
 });
 
-test("desktop Space sidebar resizes and remembers its width", async ({
+test("desktop Workspace sidebar resizes and remembers its width", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -376,7 +858,7 @@ test("desktop Space sidebar resizes and remembers its width", async ({
 
   const sidebar = page.locator(".work-sidebar");
   const resizeHandle = page.getByRole("separator", {
-    name: "Resize Space sidebar",
+    name: "Resize Workspace sidebar",
   });
   const initialBox = await sidebar.boundingBox();
   const handleBox = await resizeHandle.boundingBox();
@@ -408,7 +890,7 @@ test("desktop Space sidebar resizes and remembers its width", async ({
     .toBeCloseTo(resizedWidth - 8, 0);
 });
 
-test("collapsing the active Space keeps the remaining navigation pinned", async ({
+test("collapsing the active Workspace keeps the remaining navigation pinned", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -439,7 +921,7 @@ test("collapsing the active Space keeps the remaining navigation pinned", async 
   ).toBeLessThanOrEqual(14);
 });
 
-test("Space folders disclose thread summaries without switching context", async ({
+test("Workspace folders disclose thread summaries without switching context", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -467,7 +949,7 @@ test("Space folders disclose thread summaries without switching context", async 
   ).toBeVisible();
 });
 
-test("selected Space keeps its create action on the trailing edge", async ({
+test("selected Workspace keeps its create action on the trailing edge", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -490,7 +972,7 @@ test("selected Space keeps its create action on the trailing edge", async ({
   expect(createBox!.x).toBeGreaterThan(disclosureBox!.x + disclosureBox!.width);
 });
 
-test("terminal threads can be archived from the Space sidebar", async ({
+test("terminal threads can be archived from the Workspace sidebar", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -628,7 +1110,9 @@ test("thread actions survive a WebKit blur without a related target", async ({
 test("search scope is part of the search control", async ({ page }) => {
   await page.getByRole("button", { name: "Open work navigation" }).click();
 
-  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  const navigation = page.getByRole("dialog", {
+    name: "Workspace navigation",
+  });
   const search = navigation.getByRole("searchbox", {
     name: "Search threads",
   });
@@ -636,16 +1120,18 @@ test("search scope is part of the search control", async ({ page }) => {
 
   await expect(search).toHaveAttribute("placeholder", "Search threads");
   await expect(
-    scope.getByRole("button", { name: "This Space", exact: true }),
+    scope.getByRole("button", { name: "This Workspace", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
 
-  await scope.getByRole("button", { name: "All Spaces", exact: true }).click();
+  await scope
+    .getByRole("button", { name: "All Workspaces", exact: true })
+    .click();
 
   await expect(
-    scope.getByRole("button", { name: "All Spaces", exact: true }),
+    scope.getByRole("button", { name: "All Workspaces", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
-    scope.getByRole("button", { name: "This Space", exact: true }),
+    scope.getByRole("button", { name: "This Workspace", exact: true }),
   ).toHaveAttribute("aria-pressed", "false");
   await expect(search).toBeFocused();
 });
@@ -671,13 +1157,15 @@ test("Thread details lists released participants and returns focus on close", as
   await expect(detailsTrigger).toBeFocused();
 });
 
-test("Space startup keeps search and navigation responsive", async ({
+test("Workspace startup keeps search and navigation responsive", async ({
   page,
 }) => {
   await page.goto(`${FIXTURE}&spaceStartup=1`);
   await page.getByRole("button", { name: "Open work navigation" }).click();
 
-  const navigation = page.getByRole("dialog", { name: "Space navigation" });
+  const navigation = page.getByRole("dialog", {
+    name: "Workspace navigation",
+  });
   await expect(
     navigation.getByText("Research Lab", { exact: true }),
   ).toBeVisible();
@@ -704,7 +1192,7 @@ test("follow-up prompts remain in the same work conversation", async ({
 }) => {
   await page.getByRole("button", { name: "Open work navigation" }).click();
   await page
-    .getByRole("dialog", { name: "Space navigation" })
+    .getByRole("dialog", { name: "Workspace navigation" })
     .getByRole("button", { name: "New thread in Colossus" })
     .click();
 
@@ -731,7 +1219,7 @@ test("follow-up prompts remain in the same work conversation", async ({
 
   await page.getByRole("button", { name: "Open work navigation" }).click();
   const workNavigation = page.getByRole("dialog", {
-    name: "Space navigation",
+    name: "Workspace navigation",
   });
   await expect(
     workNavigation.locator(".work-item").filter({ hasText: opening }),

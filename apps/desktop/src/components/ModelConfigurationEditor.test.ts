@@ -100,7 +100,8 @@ describe("ModelConfigurationEditor", () => {
     expect(markup).toContain("example-model");
     expect(markup).toContain("No credential");
     expect(markup).toContain("Automatic · 15 minutes");
-    expect(markup).toContain("ChatGPT subscription (Codex)");
+    expect(markup).toContain('role="combobox"');
+    expect(markup).toContain("OpenAI-compatible");
     expect(markup).toContain("Reasoning effort");
     expect(markup).toContain("Provider default");
     expect(markup).toContain("Unsafe: Full access.");

@@ -26,5 +26,8 @@ pub use handlers::*;
 mod repositories;
 pub use repositories::*;
 
+mod activity;
+pub use activity::*;
+
 #[cfg(test)]
 mod tests;

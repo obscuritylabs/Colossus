@@ -23,7 +23,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
+import { type InputHTMLAttributes, useEffect, useMemo, useState } from "react";
 
 import {
   applyRepositoryConfiguration,
@@ -77,6 +77,7 @@ import type {
   RuntimeTarget,
   TerminalKind,
 } from "../types";
+import { DropdownSelect } from "./DropdownSelect";
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
@@ -626,6 +627,17 @@ function currentValue<T>(entry: CatalogEntry<T>): T {
   );
 }
 
+function SwitchInput(
+  props: Omit<
+    InputHTMLAttributes<HTMLInputElement>,
+    "className" | "role" | "type"
+  >,
+) {
+  return (
+    <input {...props} className="switch-input" type="checkbox" role="switch" />
+  );
+}
+
 function fixtureCatalogUpsert<T>(
   entries: CatalogEntry<T>[],
   resourceId: string | null,
@@ -957,7 +969,7 @@ export function buildManagedSettingsFixture(
           source: "built_in" as const,
         })),
       ],
-      effectiveYaml: `schemaVersion: 1\ndesktopManaged:\n  workspaceIdentity: <desktop-managed>\n  storagePath: <desktop-managed>\nspace:\n  id: ${space.spaceId}\n  acceptedGlobalRevision: ${fixture && index === 0 ? 3 : 4}\naccess:\n  profile: ${desktop.accessProfile}\nsandbox:\n  executionBoundary: ${desktop.executionBoundary}\nmcp:\n  servers: ${selectedMcp.length}\n`,
+      effectiveYaml: `schemaVersion: 1\ndesktopManaged:\n  workspaceIdentity: <desktop-managed>\n  storagePath: <desktop-managed>\nworkspace:\n  id: ${space.spaceId}\n  acceptedGlobalRevision: ${fixture && index === 0 ? 3 : 4}\naccess:\n  profile: ${desktop.accessProfile}\nsandbox:\n  executionBoundary: ${desktop.executionBoundary}\nmcp:\n  servers: ${selectedMcp.length}\n`,
     };
   });
   return {
@@ -1378,10 +1390,10 @@ export function ManagedSettingsPane({
           ...telemetryReferences,
         ]);
         target.status = "active";
-        target.statusMessage = "Space settings applied.";
+        target.statusMessage = "Workspace settings applied.";
         return draft;
       },
-      "Space settings applied.",
+      "Workspace settings applied.",
     );
   }
 
@@ -1401,7 +1413,7 @@ export function ManagedSettingsPane({
         target.statusMessage = "Global revision applied.";
         return draft;
       },
-      "Global revision applied to this Space.",
+      "Global revision applied to this Workspace.",
     );
   }
 
@@ -1488,7 +1500,7 @@ export function ManagedSettingsPane({
         setSnapshot(draft);
       }
       setImportProposal(null);
-      setNotice("Repository configuration applied to this Space.");
+      setNotice("Repository configuration applied to this Workspace.");
     } catch (error: unknown) {
       setFailure(
         error instanceof Error
@@ -2037,12 +2049,12 @@ export function ManagedSettingsPane({
             Settings /{" "}
             {scope === "global"
               ? "Global configuration"
-              : (selectedSpace?.name ?? "Space")}
+              : (selectedSpace?.name ?? "Workspace")}
           </p>
           <h2>
             {scope === "global"
               ? "Global configuration"
-              : "Space configuration"}
+              : "Workspace configuration"}
           </h2>
           <div
             className="managed-scope-switch"
@@ -2071,7 +2083,7 @@ export function ManagedSettingsPane({
               }}
             >
               <IconFolder size={16} aria-hidden="true" />
-              Space
+              Workspace
             </button>
           </div>
         </div>
@@ -2209,8 +2221,8 @@ export function ManagedSettingsPane({
         <>
           <div className="space-settings-context">
             <label>
-              <span>Space</span>
-              <select
+              <span>Workspace</span>
+              <DropdownSelect
                 value={selectedSpace?.id ?? ""}
                 onChange={(event) => setSelectedSpaceId(event.target.value)}
               >
@@ -2221,7 +2233,7 @@ export function ManagedSettingsPane({
                       {candidate.name}
                     </option>
                   ))}
-              </select>
+              </DropdownSelect>
             </label>
             {selectedSpace ? <RuntimeStatus space={selectedSpace} /> : null}
             {selectedSpace ? (
@@ -2311,13 +2323,13 @@ export function ManagedSettingsPane({
           ) : (
             <EmptySettings
               icon={<IconFolder size={24} />}
-              title="No Space selected"
+              title="No Workspace selected"
             />
           )}
           <SettingsActionBar
             dirty={spaceDirty}
             busy={busy}
-            label="Apply Space changes"
+            label="Apply Workspace changes"
             onDiscard={() =>
               selectedSpace && setSpace(spaceDraft(selectedSpace))
             }
@@ -2600,7 +2612,7 @@ function GlobalSettingsBody({
           </label>
           <label>
             <span>Kind</span>
-            <select
+            <DropdownSelect
               value={credentialKind}
               onChange={(event) =>
                 setCredentialKind(event.target.value as ManagedCredentialKind)
@@ -2610,7 +2622,7 @@ function GlobalSettingsBody({
               <option value="bearer_token">Bearer token</option>
               <option value="client_secret">OAuth client secret</option>
               <option value="generic_secret">Generic secret</option>
-            </select>
+            </DropdownSelect>
           </label>
           <button
             className="button primary"
@@ -2673,7 +2685,7 @@ function GlobalSettingsBody({
       <section className="managed-settings-body">
         <div className="managed-section-heading">
           <div>
-            <p className="eyebrow">Built-in → Global → Space</p>
+            <p className="eyebrow">Built-in → Global → Workspace</p>
             <h3>Global defaults</h3>
           </div>
         </div>
@@ -3121,9 +3133,7 @@ export function SpaceSettingsBody({
                         </button>
                       ) : null}
                     </div>
-                    <input
-                      className="switch-input"
-                      type="checkbox"
+                    <SwitchInput
                       checked={enabled}
                       aria-label={`Enable ${entry.label}`}
                       onChange={(event) =>
@@ -3261,9 +3271,7 @@ export function SpaceSettingsBody({
                   >
                     {enabled ? "Enabled" : "Available"}
                   </span>
-                  <input
-                    className="switch-input"
-                    type="checkbox"
+                  <SwitchInput
                     checked={enabled}
                     aria-label={`Enable ${entry.label}`}
                     onChange={(event) => {
@@ -3289,7 +3297,7 @@ export function SpaceSettingsBody({
                 <span>
                   {role === "agent" ? "Agent search" : "Research search"}
                 </span>
-                <select
+                <DropdownSelect
                   value={draft.searchRoles[role] ?? ""}
                   onChange={(event) => {
                     const searchRoles = { ...draft.searchRoles };
@@ -3305,7 +3313,7 @@ export function SpaceSettingsBody({
                       {entry.label}
                     </option>
                   ))}
-                </select>
+                </DropdownSelect>
               </label>
             ))}
           </div>
@@ -3351,7 +3359,7 @@ export function SpaceSettingsBody({
           <div className="authority-control-grid">
             <label>
               <span>Telemetry profile</span>
-              <select
+              <DropdownSelect
                 value={draft.selectedTelemetry ?? ""}
                 onChange={(event) =>
                   setDraft({
@@ -3366,7 +3374,7 @@ export function SpaceSettingsBody({
                     {entry.label} · r{entry.currentRevision}
                   </option>
                 ))}
-              </select>
+              </DropdownSelect>
             </label>
           </div>
           {draft.selectedTelemetry ? (
@@ -3376,8 +3384,8 @@ export function SpaceSettingsBody({
                 <div>
                   <strong>Immutable while active</strong>
                   <p>
-                    Runs keep this telemetry revision until the Space applies a
-                    newer global revision.
+                    Runs keep this telemetry revision until the Workspace
+                    applies a newer global revision.
                   </p>
                 </div>
               </div>
@@ -3426,7 +3434,7 @@ export function SpaceSettingsBody({
         </div>
         <pre
           className="effective-configuration-code"
-          aria-label="Effective Space configuration"
+          aria-label="Effective Workspace configuration"
         >
           <code>{selectedSpace.effectiveYaml}</code>
         </pre>
@@ -3452,7 +3460,7 @@ export function SpaceSettingsBody({
         <div className="managed-settings-body">
           <div className="managed-section-heading">
             <div>
-              <p className="eyebrow">Space override</p>
+              <p className="eyebrow">Workspace override</p>
               <h3>
                 {tab === "access" ? "Access and authority" : "Runtime defaults"}
               </h3>
@@ -3527,9 +3535,7 @@ export function SpaceSettingsBody({
                   >
                     {enabled ? "Selected" : "Global"}
                   </span>
-                  <input
-                    className="switch-input"
-                    type="checkbox"
+                  <SwitchInput
                     checked={enabled}
                     aria-label={`Select ${entry.label}`}
                     onChange={(event) => {
@@ -3600,9 +3606,7 @@ export function SpaceSettingsBody({
                   >
                     {enabled ? "Selected" : `r${entry.currentRevision}`}
                   </span>
-                  <input
-                    className="switch-input"
-                    type="checkbox"
+                  <SwitchInput
                     disabled={!providerSelected}
                     checked={enabled}
                     aria-label={`Select ${entry.label}`}
@@ -3676,7 +3680,7 @@ export function SpaceSettingsBody({
             ).map((role) => (
               <label key={role}>
                 <span>{role.replaceAll("_", " ")}</span>
-                <select
+                <DropdownSelect
                   required={role === "primary"}
                   value={draft.modelRoles[role] ?? ""}
                   onChange={(event) => {
@@ -3693,7 +3697,7 @@ export function SpaceSettingsBody({
                       {entry.label}
                     </option>
                   ))}
-                </select>
+                </DropdownSelect>
               </label>
             ))}
           </div>
@@ -3711,7 +3715,7 @@ export function SpaceSettingsBody({
     <section className="managed-settings-body">
       <div className="managed-section-heading">
         <div>
-          <p className="eyebrow">Sparse Space overrides</p>
+          <p className="eyebrow">Sparse Workspace overrides</p>
           <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
         </div>
       </div>
@@ -3961,7 +3965,7 @@ function AuthorityControls({
     <div className="authority-control-grid">
       <label>
         <span>Access profile</span>
-        <select
+        <DropdownSelect
           value={access ?? "inherit"}
           onChange={(event) =>
             onAccess(
@@ -3976,11 +3980,11 @@ function AuthorityControls({
           <option value="pinned">Pinned</option>
           <option value="development">Development</option>
           <option value="allow_all">Allow all</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label>
         <span>Execution boundary</span>
-        <select
+        <DropdownSelect
           value={boundary ?? "inherit"}
           onChange={(event) =>
             onBoundary(
@@ -3994,11 +3998,11 @@ function AuthorityControls({
           <option value="offline_isolated">Offline isolated</option>
           <option value="workspace_isolated">Workspace isolated</option>
           <option value="full_access">Full access</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label>
         <span>Local terminal</span>
-        <select
+        <DropdownSelect
           value={terminal === null ? "inherit" : String(terminal)}
           onChange={(event) =>
             onTerminal(
@@ -4011,7 +4015,7 @@ function AuthorityControls({
           <option value="inherit">Inherit</option>
           <option value="false">Disabled</option>
           <option value="true">Enabled</option>
-        </select>
+        </DropdownSelect>
       </label>
     </div>
   );
@@ -4129,7 +4133,7 @@ function FieldControl({
   }
   if (descriptor.control === "select") {
     return (
-      <select
+      <DropdownSelect
         value={typeof value === "string" ? value : ""}
         aria-label={descriptor.title}
         onChange={(event) => onChange(event.target.value)}
@@ -4139,7 +4143,7 @@ function FieldControl({
             {option.replaceAll("_", " ")}
           </option>
         ))}
-      </select>
+      </DropdownSelect>
     );
   }
   if (descriptor.control === "json") {
@@ -4207,11 +4211,8 @@ function JsonFieldEditor({
 }
 
 function SourceBadge({ source }: { source: string }) {
-  return (
-    <span className={`source-badge source-${source}`}>
-      {source.replace("_", " ")}
-    </span>
-  );
+  const label = source === "space" ? "workspace" : source.replace("_", " ");
+  return <span className={`source-badge source-${source}`}>{label}</span>;
 }
 
 function DiagnosticResult({ value }: { value: ManagedRuntimeDiagnostic }) {
@@ -4431,7 +4432,7 @@ export function RepositoryImportDialog({
                 <Metric
                   icon={<IconAdjustments size={19} />}
                   value={proposal.fieldOverrides.length}
-                  label="Space overrides"
+                  label="Workspace overrides"
                 />
                 <Metric
                   icon={<IconLock size={19} />}
@@ -4465,7 +4466,7 @@ export function RepositoryImportDialog({
               {proposal.credentialSlots.map((slot) => (
                 <label key={slot.slotId}>
                   <span>{slot.label}</span>
-                  <select
+                  <DropdownSelect
                     value={mappings[slot.slotId] ?? ""}
                     onChange={(event) =>
                       onMappingsChange({
@@ -4480,7 +4481,7 @@ export function RepositoryImportDialog({
                         {credential.label}
                       </option>
                     ))}
-                  </select>
+                  </DropdownSelect>
                   <small>{slot.consumers.length} consumers</small>
                 </label>
               ))}
@@ -4518,7 +4519,7 @@ export function RepositoryImportDialog({
                         <span className="sr-only">
                           Resolution for {resource.label}
                         </span>
-                        <select
+                        <DropdownSelect
                           aria-label={`Resolution for ${resource.label}`}
                           value={decision.action}
                           onChange={(event) => {
@@ -4542,7 +4543,7 @@ export function RepositoryImportDialog({
                             Replace global revision
                           </option>
                           <option value="skip">Skip definition</option>
-                        </select>
+                        </DropdownSelect>
                       </label>
                       {decision.action === "rename" ? (
                         <input
@@ -4731,7 +4732,7 @@ function SearchEditor({
       </label>
       <label>
         <span>Adapter</span>
-        <select
+        <DropdownSelect
           value={draft.kind}
           onChange={(event) =>
             onChange({
@@ -4742,7 +4743,7 @@ function SearchEditor({
         >
           <option value="searxng">SearXNG</option>
           <option value="serp_api">SerpAPI</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label className="mcp-editor-wide">
         <span>Endpoint</span>
@@ -4757,7 +4758,7 @@ function SearchEditor({
       </label>
       <label>
         <span>Credential</span>
-        <select
+        <DropdownSelect
           value={draft.credentialId}
           required={draft.kind === "serp_api"}
           onChange={(event) =>
@@ -4770,7 +4771,7 @@ function SearchEditor({
               {credential.label}
             </option>
           ))}
-        </select>
+        </DropdownSelect>
       </label>
       <label>
         <span>Auth header</span>
@@ -4875,7 +4876,7 @@ function TelemetryEditor({
       </label>
       <label>
         <span>Protocol</span>
-        <select
+        <DropdownSelect
           value={draft.protocol}
           onChange={(event) =>
             onChange({
@@ -4887,7 +4888,7 @@ function TelemetryEditor({
         >
           <option value="grpc">OTLP gRPC</option>
           <option value="http_protobuf">OTLP HTTP/protobuf</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label>
         <span>Timeout (ms)</span>
@@ -4903,9 +4904,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>Traces</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.tracesEnabled}
           onChange={(event) =>
             onChange({ ...draft, tracesEnabled: event.target.checked })
@@ -4929,9 +4928,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>Metrics</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.metricsEnabled}
           onChange={(event) =>
             onChange({ ...draft, metricsEnabled: event.target.checked })
@@ -4955,9 +4952,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>OTLP logs</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.logsOtlp}
           onChange={(event) =>
             onChange({ ...draft, logsOtlp: event.target.checked })
@@ -4966,9 +4961,7 @@ function TelemetryEditor({
       </label>
       <label className="switch-row">
         <span>JSON stdout</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.logsStdoutJson}
           onChange={(event) =>
             onChange({ ...draft, logsStdoutJson: event.target.checked })
@@ -4977,7 +4970,7 @@ function TelemetryEditor({
       </label>
       <label>
         <span>Journal payloads</span>
-        <select
+        <DropdownSelect
           value={draft.journalPayloads}
           onChange={(event) =>
             onChange({
@@ -4990,13 +4983,11 @@ function TelemetryEditor({
           <option value="disabled">Disabled</option>
           <option value="metadata">Metadata only</option>
           <option value="full">Full sensitive payloads</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label className="switch-row">
         <span>Allow insecure remote transport</span>
-        <input
-          className="switch-input"
-          type="checkbox"
+        <SwitchInput
           checked={draft.acknowledgeInsecureTransport}
           onChange={(event) =>
             onChange({
@@ -5020,8 +5011,8 @@ function TelemetryEditor({
       {draft.journalPayloads === "full" ? (
         <p className="authority-warning mcp-editor-wide">
           <IconAlertTriangle size={17} />
-          Full payload export requires native confirmation when a Space applies
-          this revision.
+          Full payload export requires native confirmation when a Workspace
+          applies this revision.
         </p>
       ) : null}
       <div className="mcp-editor-actions">
@@ -5093,7 +5084,7 @@ function ProviderEditor({
       </label>
       <label>
         <span>Adapter</span>
-        <select
+        <DropdownSelect
           value={draft.kind}
           onChange={(event) =>
             onChange({
@@ -5105,7 +5096,7 @@ function ProviderEditor({
           <option value="openai_responses">OpenAI Responses</option>
           <option value="openai_compatible">OpenAI compatible</option>
           <option value="open_ai_codex">Codex subscription</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label className="mcp-editor-wide">
         <span>Base URL</span>
@@ -5123,7 +5114,7 @@ function ProviderEditor({
       </label>
       <label>
         <span>Credential</span>
-        <select
+        <DropdownSelect
           value={codex ? "" : draft.credentialId}
           disabled={codex}
           onChange={(event) =>
@@ -5136,7 +5127,7 @@ function ProviderEditor({
               {credential.label}
             </option>
           ))}
-        </select>
+        </DropdownSelect>
       </label>
       <label>
         <span>Timeout (ms)</span>
@@ -5218,7 +5209,7 @@ function ModelEditor({
       </label>
       <label>
         <span>Provider</span>
-        <select
+        <DropdownSelect
           value={draft.providerProfile}
           required
           onChange={(event) =>
@@ -5234,7 +5225,7 @@ function ModelEditor({
               </option>
             );
           })}
-        </select>
+        </DropdownSelect>
       </label>
       <label className="mcp-editor-wide">
         <span>Model identifier</span>
@@ -5360,7 +5351,7 @@ function McpEditor({
       </label>
       <label>
         <span>Transport</span>
-        <select
+        <DropdownSelect
           value={draft.transport}
           onChange={(event) =>
             onChange({
@@ -5371,7 +5362,7 @@ function McpEditor({
         >
           <option value="stdio">stdio</option>
           <option value="streamable_http">HTTP</option>
-        </select>
+        </DropdownSelect>
       </label>
       <label className="mcp-editor-wide">
         <span>{draft.transport === "stdio" ? "Executable" : "URL"}</span>
@@ -5403,7 +5394,7 @@ function McpEditor({
       </label>
       <label>
         <span>Credential</span>
-        <select
+        <DropdownSelect
           value={draft.credentialId}
           onChange={(event) =>
             onChange({ ...draft, credentialId: event.target.value })
@@ -5415,7 +5406,7 @@ function McpEditor({
               {credential.label}
             </option>
           ))}
-        </select>
+        </DropdownSelect>
       </label>
       <div className="mcp-editor-actions">
         <button className="button secondary" type="button" onClick={onCancel}>
@@ -5535,7 +5526,9 @@ function DesktopSettings(
         </span>
         <div>
           <strong>{desktop.workspace?.displayName ?? "Managed Local"}</strong>
-          <small>{desktop.workspace?.displayPath ?? "No Space selected"}</small>
+          <small>
+            {desktop.workspace?.displayPath ?? "No Workspace selected"}
+          </small>
         </div>
         <div className="resource-actions">
           <button
@@ -5544,7 +5537,7 @@ function DesktopSettings(
             disabled={connecting}
             onClick={props.onChooseWorkspace}
           >
-            Add Space
+            Add Workspace
           </button>
           <button
             className="button secondary"

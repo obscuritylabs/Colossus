@@ -31,7 +31,7 @@ const LOCKED_INVARIANTS: &[(&str, &str, &str)] = &[
     (
         "storage.path",
         "Runtime storage path",
-        "Desktop creates a private per-Space storage directory and verifies its owner protections.",
+        "Desktop creates a private per-Workspace storage directory and verifies its owner protections.",
     ),
     (
         "storage.keyReference",
@@ -46,7 +46,7 @@ const LOCKED_INVARIANTS: &[(&str, &str, &str)] = &[
     (
         "runtime.instanceId",
         "Runtime instance identity",
-        "Desktop generates a private runtime identity for every Space.",
+        "Desktop generates a private runtime identity for every Workspace.",
     ),
     (
         "runtime.workerIpc",
@@ -66,22 +66,22 @@ const LOCKED_INVARIANTS: &[(&str, &str, &str)] = &[
     (
         "memory.indexPath",
         "Memory index path",
-        "Desktop confines the disposable memory index to this Space's private runtime storage.",
+        "Desktop confines the disposable memory index to this Workspace's private runtime storage.",
     ),
     (
         "skills.user",
         "User skill storage",
-        "Desktop confines installed user skills to this Space's private runtime storage.",
+        "Desktop confines installed user skills to this Workspace's private runtime storage.",
     ),
     (
         "packs.installRoot",
         "Pack installation root",
-        "Desktop confines verified pack installations to this Space's private runtime storage.",
+        "Desktop confines verified pack installations to this Workspace's private runtime storage.",
     ),
     (
         "workflows.user",
         "User workflow storage",
-        "Desktop confines user workflow libraries to this Space's private runtime storage.",
+        "Desktop confines user workflow libraries to this Workspace's private runtime storage.",
     ),
 ];
 
@@ -827,7 +827,7 @@ fn apply_space_edit(
         .spaces
         .iter_mut()
         .find(|space| space.id == request.space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     space.configuration.access_profile_override = request.access_profile_override;
     space.configuration.execution_boundary_override = request.execution_boundary_override;
     space.configuration.terminal_enabled_override = request.terminal_enabled_override;
@@ -936,7 +936,7 @@ fn advance_space_revision(
         .spaces
         .iter()
         .find(|space| space.id == space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?
         .configuration
         .catalog_revisions
         .clone();
@@ -957,7 +957,7 @@ fn advance_space_revision(
         .spaces
         .iter_mut()
         .find(|space| space.id == space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     space.configuration.accepted_global_revision = current_global_revision;
     space.configuration.catalog_revisions = advanced;
     project_space_compatibility(settings, space_id)
@@ -972,7 +972,7 @@ fn project_space_compatibility(
             .spaces
             .iter()
             .find(|space| space.id == space_id)
-            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
         resolve_space_configuration(&settings.global_configuration, space)?
     };
     let space = settings
@@ -1019,7 +1019,10 @@ fn runtime_projection(
     space_id: &str,
 ) -> Result<DesktopSettings, CommandErrorDto> {
     if settings.space(space_id).is_none() {
-        return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+        return Err(CommandErrorDto::invalid(
+            "spaceId",
+            "The Workspace is unknown.",
+        ));
     }
     let mut projected = settings.clone();
     projected.selected_space_id = Some(space_id.to_owned());
@@ -1057,7 +1060,7 @@ pub(crate) async fn confirm_authority_elevation(
             .message(
                 "This change increases runtime authority or enables sensitive telemetry disclosure. Review the Access, Sandbox, and Telemetry values before allowing the runtime to restart.",
             )
-            .title("Approve Space authority change")
+            .title("Approve Workspace authority change")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
                 "Approve and apply".into(),
@@ -1254,7 +1257,7 @@ fn credential_dependents(settings: &DesktopSettings, credential_id: &str) -> Vec
                 .iter()
                 .any(|provider| provider.credential_id.as_deref() == Some(credential_id))
         {
-            dependents.insert(format!("Space {}", space.display_name));
+            dependents.insert(format!("Workspace {}", space.display_name));
         }
         for (key, reference) in &space.configuration.catalog_revisions {
             if catalog_reference_uses_credential(
@@ -1263,7 +1266,10 @@ fn credential_dependents(settings: &DesktopSettings, credential_id: &str) -> Vec
                 reference,
                 credential_id,
             ) {
-                dependents.insert(format!("Space {} resource selection", space.display_name));
+                dependents.insert(format!(
+                    "Workspace {} resource selection",
+                    space.display_name
+                ));
             }
         }
     }
@@ -1511,7 +1517,7 @@ fn effective_yaml(
             "workerIpc": "<desktop-managed>",
             "bootstrapAuthentication": "<desktop-managed>"
         },
-        "space": {
+        "workspace": {
             "id": space.id,
             "acceptedGlobalRevision": space.configuration.accepted_global_revision
         },
@@ -2056,7 +2062,7 @@ pub(crate) fn resolved_for(
 ) -> Result<ResolvedSpaceConfiguration, CommandErrorDto> {
     let space = settings
         .space(space_id)
-        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+        .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
     resolve_space_configuration(&settings.global_configuration, space)
 }
 
@@ -2657,6 +2663,8 @@ mod tests {
             .expect("resolved settings");
         let yaml = effective_yaml(space, &resolved).expect("YAML");
         assert!(yaml.contains("<desktop-managed>"));
+        assert!(yaml.contains("workspace:"));
+        assert!(!yaml.contains("\nspace:"));
         assert!(!yaml.contains("credentialValue"));
     }
 }

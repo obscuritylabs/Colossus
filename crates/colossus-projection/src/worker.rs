@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Mutex;
 
 /// Pure event-to-projection reducer.
 pub trait ProjectionHandler: Send + Sync {
@@ -39,6 +40,7 @@ pub struct ProjectionWorker {
     journal: Arc<dyn EventJournal>,
     store: Arc<dyn ProjectionStore>,
     handlers: Vec<Arc<dyn ProjectionHandler>>,
+    operation_gate: Mutex<()>,
 }
 
 impl ProjectionWorker {
@@ -62,11 +64,22 @@ impl ProjectionWorker {
             journal,
             store,
             handlers,
+            operation_gate: Mutex::new(()),
         })
     }
 
     /// Apply up to `limit_per_projection` pending events for every handler.
     pub fn run_once(&self, limit_per_projection: usize) -> Result<ProjectionRunReport, StoreError> {
+        let _operation = self.operation_gate.lock().map_err(|_| {
+            StoreError::Adapter("projection worker operation lock was poisoned".into())
+        })?;
+        self.run_once_inner(limit_per_projection)
+    }
+
+    fn run_once_inner(
+        &self,
+        limit_per_projection: usize,
+    ) -> Result<ProjectionRunReport, StoreError> {
         let mut applied = 0_u64;
         let mut passive_batches = Vec::new();
         let mut passive_applied = 0_u64;
@@ -166,6 +179,17 @@ impl ProjectionWorker {
         batch_limit: usize,
         max_rounds: usize,
     ) -> Result<ProjectionRunReport, StoreError> {
+        let _operation = self.operation_gate.lock().map_err(|_| {
+            StoreError::Adapter("projection worker operation lock was poisoned".into())
+        })?;
+        self.drain_inner(batch_limit, max_rounds)
+    }
+
+    fn drain_inner(
+        &self,
+        batch_limit: usize,
+        max_rounds: usize,
+    ) -> Result<ProjectionRunReport, StoreError> {
         if batch_limit == 0 || max_rounds == 0 {
             return Err(StoreError::Adapter(
                 "projection drain bounds must be greater than zero".into(),
@@ -173,7 +197,7 @@ impl ProjectionWorker {
         }
         let mut applied = 0_u64;
         for _ in 0..max_rounds {
-            let report = self.run_once(batch_limit)?;
+            let report = self.run_once_inner(batch_limit)?;
             applied = applied.saturating_add(report.applied);
             if report.projections.iter().all(|status| status.ready) {
                 return Ok(ProjectionRunReport {
@@ -193,19 +217,25 @@ impl ProjectionWorker {
 
     /// Delete one named projection and rebuild it from sequence one.
     pub fn rebuild(&self, name: &str) -> Result<ProjectionRunReport, StoreError> {
+        let _operation = self.operation_gate.lock().map_err(|_| {
+            StoreError::Adapter("projection worker operation lock was poisoned".into())
+        })?;
         if !self.handlers.iter().any(|handler| handler.name() == name) {
             return Err(StoreError::NotFound(format!("projection {name}")));
         }
         self.store.reset(name)?;
-        self.drain(256, 16_384)
+        self.drain_inner(256, 16_384)
     }
 
     /// Delete and rebuild every registered projection.
     pub fn rebuild_all(&self) -> Result<ProjectionRunReport, StoreError> {
+        let _operation = self.operation_gate.lock().map_err(|_| {
+            StoreError::Adapter("projection worker operation lock was poisoned".into())
+        })?;
         for handler in &self.handlers {
             self.store.reset(handler.name())?;
         }
-        self.drain(256, 16_384)
+        self.drain_inner(256, 16_384)
     }
 
     /// Report current journal head, position, lag, and readiness.

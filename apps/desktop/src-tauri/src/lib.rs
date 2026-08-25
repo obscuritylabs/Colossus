@@ -26,7 +26,7 @@ mod workspace_files;
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use commands::{
     archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_asides, list_runs,
-    read_artifact_content, respond_interaction, restore_thread, watch_run,
+    list_session_activity, read_artifact_content, respond_interaction, restore_thread, watch_run,
 };
 use configuration_import::{apply_repository_configuration, inspect_repository_configuration};
 use desktop_commands::{
@@ -138,6 +138,7 @@ pub fn run() {
             read_artifact_content,
             get_run,
             list_runs,
+            list_session_activity,
             list_asides,
             watch_run,
             cancel_run,

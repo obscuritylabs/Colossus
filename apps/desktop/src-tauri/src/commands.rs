@@ -12,8 +12,8 @@ use crate::{
     dto::{
         ArtifactContentDto, ArtifactReferenceDto, AsideDto, CancelRunInput, CommandErrorDto,
         CreateRunInput, GetRunDto, GetRunInput, InteractionDto, ListAsidesInput, ListRunsDto,
-        ListRunsInput, RespondInteractionInput, RunDto, ThreadLifecycleDto, ThreadLifecycleInput,
-        WatchEventDto, WatchRunInput,
+        ListRunsInput, ListSessionActivityDto, ListSessionActivityInput, RespondInteractionInput,
+        RunDto, ThreadLifecycleDto, ThreadLifecycleInput, WatchEventDto, WatchRunInput,
     },
     run_list, space_search,
     state::{AppState, SelectedTargetLease, TargetConsentContext, TargetHandle},
@@ -199,23 +199,23 @@ pub(crate) async fn create_run(
         target.target.consent,
         TargetConsentContext::ManagedLocal
     ) {
-        let space = settings
-            .space(&target_id)
-            .ok_or_else(|| CommandErrorDto::invalid("targetId", "The managed Space is unknown."))?;
+        let space = settings.space(&target_id).ok_or_else(|| {
+            CommandErrorDto::invalid("targetId", "The managed Workspace is unknown.")
+        })?;
         if space.configuration.accepted_global_revision < settings.global_configuration.revision {
             return Err(CommandErrorDto::busy(
-                "This Space has a pending configuration update. Review and apply it before starting new work.",
+                "This Workspace has a pending configuration update. Review and apply it before starting new work.",
             ));
         }
         if state.configuration_draining_for(&target_id).await {
             return Err(CommandErrorDto::busy(
-                "This Space is draining active work before applying configuration. Wait for the restart to finish.",
+                "This Workspace is draining active work before applying configuration. Wait for the restart to finish.",
             ));
         }
         let guard = state.run_creation_guard_for(&target_id).await;
         if state.configuration_draining_for(&target_id).await {
             return Err(CommandErrorDto::busy(
-                "This Space is draining active work before applying configuration. Wait for the restart to finish.",
+                "This Workspace is draining active work before applying configuration. Wait for the restart to finish.",
             ));
         }
         Some(guard)
@@ -323,6 +323,32 @@ pub(crate) async fn list_runs(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_session_activity(
+    state: State<'_, AppState>,
+    target_id: String,
+    request: ListSessionActivityInput,
+) -> Result<ListSessionActivityDto, CommandErrorDto> {
+    let request = request.into_sdk()?;
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let response = target
+        .target
+        .client
+        .list_session_activity(request)
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    Ok(ListSessionActivityDto {
+        activities: response.activities.into_iter().map(Into::into).collect(),
+        next_page_token: response
+            .page
+            .map_or_else(String::new, |page| page.next_page_token),
+        head_sequence: response.head_sequence,
+        projected_through_sequence: response.projected_through_sequence,
+        caught_up: response.caught_up,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn list_asides(
     state: State<'_, AppState>,
     target_id: String,
@@ -392,7 +418,7 @@ fn require_selected_space(
     } else {
         Err(CommandErrorDto::local_sanitized(
             "space_not_selected",
-            "Select this Space before using its Asides.",
+            "Select this Workspace before using its Asides.",
             true,
         ))
     }

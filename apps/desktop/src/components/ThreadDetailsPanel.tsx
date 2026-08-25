@@ -245,7 +245,7 @@ function DelegateRunDetails({
             </dd>
           </div>
           <div>
-            <dt>Space</dt>
+            <dt>Workspace</dt>
             <dd>
               <IconFolder size={14} stroke={1.7} aria-hidden="true" />
               {spaceName}
@@ -495,7 +495,7 @@ export function ThreadDetailsPanel({
           <dd>{durationLabel(run)}</dd>
         </div>
         <div>
-          <dt>Space</dt>
+          <dt>Workspace</dt>
           <dd>
             <IconFolder size={15} stroke={1.7} aria-hidden="true" />
             {spaceName}

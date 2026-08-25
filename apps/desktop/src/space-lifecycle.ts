@@ -95,7 +95,7 @@ export function projectSpaceArchived(
       ? nextSpace === null
         ? {
             state: "disconnected",
-            message: `${space.displayName} was archived. Add a Space to continue.`,
+            message: `${space.displayName} was archived. Add a Workspace to continue.`,
             targetId: null,
           }
         : {

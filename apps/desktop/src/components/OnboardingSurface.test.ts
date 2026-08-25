@@ -92,8 +92,8 @@ describe("OnboardingSurface", () => {
   it("starts with folder selection and allows offline verification", () => {
     const markup = renderOnboarding(null);
 
-    expect(markup).toContain("Add your first Space");
-    expect(markup).toContain("Add Space from folder");
+    expect(markup).toContain("Add your first Workspace");
+    expect(markup).toContain("Add Workspace from folder");
     expect(markup).not.toContain("provider-setup-form");
     expect(openingButtonTag(markup, "Run offline self-test")).not.toContain(
       "disabled",
@@ -122,7 +122,7 @@ describe("OnboardingSurface", () => {
     expect(markup).not.toContain("API base URL");
     expect(markup).toContain("native secure prompt");
     expect(markup).toContain(
-      '<option value="allow_all" selected="">Allow all — every declared built-in tool</option>',
+      '<span class="app-select-value">Allow all — every declared built-in tool</span>',
     );
     expect(markup).toContain("Unsafe: Full access.");
     expect(markup).toContain("Approval mode is a separate setting.");
@@ -154,13 +154,13 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain(">Cancel</button>");
     expect(markup).toContain('value="configured-model"');
     expect(markup).toContain(
-      '<option value="openai_responses" selected="">OpenAI Responses</option>',
+      '<span class="app-select-value">OpenAI Responses</span>',
     );
     expect(markup).toContain(
-      '<option value="minimal" selected="">Minimal — no workspace tools</option>',
+      '<span class="app-select-value">Minimal — no workspace tools</span>',
     );
     expect(markup).toContain(
-      '<option value="offline_isolated" selected="">Offline isolated</option>',
+      '<span class="app-select-value">Offline isolated</span>',
     );
     expect(markup).not.toContain("Unsafe: Full access.");
     expect(markup).toContain("Replace the stored API key");

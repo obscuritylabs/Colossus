@@ -2,7 +2,8 @@ use crate::{
     AgentRunClient, ApiResult, ArchiveThreadRequest, ArtifactClient, Backend, BackendKind,
     CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
     GetRunRequest, GetRunResponse, GrpcBackend, GrpcConnectOptions, ListRunsRequest,
-    ListRunsResponse, NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
+    ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
+    NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
     RespondInteractionResponse, RestoreThreadRequest, RunUpdateStream, SdkError, SdkResult, Secret,
     ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, ThreadLifecycle,
     TlsFingerprint, WatchRunRequest,
@@ -509,6 +510,16 @@ impl AgentRunClient for WindowsAgentRuns {
 
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
         self.primary.agent_runs().list_runs(request).await
+    }
+
+    async fn list_session_activity(
+        &self,
+        request: ListSessionActivityRequest,
+    ) -> ApiResult<ListSessionActivityResponse> {
+        self.primary
+            .agent_runs()
+            .list_session_activity(request)
+            .await
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {

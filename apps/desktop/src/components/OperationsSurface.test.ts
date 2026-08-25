@@ -128,10 +128,10 @@ function openingButtonTag(markup: string, label: string): string {
 }
 
 describe("OperationsSurface runtime targets", () => {
-  it("keeps Space navigation reachable from every responsive operations view", () => {
+  it("keeps Workspace navigation reachable from every responsive operations view", () => {
     const markup = renderSurface("fleet");
 
-    expect(markup).toContain('aria-label="Open Space navigation"');
+    expect(markup).toContain('aria-label="Open Workspace navigation"');
     expect(markup).toContain('aria-controls="work-navigation"');
   });
 

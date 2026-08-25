@@ -235,6 +235,8 @@ describe("ManagedSettingsPane", () => {
     expect(snapshot.spaces[0]?.effectiveYaml).toContain(
       "workspaceIdentity: <desktop-managed>",
     );
+    expect(snapshot.spaces[0]?.effectiveYaml).toContain("workspace:");
+    expect(snapshot.spaces[0]?.effectiveYaml).not.toContain("\nspace:");
     expect(snapshot.lockedInvariants.map((entry) => entry.id)).toContain(
       "runtime.bootstrapAuthentication",
     );
@@ -250,9 +252,11 @@ describe("ManagedSettingsPane", () => {
 
     expect(markup).toContain('aria-label="Configuration scope"');
     expect(markup).toContain("Global");
-    expect(markup).toContain("Space");
+    expect(markup).toContain("Workspace");
+    expect(markup).not.toContain(">space<");
     expect(markup).toContain("Runtime defaults");
-    expect(markup).toContain('<option value="pinned">Pinned</option>');
+    expect(markup).toContain('role="combobox"');
+    expect(markup).not.toContain("<select");
     expect(markup).toContain("built in");
     expect(markup).toContain("Authority summary");
     expect(markup).toContain("No local changes");

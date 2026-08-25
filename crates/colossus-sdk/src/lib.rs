@@ -46,7 +46,7 @@ pub use backend::{AgentRunClient, ArtifactClient, Backend, BackendKind};
 pub use client::Colossus;
 pub use colossus_api::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApiScope, FieldViolation, IdempotencyKey,
-    PLAN_CONTINUATION_CAPABILITY, scopes,
+    PLAN_CONTINUATION_CAPABILITY, SESSION_ACTIVITY_CAPABILITY, scopes,
 };
 #[cfg(all(feature = "sidecar", target_os = "macos"))]
 pub use colossus_darwin_process::{
@@ -104,13 +104,15 @@ pub use types::{
     ArtifactState, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
     DownloadedArtifact, GetRunRequest, GetRunResponse, InputContentPart, Interaction,
     InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest,
-    ListRunsResponse, MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse,
-    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth,
-    ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse,
-    RestoreThreadRequest, Run, RunBranch, RunBranchContextMode, RunCancellation, RunFailure,
-    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream,
-    ServerCapabilities, SessionMessage, ThreadLifecycle, TokenUsage, ToolActivity,
-    ToolActivityState, UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
+    ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse, MessageContentPart,
+    MessageRole, OutcomeCertainty, PageRequest, PageResponse, PlanExecutionStrategy, PlanRunAction,
+    PlanStatus, PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind,
+    RespondInteractionRequest, RespondInteractionResponse, RestoreThreadRequest, Run, RunBranch,
+    RunBranchContextMode, RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal,
+    RunUpdate, RunUpdateKind, RunUpdateStream, ServerCapabilities, SessionActivity,
+    SessionActivityContent, SessionActivityKind, SessionActivityLane, SessionActivityStatus,
+    SessionMessage, ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState,
+    UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
 };
 
 #[cfg(test)]

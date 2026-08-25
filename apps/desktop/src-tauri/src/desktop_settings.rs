@@ -137,7 +137,7 @@ pub(crate) struct WorkspaceSetting {
     pub(crate) display_path: String,
 }
 
-/// Persisted folder-backed Desktop context. The renderer calls this a Space, while
+/// Persisted folder-backed Desktop context. The renderer calls this a Workspace, while
 /// the neutral native name keeps a future product-label change migration-free.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -293,14 +293,14 @@ pub(crate) struct DesktopSettings {
     pub(crate) spaces: Vec<WorkspaceProfile>,
     #[serde(default)]
     pub(crate) selected_space_id: Option<String>,
-    /// Versioned reusable definitions and defaults shared by Desktop Spaces.
+    /// Versioned reusable definitions and defaults shared by Desktop Workspaces.
     #[serde(default)]
     pub(crate) global_configuration: GlobalConfigurationSetting,
-    /// Bounded linkage metadata for Space-scoped side conversations. No prompt,
+    /// Bounded linkage metadata for Workspace-scoped side conversations. No prompt,
     /// message, tool output, or selected text is persisted here.
     #[serde(default)]
     pub(crate) asides: Vec<AsideSetting>,
-    /// Selected-Space projection retained for narrow command paths. `SettingsStore`
+    /// Selected-Workspace projection retained for narrow command paths. `SettingsStore`
     /// synchronizes it into `spaces` before every write and refreshes it after load.
     pub(crate) workspace: Option<WorkspaceSetting>,
     #[serde(default)]
@@ -458,14 +458,14 @@ impl DesktopSettings {
         {
             return Err(CommandErrorDto::invalid(
                 "workspace",
-                "That folder already belongs to another Space.",
+                "That folder already belongs to another Workspace.",
             ));
         }
         let space = self
             .spaces
             .iter_mut()
             .find(|space| space.id == space_id)
-            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Space is unknown."))?;
+            .ok_or_else(|| CommandErrorDto::invalid("spaceId", "The Workspace is unknown."))?;
         workspace.id.clone_from(&space.workspace.id);
         space.workspace = workspace.clone();
         if self.selected_space_id.as_deref() == Some(space_id) {
@@ -549,14 +549,14 @@ impl DesktopSettings {
         self.sync_selected_space_projection()?;
         if self.spaces.len() >= MAX_WORKSPACE_PROFILES {
             return Err(CommandErrorDto::busy(
-                "The Desktop Space limit has been reached. Archive an unused Space first.",
+                "The Desktop Workspace limit has been reached. Archive an unused Workspace first.",
             ));
         }
         let identity = workspace.identity.as_ref().ok_or_else(workspace_error)?;
         if self.space_for_workspace_identity(identity).is_some() {
             return Err(CommandErrorDto::invalid(
                 "workspace",
-                "That folder already belongs to a Space.",
+                "That folder already belongs to a Workspace.",
             ));
         }
         let id = workspace.id.clone();
@@ -584,12 +584,15 @@ impl DesktopSettings {
     pub(crate) fn activate_space(&mut self, space_id: &str) -> Result<(), CommandErrorDto> {
         self.sync_selected_space_projection()?;
         let Some(index) = self.spaces.iter().position(|space| space.id == space_id) else {
-            return Err(CommandErrorDto::invalid("spaceId", "The Space is unknown."));
+            return Err(CommandErrorDto::invalid(
+                "spaceId",
+                "The Workspace is unknown.",
+            ));
         };
         if self.spaces[index].archived {
             return Err(CommandErrorDto::invalid(
                 "spaceId",
-                "Restore this Space before selecting it.",
+                "Restore this Workspace before selecting it.",
             ));
         }
         self.spaces[index].last_opened_at_ms = unix_time_millis();
@@ -626,7 +629,7 @@ impl DesktopSettings {
             .cloned();
         let Some(space) = selected else {
             // A provider may be configured before the first folder is selected.
-            // Preserve that staged projection so Add Space can inherit it and so
+            // Preserve that staged projection so Add Workspace can inherit it and so
             // legacy path-only migrations do not silently discard provider state.
             return;
         };

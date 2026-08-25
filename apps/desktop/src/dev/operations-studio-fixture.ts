@@ -3,8 +3,11 @@ import type { ChatState, RunView } from "../state";
 import type {
   ArtifactReference,
   Interaction,
+  ListSessionActivityRequest,
   Run,
   RunUpdate,
+  SessionActivity,
+  SessionActivityPage,
   SessionMap,
   TokenUsage,
 } from "../types";
@@ -36,7 +39,7 @@ export function buildSessionMapFixture(): SessionMap {
         task: "Review the Desktop IPC and credential boundaries.",
         role: "security",
         status: "completed",
-        finalOutput: "No cross-Space control path was found.",
+        finalOutput: "No cross-Workspace control path was found.",
         error: "",
         createdAt: "2026-07-20T14:31:00Z",
         updatedAt: "2026-07-20T14:34:00Z",
@@ -94,7 +97,7 @@ export function buildSessionMapFixture(): SessionMap {
       },
       {
         id: "fixture-task-tests",
-        title: "Verify selected-Space isolation",
+        title: "Verify selected-Workspace isolation",
         description: "Add negative IPC and renderer contract coverage.",
         status: "in_progress",
         createdAt: "2026-07-20T14:30:10Z",
@@ -155,10 +158,11 @@ export function buildSessionMapFixture(): SessionMap {
         status: "active",
         priority: "high",
         title: "Fail closed on identity drift",
-        decision: "Stop the affected Space when workspace identity changes.",
+        decision:
+          "Stop the affected Workspace when workspace identity changes.",
         intent: "Avoid silently operating on a different folder object.",
         appliesWhen:
-          "The selected Space no longer matches its canonical identity.",
+          "The selected Workspace no longer matches its canonical identity.",
         rationale: "An explicit reselection is safer than path-only recovery.",
         createdAt: "2026-07-20T14:31:00Z",
         updatedAt: "2026-07-20T14:31:00Z",
@@ -249,6 +253,649 @@ export function buildSessionMapFixture(): SessionMap {
 
 const SELECTED_RUN_ID = "fixture-run-desktop-release";
 const SESSION_ID = "fixture-session-operations-studio";
+
+function activity(
+  sequence: number,
+  turn: number,
+  lane: SessionActivity["lane"],
+  kind: SessionActivity["kind"],
+  title: string,
+  summary: string,
+  startedAt: string,
+  options: Partial<SessionActivity> = {},
+): SessionActivity {
+  return {
+    activityId: `fixture-activity-${sequence}`,
+    runId: SELECTED_RUN_ID,
+    turn,
+    lane,
+    kind,
+    title,
+    summary,
+    actor:
+      kind === "user" ? "User" : lane === "system" ? "System" : "Assistant",
+    status: "completed",
+    startedAt,
+    completedAt: null,
+    durationMs: null,
+    input: null,
+    result: null,
+    attributes: {},
+    sourceEventTypes: [`fixture.${kind}.v1`],
+    firstSequence: sequence,
+    lastSequence: sequence,
+    ...options,
+  };
+}
+
+const SESSION_ACTIVITY_FIXTURE: SessionActivity[] = [
+  activity(
+    1,
+    1,
+    "agent",
+    "user",
+    "User message",
+    "Review the desktop release path and identify its trust boundaries.",
+    "2026-07-20T14:30:00.103Z",
+    {
+      input: {
+        format: "text",
+        value:
+          "Review the desktop release path and identify its trust boundaries.",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    2,
+    1,
+    "system",
+    "system",
+    "Context prepared",
+    "Prepared 6 messages from session state",
+    "2026-07-20T14:30:00.145Z",
+    {
+      attributes: {
+        message_count: "6",
+        token_estimate: "1840",
+        strategy: "full",
+      },
+      sourceEventTypes: ["context.prepared.v1"],
+    },
+  ),
+  activity(
+    3,
+    1,
+    "agent",
+    "assistant",
+    "Assistant turn",
+    "Model request prepared",
+    "2026-07-20T14:30:00.184Z",
+    {
+      completedAt: "2026-07-20T14:30:00.360Z",
+      durationMs: 176,
+      attributes: { model_profile: "primary", tool_count: "12" },
+      sourceEventTypes: ["model.request.prepared.v1", "final.output.v1"],
+    },
+  ),
+  activity(
+    4,
+    1,
+    "tools",
+    "tool",
+    "filesystem.search",
+    "Searched workspace files matching README",
+    "2026-07-20T14:30:00.362Z",
+    {
+      completedAt: "2026-07-20T14:30:00.446Z",
+      durationMs: 84,
+      input: {
+        format: "json",
+        value: '{\n  "query": "**/README*",\n  "max_results": 50\n}',
+      },
+      result: {
+        format: "text",
+        value:
+          "Found 3 released results\n./README.md\n./docs/README.md\n./examples/README.md",
+      },
+      attributes: { tool_name: "filesystem.search" },
+      sourceEventTypes: [
+        "tool.call.requested.v1",
+        "tool.call.started.v1",
+        "tool.call.completed.v1",
+      ],
+      lastSequence: 6,
+    },
+  ),
+  activity(
+    7,
+    1,
+    "tools",
+    "tool",
+    "filesystem.read",
+    "Read the released architecture guide",
+    "2026-07-20T14:30:00.448Z",
+    {
+      completedAt: "2026-07-20T14:30:00.550Z",
+      durationMs: 102,
+      input: {
+        format: "json",
+        value: '{ "path": "docs/develop/architecture.md" }',
+      },
+      result: {
+        format: "text",
+        value: "# Architecture\n\nRust is the active root implementation…",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    8,
+    1,
+    "system",
+    "system",
+    "Token usage",
+    "2,184 tokens used",
+    "2026-07-20T14:30:00.573Z",
+    {
+      attributes: {
+        input_tokens: "1712",
+        output_tokens: "472",
+        total_tokens: "2184",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    9,
+    2,
+    "agent",
+    "user",
+    "User message",
+    "Trace the native bootstrap and credential boundaries.",
+    "2026-07-20T14:31:02.101Z",
+    {
+      input: {
+        format: "text",
+        value: "Trace the native bootstrap and credential boundaries.",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    10,
+    2,
+    "system",
+    "system",
+    "Context prepared",
+    "Prepared 12 messages from session state",
+    "2026-07-20T14:31:02.142Z",
+    {
+      attributes: {
+        message_count: "12",
+        token_estimate: "4630",
+        strategy: "full",
+      },
+      sourceEventTypes: ["context.prepared.v1"],
+    },
+  ),
+  activity(
+    11,
+    2,
+    "tools",
+    "tool",
+    "shell.exec",
+    "Checked the workspace status",
+    "2026-07-20T14:31:02.360Z",
+    {
+      completedAt: "2026-07-20T14:31:02.451Z",
+      durationMs: 91,
+      input: {
+        format: "json",
+        value: '{ "command": "git status --porcelain" }',
+      },
+      result: {
+        format: "text",
+        value: "Process exited successfully with no released output.",
+      },
+      attributes: { exit_code: "0" },
+      sourceEventTypes: ["tool.call.started.v1", "tool.call.completed.v1"],
+      lastSequence: 12,
+    },
+  ),
+  activity(
+    13,
+    2,
+    "tools",
+    "tool",
+    "network.fetch",
+    "Outbound request denied by policy",
+    "2026-07-20T14:31:02.510Z",
+    {
+      status: "failed",
+      completedAt: "2026-07-20T14:31:02.519Z",
+      durationMs: 9,
+      result: {
+        format: "text",
+        value: "The requested destination was not released by policy.",
+      },
+      attributes: {
+        action: "network.fetch",
+        action_category: "network",
+        policy_outcome: "deny",
+        reason_code: "policy_denied",
+        resource_authority: "declared",
+        sandbox_boundary: "broker",
+      },
+      sourceEventTypes: ["tool.call.requested.v1", "effect.denied.v1"],
+      lastSequence: 14,
+    },
+  ),
+  activity(
+    15,
+    2,
+    "agent",
+    "assistant",
+    "Reasoning summary",
+    "The native sidecar binds the selected workspace identity before runtime composition.",
+    "2026-07-20T14:31:02.689Z",
+    {
+      runId: "fixture-run-security-reviewer",
+      actor: "Subagent · security-reviewer",
+      attributes: {
+        run_role: "subagent",
+        subagent_id: "fixture-subagent-security-reviewer",
+        subagent_role: "security-reviewer",
+        parent_run_id: SELECTED_RUN_ID,
+      },
+      result: {
+        format: "text",
+        value:
+          "The native sidecar binds the selected workspace identity before runtime composition.",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    16,
+    3,
+    "agent",
+    "user",
+    "User message",
+    "Turn the findings into an implementation plan.",
+    "2026-07-20T14:32:10.021Z",
+    {
+      input: {
+        format: "text",
+        value: "Turn the findings into an implementation plan.",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    17,
+    3,
+    "system",
+    "system",
+    "Context prepared",
+    "Prepared 19 messages from session state",
+    "2026-07-20T14:32:10.063Z",
+    {
+      attributes: {
+        compacted: "true",
+        message_count: "19",
+        strategy: "summary",
+      },
+      sourceEventTypes: ["context.prepared.v1"],
+    },
+  ),
+  activity(
+    18,
+    3,
+    "system",
+    "system",
+    "Plan written",
+    "A canonical Plan revision was saved",
+    "2026-07-20T14:32:11.220Z",
+    {
+      attributes: { plan_id: "fixture-plan-bootstrap", revision: "3" },
+      sourceEventTypes: ["plan.written.v1"],
+    },
+  ),
+  activity(
+    19,
+    3,
+    "agent",
+    "assistant",
+    "Assistant response",
+    "Outlined the release boundary, verification gates, and recovery behavior.",
+    "2026-07-20T14:32:11.240Z",
+    {
+      completedAt: "2026-07-20T14:32:11.583Z",
+      durationMs: 343,
+      result: {
+        format: "text",
+        value:
+          "## Implementation plan\n\n1. Preserve the native trust boundary.\n2. Add bounded verification gates.\n3. Exercise recovery before release.",
+      },
+      sourceEventTypes: ["model.request.prepared.v1", "api.run.update.v1"],
+      lastSequence: 20,
+    },
+  ),
+  activity(
+    21,
+    4,
+    "agent",
+    "user",
+    "User message",
+    "Run the focused checks and summarize the release readiness.",
+    "2026-07-20T14:33:12.103Z",
+    {
+      input: {
+        format: "text",
+        value: "Run the focused checks and summarize the release readiness.",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    22,
+    4,
+    "system",
+    "system",
+    "Context prepared",
+    "Prepared 24 messages from session state",
+    "2026-07-20T14:33:12.145Z",
+    {
+      attributes: {
+        message_count: "24",
+        token_estimate: "7890",
+        strategy: "full",
+      },
+      sourceEventTypes: ["context.prepared.v1"],
+    },
+  ),
+  activity(
+    23,
+    4,
+    "agent",
+    "assistant",
+    "Assistant turn",
+    "Planning the release verification sequence",
+    "2026-07-20T14:33:12.184Z",
+    {
+      completedAt: "2026-07-20T14:33:12.360Z",
+      durationMs: 176,
+      attributes: { model_profile: "primary", tool_count: "12" },
+      sourceEventTypes: ["model.request.prepared.v1", "final.output.v1"],
+    },
+  ),
+  activity(
+    24,
+    4,
+    "tools",
+    "tool",
+    "filesystem.search",
+    "Located release and validation manifests",
+    "2026-07-20T14:33:12.362Z",
+    {
+      completedAt: "2026-07-20T14:33:12.446Z",
+      durationMs: 84,
+      input: {
+        format: "json",
+        value: '{ "query": "**/{Cargo.toml,tauri.conf.json}" }',
+      },
+      result: {
+        format: "text",
+        value:
+          "Found released manifests\n./Cargo.toml\n./apps/desktop/src-tauri/tauri.conf.json",
+      },
+      attributes: { tool_name: "filesystem.search" },
+      sourceEventTypes: [
+        "tool.call.requested.v1",
+        "tool.call.started.v1",
+        "tool.call.completed.v1",
+      ],
+      lastSequence: 26,
+    },
+  ),
+  activity(
+    27,
+    4,
+    "tools",
+    "tool",
+    "filesystem.read",
+    "Read the released validation configuration",
+    "2026-07-20T14:33:12.448Z",
+    {
+      completedAt: "2026-07-20T14:33:12.550Z",
+      durationMs: 102,
+      input: {
+        format: "json",
+        value: '{ "path": "apps/desktop/src-tauri/tauri.conf.json" }',
+      },
+      result: {
+        format: "text",
+        value:
+          "Released configuration preview: local-only CSP and native capabilities.",
+      },
+      sourceEventTypes: ["tool.call.started.v1", "tool.call.completed.v1"],
+      lastSequence: 29,
+    },
+  ),
+  activity(
+    30,
+    4,
+    "tools",
+    "tool",
+    "shell.exec",
+    "Checked the candidate change set",
+    "2026-07-20T14:33:12.552Z",
+    {
+      completedAt: "2026-07-20T14:33:12.643Z",
+      durationMs: 91,
+      input: {
+        format: "json",
+        value: '{ "command": "git status --short" }',
+      },
+      result: {
+        format: "text",
+        value:
+          "Process exited successfully; released summary contains 12 changed paths.",
+      },
+      attributes: { exit_code: "0" },
+      sourceEventTypes: ["tool.call.started.v1", "tool.call.completed.v1"],
+      lastSequence: 32,
+    },
+  ),
+  activity(
+    33,
+    4,
+    "system",
+    "system",
+    "State checkpoint saved",
+    "Saved the released turn checkpoint",
+    "2026-07-20T14:33:12.646Z",
+    { sourceEventTypes: ["api.run.update.v1"] },
+  ),
+  activity(
+    34,
+    4,
+    "agent",
+    "assistant",
+    "Reasoning summary",
+    "Focused checks cover the projection, transport boundary, and desktop release surface.",
+    "2026-07-20T14:33:12.689Z",
+    {
+      result: {
+        format: "text",
+        value:
+          "Focused checks cover the projection, transport boundary, and desktop release surface.",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    35,
+    4,
+    "system",
+    "system",
+    "Token usage",
+    "8,412 tokens used",
+    "2026-07-20T14:33:12.845Z",
+    {
+      attributes: {
+        input_tokens: "7310",
+        output_tokens: "1102",
+        total_tokens: "8412",
+      },
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+  activity(
+    36,
+    4,
+    "tools",
+    "tool",
+    "cargo.test",
+    "Ran focused Rust library tests",
+    "2026-07-20T14:33:13.052Z",
+    {
+      completedAt: "2026-07-20T14:33:14.332Z",
+      durationMs: 1280,
+      input: {
+        format: "json",
+        value: '{ "package": "colossus-runtime", "lib": true }',
+      },
+      result: {
+        format: "text",
+        value: "test result: ok. 126 passed; 0 failed",
+      },
+      attributes: { exit_code: "0" },
+      sourceEventTypes: [
+        "tool.call.requested.v1",
+        "tool.call.started.v1",
+        "tool.call.completed.v1",
+      ],
+      lastSequence: 38,
+    },
+  ),
+  activity(
+    39,
+    4,
+    "agent",
+    "assistant",
+    "Assistant response",
+    "The release boundary is ready for the full validation gate.",
+    "2026-07-20T14:33:14.389Z",
+    {
+      completedAt: "2026-07-20T14:33:14.732Z",
+      durationMs: 343,
+      result: {
+        format: "text",
+        value:
+          "Focused checks pass. The native boundary remains fail-closed and is ready for the full release gate.",
+      },
+      sourceEventTypes: ["model.request.prepared.v1", "api.run.update.v1"],
+      lastSequence: 40,
+    },
+  ),
+  activity(
+    41,
+    4,
+    "system",
+    "system",
+    "Run completed",
+    "Run completed",
+    "2026-07-20T14:33:14.745Z",
+    { sourceEventTypes: ["run.completed.v1"] },
+  ),
+].sort((left, right) => right.firstSequence - left.firstSequence);
+
+const SESSION_ACTIVITY_LIVE_FIXTURE: SessionActivity[] = [
+  activity(
+    42,
+    5,
+    "system",
+    "system",
+    "Live checkpoint",
+    "Projection advanced to the newest released records.",
+    "2026-07-20T14:33:17.000Z",
+    { sourceEventTypes: ["projection.checkpoint.v1"] },
+  ),
+  activity(
+    43,
+    5,
+    "agent",
+    "assistant",
+    "Live response",
+    "A newly released assistant activity arrived while following live.",
+    "2026-07-20T14:33:20.000Z",
+    {
+      completedAt: "2026-07-20T14:33:20.180Z",
+      durationMs: 180,
+      sourceEventTypes: ["api.run.update.v1"],
+    },
+  ),
+];
+
+interface SessionActivityFixtureOptions {
+  liveActivityCount?: number;
+}
+
+export function buildSessionActivityFixture(
+  request: ListSessionActivityRequest,
+  options: SessionActivityFixtureOptions = {},
+): SessionActivityPage {
+  const liveActivityCount = Math.min(
+    Math.max(options.liveActivityCount ?? 0, 0),
+    SESSION_ACTIVITY_LIVE_FIXTURE.length,
+  );
+  const fixtureActivities = [
+    ...SESSION_ACTIVITY_LIVE_FIXTURE.slice(0, liveActivityCount),
+    ...SESSION_ACTIVITY_FIXTURE,
+  ].sort((left, right) => right.firstSequence - left.firstSequence);
+  const query = request.query?.trim().toLocaleLowerCase() ?? "";
+  const lanes = request.lanes ?? [];
+  const kinds = request.kinds ?? [];
+  const statuses = request.statuses ?? [];
+  const matching = fixtureActivities.filter((item) => {
+    if (lanes.length > 0 && !lanes.includes(item.lane)) return false;
+    if (kinds.length > 0 && !kinds.includes(item.kind)) return false;
+    if (
+      statuses.length > 0 &&
+      (item.status === null || !statuses.includes(item.status))
+    ) {
+      return false;
+    }
+    return (
+      query === "" ||
+      JSON.stringify({
+        title: item.title,
+        summary: item.summary,
+        actor: item.actor,
+        attributes: item.attributes,
+        sourceEventTypes: item.sourceEventTypes,
+        input: item.input?.value,
+        result: item.result?.value,
+      })
+        .toLocaleLowerCase()
+        .includes(query)
+    );
+  });
+  const offset =
+    Number.parseInt(request.pageToken?.replace("fixture:", "") ?? "0", 10) || 0;
+  const pageSize = Math.min(Math.max(request.pageSize ?? 100, 1), 100);
+  const page = matching.slice(offset, offset + pageSize);
+  const nextOffset = offset + page.length;
+  return {
+    activities: page,
+    nextPageToken: nextOffset < matching.length ? `fixture:${nextOffset}` : "",
+    headSequence: 41 + liveActivityCount,
+    projectedThroughSequence: 41 + liveActivityCount,
+    caughtUp: true,
+  };
+}
 
 function update(
   sequence: number,

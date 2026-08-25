@@ -88,10 +88,10 @@ Credentials, prompts, model output, and private paths are not included in diagno
 
 The enhanced Settings pane uses the same Windows storage and credential boundary.
 Global provider, model, MCP, search, telemetry, and credential definitions are
-revisioned; each Space pins the revisions it has accepted. Repository configuration is
+revisioned; each Workspace pins the revisions it has accepted. Repository configuration is
 inspected by the sealed sidecar parser, and imported `env:` credential references must
 be mapped to Windows-backed opaque records. Provider/model/search/MCP diagnostics run
-through the selected Space's authenticated worker instead of from the WebView.
+through the selected Workspace's authenticated worker instead of from the WebView.
 
 ### 3. Import a private CA
 
