@@ -103,6 +103,16 @@ fn install(installer: &Path, prefix: &Path) -> Output {
 
 #[cfg(unix)]
 fn install_with_umask(installer: &Path, prefix: &Path, umask: &str) -> Output {
+    install_with_umask_and_home(installer, prefix, umask, &prefix.join("home/.colossus"))
+}
+
+#[cfg(unix)]
+fn install_with_umask_and_home(
+    installer: &Path,
+    prefix: &Path,
+    umask: &str,
+    colossus_home: &Path,
+) -> Output {
     Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("umask {umask}; exec /bin/sh \"$@\""))
@@ -110,7 +120,7 @@ fn install_with_umask(installer: &Path, prefix: &Path, umask: &str) -> Output {
         .arg(installer)
         .arg("--prefix")
         .arg(prefix)
-        .env("COLOSSUS_HOME", prefix.join("home/.colossus"))
+        .env("COLOSSUS_HOME", colossus_home)
         .env("XDG_DATA_HOME", prefix.join("data"))
         .output()
         .expect("run installer with explicit umask")
@@ -219,6 +229,28 @@ fn packaged_installer_handles_ubuntu_user_private_group_umask() {
     assert!(
         String::from_utf8_lossy(&installed.stdout)
             .contains("removed group-write permission from installation directory")
+    );
+
+    let replaceable_prefix = root.join("replaceable-prefix");
+    fs::create_dir(&replaceable_prefix).expect("replaceable prefix directory");
+    fs::set_permissions(&replaceable_prefix, fs::Permissions::from_mode(0o775))
+        .expect("replaceable prefix permissions");
+    let rejected = install_with_umask_and_home(
+        &installer,
+        &replaceable_prefix,
+        "0002",
+        &root.join("replaceable-test-home"),
+    );
+    assert!(!rejected.status.success());
+    let rejected_stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        rejected_stderr
+            .contains("installation prefix ancestor is writable without sticky protection"),
+        "{rejected_stderr}"
+    );
+    assert!(
+        !replaceable_prefix.join("bin").exists(),
+        "an unsafe prefix must be rejected before creating bin"
     );
 
     let shared_prefix = root.join("shared-prefix");

@@ -148,7 +148,8 @@ The receipt records only its schema version, release channel and version, target
 prefix, binary path, fixed distribution origin, and `direct` installer kind. The
 installer rejects linked or unsafe destination directories and commits the binary and
 receipt with same-directory temporary files. On Unix it creates missing installation
-directories under a private umask. If an existing current-user-owned `bin` directory is
+directories under a private umask after verifying the existing prefix ancestry is not
+replaceable by another user. If an existing current-user-owned `bin` directory is
 group-writable beneath an owner-private prefix, the installer removes that group-write
 permission and reports the change; it does not relax a shared or world-writable path.
 If receipt commit fails, it restores the previous executable.

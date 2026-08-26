@@ -108,11 +108,49 @@ directory_is_owner_private() {
     [ $((0$private_mode & 077)) -eq 0 ]
 }
 
+require_safe_install_prefix_ancestors() {
+    checked_path=$1
+    remainder=${checked_path#/}
+    current=
+    current_user=$(id -u)
+    old_ifs=$IFS
+    IFS=/
+    for component in $remainder; do
+        IFS=$old_ifs
+        [ -n "$component" ] || continue
+        current=$current/$component
+        if [ -e "$current" ]; then
+            if ! { [ -d "$current" ] && [ ! -L "$current" ]; }; then
+                fail "installation prefix ancestor is linked or not a directory: $current"
+            fi
+            ancestor_owner=$(file_owner "$current") ||
+                fail "could not inspect installation prefix ancestor owner: $current"
+            if [ "$ancestor_owner" != 0 ] && [ "$ancestor_owner" != "$current_user" ]; then
+                fail "installation prefix ancestor is owned by an untrusted user: $current"
+            fi
+            ancestor_mode=$(directory_mode "$current") ||
+                fail "could not inspect installation prefix ancestor permissions: $current"
+            case "$ancestor_mode" in
+                *[!0-7]*|'')
+                    fail "installation prefix ancestor permissions are invalid: $current"
+                    ;;
+            esac
+            if [ $((0$ancestor_mode & 022)) -ne 0 ] &&
+                [ $((0$ancestor_mode & 01000)) -eq 0 ]; then
+                fail "installation prefix ancestor is writable without sticky protection: $current"
+            fi
+        fi
+        IFS=/
+    done
+    IFS=$old_ifs
+}
+
 prepare_installation_directory() {
     checked_directory=$1
     checked_prefix=$2
 
     ensure_no_link_components "$checked_directory"
+    require_safe_install_prefix_ancestors "$checked_prefix"
     if [ ! -e "$checked_directory" ]; then
         # Ubuntu commonly uses a user-private group with umask 0002. Do not let
         # that ambient setting create a directory this installer then rejects.
@@ -122,6 +160,7 @@ prepare_installation_directory() {
         umask "$old_umask"
     fi
     ensure_no_link_components "$checked_directory"
+    require_safe_install_prefix_ancestors "$checked_prefix"
 
     if [ -d "$checked_directory" ] && [ ! -L "$checked_directory" ] &&
         [ "$(file_owner "$checked_directory")" = "$(id -u)" ]; then
