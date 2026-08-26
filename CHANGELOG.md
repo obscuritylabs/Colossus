@@ -8,6 +8,15 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Fixed
+
+- Made the Unix direct installer compatible with Ubuntu's common user-private-group
+  `0002` umask. Missing installation directories are now created privately, and an
+  existing group-writable `bin` directory is normalized only beneath an owner-private
+  prefix; replaceable prefixes, group-writable bins under accessible prefixes, and
+  world-writable destinations still fail closed with explicit installation-failure
+  output.
+
 ## [0.10.10-preview.5] - 2026-08-25
 
 ### Added

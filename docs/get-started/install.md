@@ -147,8 +147,12 @@ A successful direct installation writes a bounded, credential-free ownership rec
 The receipt records only its schema version, release channel and version, target,
 prefix, binary path, fixed distribution origin, and `direct` installer kind. The
 installer rejects linked or unsafe destination directories and commits the binary and
-receipt with same-directory temporary files. If receipt commit fails, it restores the
-previous executable.
+receipt with same-directory temporary files. On Unix it creates missing installation
+directories under a private umask after verifying the existing prefix ancestry is not
+replaceable by another user. If an existing current-user-owned `bin` directory is
+group-writable beneath an owner-private prefix, the installer removes that group-write
+permission and reports the change; it does not relax a shared or world-writable path.
+If receipt commit fails, it restores the previous executable.
 
 ### Check for a newer stable release
 
@@ -342,8 +346,11 @@ state. Back up or remove it only as a separate, explicit data-lifecycle decision
   checksum.
 - **Checksum or archive rejection:** do not bypass verification. Download the release
   again and report a reproducible mismatch.
-- **Unsafe prefix:** choose an absolute, current-user-owned prefix without linked,
-  group-writable, or world-writable installation directories.
+- **Unsafe prefix:** choose an absolute, current-user-owned prefix without linked or
+  shared writable components. The Unix installer repairs the common mode-`0775` `bin`
+  directory only when its parent prefix is owner-private; otherwise remove group-write
+  permission deliberately or choose a private prefix, then retry. A failed bootstrap
+  prints that the requested version was not installed.
 - **Unsafe Colossus home:** use an absolute current-user-owned private directory with
   no linked components. Do not relax its permissions to complete installation.
 - **Command not found:** apply the printed `PATH` command, then open a new terminal.
