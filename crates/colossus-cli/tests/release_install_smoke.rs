@@ -101,6 +101,21 @@ fn install(installer: &Path, prefix: &Path) -> Output {
         .expect("run installer")
 }
 
+#[cfg(unix)]
+fn install_with_umask(installer: &Path, prefix: &Path, umask: &str) -> Output {
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("umask {umask}; exec /bin/sh \"$@\""))
+        .arg("colossus-install-test")
+        .arg(installer)
+        .arg("--prefix")
+        .arg(prefix)
+        .env("COLOSSUS_HOME", prefix.join("home/.colossus"))
+        .env("XDG_DATA_HOME", prefix.join("data"))
+        .output()
+        .expect("run installer with explicit umask")
+}
+
 #[cfg(windows)]
 fn install(installer: &Path, prefix: &Path) -> Output {
     Command::new("pwsh")
@@ -145,6 +160,94 @@ fn offline_command(binary: &Path, working_directory: &Path) -> process_support::
         }
     }
     process_support::IsolatedCommand::new(command, isolated_home)
+}
+
+#[cfg(unix)]
+#[test]
+fn packaged_installer_handles_ubuntu_user_private_group_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let root = fs::canonicalize(directory.path()).expect("canonical test root");
+    create_private_directory(&root);
+    let package = root.join("package");
+    fs::create_dir(&package).expect("package directory");
+    let installer = prepare_package(source_binary, &package);
+
+    let new_prefix = root.join("new-prefix");
+    let installed = install_with_umask(&installer, &new_prefix, "0002");
+    assert!(
+        installed.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&installed.stdout),
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    assert_eq!(
+        fs::metadata(new_prefix.join("bin"))
+            .expect("new bin metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+        "the ambient umask must not create a directory the installer rejects"
+    );
+
+    let existing_prefix = root.join("existing-prefix");
+    create_private_directory(&existing_prefix);
+    fs::create_dir(existing_prefix.join("bin")).expect("existing bin directory");
+    fs::set_permissions(
+        existing_prefix.join("bin"),
+        fs::Permissions::from_mode(0o775),
+    )
+    .expect("Ubuntu-style bin permissions");
+    let installed = install(&installer, &existing_prefix);
+    assert!(
+        installed.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&installed.stdout),
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    assert_eq!(
+        fs::metadata(existing_prefix.join("bin"))
+            .expect("normalized bin metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    assert!(
+        String::from_utf8_lossy(&installed.stdout)
+            .contains("removed group-write permission from installation directory")
+    );
+
+    let shared_prefix = root.join("shared-prefix");
+    fs::create_dir(&shared_prefix).expect("shared prefix directory");
+    fs::set_permissions(&shared_prefix, fs::Permissions::from_mode(0o755))
+        .expect("shared prefix permissions");
+    fs::create_dir(shared_prefix.join("bin")).expect("shared bin directory");
+    fs::set_permissions(shared_prefix.join("bin"), fs::Permissions::from_mode(0o775))
+        .expect("shared bin permissions");
+    let rejected = install(&installer, &shared_prefix);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("installation directory is group- or world-writable")
+    );
+    assert!(!shared_prefix.join("bin/colossus").exists());
+
+    let unsafe_prefix = root.join("unsafe-prefix");
+    create_private_directory(&unsafe_prefix);
+    fs::create_dir(unsafe_prefix.join("bin")).expect("unsafe bin directory");
+    fs::set_permissions(unsafe_prefix.join("bin"), fs::Permissions::from_mode(0o777))
+        .expect("unsafe bin permissions");
+    let rejected = install(&installer, &unsafe_prefix);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("installation directory is group- or world-writable")
+    );
+    assert!(!unsafe_prefix.join("bin/colossus").exists());
 }
 
 #[test]

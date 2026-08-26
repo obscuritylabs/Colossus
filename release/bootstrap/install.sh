@@ -428,7 +428,9 @@ binary_version=$(
 ) || fail "downloaded binary did not report its version"
 [ "$binary_version" = "colossus $version" ] || fail "downloaded binary version mismatch"
 
-"$package_root/install.sh" --prefix "$prefix"
+if ! "$package_root/install.sh" --prefix "$prefix"; then
+    fail "installation failed; the requested Colossus version was not installed"
+fi
 
 case ":${PATH:-}:" in
     *":$prefix/bin:"*) ;;

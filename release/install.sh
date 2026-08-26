@@ -95,6 +95,51 @@ require_private_write_directory() {
     fi
 }
 
+directory_is_owner_private() {
+    private_directory=$1
+    if ! { [ -d "$private_directory" ] && [ ! -L "$private_directory" ]; }; then
+        return 1
+    fi
+    [ "$(file_owner "$private_directory")" = "$(id -u)" ] || return 1
+    private_mode=$(directory_mode "$private_directory") || return 1
+    case "$private_mode" in
+        *[!0-7]*|'') return 1 ;;
+    esac
+    [ $((0$private_mode & 077)) -eq 0 ]
+}
+
+prepare_installation_directory() {
+    checked_directory=$1
+    checked_prefix=$2
+
+    ensure_no_link_components "$checked_directory"
+    if [ ! -e "$checked_directory" ]; then
+        # Ubuntu commonly uses a user-private group with umask 0002. Do not let
+        # that ambient setting create a directory this installer then rejects.
+        old_umask=$(umask)
+        umask 077
+        mkdir -p -- "$checked_directory"
+        umask "$old_umask"
+    fi
+    ensure_no_link_components "$checked_directory"
+
+    if [ -d "$checked_directory" ] && [ ! -L "$checked_directory" ] &&
+        [ "$(file_owner "$checked_directory")" = "$(id -u)" ]; then
+        mode=$(directory_mode "$checked_directory") ||
+            fail "could not inspect directory permissions"
+        case "$mode" in
+            *[!0-7]*|'') fail "directory permissions are invalid: $checked_directory" ;;
+        esac
+        if [ $((0$mode & 020)) -ne 0 ] && [ $((0$mode & 002)) -eq 0 ] &&
+            directory_is_owner_private "$checked_prefix"; then
+            chmod g-w "$checked_directory"
+            printf '%s\n' "removed group-write permission from installation directory: $checked_directory"
+        fi
+    fi
+
+    require_private_write_directory "$checked_directory"
+}
+
 require_private_home_directory() {
     checked_directory=$1
     if ! { [ -d "$checked_directory" ] && [ ! -L "$checked_directory" ]; }; then
@@ -243,10 +288,7 @@ colossus_home=
 prepare_colossus_home
 
 bin_dir=$prefix/bin
-ensure_no_link_components "$bin_dir"
-mkdir -p -- "$bin_dir"
-ensure_no_link_components "$bin_dir"
-require_private_write_directory "$bin_dir"
+prepare_installation_directory "$bin_dir" "$prefix"
 
 if [ -n "${XDG_DATA_HOME:-}" ]; then
     case "$XDG_DATA_HOME" in

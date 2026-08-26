@@ -215,14 +215,14 @@ set -eu
 [ "$#" -eq 4 ] && [ "$3" = -- ] || exit 64
 case "$1:$2" in
     -f:%u|-f:%Lp)
+        if [ "$COLOSSUS_TEST_KERNEL" = Darwin ]; then
+            exec /usr/bin/stat "$@"
+        fi
         printf 'partial GNU filesystem status\n'
         exit 1
         ;;
-    -c:%u)
-        id -u
-        ;;
-    -c:%a)
-        printf '700\n'
+    -c:%u|-c:%a)
+        exec /usr/bin/stat "$@"
         ;;
     *)
         exit 64
@@ -436,6 +436,44 @@ fn bootstrap_verifies_then_installs_and_records_direct_ownership() {
     assert_eq!(receipt["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], release_target());
     assert_eq!(receipt["installerKind"], "direct");
+}
+
+#[test]
+fn bootstrap_makes_packaged_installer_failure_explicit() {
+    let fixture = Fixture::new();
+    let prefix = fixture.root.join("unsafe-prefix");
+    fs::create_dir(&prefix).expect("prefix directory");
+    fs::set_permissions(&prefix, fs::Permissions::from_mode(0o700))
+        .expect("private prefix permissions");
+    fs::create_dir(prefix.join("bin")).expect("bin directory");
+    fs::set_permissions(prefix.join("bin"), fs::Permissions::from_mode(0o777))
+        .expect("unsafe bin permissions");
+    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let rejected = fixture.run(
+        &[
+            "--version",
+            &version,
+            "--channel",
+            release_channel(),
+            "--prefix",
+            prefix.to_str().expect("UTF-8 prefix"),
+            "--yes",
+        ],
+        &prefix,
+    );
+    assert!(!rejected.status.success());
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("installation directory is group- or world-writable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "colossus installer: installation failed; the requested Colossus version was not installed"
+        ),
+        "{stderr}"
+    );
+    assert!(!prefix.join("bin/colossus").exists());
 }
 
 #[test]

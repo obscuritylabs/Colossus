@@ -229,7 +229,11 @@ Bootstrap extraction accepts one exact version-and-target package root containin
 the reviewed release members. It rejects traversal, duplicate paths, links, reparse
 points, device or special files, unexpected entries, and version mismatches. Packaged
 installers reject linked destination components and unsafe ownership or permission
-boundaries, stage replacements in the destination directory, and write a bounded
+boundaries. The Unix installer creates missing destination directories under a private
+umask. It may remove group-write permission from an existing current-user-owned `bin`
+directory only when the prefix itself is owner-private. A group-writable `bin` beneath
+a group- or other-accessible prefix, and every world-writable destination, remain
+rejected. Installers stage replacements in the destination directory and write a bounded
 credential-free direct-install receipt. Binary replacement is rolled back if the
 receipt cannot commit. The bootstrap never elevates, mutates shell profiles, logs
 headers or home-directory contents, or treats a package-manager installation as direct
