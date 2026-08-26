@@ -8,6 +8,46 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.5] - 2026-08-25
+
+### Added
+
+- Added a canonical, source-filterable session activity projection and Desktop trajectory
+  view for inspecting run, model, tool, policy, usage, and subagent events.
+- Added a live React Flow session topology that uses the full available pane and refreshes
+  while the topology tab is active.
+- Added persistent, Workspace-scoped thread names to the Desktop thread actions menu.
+
+### Changed
+
+- Renamed the Desktop's user-facing `Space` terminology to `Workspace` while retaining the
+  existing persisted settings and native command schema for compatibility.
+- Replaced native Desktop selects with accessible, app-owned dropdowns that have consistent
+  sizing, keyboard navigation, and styling across platforms.
+
+### Fixed
+
+- Kept stdio MCP input open through the final JSON-RPC response and bounded completion-line
+  scanning so local MCP servers can finish requests without premature EOF or unbounded reads.
+- Prevented delayed Workspace drawer initialization from stealing focus after a user changes
+  the thread-search scope.
+- Centered Desktop run-timeline markers and normalized toggle sizing in settings and the
+  session map.
+- Prevented stale paginated activity responses from being merged after a session, search,
+  or filter change.
+- Preserved required-field validation and unavailable-value disclosure in the app-owned
+  dropdown control.
+- Added a bounded connection-refused retry to native-sandbox release acceptance so a
+  transient authenticated-proxy readiness race cannot fail an otherwise valid artifact.
+
+### Upgrade Notes
+
+- `v0.10.10-preview.5` supersedes the unpublished `v0.10.10-preview.4` attempt. Its
+  ARM64 macOS release job twice received a transient connection-refused result from the
+  authenticated loopback proxy; the release gate prevented draft creation both times.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
+
 ## [0.10.10-preview.4] - 2026-08-25
 
 ### Added
