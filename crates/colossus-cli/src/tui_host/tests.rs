@@ -44,7 +44,8 @@ fn model_diagnostics_use_a_readable_route_and_named_check_table() {
             },
             "capabilities": {
                 "toolCalls": true,
-                "streaming": true
+                "streaming": true,
+                "imageInputs": false
             },
             "reasoning_effort": "xhigh"
         },
@@ -77,6 +78,10 @@ fn model_diagnostics_use_a_readable_route_and_named_check_table() {
     assert!(details.contains(&(
         "Tokens".into(),
         "128,000 context · 99,200 input budget · 16,000 max output".into()
+    )));
+    assert!(details.contains(&(
+        "Capabilities".into(),
+        "tools on · streaming on · images off".into()
     )));
     let PresentationBlock::Table(checks) = &body[1] else {
         panic!("expected check table");
@@ -299,7 +304,7 @@ fn conversation_message(sequence: u64) -> SessionMessage {
             } else {
                 ModelMessageRole::Assistant
             },
-            content: format!("Message {sequence}\nwith   normalized spacing"),
+            content: format!("Message {sequence}\nwith   normalized spacing").into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         },
@@ -314,7 +319,7 @@ fn tool_message(sequence: u64) -> SessionMessage {
         sequence,
         message: colossus_contracts::ModelMessage {
             role: ModelMessageRole::Tool,
-            content: format!("tool result {sequence}"),
+            content: format!("tool result {sequence}").into(),
             tool_call_id: Some(format!("call-{sequence}")),
             tool_calls: Vec::new(),
         },

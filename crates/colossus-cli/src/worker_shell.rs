@@ -774,6 +774,7 @@ pub(super) async fn worker_line_runner(
                                 role: "primary".into(),
                                 instructions: "You are Colossus.".into(),
                                 prompt,
+                                images: Vec::new(),
                                 max_turns: None,
                                 session_id: active_session_id.clone(),
                                 explicit_skills,

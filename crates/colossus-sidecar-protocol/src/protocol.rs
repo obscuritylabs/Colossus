@@ -487,6 +487,9 @@ pub struct ManagedModelCapabilities {
     pub tool_calls: bool,
     /// Whether the model uses provider streaming.
     pub streaming: bool,
+    /// Whether the model receives verified encrypted run-input images.
+    #[serde(default)]
+    pub image_inputs: bool,
 }
 
 /// Compact explicit model metadata without provider credentials.
@@ -1187,6 +1190,7 @@ impl ManagedRuntimeConfig {
                 capabilities: ManagedModelCapabilities {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],
@@ -1993,6 +1997,7 @@ mod tests {
                     capabilities: ManagedModelCapabilities {
                         tool_calls: true,
                         streaming: true,
+                        image_inputs: false,
                     },
                     reasoning_effort: None,
                 }],

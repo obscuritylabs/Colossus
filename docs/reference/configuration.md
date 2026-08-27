@@ -116,6 +116,7 @@ models:
       capabilities:
         toolCalls: true
         streaming: true
+        imageInputs: false
   roles:
     primary: echo
 context:

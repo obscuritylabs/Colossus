@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::fmt;
 
 const MAX_HOST_CREDENTIALS: usize = 64;
@@ -287,6 +288,7 @@ pub struct ProviderExecutor {
     tls_roots: AdditionalRootCertificates,
     codex_auth: Option<CodexAuthStore>,
     codex_refresh: tokio::sync::Mutex<()>,
+    media: Option<Arc<dyn RunInputMediaResolver>>,
 }
 
 impl ProviderExecutor {
@@ -306,6 +308,7 @@ impl ProviderExecutor {
             tls_roots: AdditionalRootCertificates::default(),
             codex_auth: None,
             codex_refresh: tokio::sync::Mutex::new(()),
+            media: None,
         }
     }
 
@@ -320,6 +323,13 @@ impl ProviderExecutor {
     #[must_use]
     pub fn with_codex_auth_store(mut self, store: CodexAuthStore) -> Self {
         self.codex_auth = Some(store);
+        self
+    }
+
+    /// Bind the application-owned encrypted run-input media resolver.
+    #[must_use]
+    pub fn with_run_input_media(mut self, media: Arc<dyn RunInputMediaResolver>) -> Self {
+        self.media = Some(media);
         self
     }
 
@@ -462,6 +472,10 @@ impl ProviderExecutor {
         })?;
         validate_model_request(&model_request, max_output_tokens)
             .map_err(provider_execution_error)?;
+        let resolved_images = self
+            .resolve_images(&model_request)
+            .await
+            .map_err(provider_execution_error)?;
         let endpoint = self
             .profile
             .generation_endpoint()
@@ -475,7 +489,7 @@ impl ProviderExecutor {
             let text = model_request
                 .messages
                 .last()
-                .map(|message| message.content.clone())
+                .map(|message| message.content.plain_text().into_owned())
                 .ok_or_else(|| {
                     provider_execution_error(ProviderError::Malformed(
                         "echo request has no message".into(),
@@ -516,23 +530,25 @@ impl ProviderExecutor {
         let tool_names =
             ProviderToolNames::from_request(&model_request).map_err(provider_execution_error)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => responses_payload(
-                &model_request,
-                self.profile.kind,
-                &model,
-                max_output_tokens,
-                reasoning_effort,
-                true,
-                &tool_names,
-            ),
-            ProviderKind::OpenAiCompatible => chat_payload(
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
+                responses_payload_with_images(
+                    &model_request,
+                    self.profile.kind,
+                    &model,
+                    max_output_tokens,
+                    reasoning_effort,
+                    true,
+                    ProviderProjection::new(&tool_names, &resolved_images),
+                )
+            }
+            ProviderKind::OpenAiCompatible => chat_payload_with_images(
                 &model_request,
                 &model,
                 max_output_tokens,
                 self.profile.chat_completions_output_token_parameter,
                 reasoning_effort,
                 true,
-                &tool_names,
+                ProviderProjection::new(&tool_names, &resolved_images),
             ),
             ProviderKind::Echo => unreachable!("handled above"),
         }
@@ -629,6 +645,7 @@ impl ProviderExecutor {
             ProviderError::Configuration("provider generation request is absent".into())
         })?;
         validate_model_request(&model_request, max_output_tokens)?;
+        let resolved_images = self.resolve_images(&model_request).await?;
         let endpoint = self.profile.generation_endpoint()?;
         if self.profile.kind == ProviderKind::Echo {
             if effect.resource != endpoint {
@@ -639,7 +656,7 @@ impl ProviderExecutor {
             let text = model_request
                 .messages
                 .last()
-                .map(|message| message.content.clone())
+                .map(|message| message.content.plain_text().into_owned())
                 .ok_or_else(|| ProviderError::Malformed("echo request has no message".into()))?;
             return bounded_result(
                 &ProviderTurn {
@@ -660,23 +677,25 @@ impl ProviderExecutor {
         self.validate_resource(effect, &endpoint, permit)?;
         let tool_names = ProviderToolNames::from_request(&model_request)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => responses_payload(
-                &model_request,
-                self.profile.kind,
-                &model,
-                max_output_tokens,
-                reasoning_effort,
-                false,
-                &tool_names,
-            ),
-            ProviderKind::OpenAiCompatible => chat_payload(
+            ProviderKind::OpenAiResponses | ProviderKind::OpenAiCodex => {
+                responses_payload_with_images(
+                    &model_request,
+                    self.profile.kind,
+                    &model,
+                    max_output_tokens,
+                    reasoning_effort,
+                    false,
+                    ProviderProjection::new(&tool_names, &resolved_images),
+                )
+            }
+            ProviderKind::OpenAiCompatible => chat_payload_with_images(
                 &model_request,
                 &model,
                 max_output_tokens,
                 self.profile.chat_completions_output_token_parameter,
                 reasoning_effort,
                 false,
-                &tool_names,
+                ProviderProjection::new(&tool_names, &resolved_images),
             ),
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
@@ -731,6 +750,53 @@ impl ProviderExecutor {
         Ok(())
     }
 
+    async fn resolve_images(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<ProviderResolvedImages, ProviderError> {
+        let references = request
+            .messages
+            .iter()
+            .flat_map(|message| message.content.images())
+            .collect::<Vec<_>>();
+        if references.is_empty() {
+            return Ok(ProviderResolvedImages::default());
+        }
+        if references.len() > 16 {
+            return Err(ProviderError::Configuration(
+                "provider-visible image count exceeds 16".into(),
+            ));
+        }
+        let resolver = self.media.as_ref().ok_or_else(|| {
+            ProviderError::Configuration("run-input image resolver is unavailable".into())
+        })?;
+        let mut combined = 0_u64;
+        let mut resolved = ProviderResolvedImages::default();
+        for reference in references {
+            let image = resolver
+                .resolve_image(reference)
+                .await
+                .map_err(|error| ProviderError::Configuration(error.to_string()))?;
+            combined = combined
+                .checked_add(image.reference.size_bytes)
+                .ok_or_else(|| {
+                    ProviderError::Configuration("provider-visible image size overflowed".into())
+                })?;
+            if combined > 32 * 1_048_576 {
+                return Err(ProviderError::Configuration(
+                    "provider-visible images exceed 32 MiB".into(),
+                ));
+            }
+            let data_url = format!(
+                "data:{};base64,{}",
+                image.reference.media_type,
+                BASE64.encode(&image.bytes)
+            );
+            resolved.insert(&image.reference, data_url)?;
+        }
+        Ok(resolved)
+    }
+
     async fn request_json(
         &self,
         endpoint: &str,
@@ -743,6 +809,7 @@ impl ProviderExecutor {
             .await?;
         if !response.status().is_success() {
             if include_response_diagnostics {
+                let payload = payload.as_ref().map(redacted_image_payload);
                 return self
                     .capture_http_error(endpoint, payload, response, secret)
                     .await
@@ -815,11 +882,7 @@ impl ProviderExecutor {
         if let Some(payload) = payload {
             let body = serde_json::to_vec(payload)
                 .map_err(|error| ProviderError::Malformed(error.to_string()))?;
-            if body.len() > MAX_PROVIDER_REQUEST_BYTES {
-                return Err(ProviderError::Configuration(
-                    "serialized provider request exceeds 1 MiB".into(),
-                ));
-            }
+            validate_serialized_provider_request(payload, body.len())?;
             builder = builder
                 .header("content-type", "application/json")
                 .body(body);
@@ -1069,6 +1132,53 @@ impl ProviderExecutor {
             observer,
         )
         .await
+    }
+}
+
+pub(super) fn validate_serialized_provider_request(
+    payload: &Value,
+    body_len: usize,
+) -> Result<(), ProviderError> {
+    let redacted = redacted_image_payload(payload);
+    let non_image_len = serde_json::to_vec(&redacted)
+        .map_err(|error| ProviderError::Malformed(error.to_string()))?
+        .len();
+    let contains_images = payload_contains_image_data_url(payload);
+    let body_limit = if contains_images {
+        MAX_PROVIDER_REQUEST_WITH_IMAGES_BYTES
+    } else {
+        MAX_PROVIDER_REQUEST_BYTES
+    };
+    if body_len > body_limit || non_image_len > MAX_PROVIDER_REQUEST_BYTES {
+        return Err(ProviderError::Configuration(
+            "serialized provider request exceeds its bounded text or image request size".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn payload_contains_image_data_url(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.starts_with("data:image/"),
+        Value::Array(values) => values.iter().any(payload_contains_image_data_url),
+        Value::Object(object) => object.values().any(payload_contains_image_data_url),
+        _ => false,
+    }
+}
+
+pub(super) fn redacted_image_payload(value: &Value) -> Value {
+    match value {
+        Value::String(text) if text.starts_with("data:image/") => {
+            Value::String("[REDACTED_IMAGE_DATA_URL]".into())
+        }
+        Value::Array(values) => Value::Array(values.iter().map(redacted_image_payload).collect()),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), redacted_image_payload(value)))
+                .collect(),
+        ),
+        _ => value.clone(),
     }
 }
 

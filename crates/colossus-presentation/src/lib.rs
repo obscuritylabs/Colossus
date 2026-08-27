@@ -2,7 +2,7 @@
 
 use colossus_contracts::{
     Actor, AutomaticApprovalNotice, ContextStatus, CustomTheme, EventClassification,
-    ExecutionContext, NewEvent, ProviderEvent, RiskLevel, RiskReviewFailure,
+    ExecutionContext, ModelImageReference, NewEvent, ProviderEvent, RiskLevel, RiskReviewFailure,
     RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, RunPhase, ThemeColor, ThemeSpinner,
     ThemeTextStyle, ToolCall, ToolResult, WorkStateSnapshot,
 };

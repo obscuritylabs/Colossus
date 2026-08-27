@@ -48,7 +48,7 @@ impl InteractiveHost for FixtureHost {
                     sequence,
                     message: ModelMessage {
                         role: ModelMessageRole::Assistant,
-                        content: format!("durable-row-{sequence:02}"),
+                        content: format!("durable-row-{sequence:02}").into(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     },

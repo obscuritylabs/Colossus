@@ -435,7 +435,10 @@ the complete bytes match the reservation. Metadata and downloads require
 `artifacts:read` and the same authenticated application ID. Original paths, partial
 uploads, and another application's artifacts are never released. Run-input
 attachments are accepted only from available `run_input` artifacts with supported
-bounded UTF-8 media types.
+bounded UTF-8 media types or validated static PNG, JPEG, and WebP content. Durable model
+history contains only verified image metadata. Exact bytes remain encrypted artifacts
+and are re-resolved and reverified only after the provider permit is issued; policy,
+audit, diagnostics, logs, and released errors never receive the bytes or data URL.
 
 Public run listing is owner-indexed and never scans the shared global journal. The
 idempotency claim, run creation, and per-application index entry commit atomically.

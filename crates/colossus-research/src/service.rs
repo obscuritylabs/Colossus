@@ -425,7 +425,7 @@ impl ResearchService {
             message_run_id.unwrap_or(&run.id),
             ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: run.report.clone(),
+                content: run.report.clone().into(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },

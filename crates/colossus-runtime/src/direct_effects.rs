@@ -1,6 +1,42 @@
 use super::*;
 
 impl Runtime {
+    /// Validate exact local bytes with the shared bounded run-input image contract.
+    pub fn validate_run_input_image(
+        &self,
+        file_name: &str,
+        declared_media_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<ValidatedImage, RuntimeError> {
+        validate_image_bytes(file_name, declared_media_type, bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Resolve an owner-authorized encrypted artifact into durable image metadata.
+    pub fn run_input_image_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<ModelImageReference, RuntimeError> {
+        self.run_input_media
+            .image_reference(owner_id, artifact_id)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Retrieve exact verified bytes for a trusted local preview of a canonical reference.
+    pub async fn preview_run_input_image(
+        &self,
+        reference: &ModelImageReference,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let resolved = colossus_ports::RunInputMediaResolver::resolve_image(
+            self.run_input_media.as_ref(),
+            reference,
+        )
+        .await
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        Ok(resolved.bytes)
+    }
+
     /// Render bounded UTF-8 attachment files into a model prompt after policy-authorized reads.
     pub async fn prompt_with_text_attachments(
         &self,

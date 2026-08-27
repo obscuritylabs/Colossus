@@ -196,6 +196,11 @@ pub struct TuiState {
     pub(super) completions: Vec<String>,
     pub(super) sticky_skills: Vec<String>,
     pub(super) provider_response_diagnostics: bool,
+    pub(super) pending_images: Vec<ModelImageReference>,
+    pub(super) preview_cache: PreviewCache,
+    pub(super) preview_loading: BTreeSet<String>,
+    pub(super) preview_failures: BTreeMap<String, String>,
+    pub(super) preview_transcript_size: Size,
     pub(super) active_calls: BTreeMap<String, colossus_contracts::ToolCall>,
     pub(super) queue: VecDeque<String>,
     pub(super) queue_paused: bool,
@@ -281,6 +286,11 @@ impl TuiState {
             completions: with_mode_completions(snapshot.completions),
             sticky_skills: Vec::new(),
             provider_response_diagnostics: false,
+            pending_images: Vec::new(),
+            preview_cache: PreviewCache::default(),
+            preview_loading: BTreeSet::new(),
+            preview_failures: BTreeMap::new(),
+            preview_transcript_size: Size::new(0, 0),
             active_calls: BTreeMap::new(),
             queue: VecDeque::new(),
             queue_paused: false,
@@ -307,6 +317,29 @@ impl TuiState {
             security_posture_entry,
             should_exit: false,
         }
+    }
+
+    pub(super) fn preview_references(&self) -> Vec<ModelImageReference> {
+        let mut references = Vec::new();
+        let mut digests = BTreeSet::new();
+        for image in self.pending_images.iter().take(3) {
+            if digests.insert(image.sha256.clone()) {
+                references.push(image.clone());
+            }
+        }
+        for entry in self.transcript.iter().rev() {
+            for block in entry.document.blocks.iter().rev() {
+                if let PresentationBlock::Image(image) = block
+                    && digests.insert(image.sha256.clone())
+                {
+                    references.push(image.clone());
+                    if references.len() == 8 {
+                        return references;
+                    }
+                }
+            }
+        }
+        references
     }
 
     pub(super) fn dismiss_welcome(&mut self) {
@@ -387,6 +420,7 @@ impl TuiState {
         Ok(InteractiveRunRequest {
             session_id: self.session_id.clone(),
             prompt,
+            images: self.pending_images.clone(),
             mode,
             explicit_skills: Vec::new(),
             sticky_skills: self.sticky_skills.clone(),

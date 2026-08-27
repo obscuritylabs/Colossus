@@ -887,7 +887,7 @@ fn load_or_create_exact_key(
         .read(service, account)?
         .ok_or(PublicApiAdminError::SecretStoreUnavailable)?;
     let stored = exact_key(stored)?;
-    if stored.as_ref() != generated.as_ref() {
+    if *stored != *generated {
         return Err(PublicApiAdminError::SecretStoreUnavailable);
     }
     Ok(stored)

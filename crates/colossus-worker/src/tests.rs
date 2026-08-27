@@ -204,6 +204,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
             role: "primary".into(),
             instructions: "test".into(),
             prompt: "reproduce".into(),
+            images: Vec::new(),
             max_turns: None,
             session_id: "session".into(),
             explicit_skills: Vec::new(),
@@ -312,6 +313,7 @@ fn interactive_plan_run_binds_the_selected_revision() {
             role: "primary".into(),
             instructions: "plan safely".into(),
             prompt: "refine the plan".into(),
+            images: Vec::new(),
             max_turns: None,
             session_id: "session".into(),
             explicit_skills: Vec::new(),
@@ -1714,7 +1716,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 16);
+    assert_eq!(PROTOCOL_VERSION, 17);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

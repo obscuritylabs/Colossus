@@ -8,13 +8,17 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 16 adds secret-free host exporter validation for trusted native Desktop
-/// clients. Older workers cannot validate that request shape, so both sides reject the
-/// mismatch and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 16;
+/// Version 17 adds metadata-only image requests and bounded transient preview responses.
+/// Older workers cannot validate those request shapes, so both sides reject the mismatch
+/// and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 17;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
-pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+///
+/// Exact image bytes are base64-wrapped once as an operation result and once by the
+/// authenticated envelope. Thirty-two MiB bounds that representation for one valid
+/// 16 MiB image without relaxing the separate 1 MiB request ceiling.
+pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 type HmacSha256 = Hmac<Sha256>;
 
@@ -423,5 +427,17 @@ mod tests {
             serde_json::to_value(ControlOperation::WorkflowList).expect("workflow list"),
             serde_json::json!({"operation": "workflow_list"})
         );
+    }
+
+    #[test]
+    fn response_ceiling_carries_one_maximum_image_through_both_base64_layers() {
+        const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+        const JSON_ENVELOPE_ALLOWANCE: usize = 16 * 1024;
+
+        let operation_result = 4 * MAX_IMAGE_BYTES.div_ceil(3) + JSON_ENVELOPE_ALLOWANCE;
+        let authenticated_frame = 4 * operation_result.div_ceil(3) + JSON_ENVELOPE_ALLOWANCE;
+
+        assert!(authenticated_frame < MAX_FRAME_BYTES);
+        assert_eq!(MAX_REQUEST_BYTES, 1024 * 1024);
     }
 }

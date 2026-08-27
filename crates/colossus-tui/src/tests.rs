@@ -1,4 +1,21 @@
 use super::*;
+
+#[test]
+fn terminal_query_requires_a_real_emulator_hint() {
+    assert!(!terminal_can_answer_graphics_query(|name| match name {
+        "TERM" => Ok("xterm-256color".into()),
+        _ => Err(std::env::VarError::NotPresent),
+    }));
+    assert!(terminal_can_answer_graphics_query(|name| match name {
+        "TERM" => Ok("xterm-kitty".into()),
+        _ => Err(std::env::VarError::NotPresent),
+    }));
+    assert!(terminal_can_answer_graphics_query(|name| match name {
+        "TERM" => Ok("xterm-256color".into()),
+        "VTE_VERSION" => Ok("7800".into()),
+        _ => Err(std::env::VarError::NotPresent),
+    }));
+}
 use colossus_contracts::{
     AgentRunResult, CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall,
     SandboxBoundaryMode, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
@@ -56,6 +73,19 @@ fn empty_snapshot() -> InteractiveSnapshot {
     source.footer.context = Some((0, 32_768));
     source.footer.message_count = 0;
     source
+}
+
+fn image_reference(index: usize) -> ModelImageReference {
+    ModelImageReference {
+        artifact_id: format!("artifact-{:064x}", index + 1),
+        file_name: format!("image-{index}.png"),
+        media_type: "image/png".into(),
+        size_bytes: 128,
+        sha256: format!("{:064x}", index + 100),
+        width_pixels: 32,
+        height_pixels: 16,
+        detail: colossus_contracts::ModelImageDetail::Auto,
+    }
 }
 
 #[test]
@@ -592,6 +622,151 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
             arguments: String::new(),
         })
     );
+}
+
+#[test]
+fn parser_handles_bounded_image_attachment_commands() {
+    assert_eq!(
+        parse_interactive_command("/attach workspace/image.png"),
+        InteractiveCommand::Local(LocalCommand::Attach("workspace/image.png".into()))
+    );
+    assert_eq!(
+        parse_interactive_command("/attach \"workspace/image with space.webp\""),
+        InteractiveCommand::Local(LocalCommand::Attach(
+            "workspace/image with space.webp".into()
+        ))
+    );
+    assert_eq!(
+        parse_interactive_command("/attachments"),
+        InteractiveCommand::Local(LocalCommand::Attachments)
+    );
+    assert_eq!(
+        parse_interactive_command("/detach 2"),
+        InteractiveCommand::Local(LocalCommand::Detach(AttachmentDetach::Index(2)))
+    );
+    assert_eq!(
+        parse_interactive_command("/detach all"),
+        InteractiveCommand::Local(LocalCommand::Detach(AttachmentDetach::All))
+    );
+    for invalid in [
+        "/attach",
+        "/attach \"unterminated",
+        "/detach 0",
+        "/detach none",
+    ] {
+        assert!(matches!(
+            parse_interactive_command(invalid),
+            InteractiveCommand::Invalid(_)
+        ));
+    }
+}
+
+#[test]
+fn pending_images_survive_start_failure_and_clear_after_accepted_completion() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.pending_images.push(image_reference(0));
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Err("provider route unavailable".into()))),
+    );
+    assert_eq!(state.pending_images.len(), 1);
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Run(HostRunResult {
+            outcome: AgentRunOutcome::Completed {
+                result: AgentRunResult {
+                    run_id: "run-image".into(),
+                    session_id: Some("019f-test".into()),
+                    role: "primary".into(),
+                    profile: "test".into(),
+                    model_profile: "test".into(),
+                    provider_profile: "test".into(),
+                    model: "test".into(),
+                    plan: None,
+                    output: "done".into(),
+                    event_count: 1,
+                    elapsed_seconds: 0.1,
+                },
+            },
+            footer: FooterState::default(),
+            plan_selection: PlanSelectionUpdate::Unchanged,
+        })))),
+    );
+    assert!(state.pending_images.is_empty());
+}
+
+#[test]
+fn resumed_multipart_images_render_accessible_metadata_and_pending_overflow() {
+    let mut source = snapshot();
+    source.transcript.messages = vec![SessionMessage {
+        session_id: "019f-test".into(),
+        run_id: "run-image".into(),
+        sequence: 1,
+        message: ModelMessage {
+            role: ModelMessageRole::User,
+            content: ModelContent::Parts(vec![
+                ModelContentPart::Text {
+                    text: "Inspect this".into(),
+                },
+                ModelContentPart::Image {
+                    image: image_reference(0),
+                },
+            ]),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+        created_at: "2026-07-15T00:00:00Z".into(),
+    }];
+    let mut state = TuiState::from_snapshot(source);
+    state.pending_images = (0..4).map(image_reference).collect();
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw image metadata");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Inspect this"), "{rendered}");
+    assert!(rendered.contains("image-0.png"), "{rendered}");
+    assert!(rendered.contains("image/png"), "{rendered}");
+    assert!(rendered.contains("+1 more"), "{rendered}");
+}
+
+#[test]
+fn injected_native_protocol_reserves_cells_and_renders_through_the_stateful_widget() {
+    let mut picker = Picker::halfblocks();
+    picker.set_protocol_type(ProtocolType::Kitty);
+    let mut cache = PreviewCache::default();
+    cache.set_picker(picker);
+    cache.insert("digest".into(), image::DynamicImage::new_rgba8(2, 2));
+    assert!(cache.native_graphics());
+
+    let size = Size::new(18, 5);
+    let mut terminal = Terminal::new(TestBackend::new(18, 5)).expect("test terminal");
+    let mut rendered_native_sequence = false;
+    for _ in 0..1_000 {
+        cache.prepare("digest", size);
+        let placeholders = cache.lines("digest", size).expect("reserved image cells");
+        assert_eq!(placeholders.len(), 5);
+        assert!(placeholders.iter().all(|line| line.width() == 18));
+        terminal
+            .draw(|frame| cache.render_native(frame, "digest", size, frame.area()))
+            .expect("native image draw");
+        rendered_native_sequence = (0..size.height).any(|y| {
+            (0..size.width).any(|x| {
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((x, y))
+                    .is_some_and(|cell| cell.symbol().contains('\u{1b}'))
+            })
+        });
+        if rendered_native_sequence {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(rendered_native_sequence);
 }
 
 #[test]
@@ -1656,7 +1831,7 @@ fn completion_ghost_uses_a_distinct_low_emphasis_style() {
     state.completions = vec!["candy".into()];
     state.composer.insert("can");
     terminal
-        .draw(|frame| render_composer(frame, &state, frame.area()))
+        .draw(|frame| render_composer(frame, &mut state, frame.area()))
         .expect("draw composer");
     let buffer = terminal.backend().buffer();
     let typed = buffer.cell((1, 1)).expect("typed cell").style();
@@ -1702,7 +1877,7 @@ fn historical_tool_results_are_correlated_with_assistant_calls() {
             sequence: 1,
             message: ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: String::new(),
+                content: String::new().into(),
                 tool_call_id: None,
                 tool_calls: vec![ModelToolCall {
                     call_id: "call-1".into(),
@@ -1748,7 +1923,7 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
             sequence: 1,
             message: ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: String::new(),
+                content: String::new().into(),
                 tool_call_id: None,
                 tool_calls: vec![ModelToolCall {
                     call_id: "call-fetch".into(),
@@ -1764,7 +1939,7 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
             sequence: 2,
             message: ModelMessage {
                 role: ModelMessageRole::Tool,
-                content: body.clone(),
+                content: body.clone().into(),
                 tool_call_id: Some("call-fetch".into()),
                 tool_calls: Vec::new(),
             },
@@ -1894,7 +2069,7 @@ fn page_boundary_tool_results_remain_bounded_before_their_call_is_loaded() {
         sequence: 101,
         message: ModelMessage {
             role: ModelMessageRole::Tool,
-            content: body.clone(),
+            content: body.clone().into(),
             tool_call_id: Some("call-from-older-page".into()),
             tool_calls: Vec::new(),
         },
@@ -3245,7 +3420,7 @@ fn labeled_transcript_content_reserves_its_indent_within_the_viewport() {
         sequence: 1,
         message: ModelMessage {
             role: ModelMessageRole::Assistant,
-            content: String::new(),
+            content: String::new().into(),
             tool_call_id: None,
             tool_calls: vec![ModelToolCall {
                 call_id: "call-wide".into(),

@@ -201,6 +201,8 @@ pub(crate) fn managed_provider_setting_is_valid(provider: &ProviderSetting) -> b
 pub(crate) struct ModelCapabilitiesSetting {
     pub(crate) tool_calls: bool,
     pub(crate) streaming: bool,
+    #[serde(default)]
+    pub(crate) image_inputs: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2240,6 +2242,7 @@ mod tests {
                 capabilities: ModelCapabilitiesSetting {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],

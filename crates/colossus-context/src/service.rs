@@ -64,7 +64,7 @@ impl ContextService {
         let binding = self.decision_message(session_id)?;
         let original_messages =
             prepend_bindings(binding.clone().into_iter().collect(), messages.clone());
-        let raw = estimate_tokens("", &original_messages, &[]);
+        let raw = estimate_tokens_for_model(&budget.model, "", &original_messages, &[]);
         let active = self.snapshots.active(session_id)?;
         let prepared = active.as_ref().map_or_else(
             || messages.clone(),
@@ -75,7 +75,7 @@ impl ContextService {
             session_id: session_id.into(),
             message_count: records.len().try_into().unwrap_or(u64::MAX),
             raw_token_estimate: raw,
-            token_estimate: estimate_tokens("", &prepared, &[]),
+            token_estimate: estimate_tokens_for_model(&budget.model, "", &prepared, &[]),
             model_profile: budget.model_profile,
             context_window_tokens: budget.limits.context_window_tokens,
             max_output_tokens: budget.limits.max_output_tokens,
@@ -234,7 +234,7 @@ impl ContextService {
         }
         Ok(Some(ModelMessage {
             role: ModelMessageRole::System,
-            content,
+            content: content.into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         }))
@@ -254,11 +254,12 @@ impl ContextService {
             .iter()
             .rev()
             .find(|message| message.role == ModelMessageRole::User)
-            .map_or("", |message| message.content.as_str());
+            .map(|message| message.content.plain_text())
+            .unwrap_or_default();
         if !query.trim().is_empty()
             && let Some(retriever) = &self.memories
         {
-            let records = retriever.relevant(query, session_id, context, 6).await?;
+            let records = retriever.relevant(&query, session_id, context, 6).await?;
             if let Some(memory) = memory_message(&records) {
                 bindings.push(memory);
             }
@@ -307,7 +308,7 @@ fn bounded_summary_request(
         instructions: SUMMARY_INSTRUCTIONS.into(),
         messages: vec![ModelMessage {
             role: ModelMessageRole::User,
-            content: format!("{PREFIX}{history}"),
+            content: format!("{PREFIX}{history}").into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         }],
@@ -315,7 +316,7 @@ fn bounded_summary_request(
         max_output_tokens: None,
     };
     let fits = |request: &ModelRequest| {
-        request.messages[0].content.len() <= MAX_SUMMARY_PROMPT_BYTES
+        request.messages[0].content.text_bytes() <= MAX_SUMMARY_PROMPT_BYTES
             && estimate_tokens(&request.instructions, &request.messages, &request.tools)
                 <= input_budget_tokens
     };
@@ -332,7 +333,7 @@ fn bounded_summary_request(
             "{}. {:?}: {}\n\n",
             index + 1,
             message.role,
-            truncate_chars(&message.content, 1_000)
+            truncate_chars(&message.content.plain_text(), 1_000)
         );
         let checkpoint = history.len();
         history.push_str(&item);
@@ -370,11 +371,14 @@ impl ContextPreparer for ContextService {
             context,
             force,
         } = request;
+        validate_newest_image_turn(&messages)?;
+        let messages = compact_excess_images(&messages);
         let bindings = self
             .binding_messages(&session_id, &messages, context.clone())
             .await?;
         let original_messages = prepend_bindings(bindings.clone(), messages.clone());
-        let original = estimate_tokens(&instructions, &original_messages, &tools);
+        let original =
+            estimate_tokens_for_model(&budget.model, &instructions, &original_messages, &tools);
         let original_bytes = model_request_bytes(&instructions, &original_messages, &tools);
         let threshold = self
             .config
@@ -386,7 +390,8 @@ impl ContextPreparer for ContextService {
             |snapshot| apply_snapshot(snapshot, &messages),
         );
         let active_messages = prepend_bindings(bindings.clone(), active_messages);
-        let active_estimate = estimate_tokens(&instructions, &active_messages, &tools);
+        let active_estimate =
+            estimate_tokens_for_model(&budget.model, &instructions, &active_messages, &tools);
         let active_bytes = model_request_bytes(&instructions, &active_messages, &tools);
         let should_create = force
             || (self.config.auto_compaction
@@ -461,6 +466,14 @@ impl ContextPreparer for ContextService {
                 "preserved recent messages require {preserved_bytes} budgeted bytes, exceeding the {MAX_PREPARED_MODEL_REQUEST_BYTES}-byte provider policy budget"
             )));
         }
+        let preserved_estimate =
+            estimate_tokens_for_model(&budget.model, &instructions, &preserved, &tools);
+        if preserved_estimate.saturating_add(64) > budget.limits.input_budget_tokens {
+            return Err(ContextError::Configuration(format!(
+                "preserved recent messages require at least {preserved_estimate} estimated tokens plus snapshot metadata, exceeding the {} token effective input budget for model profile {}",
+                budget.limits.input_budget_tokens, budget.model_profile
+            )));
+        }
         let draft_snapshot = deterministic_snapshot(&session_id, &messages[..source_end]);
         let mut minimum_snapshot = draft_snapshot.clone();
         minimum_snapshot.summary = "...".into();
@@ -474,7 +487,8 @@ impl ContextPreparer for ContextService {
                 "preserved recent messages plus snapshot metadata require {minimum_bytes} budgeted bytes, exceeding the {MAX_PREPARED_MODEL_REQUEST_BYTES}-byte provider policy budget"
             )));
         }
-        let minimum_estimate = estimate_tokens(&instructions, &minimum_prepared, &tools);
+        let minimum_estimate =
+            estimate_tokens_for_model(&budget.model, &instructions, &minimum_prepared, &tools);
         if minimum_estimate > budget.limits.input_budget_tokens {
             return Err(ContextError::Configuration(format!(
                 "preserved recent messages plus snapshot metadata require at least {minimum_estimate} estimated tokens, exceeding the {} token effective input budget for model profile {}",
@@ -486,14 +500,14 @@ impl ContextPreparer for ContextService {
             .await?;
         let mut prepared = apply_snapshot(&snapshot, &messages);
         prepared = prepend_bindings(bindings, prepared);
-        bound_summary_to_target(&instructions, &mut prepared, &tools, target);
+        bound_summary_to_target(&budget.model, &instructions, &mut prepared, &tools, target);
         bound_summary_to_byte_limit(
             &instructions,
             &mut prepared,
             &tools,
             MAX_PREPARED_MODEL_REQUEST_BYTES,
         );
-        let estimate = estimate_tokens(&instructions, &prepared, &tools);
+        let estimate = estimate_tokens_for_model(&budget.model, &instructions, &prepared, &tools);
         if estimate > budget.limits.input_budget_tokens {
             return Err(ContextError::Configuration(format!(
                 "preserved recent messages require {estimate} estimated tokens, exceeding the {} token effective input budget for model profile {}",

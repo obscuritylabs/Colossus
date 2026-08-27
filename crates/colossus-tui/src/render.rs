@@ -23,6 +23,8 @@ pub(super) fn render(
         return;
     }
 
+    prepare_image_previews(state, area);
+
     let composer_height = composer_height(state, area.width);
     let activity_height = u16::from(state.operation.is_some());
     let approval_height =
@@ -77,9 +79,38 @@ pub(super) fn render(
     }
 }
 
+fn prepare_image_previews(state: &mut TuiState, area: Rect) {
+    let transcript_size = Size::new(
+        area.width.saturating_mul(2).saturating_div(3).clamp(1, 80),
+        area.height.saturating_div(2).clamp(1, 24),
+    );
+    state.preview_transcript_size = transcript_size;
+    let transcript_images = state
+        .transcript
+        .iter()
+        .flat_map(|entry| entry.document.blocks.iter())
+        .filter_map(|block| match block {
+            PresentationBlock::Image(image) => Some(image.sha256.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for digest in transcript_images {
+        state.preview_cache.prepare(&digest, transcript_size);
+    }
+    let pending = state
+        .pending_images
+        .iter()
+        .take(3)
+        .map(|image| image.sha256.clone())
+        .collect::<Vec<_>>();
+    for digest in pending {
+        state.preview_cache.prepare(&digest, Size::new(18, 5));
+    }
+}
+
 pub(super) fn render_transcript(
     frame: &mut Frame<'_>,
-    state: &TuiState,
+    state: &mut TuiState,
     area: Rect,
     transcript_start: usize,
 ) {
@@ -109,13 +140,17 @@ pub(super) fn render_transcript(
     } else {
         Vec::new()
     };
-    let mut transcript = transcript_lines_range(
+    let welcome_line_count = lines.len();
+    let (mut transcript, mut image_placements) = transcript_lines_range_with_images(
         state,
         width,
         transcript_start.min(state.transcript.len()),
         state.transcript.len(),
         !lines.is_empty(),
     );
+    for placement in &mut image_placements {
+        placement.line = placement.line.saturating_add(welcome_line_count);
+    }
     lines.append(&mut transcript);
     let visible = usize::from(transcript_area.height);
     let live_top = lines.len().saturating_sub(visible);
@@ -124,6 +159,36 @@ pub(super) fn render_transcript(
         .scroll((u16::try_from(top).unwrap_or(u16::MAX), 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, transcript_area);
+    if state.preview_cache.native_graphics() {
+        let bottom = top.saturating_add(visible);
+        for placement in image_placements {
+            let image_bottom = placement
+                .line
+                .saturating_add(usize::from(state.preview_transcript_size.height));
+            if placement.line < top || image_bottom > bottom {
+                continue;
+            }
+            let area = Rect::new(
+                transcript_area
+                    .x
+                    .saturating_add(u16::try_from(placement.indent).unwrap_or(u16::MAX)),
+                transcript_area.y.saturating_add(
+                    u16::try_from(placement.line.saturating_sub(top)).unwrap_or(u16::MAX),
+                ),
+                state.preview_transcript_size.width,
+                state.preview_transcript_size.height,
+            );
+            if area.right() <= transcript_area.right() && area.bottom() <= transcript_area.bottom()
+            {
+                state.preview_cache.render_native(
+                    frame,
+                    &placement.digest,
+                    state.preview_transcript_size,
+                    area,
+                );
+            }
+        }
+    }
 }
 
 pub(super) fn desired_inline_viewport_height(
@@ -373,8 +438,25 @@ pub(super) fn transcript_lines_range<'a>(
     end: usize,
     leading_separator: bool,
 ) -> Vec<Line<'a>> {
+    transcript_lines_range_with_images(state, width, start, end, leading_separator).0
+}
+
+struct TranscriptImagePlacement {
+    line: usize,
+    indent: usize,
+    digest: String,
+}
+
+fn transcript_lines_range_with_images<'a>(
+    state: &'a TuiState,
+    width: usize,
+    start: usize,
+    end: usize,
+    leading_separator: bool,
+) -> (Vec<Line<'a>>, Vec<TranscriptImagePlacement>) {
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let mut lines = Vec::new();
+    let mut image_placements = Vec::new();
     let mut visible_entries = 0_usize;
     let start = start.min(state.transcript.len());
     let end = end.min(state.transcript.len());
@@ -429,22 +511,19 @@ pub(super) fn transcript_lines_range<'a>(
             ]));
         }
         let content_width = width.saturating_sub(if show_label { 2 } else { 0 }).max(1);
-        let rendered = if state.security_posture_entry == Some(entry_index) {
-            security_posture_lines(state, content_width)
+        let (rendered, images) = if state.security_posture_entry == Some(entry_index) {
+            (security_posture_lines(state, content_width), Vec::new())
         } else {
-            StyledDocumentRenderer::for_transcript(state.preferences.clone(), content_width)
-                .render(&entry.document)
-                .into_iter()
-                .map(|line| {
-                    Line::from(
-                        line.spans
-                            .into_iter()
-                            .map(|span| Span::styled(span.content, ratatui_style(span.style)))
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect()
+            transcript_document_lines(state, &entry.document, content_width)
         };
+        let rendered_start = lines.len();
+        image_placements.extend(images.into_iter().map(|(line, digest)| {
+            TranscriptImagePlacement {
+                line: rendered_start.saturating_add(line),
+                indent: usize::from(show_label) * 2,
+                digest,
+            }
+        }));
         lines.extend(rendered.into_iter().map(|mut line| {
             if show_label && !line.spans.is_empty() {
                 line.spans
@@ -453,7 +532,41 @@ pub(super) fn transcript_lines_range<'a>(
             line
         }));
     }
-    lines
+    (lines, image_placements)
+}
+
+fn transcript_document_lines(
+    state: &TuiState,
+    document: &PresentationDocument,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
+    let renderer = StyledDocumentRenderer::for_transcript(state.preferences.clone(), width);
+    let mut lines = Vec::new();
+    let mut images = Vec::new();
+    for block in &document.blocks {
+        if let PresentationBlock::Image(image) = block
+            && let Some(preview) = state
+                .preview_cache
+                .lines(&image.sha256, state.preview_transcript_size)
+        {
+            images.push((lines.len(), image.sha256.clone()));
+            lines.extend(preview.iter().cloned());
+        }
+        lines.extend(
+            renderer
+                .render(&PresentationDocument::from_block(block.clone()))
+                .into_iter()
+                .map(|line| {
+                    Line::from(
+                        line.spans
+                            .into_iter()
+                            .map(|span| Span::styled(span.content, ratatui_style(span.style)))
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+        );
+    }
+    (lines, images)
 }
 
 pub(super) fn security_posture_lines(state: &TuiState, width: usize) -> Vec<Line<'static>> {
@@ -674,7 +787,7 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
     );
 }
 
-pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
+pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let inner_width = usize::from(area.width.saturating_sub(4)).max(1);
     let (before, after) = state.composer.draft.split_at(state.composer.cursor);
@@ -683,7 +796,8 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         state.ghost_text().unwrap_or("")
     };
-    let mut text = Vec::new();
+    let mut text = pending_thumbnail_lines(state);
+    let preview_rows = text.len();
     let logical_lines = format!("{before}{after}{ghost}")
         .split('\n')
         .map(str::to_owned)
@@ -753,6 +867,31 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
             .wrap(Wrap { trim: false }),
         area,
     );
+    if state.preview_cache.native_graphics() {
+        let pending = state
+            .pending_images
+            .iter()
+            .take(3)
+            .map(|image| image.sha256.clone())
+            .collect::<Vec<_>>();
+        for (index, digest) in pending.into_iter().enumerate() {
+            let thumbnail_area = Rect::new(
+                area.x
+                    .saturating_add(1)
+                    .saturating_add(u16::try_from(index).unwrap_or(u16::MAX).saturating_mul(19)),
+                area.y.saturating_add(1),
+                18,
+                5,
+            );
+            if thumbnail_area.right() <= area.right().saturating_sub(1)
+                && thumbnail_area.bottom() <= area.bottom().saturating_sub(1)
+            {
+                state
+                    .preview_cache
+                    .render_native(frame, &digest, Size::new(18, 5), thumbnail_area);
+            }
+        }
+    }
     let (cursor_row, cursor_column) = composer_cursor_position(before, inner_width);
     let x = area
         .x
@@ -761,6 +900,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     let y = area
         .y
         .saturating_add(1)
+        .saturating_add(u16::try_from(preview_rows).unwrap_or(u16::MAX))
         .saturating_add(u16::try_from(cursor_row).unwrap_or(u16::MAX));
     if state.overlay.is_none()
         && x < area.right().saturating_sub(1)
@@ -768,6 +908,45 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     {
         frame.set_cursor_position((x, y));
     }
+}
+
+fn pending_thumbnail_lines(state: &TuiState) -> Vec<Line<'static>> {
+    if state.pending_images.is_empty() {
+        return Vec::new();
+    }
+    let visible = state.pending_images.iter().take(3).collect::<Vec<_>>();
+    let mut lines = Vec::with_capacity(6);
+    for row in 0..5 {
+        let mut spans = Vec::new();
+        for (index, image) in visible.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw(" "));
+            }
+            if let Some(preview) = state.preview_cache.lines(&image.sha256, Size::new(18, 5)) {
+                if let Some(line) = preview.get(row) {
+                    spans.extend(line.spans.clone());
+                }
+            } else {
+                spans.push(Span::raw(if row == 2 {
+                    "   loading image  "
+                } else {
+                    "                  "
+                }));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    let mut labels = visible
+        .iter()
+        .map(|image| truncate_width(&image.file_name, 18))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let more = state.pending_images.len().saturating_sub(3);
+    if more > 0 {
+        labels.push_str(&format!("  +{more} more"));
+    }
+    lines.push(Line::from(labels));
+    lines
 }
 
 pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {

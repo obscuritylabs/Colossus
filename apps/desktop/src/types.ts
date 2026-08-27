@@ -176,6 +176,7 @@ export interface ManagedProviderConfiguration {
 export interface ManagedModelCapabilities {
   toolCalls: boolean;
   streaming: boolean;
+  imageInputs: boolean;
 }
 
 export interface ManagedModelConfiguration {

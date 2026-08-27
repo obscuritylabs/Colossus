@@ -1,5 +1,7 @@
 use super::*;
-use colossus_contracts::{ActorType, ModelToolCall};
+use colossus_contracts::{
+    ActorType, ModelContent, ModelContentPart, ModelImageDetail, ModelImageReference, ModelToolCall,
+};
 use colossus_testkit::{InMemoryEventJournal, assert_session_repository_conformance};
 
 fn actor() -> Actor {
@@ -65,6 +67,62 @@ fn sessions_and_messages_reconstruct_after_repository_restart() {
 }
 
 #[test]
+fn multipart_image_messages_reconstruct_with_ordered_metadata_and_text_preview() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedSessionRepository::new(Arc::clone(&journal));
+    repository
+        .create_session("multipart", None, actor())
+        .expect("create");
+    let image = ModelImageReference {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+        file_name: "screen.png".into(),
+        media_type: "image/png".into(),
+        size_bytes: 123,
+        sha256: "b".repeat(64),
+        width_pixels: 800,
+        height_pixels: 600,
+        detail: ModelImageDetail::Auto,
+    };
+    let message = ModelMessage {
+        role: ModelMessageRole::User,
+        content: ModelContent::Parts(vec![
+            ModelContentPart::Text {
+                text: "inspect this".into(),
+            },
+            ModelContentPart::Image {
+                image: image.clone(),
+            },
+            ModelContentPart::Text {
+                text: "then explain it".into(),
+            },
+        ]),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    };
+    repository
+        .append_message("multipart", "run-1", message.clone(), actor())
+        .expect("multipart message");
+
+    let reopened = EventSourcedSessionRepository::new(journal);
+    let recovered = reopened
+        .list_messages("multipart")
+        .expect("messages")
+        .remove(0)
+        .message;
+    assert_eq!(recovered, message);
+    assert_eq!(recovered.content.images().collect::<Vec<_>>(), vec![&image]);
+    assert_eq!(
+        reopened
+            .get_session("multipart")
+            .expect("summary")
+            .expect("session")
+            .last_user_preview
+            .as_deref(),
+        Some("inspect this\nthen explain it")
+    );
+}
+
+#[test]
 fn message_batches_commit_all_or_none_in_order() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let repository = EventSourcedSessionRepository::new(Arc::clone(&journal));
@@ -73,7 +131,7 @@ fn message_batches_commit_all_or_none_in_order() {
         .expect("create");
     let assistant = ModelMessage {
         role: ModelMessageRole::Assistant,
-        content: String::new(),
+        content: String::new().into(),
         tool_call_id: None,
         tool_calls: vec![ModelToolCall {
             call_id: "call-1".into(),
@@ -176,7 +234,7 @@ fn pending_tool_turn_blocks_replay_until_messages_settle_atomically() {
 
     let assistant = ModelMessage {
         role: ModelMessageRole::Assistant,
-        content: String::new(),
+        content: String::new().into(),
         tool_call_id: None,
         tool_calls: vec![ModelToolCall {
             call_id: "call-guarded".into(),

@@ -5,10 +5,11 @@ use async_trait::async_trait;
 use colossus_contracts::{
     ActorType, AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
-    MemoryStatus, ModelMessageRole, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision,
-    ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
-    SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    MemoryStatus, ModelContent, ModelContentPart, ModelImageReference, ModelMessageRole,
+    PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision, ProviderReadinessCheck,
+    ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice,
+    RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage, SessionSummary, TerminalPreferences,
+    UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -49,6 +50,22 @@ use tokio::sync::{mpsc, oneshot};
 
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const APPROVAL_CONTENT_PREVIEW_CHARACTERS: usize = 64 * 1024;
+
+fn interactive_model_content(prompt: String, images: Vec<ModelImageReference>) -> ModelContent {
+    if images.is_empty() {
+        return ModelContent::Text(prompt);
+    }
+    let mut parts = Vec::with_capacity(images.len() + usize::from(!prompt.is_empty()));
+    if !prompt.is_empty() {
+        parts.push(ModelContentPart::Text { text: prompt });
+    }
+    parts.extend(
+        images
+            .into_iter()
+            .map(|image| ModelContentPart::Image { image }),
+    );
+    ModelContent::Parts(parts)
+}
 
 fn approval_mode_document(mode: Option<ApprovalMode>, changed: bool) -> PresentationDocument {
     PresentationDocument::from_block(PresentationBlock::Card {
@@ -184,13 +201,18 @@ fn model_diagnostics_document(value: &Value) -> Result<PresentationDocument, Str
         (
             "Capabilities".into(),
             format!(
-                "tools {} · streaming {}",
+                "tools {} · streaming {} · images {}",
                 if route.capabilities.tool_calls {
                     "on"
                 } else {
                     "off"
                 },
                 if route.capabilities.streaming {
+                    "on"
+                } else {
+                    "off"
+                },
+                if route.capabilities.image_inputs {
                     "on"
                 } else {
                     "off"

@@ -3,7 +3,7 @@
 use colossus_contracts::{
     Actor, EventClassification, ExecutionContext, ModelMessage, ModelMessageRole, NewEvent,
     PendingSessionToolTurn, SessionMessage, SessionMessageAppend, SessionSummary,
-    validate_model_transcript,
+    validate_model_message_content, validate_model_transcript,
 };
 use colossus_ports::{EventJournal, SessionRepository, StoreError, collect_stream_ids};
 use serde_json::{Value, json};

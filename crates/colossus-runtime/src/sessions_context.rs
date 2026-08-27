@@ -204,7 +204,7 @@ impl Runtime {
                             Some(record)
                         }
                         ModelMessageRole::Assistant
-                            if !record.message.content.trim().is_empty() =>
+                            if !record.message.content.plain_text().trim().is_empty() =>
                         {
                             record.message.tool_call_id = None;
                             record.message.tool_calls.clear();

@@ -454,6 +454,7 @@ impl Default for ModelsConfig {
                     capabilities: ModelCapabilities {
                         tool_calls: true,
                         streaming: true,
+                        image_inputs: false,
                     },
                     reasoning_effort: None,
                 },
@@ -1812,6 +1813,7 @@ pub(super) fn provider_registry(
     codex_auth: Option<CodexAuthStore>,
     tls_roots: &AdditionalRootCertificates,
     resource_authority: ResourceAuthority,
+    media: Option<Arc<dyn RunInputMediaResolver>>,
 ) -> Result<ProviderRegistry, RuntimeError> {
     let profiles = providers_config
         .profiles
@@ -1821,6 +1823,10 @@ pub(super) fn provider_registry(
                 let executor =
                     ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
                         .with_tls_roots(tls_roots.clone());
+                let executor = match &media {
+                    Some(media) => executor.with_run_input_media(Arc::clone(media)),
+                    None => executor,
+                };
                 match &codex_auth {
                     Some(store) => executor.with_codex_auth_store(store.clone()),
                     None => executor,
@@ -1972,6 +1978,7 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
         None,
         &AdditionalRootCertificates::default(),
         configured_resource_authority(&config.sandbox),
+        None,
     )?;
     for (name, profile) in &config.providers.profiles {
         let profile = provider_profile_with_authority(

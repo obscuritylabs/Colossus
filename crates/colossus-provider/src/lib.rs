@@ -11,11 +11,12 @@ use colossus_codex_auth::{
     CodexRefreshRequest,
 };
 use colossus_contracts::{
-    CredentialReference, EffectRequest, ModelCapabilities, ModelLimits, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent,
-    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic,
-    ProviderStreamItem, ProviderTurn, ProviderUsage, QuarantinedEffectResult, ReasoningEffort,
-    ResourceAuthority, validate_model_transcript,
+    CredentialReference, EffectRequest, ModelCapabilities, ModelContent, ModelContentPart,
+    ModelImageReference, ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, ModelRoute,
+    ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
+    ProviderReadinessCheck, ProviderResponseDiagnostic, ProviderStreamItem, ProviderTurn,
+    ProviderUsage, QuarantinedEffectResult, ReasoningEffort, ResourceAuthority,
+    validate_model_message_content, validate_model_transcript,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
@@ -23,7 +24,7 @@ use colossus_policy::{
     QuarantinedEffectObserver, StreamingEffectExecutor, http_transport_authority_match,
     non_public_network_address,
 };
-use colossus_ports::CredentialResolutionError;
+use colossus_ports::{CredentialResolutionError, RunInputMediaResolver};
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,7 @@ use time::OffsetDateTime;
 use tokio::net::lookup_host;
 
 const MAX_PROVIDER_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_PROVIDER_REQUEST_WITH_IMAGES_BYTES: usize = 44 * 1024 * 1024;
 const MAX_PROVIDER_ADDRESSES: usize = 16;
 const MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES: usize = 16 * 1024;
 const MAX_CODEX_REFRESH_RESPONSE_BYTES: usize = 256 * 1024;

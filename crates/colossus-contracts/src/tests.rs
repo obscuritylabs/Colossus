@@ -1,8 +1,100 @@
 use super::{
-    Actor, ActorType, AgentRunMode, ExecutionContext, ModelMessage, ModelMessageRole,
+    Actor, ActorType, AgentRunMode, ExecutionContext, ModelCapabilities, ModelContent,
+    ModelContentPart, ModelImageDetail, ModelImageReference, ModelMessage, ModelMessageRole,
     ModelToolCall, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PolicyDecision, RunEvent,
-    ThemeName, ThemeSpinner, validate_assistant_tool_call_turn, validate_model_transcript,
+    ThemeName, ThemeSpinner, validate_assistant_tool_call_turn, validate_model_message_content,
+    validate_model_transcript,
 };
+
+fn image_reference() -> ModelImageReference {
+    ModelImageReference {
+        artifact_id: format!("artifact-{}", "1".repeat(64)),
+        file_name: "diagram.png".into(),
+        media_type: "image/png".into(),
+        size_bytes: 128,
+        sha256: "2".repeat(64),
+        width_pixels: 32,
+        height_pixels: 16,
+        detail: ModelImageDetail::Auto,
+    }
+}
+
+#[test]
+fn legacy_model_content_keeps_the_scalar_json_shape() {
+    let message = ModelMessage {
+        role: ModelMessageRole::User,
+        content: "hello".into(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    };
+    let encoded = serde_json::to_value(&message).expect("serialize legacy message");
+    assert_eq!(encoded["content"], "hello");
+    assert_eq!(
+        serde_json::from_value::<ModelMessage>(encoded)
+            .expect("deserialize legacy message")
+            .content,
+        "hello"
+    );
+}
+
+#[test]
+fn legacy_model_capabilities_default_image_inputs_off() {
+    let capabilities: ModelCapabilities = serde_json::from_value(serde_json::json!({
+        "toolCalls": true,
+        "streaming": true,
+    }))
+    .expect("legacy capabilities");
+    assert!(!capabilities.image_inputs);
+    assert_eq!(
+        serde_json::to_value(capabilities).expect("capabilities JSON")["imageInputs"],
+        false
+    );
+}
+
+#[test]
+fn multipart_model_content_preserves_order_and_restricts_images_to_users() {
+    let content = ModelContent::Parts(vec![
+        ModelContentPart::Text {
+            text: "before".into(),
+        },
+        ModelContentPart::Image {
+            image: image_reference(),
+        },
+        ModelContentPart::Text {
+            text: "after".into(),
+        },
+    ]);
+    let user = ModelMessage {
+        role: ModelMessageRole::User,
+        content: content.clone(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    };
+    validate_model_message_content(&user).expect("ordered user multipart content");
+    let encoded = serde_json::to_value(&user).expect("serialize multipart message");
+    assert_eq!(encoded["content"][0]["type"], "text");
+    assert_eq!(encoded["content"][1]["type"], "image");
+    assert_eq!(encoded["content"][2]["text"], "after");
+    assert_eq!(
+        serde_json::from_value::<ModelMessage>(encoded)
+            .expect("deserialize multipart message")
+            .content,
+        content
+    );
+
+    let assistant = ModelMessage {
+        role: ModelMessageRole::Assistant,
+        content,
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    };
+    assert!(
+        validate_model_message_content(&assistant)
+            .expect_err("assistant images must fail")
+            .to_string()
+            .contains("only user")
+    );
+}
 
 #[test]
 fn application_actor_has_stable_journal_provenance() {
@@ -166,7 +258,7 @@ fn theme_names_are_stable_and_plain_migrates_to_mono() {
 fn model_transcript_requires_exact_tool_call_settlement() {
     let call = ModelMessage {
         role: ModelMessageRole::Assistant,
-        content: String::new(),
+        content: String::new().into(),
         tool_call_id: None,
         tool_calls: vec![
             ModelToolCall {
@@ -238,7 +330,7 @@ fn model_transcript_requires_exact_tool_call_settlement() {
 fn assistant_tool_call_turn_rejects_reused_ids_before_execution() {
     let assistant = |call_ids: &[&str]| ModelMessage {
         role: ModelMessageRole::Assistant,
-        content: String::new(),
+        content: String::new().into(),
         tool_call_id: None,
         tool_calls: call_ids
             .iter()

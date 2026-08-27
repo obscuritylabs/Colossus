@@ -7,6 +7,36 @@ pub struct ProviderTurnOptions {
     pub include_response_diagnostics: bool,
 }
 
+/// Exact transient image bytes resolved only inside a permit-bearing provider adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRunInputImage {
+    /// Verified durable metadata bound into the provider effect and permit.
+    pub reference: ModelImageReference,
+    /// Exact verified artifact bytes. Callers must never persist or diagnose this field.
+    pub bytes: Vec<u8>,
+}
+
+/// Safe failure from the application-owned encrypted run-input media service.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum RunInputMediaError {
+    /// The artifact was unavailable, not owner-authorized, or did not match its reference.
+    #[error("run-input image is unavailable or does not match its verified reference")]
+    Unavailable,
+    /// The artifact bytes did not satisfy the bounded image contract.
+    #[error("run-input image failed bounded validation: {0}")]
+    Invalid(String),
+}
+
+/// Late-bound resolver for encrypted run-input image artifacts.
+#[async_trait]
+pub trait RunInputMediaResolver: Send + Sync {
+    /// Resolve and re-verify exact bytes after the provider permit has been issued.
+    async fn resolve_image(
+        &self,
+        reference: &ModelImageReference,
+    ) -> Result<ResolvedRunInputImage, RunInputMediaError>;
+}
+
 /// Role-routed, policy-bound model provider used by the application loop.
 #[async_trait]
 pub trait ModelProvider: Send + Sync {

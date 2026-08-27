@@ -25,7 +25,7 @@ pub(super) fn reconstruct_summary(
         message_count = message_count.saturating_add(1);
         last_run_id = Some(record.run_id);
         if record.message.role == ModelMessageRole::User {
-            last_user_preview = Some(preview(&record.message.content));
+            last_user_preview = Some(preview(&record.message.content.plain_text()));
         }
     }
     Ok(SessionSummary {
@@ -120,6 +120,8 @@ pub(super) fn validate_session_id(id: &str) -> Result<(), StoreError> {
 }
 
 pub(super) fn validate_message(message: &ModelMessage) -> Result<(), StoreError> {
+    validate_model_message_content(message)
+        .map_err(|error| StoreError::Adapter(error.to_string()))?;
     if message.role == ModelMessageRole::System {
         return Err(StoreError::Adapter(
             "system instructions are not persisted as conversation messages".into(),

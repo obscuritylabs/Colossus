@@ -20,8 +20,9 @@ use crate::test_support::private_tempdir;
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
-    ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, PlanRecord,
-    PlanStatus, PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
+    ModelContent, ModelContentPart, ModelImageDetail, ModelImageReference, ModelLimits,
+    ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, PlanRecord, PlanStatus,
+    PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
     ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
     ResourceAuthority, RiskLevel, RiskRecommendation, RunBranchContextMode, SandboxBoundaryMode,
     SessionMessageAppend, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
@@ -64,6 +65,83 @@ fn research_outer_timeout_contains_every_bounded_nested_operation() {
     assert!(research_run_timeout_ms(300_000, 30_000, 20, 4) > 30_000);
 }
 
+#[test]
+fn image_capability_echo_and_bounds_fail_at_the_pre_effect_route_gate() {
+    let image = ModelImageReference {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+        file_name: "input.png".into(),
+        media_type: "image/png".into(),
+        size_bytes: 1,
+        sha256: "b".repeat(64),
+        width_pixels: 640,
+        height_pixels: 480,
+        detail: ModelImageDetail::Auto,
+    };
+    let request = ModelRequest {
+        instructions: "test".into(),
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::User,
+            content: ModelContent::Parts(vec![ModelContentPart::Image {
+                image: image.clone(),
+            }]),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        tools: Vec::new(),
+        max_output_tokens: None,
+    };
+    let mut route = ProviderRoute {
+        role: "primary".into(),
+        profile: "vision".into(),
+        model_profile: "vision".into(),
+        provider_profile: "openai".into(),
+        provider: "open_ai_responses".into(),
+        model: "gpt-5.6-sol".into(),
+        limits: ModelLimits {
+            context_window_tokens: 128_000,
+            max_output_tokens: 8_192,
+            safety_margin_tokens: 8_192,
+            input_budget_tokens: 111_616,
+        },
+        capabilities: ModelCapabilities {
+            tool_calls: true,
+            streaming: true,
+            image_inputs: false,
+        },
+        reasoning_effort: None,
+    };
+
+    let error = super::provider_gateway::validate_route_image_inputs(
+        &route,
+        ProviderKind::OpenAiResponses,
+        &request,
+    )
+    .expect_err("capability gate");
+    assert!(error.to_string().contains("does not enable image inputs"));
+
+    route.capabilities.image_inputs = true;
+    let error =
+        super::provider_gateway::validate_route_image_inputs(&route, ProviderKind::Echo, &request)
+            .expect_err("Echo gate");
+    assert!(error.to_string().contains("Echo provider"));
+
+    let mut oversized = request;
+    let ModelContent::Parts(parts) = &mut oversized.messages[0].content else {
+        panic!("multipart image request");
+    };
+    let ModelContentPart::Image { image } = &mut parts[0] else {
+        panic!("image part");
+    };
+    image.size_bytes = 16 * 1_048_576 + 1;
+    let error = super::provider_gateway::validate_route_image_inputs(
+        &route,
+        ProviderKind::OpenAiResponses,
+        &oversized,
+    )
+    .expect_err("image bound");
+    assert!(error.to_string().contains("dimension, or pixel bound"));
+}
+
 fn external_work_queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
     let store: Arc<dyn ProjectionStore> = Arc::new(InMemoryProjectionStore::default());
     Arc::new(JournalExternalWorkQueue::new(journal, store))
@@ -85,6 +163,7 @@ fn configure_primary_model(
             capabilities: ModelCapabilities {
                 tool_calls: true,
                 streaming: true,
+                image_inputs: false,
             },
             reasoning_effort: None,
         },
@@ -2142,7 +2221,7 @@ fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
                 SessionMessageAppend {
                     message: ModelMessage {
                         role: ModelMessageRole::Assistant,
-                        content: String::new(),
+                        content: String::new().into(),
                         tool_call_id: None,
                         tool_calls: vec![ModelToolCall {
                             call_id: "call-1".into(),
@@ -4822,6 +4901,7 @@ impl ModelProvider for WorkScriptedProvider {
             capabilities: ModelCapabilities {
                 tool_calls: true,
                 streaming: true,
+                image_inputs: false,
             },
             reasoning_effort: None,
         })

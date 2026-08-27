@@ -2367,6 +2367,7 @@ mod tests {
             capabilities: ModelCapabilitiesSetting {
                 tool_calls: true,
                 streaming: true,
+                image_inputs: false,
             },
             reasoning_effort: None,
         }

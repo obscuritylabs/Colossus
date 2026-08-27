@@ -123,6 +123,7 @@ current runtime.
 | Activity | `/stream on`, `/stream raw`, `/stream off`, `/events compact`, `/events verbose`, `/events off`, `/reasoning on`, `/reasoning off` |
 | Composer and transcript | `/transcript comfortable`, `/transcript compact`, `/multiline on`, `/multiline off`, `/multiline toggle`, `/trace` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume`, `/resume` |
+| Image attachments | `/attach PATH`, `/attachments`, `/detach INDEX`, `/detach all` |
 | Work | `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
 | Plan workflow | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Memory and research | `/memories`, `/memory search`, `/research`, `/research list` |
@@ -138,6 +139,20 @@ Use `/resume` or `/session resume` without an ID for the searchable master-detai
 browser; exact session IDs are accepted when deterministic selection matters. The
 browser keeps the running-command row, composer draft, and status footer visible while
 it is open.
+
+## Image attachments
+
+`/attach PATH` accepts an absolute path or a path relative to the active workspace;
+surround a path containing spaces with quotes. `/attachments` lists the pending images,
+and `/detach INDEX` or `/detach all` removes them. Execute and Plan modes accept images;
+Research mode rejects them locally. Pending images remain queued when validation or run
+start fails and clear after the submission is accepted.
+
+The composer shows up to three pending thumbnails and collapses the remainder into a
+`+N more` indicator. Submitted images retain content order and an adjacent filename,
+MIME, dimensions, size, and digest card. Default inline mode always renders deterministic
+half-block previews so native scrollback remains stable. `--alt-screen` uses Kitty,
+iTerm2, or Sixel when a capability query succeeds and falls back to half blocks.
 
 ## Plan workflow
 

@@ -232,7 +232,11 @@ describe("OperationsSurface runtime targets", () => {
               contextWindowTokens: 64_000,
               maxOutputTokens: 8_000,
               reasoningEffort: "high",
-              capabilities: { toolCalls: true, streaming: true },
+              capabilities: {
+                toolCalls: true,
+                streaming: true,
+                imageInputs: false,
+              },
             },
           ],
           roles: { primary: "primary" },

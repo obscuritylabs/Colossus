@@ -219,6 +219,9 @@ pub struct ModelCapabilities {
     pub tool_calls: bool,
     /// Whether this model should use the provider's streaming transport.
     pub streaming: bool,
+    /// Whether this model may receive verified run-input image artifacts.
+    #[serde(default)]
+    pub image_inputs: bool,
 }
 
 /// Provider-neutral reasoning effort requested for one model profile.

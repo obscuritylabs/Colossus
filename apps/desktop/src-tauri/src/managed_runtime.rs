@@ -841,6 +841,7 @@ fn managed_runtime_config(resolved: &ResolvedSpaceConfiguration) -> ManagedRunti
                 capabilities: ManagedModelCapabilities {
                     tool_calls: model.capabilities.tool_calls,
                     streaming: model.capabilities.streaming,
+                    image_inputs: model.capabilities.image_inputs,
                 },
                 reasoning_effort: model.reasoning_effort.map(reasoning_effort),
             })

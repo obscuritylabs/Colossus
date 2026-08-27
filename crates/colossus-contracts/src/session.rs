@@ -1,5 +1,5 @@
 use super::*;
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{borrow::Cow, collections::BTreeSet, error::Error, fmt};
 
 /// Provider-neutral message role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -29,14 +29,251 @@ pub enum RunBranchContextMode {
     SourceRunConversation,
 }
 
+/// Provider-neutral visible message content.
+///
+/// The untagged representation intentionally preserves the historical JSON string
+/// shape for text-only messages while allowing ordered multipart user input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ModelContent {
+    /// Legacy scalar text content.
+    Text(String),
+    /// Ordered text and image-reference parts.
+    Parts(Vec<ModelContentPart>),
+}
+
+impl Default for ModelContent {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl From<String> for ModelContent {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for ModelContent {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_owned())
+    }
+}
+
+impl PartialEq<&str> for ModelContent {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_text() == Some(*other)
+    }
+}
+
+impl PartialEq<String> for ModelContent {
+    fn eq(&self, other: &String) -> bool {
+        matches!(self, Self::Text(text) if text == other)
+    }
+}
+
+impl ModelContent {
+    /// Return the exact scalar text when this is a legacy text message.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Parts(_) => None,
+        }
+    }
+
+    /// Return visible text with multipart text parts joined in content order.
+    pub fn plain_text(&self) -> Cow<'_, str> {
+        match self {
+            Self::Text(text) => Cow::Borrowed(text),
+            Self::Parts(parts) => Cow::Owned(
+                parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        ModelContentPart::Text { text } => Some(text.as_str()),
+                        ModelContentPart::Image { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        }
+    }
+
+    /// Whether the content has no visible text, image, or other part.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Text(text) => text.is_empty(),
+            Self::Parts(parts) => parts.is_empty(),
+        }
+    }
+
+    /// Whether the flattened human-readable text contains one substring.
+    pub fn contains(&self, pattern: &str) -> bool {
+        self.plain_text().contains(pattern)
+    }
+
+    /// Byte length of the flattened human-readable text.
+    pub fn len(&self) -> usize {
+        self.plain_text().len()
+    }
+
+    /// Whether the flattened human-readable text begins with one prefix.
+    pub fn starts_with(&self, pattern: &str) -> bool {
+        self.plain_text().starts_with(pattern)
+    }
+
+    /// Whether the flattened human-readable text ends with one suffix.
+    pub fn ends_with(&self, pattern: &str) -> bool {
+        self.plain_text().ends_with(pattern)
+    }
+
+    /// Trimmed flattened human-readable text.
+    pub fn trim(&self) -> Cow<'_, str> {
+        match self {
+            Self::Text(text) => Cow::Borrowed(text.trim()),
+            Self::Parts(_) => Cow::Owned(self.plain_text().trim().to_owned()),
+        }
+    }
+
+    /// Iterate over image references in content order.
+    pub fn images(&self) -> impl Iterator<Item = &ModelImageReference> {
+        let parts = match self {
+            Self::Text(_) => &[][..],
+            Self::Parts(parts) => parts.as_slice(),
+        };
+        parts.iter().filter_map(|part| match part {
+            ModelContentPart::Image { image } => Some(image),
+            ModelContentPart::Text { .. } => None,
+        })
+    }
+
+    /// Number of visible UTF-8 text bytes in this content.
+    pub fn text_bytes(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::Parts(parts) => parts
+                .iter()
+                .map(|part| match part {
+                    ModelContentPart::Text { text } => text.len(),
+                    ModelContentPart::Image { .. } => 0,
+                })
+                .sum(),
+        }
+    }
+}
+
+/// One ordered provider-neutral content part.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModelContentPart {
+    /// Visible text in its original position.
+    Text {
+        /// Exact bounded UTF-8 text.
+        text: String,
+    },
+    /// Verified encrypted artifact metadata; image bytes are never durable here.
+    Image {
+        /// Exact image artifact reference.
+        image: ModelImageReference,
+    },
+}
+
+/// The only image-detail policy accepted in this release.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelImageDetail {
+    /// Let the provider choose its supported detail level.
+    #[default]
+    Auto,
+}
+
+/// Verified metadata for one encrypted run-input image artifact.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelImageReference {
+    /// Opaque encrypted artifact identifier.
+    pub artifact_id: String,
+    /// Bounded display name, never a source path.
+    pub file_name: String,
+    /// Normalized supported image MIME type.
+    pub media_type: String,
+    /// Exact verified byte length.
+    pub size_bytes: u64,
+    /// Lowercase SHA-256 of the exact transmitted bytes.
+    pub sha256: String,
+    /// Decoded image width.
+    pub width_pixels: u32,
+    /// Decoded image height.
+    pub height_pixels: u32,
+    /// Fixed provider detail policy.
+    pub detail: ModelImageDetail,
+}
+
+/// Multipart message content violates the model contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelContentError {
+    detail: String,
+}
+
+impl fmt::Display for ModelContentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl Error for ModelContentError {}
+
+/// Validate role restrictions and the durable metadata-only multipart shape.
+pub fn validate_model_message_content(message: &ModelMessage) -> Result<(), ModelContentError> {
+    let ModelContent::Parts(parts) = &message.content else {
+        return Ok(());
+    };
+    if parts.is_empty() {
+        return Err(content_error(
+            "multipart content must contain at least one part",
+        ));
+    }
+    for part in parts {
+        let ModelContentPart::Image { image } = part else {
+            continue;
+        };
+        if message.role != ModelMessageRole::User {
+            return Err(content_error("only user messages may contain image parts"));
+        }
+        if image.artifact_id.is_empty()
+            || image.file_name.is_empty()
+            || image.size_bytes == 0
+            || image.width_pixels == 0
+            || image.height_pixels == 0
+            || image.sha256.len() != 64
+            || !image
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !matches!(
+                image.media_type.as_str(),
+                "image/png" | "image/jpeg" | "image/webp"
+            )
+        {
+            return Err(content_error("image reference metadata is invalid"));
+        }
+    }
+    Ok(())
+}
+
+fn content_error(detail: impl Into<String>) -> ModelContentError {
+    ModelContentError {
+        detail: detail.into(),
+    }
+}
+
 /// One provider-neutral model message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelMessage {
     /// Message provenance role.
     pub role: ModelMessageRole,
-    /// Visible bounded text.
-    pub content: String,
+    /// Visible bounded text or ordered text and image references.
+    pub content: ModelContent,
     /// Tool-call identifier for tool results.
     pub tool_call_id: Option<String>,
     /// Strict assistant tool calls preserved for provider continuation.
@@ -94,6 +331,9 @@ pub fn validate_model_transcript(
     let mut seen = BTreeSet::<String>::new();
 
     for (message_index, message) in messages.iter().enumerate() {
+        validate_model_message_content(message).map_err(|error| {
+            transcript_error(message_index, format!("model content is invalid: {error}"))
+        })?;
         match message.role {
             ModelMessageRole::Tool => {
                 let call_id = message

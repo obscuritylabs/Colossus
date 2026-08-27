@@ -8,10 +8,11 @@ use colossus_api::ArtifactPurpose;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, AgentRunResult, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
-    IntegrationAuth, MemoryScope, MemoryStatus, PlanExecutionStrategy, PlanStatus, PlanStep,
-    PolicyDecision, ResearchDepth, ResearchSourceKind, ResearchStatus, RiskReviewFallbackNotice,
-    RunEventEnvelope, SandboxBoundaryMode, SubagentStatus, TaskStatus, TerminalPreferences,
-    UserPromptRequest, UserPromptResponse, WorkflowScheduleMisfirePolicy,
+    IntegrationAuth, MemoryScope, MemoryStatus, ModelContent, ModelContentPart,
+    ModelImageReference, PlanExecutionStrategy, PlanStatus, PlanStep, PolicyDecision,
+    ResearchDepth, ResearchSourceKind, ResearchStatus, RiskReviewFallbackNotice, RunEventEnvelope,
+    SandboxBoundaryMode, SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest,
+    UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{

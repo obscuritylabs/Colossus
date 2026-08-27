@@ -332,6 +332,12 @@ contract. Set it to `false` for a compatible server that implements only complet
 responses. Capability flags shape requests; they do not grant access to tools or
 actions.
 
+Set `imageInputs: true` only when the exact model and endpoint accept image inputs.
+Colossus never infers vision support from a model name. The default is `false`, and an
+image-bearing run is rejected before a provider effect when the selected profile has not
+opted in. OpenAI Responses and compatible Chat Completions routes use their documented
+multipart image shapes; the Codex route uses only the Responses projection.
+
 ## Role routing
 
 `models.roles` maps a fixed logical role to a model profile. `primary` is required. An

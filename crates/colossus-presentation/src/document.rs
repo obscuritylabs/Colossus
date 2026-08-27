@@ -31,6 +31,9 @@ pub enum PresentationTone {
 pub enum PresentationBlock {
     /// Plain released text.
     Text(String),
+    /// Verified metadata for an encrypted run-input image. Terminal interfaces may
+    /// replace this metadata-only block with a transient authorized preview.
+    Image(ModelImageReference),
     /// Released Markdown rendered by the terminal backend.
     Markdown(String),
     /// One prompt-shaped sample rendered with the active prompt palette.

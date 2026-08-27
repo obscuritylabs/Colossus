@@ -95,6 +95,7 @@ pub struct Runtime {
     pub(super) storage_diagnostic: Value,
     pub(super) security_posture: SecurityPostureReport,
     pub(super) journal: Arc<dyn EventJournal>,
+    pub(super) run_input_media: Arc<JournalRunInputMediaResolver>,
     pub(super) recovery_reason: Option<String>,
     pub(super) projections: Arc<ProjectionWorker>,
     pub(super) session_activity: Arc<ProjectedSessionActivityReader>,
@@ -629,6 +630,7 @@ impl Runtime {
                 },
             )?;
         }
+        let run_input_media = Arc::new(JournalRunInputMediaResolver::new(Arc::clone(&journal)));
         let providers = Arc::new(provider_registry(
             &config.providers,
             &config.models,
@@ -636,6 +638,7 @@ impl Runtime {
             codex_auth,
             &tls_roots,
             configured_resource_authority(&config.sandbox),
+            Some(Arc::clone(&run_input_media) as Arc<dyn RunInputMediaResolver>),
         )?);
         let searches = Arc::new(search_registry(
             config,
@@ -1304,6 +1307,7 @@ impl Runtime {
             storage_diagnostic,
             security_posture,
             journal,
+            run_input_media,
             recovery_reason,
             projections,
             session_activity,

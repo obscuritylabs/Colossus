@@ -60,13 +60,13 @@ impl SessionPreviewCollector {
             if !matches!(
                 message.message.role,
                 ModelMessageRole::User | ModelMessageRole::Assistant
-            ) || message.message.content.trim().is_empty()
+            ) || message.message.content.plain_text().trim().is_empty()
             {
                 continue;
             }
             self.messages.push(InteractiveSessionBrowserMessage {
                 role: message.message.role,
-                content: compact_text(&message.message.content, 2_000),
+                content: compact_text(&message.message.content.plain_text(), 2_000),
             });
         }
     }

@@ -97,7 +97,7 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,
         reasoningEffort: null,
-        capabilities: { toolCalls: true, streaming: true },
+        capabilities: { toolCalls: true, streaming: true, imageInputs: false },
       },
     ];
   }
@@ -566,6 +566,22 @@ export function ModelConfigurationEditor({
             />
             <span>Streaming</span>
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={model.capabilities.imageInputs}
+              disabled={busy}
+              onChange={(event) =>
+                updateModel(index, {
+                  capabilities: {
+                    ...model.capabilities,
+                    imageInputs: event.target.checked,
+                  },
+                })
+              }
+            />
+            <span>Image inputs</span>
+          </label>
           {models.length > 1 ? (
             <button
               className="text-button"
@@ -597,7 +613,11 @@ export function ModelConfigurationEditor({
                 contextWindowTokens: 128_000,
                 maxOutputTokens: 16_000,
                 reasoningEffort: null,
-                capabilities: { toolCalls: true, streaming: true },
+                capabilities: {
+                  toolCalls: true,
+                  streaming: true,
+                  imageInputs: false,
+                },
               },
             ])
           }
