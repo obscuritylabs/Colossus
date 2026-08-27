@@ -66,11 +66,11 @@ pub(super) async fn prepare_model_content(
             "at most 16 attachments may be supplied".into(),
         ));
     }
-    let mut text_paths = Vec::new();
+    let mut text_attachments = Vec::new();
     let mut images = Vec::<ModelImageReference>::new();
     let mut combined_image_bytes = 0_u64;
     for path in attachments {
-        let bytes = runtime.read_file_bytes(path).await?;
+        let bytes = runtime.read_run_input_file_bytes(path).await?;
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -91,12 +91,10 @@ pub(super) async fn prepare_model_content(
                 images.push(import_validated_image(runtime, file_name, &bytes, &validated).await?);
             }
             Err(error) if image_candidate(path, &bytes) => return Err(error.into()),
-            Err(_) => text_paths.push(path.clone()),
+            Err(_) => text_attachments.push((path.clone(), bytes)),
         }
     }
-    let text = runtime
-        .prompt_with_text_attachments(prompt, &text_paths)
-        .await?;
+    let text = runtime.prompt_with_text_attachment_bytes(prompt, &text_attachments)?;
     if images.is_empty() {
         return Ok(ModelContent::Text(text));
     }
@@ -113,7 +111,7 @@ pub(super) async fn import_image_reference(
     runtime: &Runtime,
     path: &Path,
 ) -> Result<ModelImageReference, WorkerError> {
-    let bytes = runtime.read_file_bytes(path).await?;
+    let bytes = runtime.read_run_input_file_bytes(path).await?;
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())

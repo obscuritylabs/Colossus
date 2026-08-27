@@ -54,7 +54,7 @@ use colossus_mcp::{
     validate_config as validate_mcp_config, validate_tool_arguments,
 };
 pub use colossus_media::ValidatedImage;
-use colossus_media::{JournalRunInputMediaResolver, validate_image_bytes};
+use colossus_media::{JournalRunInputMediaResolver, MAX_IMAGE_BYTES, validate_image_bytes};
 use colossus_memory::{
     EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
     TantivyMemoryIndex, UnavailableMemoryIndex,
@@ -86,6 +86,7 @@ use colossus_ports::{
 
 const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
 const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const RUN_INPUT_FILE_READ_ACTION: &str = "filesystem.read_run_input";
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
     JournalExternalWorkQueue, ProjectedSessionActivityPage, ProjectedSessionActivityReader,

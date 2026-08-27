@@ -2090,6 +2090,57 @@ fn ephemeral_runtime_uses_fresh_process_local_state_without_storage_files() {
     assert!(!workspace.path().join("absent").exists());
 }
 
+#[tokio::test]
+async fn run_input_reads_honor_image_size_without_widening_ordinary_effects() {
+    let workspace = private_tempdir();
+    let candidate = workspace.path().join("candidate.bin");
+    let bytes = vec![0x5a; 5 * 1_048_576];
+    fs::write(&candidate, &bytes).expect("write run-input fixture");
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    config.sandbox.filesystem.push(FilesystemGrant {
+        root: workspace.path().display().to_string(),
+        mode: "read".into(),
+    });
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime");
+
+    let ordinary = runtime
+        .read_file_bytes(&candidate)
+        .await
+        .expect_err("ordinary reads retain the 4 MiB ceiling");
+    assert!(
+        ordinary.to_string().contains("permitted output bound"),
+        "{ordinary}"
+    );
+    assert_eq!(
+        runtime
+            .read_run_input_file_bytes(&candidate)
+            .await
+            .expect("run-input read"),
+        bytes
+    );
+
+    let before_render = runtime.journal().head().expect("journal head");
+    let rendered = runtime
+        .prompt_with_text_attachment_bytes(
+            "Inspect",
+            &[(PathBuf::from("note.txt"), b"one authorized read".to_vec())],
+        )
+        .expect("render already-read text");
+    assert!(rendered.contains("one authorized read"));
+    assert_eq!(
+        runtime.journal().head().expect("journal head after render"),
+        before_render,
+        "rendering already-authorized bytes must not create a second effect"
+    );
+}
+
 #[test]
 fn canonical_session_branch_is_bounded_idempotent_and_detects_drift() {
     let workspace = private_tempdir();

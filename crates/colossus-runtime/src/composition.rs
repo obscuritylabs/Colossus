@@ -769,6 +769,9 @@ impl Runtime {
                         }
                     };
                     policy = policy.with_action(&action.name, outcome);
+                    if action.name == "filesystem.read" {
+                        policy = policy.with_action(RUN_INPUT_FILE_READ_ACTION, outcome);
+                    }
                 }
                 for root in [&config.workflows.repository, &config.workflows.user] {
                     if let Ok(root) = fs::canonicalize(workspace_absolute_path(&workspace, root)) {
@@ -811,7 +814,17 @@ impl Runtime {
                         restriction.allowed_environment.clone(),
                         restriction.network_destinations.clone(),
                     );
+                    if restriction.action == "filesystem.read" {
+                        policy = policy.with_action_restrictions(
+                            RUN_INPUT_FILE_READ_ACTION,
+                            restriction.filesystem.clone(),
+                            restriction.allowed_environment.clone(),
+                            restriction.network_destinations.clone(),
+                        );
+                    }
                 }
+                policy = policy
+                    .with_action_max_output_bytes(RUN_INPUT_FILE_READ_ACTION, MAX_IMAGE_BYTES);
                 let mut provider_action_timeouts = BTreeMap::<&str, u64>::new();
                 for profile in config.providers.profiles.values() {
                     for action in [profile.kind.generation_action(), "provider.models"] {
@@ -1028,11 +1041,12 @@ impl Runtime {
                 Arc::clone(&mcp_executor),
             ));
         let http_executor = Arc::new(HttpExecutor::new().with_tls_roots(tls_roots.clone()));
-        let known_capabilities = access
+        let mut known_capabilities = access
             .actions
             .iter()
             .map(|action| action.name.clone())
             .collect::<Vec<_>>();
+        known_capabilities.push(RUN_INPUT_FILE_READ_ACTION.into());
         let sandbox_boundary_mode = SandboxBoundaryMode::from_backend(&config.sandbox.backend);
         let sandbox_boundary_acknowledged = match sandbox_boundary_mode {
             Some(SandboxBoundaryMode::External) => config.sandbox.acknowledge_external_boundary,

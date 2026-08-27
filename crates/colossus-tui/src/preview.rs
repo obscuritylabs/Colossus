@@ -9,6 +9,7 @@ use std::{
 
 const PREVIEW_CACHE_ENTRIES: usize = 8;
 const PREVIEW_CACHE_BYTES: u64 = 64 * 1_048_576;
+pub(super) const PREVIEW_VARIANTS_PER_ASSET: usize = 4;
 
 pub(super) fn decode_preview(bytes: Vec<u8>) -> Result<DynamicImage, String> {
     let format = image::guess_format(&bytes).map_err(|_| "preview format is invalid".to_owned())?;
@@ -58,6 +59,7 @@ struct PreviewVariant {
     protocol: ThreadProtocol,
     responses: Receiver<ResizeResponse>,
     lines: Vec<Line<'static>>,
+    last_used: u64,
 }
 
 impl Default for PreviewCache {
@@ -131,21 +133,35 @@ impl PreviewCache {
             return;
         }
         let key = (size.width, size.height);
+        self.tick = self.tick.wrapping_add(1);
+        let tick = self.tick;
         let Some(asset) = self.assets.get(digest) else {
             return;
         };
         if !asset.variants.contains_key(&key) {
-            if self.memory_bytes.saturating_add(asset.decoded_bytes) > PREVIEW_CACHE_BYTES {
+            let decoded_bytes = asset.decoded_bytes;
+            let image = asset.image.clone();
+            let oldest_variant = if asset.variants.len() >= PREVIEW_VARIANTS_PER_ASSET {
+                asset
+                    .variants
+                    .iter()
+                    .min_by_key(|(_, variant)| variant.last_used)
+                    .map(|(key, _)| *key)
+            } else {
+                None
+            };
+            if let Some(oldest_variant) = oldest_variant
+                && self
+                    .assets
+                    .get_mut(digest)
+                    .and_then(|asset| asset.variants.remove(&oldest_variant))
+                    .is_some()
+            {
+                self.memory_bytes = self.memory_bytes.saturating_sub(decoded_bytes);
+            }
+            if self.memory_bytes.saturating_add(decoded_bytes) > PREVIEW_CACHE_BYTES {
                 return;
             }
-            self.memory_bytes = self.memory_bytes.saturating_add(asset.decoded_bytes);
-        }
-        self.tick = self.tick.wrapping_add(1);
-        let Some(asset) = self.assets.get_mut(digest) else {
-            return;
-        };
-        asset.last_used = self.tick;
-        let variant = asset.variants.entry(key).or_insert_with(|| {
             let (request_tx, request_rx) = channel::<ResizeRequest>();
             let (response_tx, response_rx) = channel::<ResizeResponse>();
             let _ = thread::Builder::new()
@@ -159,15 +175,29 @@ impl PreviewCache {
                         }
                     }
                 });
-            PreviewVariant {
+            let variant = PreviewVariant {
                 protocol: ThreadProtocol::new(
                     request_tx,
-                    Some(self.picker.new_resize_protocol(asset.image.clone())),
+                    Some(self.picker.new_resize_protocol(image)),
                 ),
                 responses: response_rx,
                 lines: Vec::new(),
-            }
-        });
+                last_used: tick,
+            };
+            let Some(asset) = self.assets.get_mut(digest) else {
+                return;
+            };
+            asset.variants.insert(key, variant);
+            self.memory_bytes = self.memory_bytes.saturating_add(decoded_bytes);
+        }
+        let Some(asset) = self.assets.get_mut(digest) else {
+            return;
+        };
+        asset.last_used = tick;
+        let Some(variant) = asset.variants.get_mut(&key) else {
+            return;
+        };
+        variant.last_used = tick;
         let mut updated = false;
         while let Ok(response) = variant.responses.try_recv() {
             updated |= variant.protocol.update_resized_protocol(response);
@@ -221,6 +251,13 @@ impl PreviewCache {
             .and_then(|asset| asset.variants.get(&(size.width, size.height)))
             .map(|variant| variant.lines.as_slice())
             .filter(|lines| !lines.is_empty())
+    }
+
+    #[cfg(test)]
+    pub(super) fn variant_count(&self, digest: &str) -> usize {
+        self.assets
+            .get(digest)
+            .map_or(0, |asset| asset.variants.len())
     }
 }
 

@@ -190,6 +190,21 @@ impl BuiltInPolicy {
         obligations.timeout_ms = timeout_ms;
         self
     }
+
+    /// Set one action-specific output ceiling while retaining its other obligations.
+    pub fn with_action_max_output_bytes(
+        mut self,
+        action: impl Into<String>,
+        max_output_bytes: u64,
+    ) -> Self {
+        let action = action.into();
+        let obligations = self
+            .action_obligations
+            .entry(action)
+            .or_insert_with(|| self.obligations.clone());
+        obligations.max_output_bytes = max_output_bytes;
+        self
+    }
 }
 
 #[async_trait]

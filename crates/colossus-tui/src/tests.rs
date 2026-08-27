@@ -770,6 +770,18 @@ fn injected_native_protocol_reserves_cells_and_renders_through_the_stateful_widg
 }
 
 #[test]
+fn preview_cache_bounds_resize_workers_per_image() {
+    let mut cache = PreviewCache::default();
+    cache.insert("digest".into(), image::DynamicImage::new_rgba8(2, 2));
+
+    for width in 1..=u16::try_from(PREVIEW_VARIANTS_PER_ASSET + 3).expect("small bound") {
+        cache.prepare("digest", Size::new(width, 2));
+    }
+
+    assert_eq!(cache.variant_count("digest"), PREVIEW_VARIANTS_PER_ASSET);
+}
+
+#[test]
 fn parser_handles_process_local_permission_modes() {
     assert_eq!(
         parse_interactive_command("/permissions"),
