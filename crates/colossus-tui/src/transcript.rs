@@ -477,19 +477,104 @@ pub(super) fn ratatui_style(style: ThemeTextStyle) -> Style {
 }
 
 pub(super) fn composer_height(state: &TuiState, width: u16) -> u16 {
-    let inner_width = usize::from(width.saturating_sub(4)).max(1);
-    let rows = state
-        .composer
-        .draft
-        .split('\n')
-        .map(|line| UnicodeWidthStr::width(line).div_ceil(inner_width).max(1))
-        .sum::<usize>();
+    let layout = composer_layout(
+        &state.composer.draft,
+        "",
+        state.composer.cursor,
+        composer_inner_width(width),
+    );
     let preview_rows = if state.pending_images.is_empty() {
         0
     } else {
         6
     };
-    u16::try_from(rows.clamp(1, 6) + preview_rows + 2).unwrap_or(14)
+    u16::try_from(layout.lines.len().clamp(1, 6) + preview_rows + 2).unwrap_or(14)
+}
+
+pub(super) fn composer_inner_width(width: u16) -> usize {
+    usize::from(width.saturating_sub(2)).max(1)
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct ComposerVisualLine {
+    pub(super) draft: String,
+    pub(super) ghost: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ComposerLayout {
+    pub(super) lines: Vec<ComposerVisualLine>,
+    pub(super) cursor_row: usize,
+    pub(super) cursor_column: usize,
+}
+
+pub(super) fn composer_layout(
+    draft: &str,
+    ghost: &str,
+    cursor: usize,
+    width: usize,
+) -> ComposerLayout {
+    debug_assert!(cursor <= draft.len() && draft.is_char_boundary(cursor));
+    let width = width.max(1);
+    let mut lines = vec![ComposerVisualLine::default()];
+    let mut row = 0;
+    let mut column = 0;
+    let mut pending_wrap = false;
+    let mut cursor_position = None;
+
+    for (value, offset, is_ghost) in [(draft, 0, false), (ghost, draft.len(), true)] {
+        for (index, character) in value.char_indices() {
+            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+            let wrapped_before_character = if pending_wrap {
+                lines.push(ComposerVisualLine::default());
+                row += 1;
+                column = 0;
+                pending_wrap = false;
+                true
+            } else if character != '\n' && column + character_width > width {
+                lines.push(ComposerVisualLine::default());
+                row += 1;
+                column = 0;
+                true
+            } else {
+                false
+            };
+
+            if cursor_position.is_none() && offset + index == cursor {
+                cursor_position = Some((row, column));
+            }
+
+            if character == '\n' {
+                if !wrapped_before_character {
+                    lines.push(ComposerVisualLine::default());
+                    row += 1;
+                    column = 0;
+                }
+                continue;
+            }
+
+            let line = lines.last_mut().expect("composer has at least one line");
+            if is_ghost {
+                line.ghost.push(character);
+            } else {
+                line.draft.push(character);
+            }
+            column += character_width;
+            pending_wrap = column >= width;
+        }
+    }
+
+    if pending_wrap {
+        lines.push(ComposerVisualLine::default());
+        row += 1;
+        column = 0;
+    }
+    let (cursor_row, cursor_column) = cursor_position.unwrap_or((row, column));
+    ComposerLayout {
+        lines,
+        cursor_row,
+        cursor_column,
+    }
 }
 
 pub(super) fn completion_menu_height(
@@ -516,29 +601,6 @@ pub(super) fn completion_menu_height(
     u16::try_from(candidate_rows + 2)
         .unwrap_or(u16::MAX)
         .min(available)
-}
-
-pub(super) fn composer_cursor_position(before: &str, width: usize) -> (usize, usize) {
-    let mut row = 0;
-    let mut column = 0;
-    for character in before.chars() {
-        if character == '\n' {
-            row += 1;
-            column = 0;
-            continue;
-        }
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if column + character_width > width {
-            row += 1;
-            column = 0;
-        }
-        column += character_width;
-        if column == width {
-            row += 1;
-            column = 0;
-        }
-    }
-    (row.min(5), column)
 }
 
 pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
