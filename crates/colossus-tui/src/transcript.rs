@@ -523,15 +523,15 @@ pub(super) fn composer_layout(
     let mut cursor_position = None;
 
     for (value, offset, is_ghost) in [(draft, 0, false), (ghost, draft.len(), true)] {
-        for (index, character) in value.char_indices() {
-            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-            let wrapped_before_character = if pending_wrap {
+        for (index, grapheme) in value.grapheme_indices(true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            let wrapped_before_grapheme = if pending_wrap {
                 lines.push(ComposerVisualLine::default());
                 row += 1;
                 column = 0;
                 pending_wrap = false;
                 true
-            } else if character != '\n' && column + character_width > width {
+            } else if grapheme != "\n" && column + grapheme_width > width {
                 lines.push(ComposerVisualLine::default());
                 row += 1;
                 column = 0;
@@ -539,13 +539,16 @@ pub(super) fn composer_layout(
             } else {
                 false
             };
+            let grapheme_start = offset + index;
+            let cursor_inside_grapheme =
+                !is_ghost && grapheme_start < cursor && cursor < grapheme_start + grapheme.len();
 
-            if cursor_position.is_none() && offset + index == cursor {
+            if cursor_position.is_none() && grapheme_start == cursor {
                 cursor_position = Some((row, column));
             }
 
-            if character == '\n' {
-                if !wrapped_before_character {
+            if grapheme == "\n" {
+                if !wrapped_before_grapheme {
                     lines.push(ComposerVisualLine::default());
                     row += 1;
                     column = 0;
@@ -555,12 +558,19 @@ pub(super) fn composer_layout(
 
             let line = lines.last_mut().expect("composer has at least one line");
             if is_ghost {
-                line.ghost.push(character);
+                line.ghost.push_str(grapheme);
             } else {
-                line.draft.push(character);
+                line.draft.push_str(grapheme);
             }
-            column += character_width;
+            column += grapheme_width;
             pending_wrap = column >= width;
+            if cursor_position.is_none() && cursor_inside_grapheme {
+                cursor_position = Some(if pending_wrap {
+                    (row + 1, 0)
+                } else {
+                    (row, column)
+                });
+            }
         }
     }
 
@@ -624,16 +634,16 @@ pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect 
 
 pub(super) fn previous_boundary(value: &str, cursor: usize) -> usize {
     value[..cursor]
-        .char_indices()
+        .grapheme_indices(true)
         .next_back()
-        .map_or(0, |(index, _)| index)
+        .map_or(0, |(index, _grapheme)| index)
 }
 
 pub(super) fn next_boundary(value: &str, cursor: usize) -> usize {
     value[cursor..]
-        .char_indices()
+        .grapheme_indices(true)
         .nth(1)
-        .map_or(value.len(), |(index, _)| cursor + index)
+        .map_or(value.len(), |(index, _grapheme)| cursor + index)
 }
 
 pub(super) fn sanitize_input(value: &str) -> String {

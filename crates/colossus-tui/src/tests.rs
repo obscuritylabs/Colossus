@@ -1553,15 +1553,15 @@ fn research_mode_is_visible_in_composer_and_footer() {
 }
 
 #[test]
-fn unicode_editing_never_splits_a_character() {
+fn unicode_editing_never_splits_a_grapheme() {
     let mut composer = Composer::default();
-    composer.insert("a🦀界");
+    composer.insert("a❤️👨‍👩‍👧‍👦界");
     composer.move_left();
     composer.backspace();
-    assert_eq!(composer.draft, "a界");
+    assert_eq!(composer.draft, "a❤️界");
     assert!(composer.draft.is_char_boundary(composer.cursor));
     composer.delete();
-    assert_eq!(composer.draft, "a");
+    assert_eq!(composer.draft, "a❤️");
 }
 
 #[test]
@@ -1923,6 +1923,30 @@ fn composer_layout_wraps_wide_characters_before_the_cursor() {
     assert_eq!(layout.lines[0].draft, "abcd");
     assert_eq!(layout.lines[1].draft, "界");
     assert_eq!((layout.cursor_row, layout.cursor_column), (1, 2));
+}
+
+#[test]
+fn composer_layout_keeps_contextual_width_graphemes_intact() {
+    let backend = TestBackend::new(12, 4);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("123456789❤️");
+
+    let layout = composer_layout(
+        &state.composer.draft,
+        "",
+        state.composer.cursor,
+        composer_inner_width(12),
+    );
+    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.lines[0].draft, "123456789");
+    assert_eq!(layout.lines[1].draft, "❤️");
+    assert_eq!((layout.cursor_row, layout.cursor_column), (1, 2));
+
+    terminal
+        .draw(|frame| render_composer(frame, &mut state, frame.area()))
+        .expect("draw composer with contextual-width grapheme");
+    assert_eq!(terminal.backend().cursor_position(), Position::new(3, 2));
 }
 
 #[test]
