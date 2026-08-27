@@ -789,32 +789,38 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
 
 pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
     let palette = TerminalPalette::for_preferences(&state.preferences);
-    let inner_width = usize::from(area.width.saturating_sub(4)).max(1);
-    let (before, after) = state.composer.draft.split_at(state.composer.cursor);
     let ghost = if state.welcome_visible && state.composer.draft.is_empty() {
         "Implement {feature}"
     } else {
         state.ghost_text().unwrap_or("")
     };
+    let layout = composer_layout(
+        &state.composer.draft,
+        ghost,
+        state.composer.cursor,
+        composer_inner_width(area.width),
+    );
     let mut text = pending_thumbnail_lines(state);
     let preview_rows = text.len();
-    let logical_lines = format!("{before}{after}{ghost}")
-        .split('\n')
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    // Render the common single-line case with a distinct ghost span. Multiline retains
-    // newlines and uses the real terminal cursor for exact position.
-    if !state.composer.draft.contains('\n') {
-        let mut ghost_style = palette.meta_style();
-        ghost_style.dim = true;
-        text.push(Line::from(vec![
-            Span::raw(before.to_owned()),
-            Span::raw(after.to_owned()),
-            Span::styled(ghost.to_owned(), ratatui_style(ghost_style)),
-        ]));
-    } else {
-        text.extend(logical_lines.into_iter().map(Line::from));
-    }
+    let visible_rows = usize::from(area.height.saturating_sub(2)).saturating_sub(preview_rows);
+    let first_visible_row = layout
+        .cursor_row
+        .saturating_sub(visible_rows.saturating_sub(1));
+    let mut ghost_style = palette.meta_style();
+    ghost_style.dim = true;
+    text.extend(
+        layout
+            .lines
+            .iter()
+            .skip(first_visible_row)
+            .take(visible_rows)
+            .map(|line| {
+                Line::from(vec![
+                    Span::raw(line.draft.clone()),
+                    Span::styled(line.ghost.clone(), ratatui_style(ghost_style)),
+                ])
+            }),
+    );
     let action = if state.preferences.multiline {
         "Ctrl/Alt+Enter sends"
     } else {
@@ -862,9 +868,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
         }
     };
     frame.render_widget(
-        Paragraph::new(text)
-            .block(Block::default().borders(Borders::ALL).title(title))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title)),
         area,
     );
     if state.preview_cache.native_graphics() {
@@ -892,11 +896,11 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
             }
         }
     }
-    let (cursor_row, cursor_column) = composer_cursor_position(before, inner_width);
+    let cursor_row = layout.cursor_row.saturating_sub(first_visible_row);
     let x = area
         .x
         .saturating_add(1)
-        .saturating_add(u16::try_from(cursor_column).unwrap_or(u16::MAX));
+        .saturating_add(u16::try_from(layout.cursor_column).unwrap_or(u16::MAX));
     let y = area
         .y
         .saturating_add(1)

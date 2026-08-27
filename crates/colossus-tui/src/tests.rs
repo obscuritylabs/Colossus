@@ -1553,15 +1553,15 @@ fn research_mode_is_visible_in_composer_and_footer() {
 }
 
 #[test]
-fn unicode_editing_never_splits_a_character() {
+fn unicode_editing_never_splits_a_grapheme() {
     let mut composer = Composer::default();
-    composer.insert("a🦀界");
+    composer.insert("a❤️👨‍👩‍👧‍👦界");
     composer.move_left();
     composer.backspace();
-    assert_eq!(composer.draft, "a界");
+    assert_eq!(composer.draft, "a❤️界");
     assert!(composer.draft.is_char_boundary(composer.cursor));
     composer.delete();
-    assert_eq!(composer.draft, "a");
+    assert_eq!(composer.draft, "a❤️");
 }
 
 #[test]
@@ -1850,6 +1850,103 @@ fn completion_ghost_uses_a_distinct_low_emphasis_style() {
     let ghost = buffer.cell((4, 1)).expect("ghost cell").style();
     assert_ne!(typed, ghost);
     assert!(ghost.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn wrapped_composer_cursor_matches_the_rendered_text() {
+    let backend = TestBackend::new(12, 4);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("abcdefghijk");
+
+    terminal
+        .draw(|frame| render_composer(frame, &mut state, frame.area()))
+        .expect("draw wrapped composer");
+
+    let buffer = terminal.backend().buffer();
+    let first_row = (1..=10)
+        .map(|x| buffer.cell((x, 1)).expect("first-row cell").symbol())
+        .collect::<String>();
+    assert_eq!(first_row, "abcdefghij");
+    assert_eq!(buffer.cell((1, 2)).expect("wrapped cell").symbol(), "k");
+    assert_eq!(buffer.cell((2, 2)).expect("cursor cell").symbol(), " ");
+    assert_eq!(terminal.backend().cursor_position(), Position::new(2, 2));
+}
+
+#[test]
+fn exact_width_composer_reserves_the_cursor_row() {
+    let backend = TestBackend::new(12, 4);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("abcdefghij");
+
+    assert_eq!(composer_height(&state, 12), 4);
+    terminal
+        .draw(|frame| render_composer(frame, &mut state, frame.area()))
+        .expect("draw exact-width composer");
+
+    assert_eq!(terminal.backend().cursor_position(), Position::new(1, 2));
+}
+
+#[test]
+fn composer_scrolls_wrapped_tail_with_the_cursor() {
+    let backend = TestBackend::new(12, 8);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state
+        .composer
+        .insert("0000000000111111111122222222223333333333444444444455555555556");
+
+    assert_eq!(composer_height(&state, 12), 8);
+    terminal
+        .draw(|frame| render_composer(frame, &mut state, frame.area()))
+        .expect("draw scrolled composer");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(
+        buffer.cell((1, 1)).expect("first visible cell").symbol(),
+        "1"
+    );
+    assert_eq!(
+        buffer.cell((1, 6)).expect("last visible cell").symbol(),
+        "6"
+    );
+    assert_eq!(buffer.cell((2, 6)).expect("cursor cell").symbol(), " ");
+    assert_eq!(terminal.backend().cursor_position(), Position::new(2, 6));
+}
+
+#[test]
+fn composer_layout_wraps_wide_characters_before_the_cursor() {
+    let layout = composer_layout("abcd界", "", "abcd界".len(), 5);
+
+    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.lines[0].draft, "abcd");
+    assert_eq!(layout.lines[1].draft, "界");
+    assert_eq!((layout.cursor_row, layout.cursor_column), (1, 2));
+}
+
+#[test]
+fn composer_layout_keeps_contextual_width_graphemes_intact() {
+    let backend = TestBackend::new(12, 4);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("123456789❤️");
+
+    let layout = composer_layout(
+        &state.composer.draft,
+        "",
+        state.composer.cursor,
+        composer_inner_width(12),
+    );
+    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.lines[0].draft, "123456789");
+    assert_eq!(layout.lines[1].draft, "❤️");
+    assert_eq!((layout.cursor_row, layout.cursor_column), (1, 2));
+
+    terminal
+        .draw(|frame| render_composer(frame, &mut state, frame.area()))
+        .expect("draw composer with contextual-width grapheme");
+    assert_eq!(terminal.backend().cursor_position(), Position::new(3, 2));
 }
 
 #[test]

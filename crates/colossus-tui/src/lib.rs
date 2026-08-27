@@ -46,6 +46,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Maximum number of future turns accepted while one operation is running.
