@@ -5,8 +5,9 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, ContextSnapshot, ContextStatus, DecisionPriority, DecisionStatus,
-    EventClassification, ExecutionContext, KeyDecision, MemoryRecord, MemoryScope, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelToolDefinition, NewEvent, PreparedContext, ProviderEvent,
+    EventClassification, ExecutionContext, KeyDecision, MemoryRecord, MemoryScope, ModelContent,
+    ModelContentPart, ModelImageReference, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelToolDefinition, NewEvent, PreparedContext, ProviderEvent,
 };
 use colossus_ports::{
     ContextError, ContextPreparationRequest, ContextPreparer, ContextRepository, EventJournal,

@@ -45,7 +45,7 @@ pub(crate) async fn choose_run_attachment(
     let media_type = attachment_media_type(&path).ok_or_else(|| {
         CommandErrorDto::invalid(
             "attachment",
-            "This version supports UTF-8 text and source-code attachments.",
+            "Supported attachments are PNG, JPEG, static WebP, UTF-8 text, and source code.",
         )
     })?;
     let file = File::open(&path).map_err(|_| {
@@ -70,10 +70,25 @@ pub(crate) async fn choose_run_attachment(
     file.take((MAX_ATTACHMENT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| CommandErrorDto::invalid("attachment", "The attachment could not be read."))?;
-    if bytes.len() > MAX_ATTACHMENT_BYTES || std::str::from_utf8(&bytes).is_err() {
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
         return Err(CommandErrorDto::invalid(
             "attachment",
-            "Attachments must contain bounded UTF-8 text.",
+            "Attachments must be no larger than 16 MiB.",
+        ));
+    }
+    if media_type.starts_with("image/") {
+        colossus_media::validate_image_bytes(&file_name, Some(media_type), &bytes).map_err(
+            |_| {
+                CommandErrorDto::invalid(
+                    "attachment",
+                    "Images must be valid static PNG, JPEG, or WebP files within the image limits.",
+                )
+            },
+        )?;
+    } else if std::str::from_utf8(&bytes).is_err() {
+        return Err(CommandErrorDto::invalid(
+            "attachment",
+            "Text attachments must contain bounded UTF-8 text.",
         ));
     }
     let idempotency_key = attachment_idempotency_key(&file_name, media_type, &bytes)?;
@@ -156,6 +171,9 @@ fn attachment_media_type(path: &Path) -> Option<&'static str> {
         Some("yaml" | "yml") => Some("application/yaml"),
         Some("toml") => Some("application/toml"),
         Some("xml") => Some("application/xml"),
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("webp") => Some("image/webp"),
         Some(
             "txt" | "md" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "h"
             | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "zsh" | "fish" | "css" | "scss" | "html"

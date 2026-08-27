@@ -206,7 +206,7 @@ impl GatewayResearchModel {
                     instructions: instructions.into(),
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
-                        content: prompt,
+                        content: prompt.into(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     }],

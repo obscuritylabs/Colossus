@@ -174,7 +174,7 @@ positional:
 | `agents queue` | `--role subagent_default` |
 | `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
 | `artifacts upload` | Policy-authorized bounded files; `--purpose run-input`; encrypted bytes are owner-bound to the CLI application identity |
-| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 policy-read files within a 1 MiB aggregate UTF-8 input bound |
+| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 inputs. Text files retain the 1 MiB aggregate UTF-8 bound; static PNG, JPEG, and WebP images are limited to 16 MiB each and 32 MiB combined. |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |
 

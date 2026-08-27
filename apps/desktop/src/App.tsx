@@ -343,7 +343,11 @@ const INITIAL_DESKTOP: DesktopStatus = {
             contextWindowTokens: 128_000,
             maxOutputTokens: 16_000,
             reasoningEffort: null,
-            capabilities: { toolCalls: true, streaming: true },
+            capabilities: {
+              toolCalls: true,
+              streaming: true,
+              imageInputs: false,
+            },
           },
         ]
       : [],

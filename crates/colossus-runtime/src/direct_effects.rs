@@ -1,11 +1,61 @@
 use super::*;
 
 impl Runtime {
+    /// Validate exact local bytes with the shared bounded run-input image contract.
+    pub fn validate_run_input_image(
+        &self,
+        file_name: &str,
+        declared_media_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<ValidatedImage, RuntimeError> {
+        validate_image_bytes(file_name, declared_media_type, bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Resolve an owner-authorized encrypted artifact into durable image metadata.
+    pub fn run_input_image_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<ModelImageReference, RuntimeError> {
+        self.run_input_media
+            .image_reference(owner_id, artifact_id)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Retrieve exact verified bytes for a trusted local preview of a canonical reference.
+    pub async fn preview_run_input_image(
+        &self,
+        reference: &ModelImageReference,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let resolved = colossus_ports::RunInputMediaResolver::resolve_image(
+            self.run_input_media.as_ref(),
+            reference,
+        )
+        .await
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        Ok(resolved.bytes)
+    }
+
     /// Render bounded UTF-8 attachment files into a model prompt after policy-authorized reads.
     pub async fn prompt_with_text_attachments(
         &self,
         prompt: &str,
         attachments: &[PathBuf],
+    ) -> Result<String, RuntimeError> {
+        let mut resolved = Vec::with_capacity(attachments.len());
+        for path in attachments {
+            let bytes = self.read_file_bytes(path).await?;
+            resolved.push((path.clone(), bytes));
+        }
+        self.prompt_with_text_attachment_bytes(prompt, &resolved)
+    }
+
+    /// Render bounded, already-authorized UTF-8 attachment bytes without reading them again.
+    pub fn prompt_with_text_attachment_bytes(
+        &self,
+        prompt: &str,
+        attachments: &[(PathBuf, Vec<u8>)],
     ) -> Result<String, RuntimeError> {
         const MAX_ATTACHMENTS: usize = 16;
         const MAX_INPUT_BYTES: usize = 1_048_576;
@@ -22,9 +72,8 @@ impl Runtime {
         }
         let mut rendered = String::with_capacity(prompt.len());
         rendered.push_str(prompt);
-        for path in attachments {
-            let bytes = self.read_file_bytes(path).await?;
-            append_text_attachment(&mut rendered, path, &bytes, MAX_INPUT_BYTES)?;
+        for (path, bytes) in attachments {
+            append_text_attachment(&mut rendered, path, bytes, MAX_INPUT_BYTES)?;
         }
         Ok(rendered)
     }
@@ -63,6 +112,29 @@ impl Runtime {
             json!({"path": path.display().to_string(), "encoding": "binary"}),
         );
         request.capabilities = vec!["filesystem.read".into()];
+        Ok(self
+            .gateway
+            .execute(request, self.filesystem_executor.as_ref())
+            .await
+            .map(|result| result.bytes)?)
+    }
+
+    /// Read one local run-input candidate through a dedicated 16 MiB policy ceiling.
+    pub async fn read_run_input_file_bytes(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let path = workspace_absolute_path(&self.workspace, path.as_ref());
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            RUN_INPUT_FILE_READ_ACTION,
+            path.display().to_string(),
+            json!({"path": path.display().to_string(), "encoding": "binary"}),
+        );
+        request.capabilities = vec![RUN_INPUT_FILE_READ_ACTION.into()];
         Ok(self
             .gateway
             .execute(request, self.filesystem_executor.as_ref())

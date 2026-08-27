@@ -45,15 +45,15 @@ pub(super) fn transcript_from_messages(
             ModelMessageRole::System => continue,
             ModelMessageRole::User => (
                 TranscriptKind::User,
-                PresentationDocument::from_block(PresentationBlock::Markdown(
-                    record.message.content,
-                )),
+                user_content_document(&record.message.content),
                 None,
             ),
             ModelMessageRole::Assistant => {
                 let mut document = PresentationDocument::new();
                 if !record.message.content.is_empty() {
-                    document.push(PresentationBlock::Markdown(record.message.content));
+                    document.push(PresentationBlock::Markdown(
+                        record.message.content.plain_text().into_owned(),
+                    ));
                 }
                 for call in record.message.tool_calls {
                     tool_names.insert(call.call_id.clone(), call.name.clone());
@@ -81,7 +81,7 @@ pub(super) fn transcript_from_messages(
                 let source = TranscriptRenderSource::RetainedToolResult {
                     title,
                     name,
-                    output: record.message.content,
+                    output: record.message.content.plain_text().into_owned(),
                 };
                 let document = source
                     .render(preferences)
@@ -100,6 +100,75 @@ pub(super) fn transcript_from_messages(
         }
     }
     (entries, sources)
+}
+
+fn image_metadata_block(index: usize, image: &ModelImageReference) -> PresentationBlock {
+    let _ = index;
+    PresentationBlock::Image(image.clone())
+}
+
+pub(super) fn attachments_document(images: &[ModelImageReference]) -> PresentationDocument {
+    if images.is_empty() {
+        return PresentationDocument::from_block(PresentationBlock::Text(
+            "No image attachments are pending.".into(),
+        ));
+    }
+    let mut document = PresentationDocument::new();
+    document.push(PresentationBlock::Text(format!(
+        "{} pending image attachment(s)",
+        images.len()
+    )));
+    for (index, image) in images.iter().enumerate() {
+        document.push(image_metadata_block(index + 1, image));
+    }
+    document
+}
+
+fn user_content_document(content: &ModelContent) -> PresentationDocument {
+    let mut document = PresentationDocument::new();
+    match content {
+        ModelContent::Text(text) => {
+            if !text.is_empty() {
+                document.push(PresentationBlock::Markdown(text.clone()));
+            }
+        }
+        ModelContent::Parts(parts) => {
+            let mut image_index = 0;
+            for part in parts {
+                match part {
+                    ModelContentPart::Text { text } if !text.is_empty() => {
+                        document.push(PresentationBlock::Markdown(text.clone()));
+                    }
+                    ModelContentPart::Image { image } => {
+                        image_index += 1;
+                        document.push(image_metadata_block(image_index, image));
+                    }
+                    ModelContentPart::Text { .. } => {}
+                }
+            }
+        }
+    }
+    document
+}
+
+pub(super) fn user_entry_with_images(
+    content: &str,
+    images: &[ModelImageReference],
+    kind: TranscriptKind,
+) -> TranscriptEntry {
+    let mut document = PresentationDocument::new();
+    if !content.is_empty() {
+        document.push(PresentationBlock::Markdown(content.into()));
+    }
+    for (index, image) in images.iter().enumerate() {
+        document.push(image_metadata_block(index + 1, image));
+    }
+    TranscriptEntry {
+        sequence: None,
+        kind,
+        document,
+        temporary: false,
+    }
 }
 
 pub(super) fn user_entry(content: &str, kind: TranscriptKind) -> TranscriptEntry {
@@ -415,7 +484,12 @@ pub(super) fn composer_height(state: &TuiState, width: u16) -> u16 {
         .split('\n')
         .map(|line| UnicodeWidthStr::width(line).div_ceil(inner_width).max(1))
         .sum::<usize>();
-    u16::try_from(rows.clamp(1, 6) + 2).unwrap_or(8)
+    let preview_rows = if state.pending_images.is_empty() {
+        0
+    } else {
+        6
+    };
+    u16::try_from(rows.clamp(1, 6) + preview_rows + 2).unwrap_or(14)
 }
 
 pub(super) fn completion_menu_height(

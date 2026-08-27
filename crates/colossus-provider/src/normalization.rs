@@ -1,5 +1,56 @@
 use super::*;
 
+#[derive(Default)]
+pub(super) struct ProviderResolvedImages {
+    by_artifact: BTreeMap<String, (ModelImageReference, String)>,
+}
+
+impl ProviderResolvedImages {
+    pub(super) fn insert(
+        &mut self,
+        reference: &ModelImageReference,
+        data_url: String,
+    ) -> Result<(), ProviderError> {
+        if let Some((existing, _)) = self.by_artifact.get(&reference.artifact_id) {
+            if existing != reference {
+                return Err(ProviderError::Configuration(
+                    "one image artifact ID has conflicting verified metadata".into(),
+                ));
+            }
+            return Ok(());
+        }
+        self.by_artifact
+            .insert(reference.artifact_id.clone(), (reference.clone(), data_url));
+        Ok(())
+    }
+
+    fn data_url(&self, reference: &ModelImageReference) -> Result<&str, ProviderError> {
+        self.by_artifact
+            .get(&reference.artifact_id)
+            .filter(|(resolved, _)| resolved == reference)
+            .map(|(_, data_url)| data_url.as_str())
+            .ok_or_else(|| {
+                ProviderError::Configuration(
+                    "verified image bytes are unavailable for provider projection".into(),
+                )
+            })
+    }
+}
+
+pub(super) struct ProviderProjection<'a> {
+    tool_names: &'a ProviderToolNames,
+    images: &'a ProviderResolvedImages,
+}
+
+impl<'a> ProviderProjection<'a> {
+    pub(super) fn new(
+        tool_names: &'a ProviderToolNames,
+        images: &'a ProviderResolvedImages,
+    ) -> Self {
+        Self { tool_names, images }
+    }
+}
+
 pub(super) fn normalize_base_url(
     raw: &str,
     resource_authority: ResourceAuthority,
@@ -86,13 +137,51 @@ pub(super) fn validate_model_request(
         || request
             .max_output_tokens
             .is_some_and(|limit| limit == 0 || limit != resolved_max_output_tokens)
-        || request
-            .messages
-            .iter()
-            .any(|message| message.content.len() > MAX_PROVIDER_REQUEST_BYTES)
     {
         return Err(ProviderError::Configuration(
             "provider request messages, tools, or bounds are invalid".into(),
+        ));
+    }
+    let mut image_count = 0_usize;
+    let mut image_bytes = 0_u64;
+    for message in &request.messages {
+        validate_model_message_content(message).map_err(|error| {
+            ProviderError::Configuration(format!("provider message content is invalid: {error}"))
+        })?;
+        if message.content.text_bytes() > MAX_PROVIDER_REQUEST_BYTES {
+            return Err(ProviderError::Configuration(
+                "provider message text exceeds the request bound".into(),
+            ));
+        }
+        if matches!(message.content, ModelContent::Parts(_))
+            && message.role != ModelMessageRole::User
+        {
+            return Err(ProviderError::Configuration(
+                "multipart content is accepted only for user messages".into(),
+            ));
+        }
+        for image in message.content.images() {
+            image_count = image_count.saturating_add(1);
+            image_bytes = image_bytes.checked_add(image.size_bytes).ok_or_else(|| {
+                ProviderError::Configuration("provider-visible image size overflowed".into())
+            })?;
+            if image.size_bytes == 0
+                || image.size_bytes > 16 * 1_048_576
+                || image.width_pixels == 0
+                || image.height_pixels == 0
+                || image.width_pixels > 16_384
+                || image.height_pixels > 16_384
+                || u64::from(image.width_pixels) * u64::from(image.height_pixels) > 100_000_000
+            {
+                return Err(ProviderError::Configuration(
+                    "provider image metadata exceeds its configured bounds".into(),
+                ));
+            }
+        }
+    }
+    if image_count > 16 || image_bytes > 32 * 1_048_576 {
+        return Err(ProviderError::Configuration(
+            "provider-visible images exceed their aggregate bounds".into(),
         ));
     }
     let mut names = BTreeSet::new();
@@ -135,6 +224,7 @@ fn compatible_openai_tool_schema(value: &Value) -> Result<Value, ProviderError> 
     Ok(Value::Object(projected))
 }
 
+#[cfg(test)]
 pub(super) fn responses_payload(
     request: &ModelRequest,
     provider_kind: ProviderKind,
@@ -143,6 +233,27 @@ pub(super) fn responses_payload(
     reasoning_effort: Option<ReasoningEffort>,
     streaming: bool,
     tool_names: &ProviderToolNames,
+) -> Result<Value, ProviderError> {
+    let images = ProviderResolvedImages::default();
+    responses_payload_with_images(
+        request,
+        provider_kind,
+        model,
+        max_output_tokens,
+        reasoning_effort,
+        streaming,
+        ProviderProjection::new(tool_names, &images),
+    )
+}
+
+pub(super) fn responses_payload_with_images(
+    request: &ModelRequest,
+    provider_kind: ProviderKind,
+    model: &str,
+    max_output_tokens: u64,
+    reasoning_effort: Option<ReasoningEffort>,
+    streaming: bool,
+    projection: ProviderProjection<'_>,
 ) -> Result<Value, ProviderError> {
     validate_request_transcript(request)?;
     if !matches!(
@@ -155,7 +266,11 @@ pub(super) fn responses_payload(
     }
     let mut input = Vec::new();
     for message in &request.messages {
-        input.extend(responses_messages(message, tool_names)?);
+        input.extend(responses_messages_with_images(
+            message,
+            projection.tool_names,
+            projection.images,
+        )?);
     }
     let tools = request
         .tools
@@ -163,7 +278,7 @@ pub(super) fn responses_payload(
         .map(|tool| {
             Ok(json!({
                 "type": "function",
-                "name": tool_names.provider_name(&tool.name)?,
+                "name": projection.tool_names.provider_name(&tool.name)?,
                 "description": tool.description,
                 "parameters": compatible_openai_tool_schema(&tool.input_schema)?,
                 "strict": false,
@@ -189,19 +304,24 @@ pub(super) fn responses_payload(
     Ok(payload)
 }
 
-pub(super) fn responses_messages(
+fn responses_messages_with_images(
     message: &ModelMessage,
     tool_names: &ProviderToolNames,
+    images: &ProviderResolvedImages,
 ) -> Result<Vec<Value>, ProviderError> {
     match message.role {
-        ModelMessageRole::System => Ok(vec![
-            json!({"role": "developer", "content": message.content}),
-        ]),
-        ModelMessageRole::User => Ok(vec![json!({"role": "user", "content": message.content})]),
+        ModelMessageRole::System => Ok(vec![json!({
+            "role": "developer",
+            "content": scalar_content(message)?,
+        })]),
+        ModelMessageRole::User => Ok(vec![json!({
+            "role": "user",
+            "content": responses_user_content(&message.content, images)?,
+        })]),
         ModelMessageRole::Assistant => {
             let mut items = Vec::new();
             if !message.content.is_empty() {
-                items.push(json!({"role": "assistant", "content": message.content}));
+                items.push(json!({"role": "assistant", "content": scalar_content(message)?}));
             }
             items.extend(
                 message
@@ -224,9 +344,33 @@ pub(super) fn responses_messages(
             Ok(vec![json!({
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": message.content,
+                "output": scalar_content(message)?,
             })])
         }
+    }
+}
+
+fn responses_user_content(
+    content: &ModelContent,
+    images: &ProviderResolvedImages,
+) -> Result<Value, ProviderError> {
+    match content {
+        ModelContent::Text(text) => Ok(Value::String(text.clone())),
+        ModelContent::Parts(parts) => Ok(Value::Array(
+            parts
+                .iter()
+                .map(|part| match part {
+                    ModelContentPart::Text { text } => {
+                        Ok(json!({"type": "input_text", "text": text}))
+                    }
+                    ModelContentPart::Image { image } => Ok(json!({
+                        "type": "input_image",
+                        "image_url": images.data_url(image)?,
+                        "detail": "auto",
+                    })),
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?,
+        )),
     }
 }
 
@@ -242,6 +386,7 @@ pub(super) fn responses_tool_call(
     }))
 }
 
+#[cfg(test)]
 pub(super) fn chat_payload(
     request: &ModelRequest,
     model: &str,
@@ -250,6 +395,27 @@ pub(super) fn chat_payload(
     reasoning_effort: Option<ReasoningEffort>,
     streaming: bool,
     tool_names: &ProviderToolNames,
+) -> Result<Value, ProviderError> {
+    let images = ProviderResolvedImages::default();
+    chat_payload_with_images(
+        request,
+        model,
+        max_output_tokens,
+        output_token_parameter,
+        reasoning_effort,
+        streaming,
+        ProviderProjection::new(tool_names, &images),
+    )
+}
+
+pub(super) fn chat_payload_with_images(
+    request: &ModelRequest,
+    model: &str,
+    max_output_tokens: u64,
+    output_token_parameter: ChatCompletionsOutputTokenParameter,
+    reasoning_effort: Option<ReasoningEffort>,
+    streaming: bool,
+    projection: ProviderProjection<'_>,
 ) -> Result<Value, ProviderError> {
     validate_request_transcript(request)?;
     let mut messages = Vec::new();
@@ -260,13 +426,15 @@ pub(super) fn chat_payload(
         request
             .messages
             .iter()
-            .map(|message| chat_message(message, tool_names))
+            .map(|message| {
+                chat_message_with_images(message, projection.tool_names, projection.images)
+            })
             .collect::<Result<Vec<_>, _>>()?,
     );
     let tools = request
         .tools
         .iter()
-        .map(|tool| chat_tool(tool, tool_names))
+        .map(|tool| chat_tool(tool, projection.tool_names))
         .collect::<Result<Vec<_>, _>>()?;
     let mut payload = json!({
         "model": model,
@@ -300,9 +468,10 @@ fn validate_request_transcript(request: &ModelRequest) -> Result<(), ProviderErr
     })
 }
 
-pub(super) fn chat_message(
+fn chat_message_with_images(
     message: &ModelMessage,
     tool_names: &ProviderToolNames,
+    images: &ProviderResolvedImages,
 ) -> Result<Value, ProviderError> {
     let role = match message.role {
         ModelMessageRole::System => "system",
@@ -310,7 +479,12 @@ pub(super) fn chat_message(
         ModelMessageRole::Assistant => "assistant",
         ModelMessageRole::Tool => "tool",
     };
-    let mut value = json!({"role": role, "content": message.content});
+    let content = if message.role == ModelMessageRole::User {
+        chat_user_content(&message.content, images)?
+    } else {
+        Value::String(scalar_content(message)?.to_owned())
+    };
+    let mut value = json!({"role": role, "content": content});
     if message.role == ModelMessageRole::Tool {
         value["tool_call_id"] =
             Value::String(message.tool_call_id.clone().ok_or_else(|| {
@@ -327,6 +501,44 @@ pub(super) fn chat_message(
         );
     }
     Ok(value)
+}
+
+fn chat_user_content(
+    content: &ModelContent,
+    images: &ProviderResolvedImages,
+) -> Result<Value, ProviderError> {
+    match content {
+        ModelContent::Text(text) => Ok(Value::String(text.clone())),
+        ModelContent::Parts(parts) => Ok(Value::Array(
+            parts
+                .iter()
+                .map(|part| match part {
+                    ModelContentPart::Text { text } => Ok(json!({"type": "text", "text": text})),
+                    ModelContentPart::Image { image } => Ok(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": images.data_url(image)?,
+                            "detail": "auto",
+                        },
+                    })),
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?,
+        )),
+    }
+}
+
+fn scalar_content(message: &ModelMessage) -> Result<&str, ProviderError> {
+    message.content.as_text().ok_or_else(|| {
+        ProviderError::Configuration(format!(
+            "{} messages require scalar text content",
+            match message.role {
+                ModelMessageRole::System => "system",
+                ModelMessageRole::User => "user",
+                ModelMessageRole::Assistant => "assistant",
+                ModelMessageRole::Tool => "tool",
+            }
+        ))
+    })
 }
 
 pub(super) fn chat_tool_call(

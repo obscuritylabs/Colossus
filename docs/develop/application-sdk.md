@@ -431,6 +431,11 @@ Artifact uploads are caller-owned, size- and digest-bound, and chunked; download
 revalidate the released length and digest. Run attachments contain only opaque
 artifact IDs, never client or server filesystem paths.
 
+`attachments.image_input` is advertised separately from the existing text-attachment
+capability. SDK `ContentPart::Artifact` calls remain unchanged and caller ordering is
+preserved, but servers reject image artifacts unless the selected model profile has
+explicitly enabled image inputs.
+
 Public v1alpha1 runs also cannot activate installed skills. `selected_skills` must be
 empty, and prompt text such as `@skill-name` does not trigger skill discovery or
 composition. Skill activation remains disabled until the durable application grant has

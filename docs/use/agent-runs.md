@@ -81,7 +81,7 @@ colossus --config .colossus/config.yaml --output json \
   run --stream "Report repository status" > result.json
 ```
 
-For a private CLI run, attach bounded UTF-8 workspace files directly:
+For a private CLI run, attach bounded UTF-8 workspace files or supported images directly:
 
 ```bash
 colossus run --attach design.md --attach src/lib.rs \
@@ -91,6 +91,13 @@ colossus run --attach design.md --attach src/lib.rs \
 Attachment paths are sent to the active runtime, which performs each read through the
 normal filesystem policy and audit boundary. The CLI never pre-reads attachment content
 to bypass workspace restrictions.
+
+Static PNG, JPEG, and WebP files become encrypted `run_input` artifacts. Colossus
+validates their signature, exact byte digest, decoded dimensions, and allocation bounds
+before accepting the run, then resolves the exact bytes only after the provider effect is
+authorized. A model profile must explicitly set `imageInputs: true`; Echo and Research
+routes reject images locally. Up to 16 images are accepted, with a 16 MiB per-image and
+32 MiB combined bound.
 
 For reusable opaque content, upload through the encrypted artifact service:
 

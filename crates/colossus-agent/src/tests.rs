@@ -601,6 +601,7 @@ fn test_route(role: &str, profile: &str) -> ProviderRoute {
         capabilities: ModelCapabilities {
             tool_calls: true,
             streaming: true,
+            image_inputs: false,
         },
         reasoning_effort: None,
     }
@@ -1202,7 +1203,7 @@ async fn text_only_models_omit_tools_and_reject_structured_tool_history() {
             "earlier-run",
             ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: String::new(),
+                content: String::new().into(),
                 tool_call_id: None,
                 tool_calls: vec![ModelToolCall {
                     call_id: "call-1".into(),
@@ -1917,7 +1918,7 @@ async fn legacy_dangling_session_fails_locally_before_appending_new_input() {
             "legacy-run",
             ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: String::new(),
+                content: String::new().into(),
                 tool_call_id: None,
                 tool_calls: vec![ModelToolCall {
                     call_id: "dangling".into(),

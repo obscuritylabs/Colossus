@@ -52,6 +52,11 @@ rows between the preceding transcript and final response. Global `--alt-screen` 
 the application-owned full-screen viewport; `--no-alt-screen` remains a compatibility
 alias for the default.
 
+Attach a supported static image before submitting a turn with `/attach PATH`. Use
+`/attachments` to inspect the pending queue and `/detach INDEX` or `/detach all` to
+remove entries. Inline mode renders deterministic half-block previews in native
+scrollback; `--alt-screen` can use Kitty, iTerm2, or Sixel graphics when available.
+
 For a development session with eligible low-risk shell and read-only network review:
 
 ```bash

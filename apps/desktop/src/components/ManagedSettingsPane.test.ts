@@ -96,7 +96,11 @@ function desktop(): DesktopStatus {
           model: "colossus-primary",
           contextWindowTokens: 128_000,
           maxOutputTokens: 16_384,
-          capabilities: { toolCalls: true, streaming: true },
+          capabilities: {
+            toolCalls: true,
+            streaming: true,
+            imageInputs: false,
+          },
           reasoningEffort: null,
         },
       ],

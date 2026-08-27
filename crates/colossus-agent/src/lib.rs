@@ -5,10 +5,11 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, AgentRunCancellation, AgentRunMode, AgentRunOutcome, AgentRunResult,
-    EventClassification, ExecutionContext, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelToolCall, NewEvent, PendingSessionToolTurn, PlanDraftTarget, PlanRecord, ProviderEvent,
-    RunEvent, RunEventEnvelope, RunPhase, SessionMessageAppend, ToolCall, ToolResult,
-    validate_assistant_tool_call_turn, validate_model_transcript,
+    EventClassification, ExecutionContext, ModelContent, ModelMessage, ModelMessageRole,
+    ModelRequest, ModelToolCall, NewEvent, PendingSessionToolTurn, PlanDraftTarget, PlanRecord,
+    ProviderEvent, RunEvent, RunEventEnvelope, RunPhase, SessionMessageAppend, ToolCall,
+    ToolResult, validate_assistant_tool_call_turn, validate_model_message_content,
+    validate_model_transcript,
 };
 use colossus_ports::{
     ContextError, ContextPreparationRequest, ContextPreparer, EventJournal, ModelProvider,

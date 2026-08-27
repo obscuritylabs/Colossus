@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use uuid::Uuid;
 
 pub(super) fn worker_run_outcome(
@@ -46,6 +47,24 @@ pub(super) fn parse_toggle(value: &str, current: bool) -> Result<bool, String> {
 
 struct WorkerChannelObserver {
     sender: mpsc::Sender<HostEvent>,
+}
+
+struct PreviewWorkerObserver;
+
+#[async_trait]
+impl RunEventObserver for PreviewWorkerObserver {
+    async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        Ok(())
+    }
+}
+
+struct PreviewWorkerPrompts;
+
+#[async_trait]
+impl WorkerPromptHandler for PreviewWorkerPrompts {
+    async fn prompt(&self, _prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -1388,6 +1407,46 @@ impl InteractiveHost for WorkerInteractiveHost {
         Ok(true)
     }
 
+    async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
+        self.client
+            .call_interactive::<ModelImageReference>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::ImageAttach {
+                        path: PathBuf::from(path),
+                    },
+                    approval_mode: self.interactive_approval_mode()?,
+                    sandbox_boundary_acknowledgement: None,
+                },
+                &mut PreviewWorkerObserver,
+                &PreviewWorkerPrompts,
+                &RunControl::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn preview_image(&self, image: &ModelImageReference) -> Result<Vec<u8>, String> {
+        let encoded = self
+            .client
+            .call_interactive::<String>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::ImagePreview {
+                        image: image.clone(),
+                    },
+                    approval_mode: self.interactive_approval_mode()?,
+                    sandbox_boundary_acknowledgement: None,
+                },
+                &mut PreviewWorkerObserver,
+                &PreviewWorkerPrompts,
+                &RunControl::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        BASE64
+            .decode(encoded)
+            .map_err(|_| "worker returned an invalid image preview payload".to_owned())
+    }
+
     async fn execute_command(
         &self,
         command: RuntimeCommand,
@@ -1460,6 +1519,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                         role: "primary".into(),
                         instructions: "You are Colossus.".into(),
                         prompt: request.prompt,
+                        images: request.images,
                         max_turns: None,
                         session_id: request.session_id.clone(),
                         explicit_skills: request.explicit_skills,

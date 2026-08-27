@@ -13,8 +13,9 @@ use colossus_api::{
     RunResult, RunStatus, RunUpdateKind, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
-    DecisionOutcome, EventEnvelope, ModelMessageRole, NewEvent, PlanStep, PolicyDecision,
-    PolicyObligations, ProjectionWorkItem, SignedCheckpoint, UserPromptRequest,
+    DecisionOutcome, EventEnvelope, ModelContent, ModelContentPart, ModelMessageRole, NewEvent,
+    PlanStep, PolicyDecision, PolicyObligations, ProjectionWorkItem, SignedCheckpoint,
+    UserPromptRequest,
 };
 use colossus_policy::{DenyApproval, effect_request};
 use colossus_ports::{
@@ -23,11 +24,13 @@ use colossus_ports::{
 use colossus_runtime::{KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_testkit::InMemoryEventJournal;
 use futures::StreamExt as _;
+use image::{DynamicImage, ImageFormat};
 use sha2::{Digest as _, Sha256};
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::{
     env, fs,
+    io::Cursor,
     process::Command,
     sync::{
         Arc, Barrier,
@@ -548,6 +551,113 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
     let terminal = wait_terminal(&service, &owner, &created.id).await;
     assert_eq!(terminal.status, RunStatus::Completed);
     wait_inactive(&service).await;
+}
+
+async fn caller_owned_images_preserve_public_part_order_and_owner_boundaries(
+    runtime: Arc<Runtime>,
+) {
+    use colossus_api::{ArtifactApi as _, ArtifactChunk, ArtifactPurpose};
+
+    let service = service(Arc::clone(&runtime), RunAdmissionConfig::default());
+    let application_id = format!("app:image-attachment-{}", Uuid::now_v7().simple());
+    let owner = caller_with_additional_scopes(
+        &application_id,
+        "image-attachment-create",
+        &[scopes::ARTIFACTS_READ, scopes::ARTIFACTS_WRITE],
+    );
+    let other = caller_with_additional_scopes(
+        &format!("app:other-{}", Uuid::now_v7().simple()),
+        "image-attachment-other",
+        &[scopes::ARTIFACTS_READ, scopes::ARTIFACTS_WRITE],
+    );
+    let artifacts = EventSourcedArtifactApi::new(runtime.journal());
+    let mut encoded = Cursor::new(Vec::new());
+    DynamicImage::new_rgba8(3, 2)
+        .write_to(&mut encoded, ImageFormat::Png)
+        .expect("PNG fixture");
+    let bytes = encoded.into_inner();
+    let reservation = artifacts
+        .create_upload(
+            &owner,
+            CreateArtifactUploadRequest {
+                file_name: "ordered.png".into(),
+                media_type: "image/png".into(),
+                size_bytes: u64::try_from(bytes.len()).expect("artifact length"),
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+                purpose: ArtifactPurpose::RunInput,
+                idempotency_key: IdempotencyKey::new("image-attachment-upload")
+                    .expect("upload key"),
+            },
+        )
+        .await
+        .expect("reserve image artifact");
+    let artifact = artifacts
+        .upload(
+            &owner,
+            &reservation.upload_id,
+            vec![ArtifactChunk {
+                offset: 0,
+                data: bytes,
+            }],
+        )
+        .await
+        .expect("upload image artifact");
+    let request = CreateRunRequest {
+        input: vec![
+            ContentPart::Text {
+                text: "before".into(),
+            },
+            ContentPart::Artifact {
+                artifact_id: artifact.artifact_id.clone(),
+            },
+            ContentPart::Text {
+                text: "after".into(),
+            },
+        ],
+        session_id: None,
+        end_user_id: None,
+        role: Some("primary".into()),
+        mode: RunMode::Execute,
+        research_depth: None,
+        research_sources: Vec::new(),
+        skill_ids: Vec::new(),
+        plan_action: None,
+        branch: None,
+        max_turns: 1,
+        idempotency_key: IdempotencyKey::new("image-attachment-run").expect("run key"),
+    };
+
+    let content = service
+        .rendered_input_for_test(&owner, &request)
+        .await
+        .expect("ordered multipart input");
+    let ModelContent::Parts(parts) = content else {
+        panic!("image input must be multipart");
+    };
+    assert!(matches!(&parts[0], ModelContentPart::Text { text } if text == "before"));
+    assert!(matches!(
+        &parts[1],
+        ModelContentPart::Image { image }
+            if image.artifact_id == artifact.artifact_id
+                && image.file_name == "ordered.png"
+                && image.width_pixels == 3
+                && image.height_pixels == 2
+    ));
+    assert!(matches!(&parts[2], ModelContentPart::Text { text } if text == "after"));
+
+    let error = service
+        .rendered_input_for_test(&other, &request)
+        .await
+        .expect_err("cross-application image reference");
+    assert_eq!(error.reason, colossus_api::ApiErrorReason::ArtifactNotFound);
+
+    let mut research = request;
+    research.mode = RunMode::Research;
+    let error = service
+        .rendered_input_for_test(&owner, &research)
+        .await
+        .expect_err("Research image input");
+    assert!(error.message.contains("Research mode"));
 }
 
 fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
@@ -1421,6 +1531,10 @@ fn runtime_service_conformance() {
             orphan_recovery_above_the_application_cap_drains_in_order(Arc::clone(&fixture.runtime))
                 .await;
             caller_owned_text_artifacts_are_rendered_as_bounded_run_input(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            caller_owned_images_preserve_public_part_order_and_owner_boundaries(Arc::clone(
                 &fixture.runtime,
             ))
             .await;

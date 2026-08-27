@@ -14,6 +14,34 @@ impl AgentService {
         released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
     ) -> Result<AgentRunResult, AgentError> {
+        let prompt = ModelContent::from(prompt);
+        self.run_with_lineage_content(
+            role,
+            instructions,
+            &prompt,
+            max_turns,
+            requested_session_id,
+            scope,
+            initiator,
+            released_observer,
+            control,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn run_with_lineage_content(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &ModelContent,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        scope: RunScope<'_>,
+        initiator: Actor,
+        released_observer: Option<&mut dyn RunEventObserver>,
+        control: Option<&RunControl>,
+    ) -> Result<AgentRunResult, AgentError> {
         let span = tracing::info_span!(
             target: "colossus.gen_ai",
             "invoke_agent",
@@ -69,7 +97,7 @@ impl AgentService {
         &self,
         role: &str,
         instructions: &str,
-        prompt: &str,
+        prompt: &ModelContent,
         max_turns: u16,
         requested_session_id: Option<&str>,
         scope: RunScope<'_>,
@@ -83,6 +111,13 @@ impl AgentService {
                 "role and initiator id are required and max_turns must be in 1..={MAX_TURNS}"
             )));
         }
+        validate_model_message_content(&ModelMessage {
+            role: ModelMessageRole::User,
+            content: prompt.clone(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        })
+        .map_err(|error| AgentError::Configuration(error.to_string()))?;
         let started = Instant::now();
         let run_id = scope
             .requested_run_id
@@ -112,7 +147,7 @@ impl AgentService {
                     }
                     self.sessions.create_session(
                         id,
-                        Some(&session_title(prompt)),
+                        Some(&session_title(&prompt.plain_text())),
                         initiator.clone(),
                     )?;
                 }
@@ -122,7 +157,7 @@ impl AgentService {
                 let id = Uuid::now_v7().to_string();
                 self.sessions.create_session(
                     &id,
-                    Some(&session_title(prompt)),
+                    Some(&session_title(&prompt.plain_text())),
                     initiator.clone(),
                 )?;
                 id
@@ -134,6 +169,28 @@ impl AgentService {
         }
         let stream_id = format!("run:{run_id}");
         let route = self.provider.route(role)?;
+        let image_count = prompt.images().count();
+        let image_bytes = prompt.images().try_fold(0_u64, |total, image| {
+            total
+                .checked_add(image.size_bytes)
+                .ok_or_else(|| AgentError::Configuration("image input size overflowed".into()))
+        })?;
+        if image_count > 0 && !route.capabilities.image_inputs {
+            return Err(AgentError::Configuration(format!(
+                "model profile {} does not enable image inputs",
+                route.model_profile
+            )));
+        }
+        if image_count > 0 && route.provider == "echo" {
+            return Err(AgentError::Configuration(
+                "the Echo provider does not accept image inputs".into(),
+            ));
+        }
+        if image_count > 16 || image_bytes > 32 * 1_048_576 {
+            return Err(AgentError::Configuration(
+                "image inputs exceed the 16-image or 32 MiB bound".into(),
+            ));
+        }
         let mut context = ExecutionContext {
             correlation_id: run_id.clone(),
             session_id: Some(session_id.clone()),
@@ -191,7 +248,7 @@ impl AgentService {
         }
         let user_message = ModelMessage {
             role: ModelMessageRole::User,
-            content: prompt.into(),
+            content: prompt.clone(),
             tool_call_id: None,
             tool_calls: Vec::new(),
         };
@@ -598,7 +655,7 @@ impl AgentService {
                     }
                     messages.push(ModelMessage {
                         role: ModelMessageRole::User,
-                        content: recovery_prompt(recovery_attempts, &turn_definitions),
+                        content: recovery_prompt(recovery_attempts, &turn_definitions).into(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     });
@@ -727,7 +784,7 @@ impl AgentService {
                         }
                         let assistant_message = ModelMessage {
                             role: ModelMessageRole::Assistant,
-                            content: output,
+                            content: output.into(),
                             tool_call_id: None,
                             tool_calls: Vec::new(),
                         };
@@ -745,7 +802,8 @@ impl AgentService {
                             role: ModelMessageRole::System,
                             content: format!(
                                 "{message}. Call the required tool now; do not provide final output first."
-                            ),
+                            )
+                            .into(),
                             tool_call_id: None,
                             tool_calls: Vec::new(),
                         };
@@ -758,7 +816,7 @@ impl AgentService {
                         &run_id,
                         ModelMessage {
                             role: ModelMessageRole::Assistant,
-                            content: output.clone(),
+                            content: output.clone().into(),
                             tool_call_id: None,
                             tool_calls: Vec::new(),
                         },
@@ -839,7 +897,7 @@ impl AgentService {
 
             let assistant_message = ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: visible_text,
+                content: visible_text.into(),
                 tool_call_id: None,
                 tool_calls: calls
                     .iter()

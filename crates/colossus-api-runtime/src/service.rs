@@ -26,9 +26,10 @@ use colossus_api::{
 };
 use colossus_contracts::{
     ActorType, AgentRunCancellation, AgentRunMode, AgentRunOutcome, AgentRunResult,
-    ControlledAgentTerminal, GoalRunOutcome, GoalRunResult, PlanDraftTarget, PlanExecutionOutcome,
-    PlanExecutionStrategy, PlanRecord, PlanStatus, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult,
+    ControlledAgentTerminal, GoalRunOutcome, GoalRunResult, ModelContent, ModelContentPart,
+    PlanDraftTarget, PlanExecutionOutcome, PlanExecutionStrategy, PlanRecord, PlanStatus,
+    ProviderEvent, ResearchDepth, ResearchSourceKind, RunEvent, RunEventEnvelope, RunPhase,
+    ToolCall, ToolResult,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
 use colossus_projection::ProjectedSessionActivity;
@@ -392,50 +393,132 @@ impl RuntimeAgentRunApi {
         &self,
         caller: &CallerContext,
         request: &CreateRunRequest,
-    ) -> ApiResult<String> {
-        let mut rendered = String::new();
+    ) -> ApiResult<ModelContent> {
+        let mut parts = Vec::<ModelContentPart>::new();
+        let mut text_bytes = 0_usize;
+        let mut image_count = 0_usize;
+        let mut image_bytes = 0_u64;
         for part in &request.input {
-            let segment = match part {
-                ContentPart::Text { text } => text.clone(),
+            let part = match part {
+                ContentPart::Text { text } => ModelContentPart::Text { text: text.clone() },
                 ContentPart::Artifact { artifact_id } => {
-                    let download = self.artifacts.download(caller, artifact_id, 0).await?;
-                    if download.artifact.state != ArtifactState::Available
-                        || download.artifact.purpose != ArtifactPurpose::RunInput
-                        || !supported_text_attachment(&download.artifact.media_type)
+                    let artifact = self.artifacts.get(caller, artifact_id).await?;
+                    if artifact.state != ArtifactState::Available
+                        || artifact.purpose != ArtifactPurpose::RunInput
                     {
                         return Err(ApiError::failed_precondition(
                             ApiErrorReason::ArtifactUnavailable,
-                            "the artifact is not an available text run input",
+                            "the artifact is not an available run input",
                         )
                         .with_correlation_id(caller.request_id().clone()));
                     }
-                    let text = String::from_utf8(download.bytes).map_err(|_| {
-                        ApiError::invalid(
-                            ApiErrorReason::InvalidArgument,
-                            "input.artifact",
-                            "text run-input artifacts must contain UTF-8",
+                    if supported_text_attachment(&artifact.media_type) {
+                        let download = self.artifacts.download(caller, artifact_id, 0).await?;
+                        let text = String::from_utf8(download.bytes).map_err(|_| {
+                            ApiError::invalid(
+                                ApiErrorReason::InvalidArgument,
+                                "input.artifact",
+                                "text run-input artifacts must contain UTF-8",
+                            )
+                            .with_correlation_id(caller.request_id().clone())
+                        })?;
+                        ModelContentPart::Text {
+                            text: format!(
+                                "Attached file {} ({}):\n{}",
+                                download.artifact.file_name, download.artifact.media_type, text
+                            ),
+                        }
+                    } else if artifact.media_type.starts_with("image/") {
+                        if request.mode == RunMode::Research {
+                            return Err(ApiError::failed_precondition(
+                                ApiErrorReason::InvalidRunTransition,
+                                "Research mode does not accept image inputs",
+                            )
+                            .with_correlation_id(caller.request_id().clone()));
+                        }
+                        let image = self
+                            .runtime
+                            .run_input_image_reference(
+                                caller.principal().application_id(),
+                                artifact_id,
+                            )
+                            .map_err(|_| {
+                                ApiError::invalid(
+                                    ApiErrorReason::InvalidArgument,
+                                    "input.artifact",
+                                    "image run-input artifact failed bounded validation",
+                                )
+                                .with_correlation_id(caller.request_id().clone())
+                            })?;
+                        image_count = image_count.saturating_add(1);
+                        image_bytes =
+                            image_bytes.checked_add(image.size_bytes).ok_or_else(|| {
+                                ApiError::bounded_resource_exhausted(
+                                    ApiErrorReason::CapacityExceeded,
+                                    "combined image input size overflowed",
+                                )
+                            })?;
+                        ModelContentPart::Image { image }
+                    } else {
+                        return Err(ApiError::failed_precondition(
+                            ApiErrorReason::ArtifactUnavailable,
+                            "the artifact is not a supported text or image run input",
                         )
-                        .with_correlation_id(caller.request_id().clone())
-                    })?;
-                    format!(
-                        "Attached file {} ({}):\n{}",
-                        download.artifact.file_name, download.artifact.media_type, text
-                    )
+                        .with_correlation_id(caller.request_id().clone()));
+                    }
                 }
             };
-            if !rendered.is_empty() {
-                rendered.push_str("\n\n");
+            if let ModelContentPart::Text { text } = part {
+                let separator =
+                    usize::from(matches!(parts.last(), Some(ModelContentPart::Text { .. }))) * 2;
+                text_bytes = text_bytes
+                    .saturating_add(separator)
+                    .saturating_add(text.len());
+                if text_bytes > MAX_RENDERED_INPUT_BYTES {
+                    return Err(ApiError::bounded_resource_exhausted(
+                        ApiErrorReason::CapacityExceeded,
+                        "combined text and attachment input exceeds the run-input bound",
+                    )
+                    .with_correlation_id(caller.request_id().clone()));
+                }
+                if let Some(ModelContentPart::Text { text: previous }) = parts.last_mut() {
+                    previous.push_str("\n\n");
+                    previous.push_str(&text);
+                } else {
+                    parts.push(ModelContentPart::Text { text });
+                }
+            } else {
+                parts.push(part);
             }
-            if rendered.len().saturating_add(segment.len()) > MAX_RENDERED_INPUT_BYTES {
-                return Err(ApiError::bounded_resource_exhausted(
-                    ApiErrorReason::CapacityExceeded,
-                    "combined text and attachment input exceeds the run-input bound",
-                )
-                .with_correlation_id(caller.request_id().clone()));
-            }
-            rendered.push_str(&segment);
         }
-        Ok(rendered)
+        if image_count > 16 || image_bytes > 32 * 1_048_576 {
+            return Err(ApiError::bounded_resource_exhausted(
+                ApiErrorReason::CapacityExceeded,
+                "image inputs exceed the 16-image or 32 MiB bound",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        if image_count == 0 {
+            let text = parts
+                .into_iter()
+                .find_map(|part| match part {
+                    ModelContentPart::Text { text } => Some(text),
+                    ModelContentPart::Image { .. } => None,
+                })
+                .unwrap_or_default();
+            Ok(ModelContent::Text(text))
+        } else {
+            Ok(ModelContent::Parts(parts))
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn rendered_input_for_test(
+        &self,
+        caller: &CallerContext,
+        request: &CreateRunRequest,
+    ) -> ApiResult<ModelContent> {
+        self.rendered_input(caller, request).await
     }
 
     fn reserve_execution_locked(
@@ -1131,7 +1214,7 @@ impl RuntimeAgentRunApi {
                 .collect();
             let execution = self.runtime.run_research_as(
                 &run.session_id,
-                &prompt,
+                prompt.as_text().unwrap_or_default(),
                 depth,
                 source_kinds,
                 ResearchRunContext {
@@ -1249,7 +1332,7 @@ impl RuntimeAgentRunApi {
                 };
                 let execution = self
                     .runtime
-                    .run_public_model_with_mode_and_skills_stream_controlled(
+                    .run_public_model_with_mode_and_skills_stream_controlled_content(
                         &run.role,
                         &self.instructions,
                         &prompt,

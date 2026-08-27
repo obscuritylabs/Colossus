@@ -90,6 +90,49 @@ fn model_request_with_tools(names: &[&str]) -> ModelRequest {
     }
 }
 
+fn image_reference() -> ModelImageReference {
+    ModelImageReference {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+        file_name: "diagram.png".into(),
+        media_type: "image/png".into(),
+        size_bytes: 3,
+        sha256: "b".repeat(64),
+        width_pixels: 640,
+        height_pixels: 480,
+        detail: colossus_contracts::ModelImageDetail::Auto,
+    }
+}
+
+fn multipart_model_request() -> (ModelRequest, ModelImageReference, ProviderResolvedImages) {
+    let image = image_reference();
+    let request = ModelRequest {
+        instructions: "inspect the supplied image".into(),
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::User,
+            content: ModelContent::Parts(vec![
+                ModelContentPart::Text {
+                    text: "before".into(),
+                },
+                ModelContentPart::Image {
+                    image: image.clone(),
+                },
+                ModelContentPart::Text {
+                    text: "after".into(),
+                },
+            ]),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        tools: Vec::new(),
+        max_output_tokens: None,
+    };
+    let mut images = ProviderResolvedImages::default();
+    images
+        .insert(&image, "data:image/png;base64,cG5n".into())
+        .expect("resolved image");
+    (request, image, images)
+}
+
 #[async_trait]
 impl PolicyDecisionPoint for ProviderPostDenyPolicy {
     async fn decide(
@@ -453,6 +496,7 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
         ModelCapabilities {
             tool_calls: false,
             streaming: false,
+            image_inputs: false,
         },
         Some(ReasoningEffort::XHigh),
     )
@@ -473,6 +517,7 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
             ModelCapabilities {
                 tool_calls: true,
                 streaming: true,
+                image_inputs: false,
             },
             None,
         )
@@ -1172,7 +1217,7 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::Assistant,
-                content: String::new(),
+                content: String::new().into(),
                 tool_call_id: None,
                 tool_calls: vec![ModelToolCall {
                     call_id: "call-1".into(),
@@ -1283,7 +1328,7 @@ fn provider_payloads_reject_dangling_tool_calls_before_dispatch() {
         instructions: "test".into(),
         messages: vec![ModelMessage {
             role: ModelMessageRole::Assistant,
-            content: String::new(),
+            content: String::new().into(),
             tool_call_id: None,
             tool_calls: vec![ModelToolCall {
                 call_id: "dangling".into(),
@@ -1344,6 +1389,140 @@ fn codex_responses_payload_omits_unsupported_output_token_parameter() {
 
     assert!(payload.get("max_output_tokens").is_none());
     assert_eq!(payload["stream"], true);
+}
+
+#[test]
+fn multipart_images_use_exact_responses_chat_and_codex_wire_shapes() {
+    let (request, _image, images) = multipart_model_request();
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+
+    let responses = responses_payload_with_images(
+        &request,
+        ProviderKind::OpenAiResponses,
+        "unit-model",
+        4_096,
+        None,
+        false,
+        ProviderProjection::new(&tool_names, &images),
+    )
+    .expect("Responses multipart payload");
+    assert_eq!(
+        responses["input"][0]["content"][0],
+        json!({
+            "type": "input_text",
+            "text": "before",
+        })
+    );
+    assert_eq!(
+        responses["input"][0]["content"][1],
+        json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,cG5n",
+            "detail": "auto",
+        })
+    );
+    assert_eq!(
+        responses["input"][0]["content"][2],
+        json!({
+            "type": "input_text",
+            "text": "after",
+        })
+    );
+
+    let codex = responses_payload_with_images(
+        &request,
+        ProviderKind::OpenAiCodex,
+        "unit-model",
+        4_096,
+        None,
+        true,
+        ProviderProjection::new(&tool_names, &images),
+    )
+    .expect("Codex Responses multipart payload");
+    assert_eq!(codex["input"], responses["input"]);
+    assert!(codex.get("max_output_tokens").is_none());
+
+    let chat = chat_payload_with_images(
+        &request,
+        "unit-model",
+        4_096,
+        ChatCompletionsOutputTokenParameter::MaxTokens,
+        None,
+        false,
+        ProviderProjection::new(&tool_names, &images),
+    )
+    .expect("Chat Completions multipart payload");
+    assert_eq!(
+        chat["messages"][1]["content"][0],
+        json!({
+            "type": "text",
+            "text": "before",
+        })
+    );
+    assert_eq!(
+        chat["messages"][1]["content"][1],
+        json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64,cG5n",
+                "detail": "auto",
+            },
+        })
+    );
+    assert_eq!(
+        chat["messages"][1]["content"][2],
+        json!({
+            "type": "text",
+            "text": "after",
+        })
+    );
+}
+
+#[test]
+fn provider_diagnostics_redact_nested_image_data_urls() {
+    let payload = json!({
+        "input": [{
+            "content": [{
+                "type": "input_image",
+                "image_url": "data:image/png;base64,c2VjcmV0LWJ5dGVz",
+            }],
+        }],
+    });
+    let redacted = super::executor::redacted_image_payload(&payload);
+    let serialized = serde_json::to_string(&redacted).expect("redacted diagnostic JSON");
+    assert!(serialized.contains("[REDACTED_IMAGE_DATA_URL]"));
+    assert!(!serialized.contains("c2VjcmV0LWJ5dGVz"));
+    assert!(!serialized.contains("data:image/"));
+}
+
+#[test]
+fn image_request_body_uses_the_image_ceiling_without_relaxing_text_bytes() {
+    let image_payload = json!({
+        "input": [{
+            "content": [{
+                "type": "input_image",
+                "image_url": format!("data:image/png;base64,{}", "A".repeat(2 * 1_048_576)),
+            }],
+        }],
+    });
+    let image_body = serde_json::to_vec(&image_payload).expect("image request");
+    super::executor::validate_serialized_provider_request(&image_payload, image_body.len())
+        .expect("bounded image request");
+
+    let text_payload = json!({"input": "x".repeat(2 * 1_048_576)});
+    let text_body = serde_json::to_vec(&text_payload).expect("text request");
+    assert!(
+        super::executor::validate_serialized_provider_request(&text_payload, text_body.len())
+            .is_err()
+    );
+
+    assert!(
+        super::executor::validate_serialized_provider_request(
+            &image_payload,
+            MAX_PROVIDER_REQUEST_WITH_IMAGES_BYTES + 1,
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -654,6 +654,7 @@ mod tests {
                 capabilities: ModelCapabilitiesSetting {
                     tool_calls: false,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],
@@ -838,6 +839,7 @@ mod tests {
                 capabilities: ModelCapabilitiesSetting {
                     tool_calls: true,
                     streaming: false,
+                    image_inputs: false,
                 },
                 reasoning_effort: Some(ReasoningEffortSetting::High),
             }],

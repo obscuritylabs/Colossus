@@ -75,6 +75,8 @@ pub struct InteractiveRunRequest {
     pub session_id: String,
     /// Complete user prompt after local skill-mention parsing.
     pub prompt: String,
+    /// Ordered verified encrypted image references queued for this submission.
+    pub images: Vec<ModelImageReference>,
     /// Trusted execute or plan behavior selected by the terminal reducer.
     pub mode: AgentRunMode,
     /// Explicit skills activated by this prompt.
@@ -251,6 +253,21 @@ pub enum LocalCommand {
     ResetPreferences,
     /// Enable or disable in-run provider response diagnostics for this TUI process.
     ProviderDiagnostics(bool),
+    /// Import one workspace-relative or absolute image path into encrypted artifacts.
+    Attach(String),
+    /// List pending image inputs.
+    Attachments,
+    /// Remove one pending image or the complete queue.
+    Detach(AttachmentDetach),
+}
+
+/// Pending-image removal requested by `/detach`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachmentDetach {
+    /// One-based pending image index.
+    Index(usize),
+    /// Every pending image.
+    All,
 }
 
 /// Result of parsing a submitted interactive line.
@@ -290,6 +307,21 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
         "/provider diagnostics off" => {
             InteractiveCommand::Local(LocalCommand::ProviderDiagnostics(false))
         }
+        "/attachments" => InteractiveCommand::Local(LocalCommand::Attachments),
+        command
+            if command.strip_prefix("/attach").is_some_and(|rest| {
+                rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace)
+            }) =>
+        {
+            parse_attach_command(command)
+        }
+        command
+            if command.strip_prefix("/detach").is_some_and(|rest| {
+                rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace)
+            }) =>
+        {
+            parse_detach_command(command)
+        }
         command
             if command.strip_prefix("/permissions").is_some_and(|rest| {
                 rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace)
@@ -320,6 +352,42 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
             })
         }
         prompt => InteractiveCommand::Turn(prompt.to_owned()),
+    }
+}
+
+fn parse_attach_command(input: &str) -> InteractiveCommand {
+    let raw = input.strip_prefix("/attach").unwrap_or_default().trim();
+    if raw.is_empty() {
+        return InteractiveCommand::Invalid("Usage: /attach PATH".into());
+    }
+    let double_quoted = raw.starts_with('"') || raw.ends_with('"');
+    let single_quoted = raw.starts_with('\'') || raw.ends_with('\'');
+    if (double_quoted && !(raw.starts_with('"') && raw.ends_with('"')))
+        || (single_quoted && !(raw.starts_with('\'') && raw.ends_with('\'')))
+    {
+        return InteractiveCommand::Invalid("Usage: /attach PATH".into());
+    }
+    let path = if double_quoted || single_quoted {
+        raw.get(1..raw.len().saturating_sub(1)).unwrap_or_default()
+    } else {
+        raw
+    };
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return InteractiveCommand::Invalid("Usage: /attach PATH".into());
+    }
+    InteractiveCommand::Local(LocalCommand::Attach(path.into()))
+}
+
+fn parse_detach_command(input: &str) -> InteractiveCommand {
+    let raw = input.strip_prefix("/detach").unwrap_or_default().trim();
+    if raw == "all" {
+        return InteractiveCommand::Local(LocalCommand::Detach(AttachmentDetach::All));
+    }
+    match raw.parse::<usize>() {
+        Ok(index) if index > 0 => {
+            InteractiveCommand::Local(LocalCommand::Detach(AttachmentDetach::Index(index)))
+        }
+        _ => InteractiveCommand::Invalid("Usage: /detach INDEX|all".into()),
     }
 }
 
@@ -673,6 +741,15 @@ pub enum HostEvent {
     OlderPage(Result<SessionMessagePage, String>),
     /// Active-session direct-execution acknowledgement reached a terminal result.
     SandboxBoundaryAcknowledgement(Result<Option<SandboxBoundaryMode>, String>),
+    /// A requested encrypted image import completed.
+    AttachmentFinished(Result<ModelImageReference, String>),
+    /// An authorized visible image finished background retrieval and decoding.
+    PreviewFinished {
+        /// Metadata-only cache identity.
+        image: ModelImageReference,
+        /// Decoded pixels or a bounded failure without exact bytes.
+        result: Result<Box<image::DynamicImage>, String>,
+    },
 }
 
 /// Optional one-shot source of a policy-released startup notice.
@@ -705,6 +782,16 @@ pub trait InteractiveHost: Send + Sync {
         mode: SandboxBoundaryMode,
         events: mpsc::Sender<HostEvent>,
     ) -> Result<bool, String>;
+
+    /// Import and validate one path as an encrypted pending run-input image.
+    async fn attach_image(&self, _path: &str) -> Result<ModelImageReference, String> {
+        Err("image attachments are unavailable for this host".into())
+    }
+
+    /// Lazily retrieve authorized exact image bytes for a visible terminal preview.
+    async fn preview_image(&self, _image: &ModelImageReference) -> Result<Vec<u8>, String> {
+        Err("image previews are unavailable for this host".into())
+    }
 
     /// Execute one typed application command without writing to the terminal.
     async fn execute_command(

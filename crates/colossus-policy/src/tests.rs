@@ -347,6 +347,46 @@ async fn action_timeout_retains_restrictions_without_widening_other_actions() {
     assert_eq!(network.obligations.timeout_ms, 30_000);
 }
 
+#[tokio::test]
+async fn action_output_limit_retains_restrictions_without_widening_other_actions() {
+    let policy = BuiltInPolicy::offline_default()
+        .with_limits(30_000, 4 * 1024 * 1024, 2, 64 * 1024 * 1024, 1)
+        .with_action("filesystem.read", DecisionOutcome::Allow)
+        .with_action("filesystem.read_run_input", DecisionOutcome::Allow)
+        .with_action_restrictions(
+            "filesystem.read_run_input",
+            vec![colossus_contracts::FilesystemGrant {
+                root: "/verified/input".into(),
+                mode: "read".into(),
+            }],
+            Vec::new(),
+            Vec::new(),
+        )
+        .with_action_max_output_bytes("filesystem.read_run_input", 16 * 1024 * 1024);
+    let run_input = policy
+        .decide(&effect_request(
+            system_actor("input-test"),
+            "filesystem.read_run_input",
+            "/verified/input/image.png",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("run-input decision");
+    assert_eq!(run_input.obligations.max_output_bytes, 16 * 1024 * 1024);
+    assert_eq!(run_input.obligations.filesystem.len(), 1);
+
+    let ordinary = policy
+        .decide(&effect_request(
+            system_actor("filesystem-test"),
+            "filesystem.read",
+            "/verified/input/file.txt",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("ordinary decision");
+    assert_eq!(ordinary.obligations.max_output_bytes, 4 * 1024 * 1024);
+}
+
 #[async_trait]
 impl EffectExecutor for CountingExecutor {
     async fn execute(

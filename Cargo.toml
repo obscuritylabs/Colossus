@@ -32,6 +32,7 @@ members = [
     "crates/colossus-agent",
     "crates/colossus-session",
     "crates/colossus-context",
+    "crates/colossus-media",
     "crates/colossus-work",
     "crates/colossus-memory",
     "crates/colossus-memory-chroma",
@@ -95,6 +96,8 @@ regex = "1.13.0"
 rmcp = { version = "=2.2.0", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "macros"] }
+ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
+image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.4", features = ["mount", "process"] }
@@ -177,6 +180,7 @@ colossus-worker-protocol = { version = "=0.10.10-preview.5", path = "crates/colo
 colossus-access = { version = "=0.10.10-preview.5", path = "crates/colossus-access" }
 colossus-audit = { version = "=0.10.10-preview.5", path = "crates/colossus-audit" }
 colossus-context = { version = "=0.10.10-preview.5", path = "crates/colossus-context" }
+colossus-media = { version = "=0.10.10-preview.5", path = "crates/colossus-media" }
 colossus-work = { version = "=0.10.10-preview.5", path = "crates/colossus-work" }
 colossus-domain = { version = "=0.10.10-preview.5", path = "crates/colossus-domain" }
 colossus-journal-redb = { version = "=0.10.10-preview.5", path = "crates/colossus-journal-redb" }

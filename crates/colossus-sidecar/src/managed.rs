@@ -629,6 +629,7 @@ fn managed_runtime_config(
                         capabilities: ModelCapabilities {
                             tool_calls: model.capabilities.tool_calls,
                             streaming: model.capabilities.streaming,
+                            image_inputs: model.capabilities.image_inputs,
                         },
                         reasoning_effort: model.reasoning_effort.map(reasoning_effort),
                     },
@@ -1550,6 +1551,7 @@ mod tests {
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],
@@ -2191,6 +2193,7 @@ mod tests {
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],
@@ -2251,6 +2254,7 @@ mod tests {
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],
@@ -2297,6 +2301,7 @@ mod tests {
                 capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: Some(ManagedReasoningEffort::High),
             }],

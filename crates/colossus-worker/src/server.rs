@@ -576,27 +576,50 @@ async fn dispatch_interactive(
             role,
             instructions,
             prompt,
+            images,
             max_turns,
             session_id,
             explicit_skills,
             sticky_skills,
             include_provider_response_diagnostics,
-        } => Ok(serde_json::to_value(
-            runtime
-                .run_with_mode_with_skills_stream_controlled(
-                    mode,
-                    &role,
-                    &instructions,
-                    &prompt,
-                    max_turns,
-                    Some(&session_id),
-                    &explicit_skills,
-                    &sticky_skills,
-                    include_provider_response_diagnostics,
-                    observer,
-                    control,
-                )
-                .await?,
+        } => {
+            let content = if images.is_empty() {
+                ModelContent::Text(prompt)
+            } else {
+                let mut parts = Vec::with_capacity(images.len() + usize::from(!prompt.is_empty()));
+                if !prompt.is_empty() {
+                    parts.push(ModelContentPart::Text { text: prompt });
+                }
+                parts.extend(
+                    images
+                        .into_iter()
+                        .map(|image| ModelContentPart::Image { image }),
+                );
+                ModelContent::Parts(parts)
+            };
+            Ok(serde_json::to_value(
+                runtime
+                    .run_with_mode_with_skills_stream_controlled_content(
+                        mode,
+                        &role,
+                        &instructions,
+                        &content,
+                        max_turns,
+                        Some(&session_id),
+                        &explicit_skills,
+                        &sticky_skills,
+                        include_provider_response_diagnostics,
+                        observer,
+                        control,
+                    )
+                    .await?,
+            )?)
+        }
+        InteractiveWorkerRequest::ImageAttach { path } => Ok(serde_json::to_value(
+            import_image_reference(runtime, &path).await?,
+        )?),
+        InteractiveWorkerRequest::ImagePreview { image } => Ok(serde_json::to_value(
+            BASE64.encode(runtime.preview_run_input_image(&image).await?),
         )?),
         InteractiveWorkerRequest::PresentationHistoryAppend { session_id, entry } => {
             Ok(serde_json::to_value(
@@ -948,18 +971,17 @@ where
                 .into_iter()
                 .map(PathBuf::from)
                 .collect::<Vec<_>>();
-            let prompt = match runtime
-                .prompt_with_text_attachments(&prompt, &attachment_paths)
-                .await
-            {
+            let prompt = match prepare_model_content(&runtime, &prompt, &attachment_paths).await {
                 Ok(prompt) => prompt,
                 Err(error) => {
                     observer.error(error.to_string()).await?;
                     return Ok(false);
                 }
             };
+            let control = RunControl::default();
             let result = runtime
-                .run_model_with_skills_stream(
+                .run_with_mode_with_skills_stream_controlled_content(
+                    AgentRunMode::Execute,
                     &role,
                     &instructions,
                     &prompt,
@@ -967,11 +989,20 @@ where
                     session_id.as_deref(),
                     &explicit_skills,
                     &sticky_skills,
+                    false,
                     &mut observer,
+                    &control,
                 )
                 .await;
             match result {
-                Ok(result) => observer.complete(serde_json::to_value(result)?).await?,
+                Ok(AgentRunOutcome::Completed { result }) => {
+                    observer.complete(serde_json::to_value(result)?).await?
+                }
+                Ok(AgentRunOutcome::Cancelled { .. }) => {
+                    observer
+                        .error("run was cancelled before completion".into())
+                        .await?
+                }
                 Err(error) => observer.error(error.to_string()).await?,
             }
             Ok(false)
@@ -996,18 +1027,17 @@ where
                 .into_iter()
                 .map(PathBuf::from)
                 .collect::<Vec<_>>();
-            let prompt = match runtime
-                .prompt_with_text_attachments(&prompt, &attachment_paths)
-                .await
-            {
+            let prompt = match prepare_model_content(&runtime, &prompt, &attachment_paths).await {
                 Ok(prompt) => prompt,
                 Err(error) => {
                     observer.error(error.to_string()).await?;
                     return Ok(false);
                 }
             };
+            let control = RunControl::default();
             let result = runtime
-                .run_plan_with_skills_stream(
+                .run_with_mode_with_skills_stream_controlled_content(
+                    AgentRunMode::Plan(colossus_contracts::PlanDraftTarget::Create),
                     &role,
                     &instructions,
                     &prompt,
@@ -1015,11 +1045,20 @@ where
                     session_id.as_deref(),
                     &explicit_skills,
                     &sticky_skills,
+                    false,
                     &mut observer,
+                    &control,
                 )
                 .await;
             match result {
-                Ok(result) => observer.complete(serde_json::to_value(result)?).await?,
+                Ok(AgentRunOutcome::Completed { result }) => {
+                    observer.complete(serde_json::to_value(result)?).await?
+                }
+                Ok(AgentRunOutcome::Cancelled { .. }) => {
+                    observer
+                        .error("run was cancelled before completion".into())
+                        .await?
+                }
                 Err(error) => observer.error(error.to_string()).await?,
             }
             Ok(false)

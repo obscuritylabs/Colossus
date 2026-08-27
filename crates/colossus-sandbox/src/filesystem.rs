@@ -23,7 +23,7 @@ impl EffectExecutor for FilesystemExecutor {
         let max_output =
             usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
         match request.action.as_str() {
-            "filesystem.read" => {
+            "filesystem.read" | "filesystem.read_run_input" => {
                 let metadata = fs::metadata(&target).map_err(adapter_failure)?;
                 if !metadata.is_file() {
                     return Err(adapter_failure("filesystem.read requires a regular file"));
@@ -88,7 +88,11 @@ impl EffectExecutor for FilesystemExecutor {
 
 pub(super) fn filesystem_mode(action: &str) -> Result<&'static str, ExecutionError> {
     match action {
-        "filesystem.read" | "filesystem.list" | "filesystem.search" | "patch.preview" => Ok("read"),
+        "filesystem.read"
+        | "filesystem.read_run_input"
+        | "filesystem.list"
+        | "filesystem.search"
+        | "patch.preview" => Ok("read"),
         "filesystem.metadata" => Ok("metadata"),
         "filesystem.write" | "patch.apply" | "patch.reverse" | "trace.export"
         | "audit.export.write" => Ok("write"),

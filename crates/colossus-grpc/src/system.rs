@@ -151,6 +151,13 @@ impl SystemService for SystemServiceAdapter {
                 && caller.principal().has_scope(scopes::RUNS_EXECUTE),
             detail: String::new(),
         }))
+        .chain(std::iter::once(Capability {
+            name: "attachments.image_input".into(),
+            enabled: caller.principal().has_scope(scopes::ARTIFACTS_READ)
+                && caller.principal().has_scope(scopes::ARTIFACTS_WRITE)
+                && caller.principal().has_scope(scopes::RUNS_EXECUTE),
+            detail: String::new(),
+        }))
         .collect();
         let mut limits = self.application_limits.clone();
         limits.extend([
@@ -448,6 +455,7 @@ mod tests {
         assert!(enabled.contains("artifacts.read"));
         assert!(enabled.contains("artifacts.upload"));
         assert!(enabled.contains("attachments.run_input"));
+        assert!(enabled.contains("attachments.image_input"));
 
         let without_run_scope = service()
             .get_server_info(request_with(

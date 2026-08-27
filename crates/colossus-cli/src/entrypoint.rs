@@ -1199,18 +1199,22 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             let prompt = prompt
                 .as_deref()
                 .ok_or_else(|| cli_error("a prompt or --execute-plan is required"))?;
-            let prompt = runtime
-                .prompt_with_text_attachments(prompt, &attachments)
-                .await?;
+            let prompt = prepare_model_content(&runtime, prompt, &attachments).await?;
             let session_id = if resume {
                 Some(runtime.latest_session()?.id)
             } else {
                 session
             };
-            let result = if plan && stream {
+            let control = RunControl::default();
+            let outcome = if stream {
                 let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
                 let result = runtime
-                    .run_plan_with_skills_stream(
+                    .run_with_mode_with_skills_stream_controlled_content(
+                        if plan {
+                            AgentRunMode::Plan(PlanDraftTarget::Create)
+                        } else {
+                            AgentRunMode::Execute
+                        },
                         &role,
                         &instructions,
                         &prompt,
@@ -1218,42 +1222,22 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                         session_id.as_deref(),
                         &skills,
                         &[],
+                        false,
                         &mut observer,
-                    )
-                    .await;
-                observer.finish_line()?;
-                result?
-            } else if plan {
-                runtime
-                    .run_plan_with_skills(
-                        &role,
-                        &instructions,
-                        &prompt,
-                        max_turns,
-                        session_id.as_deref(),
-                        &skills,
-                        &[],
-                    )
-                    .await?
-            } else if stream {
-                let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
-                let result = runtime
-                    .run_model_with_skills_stream(
-                        &role,
-                        &instructions,
-                        &prompt,
-                        max_turns,
-                        session_id.as_deref(),
-                        &skills,
-                        &[],
-                        &mut observer,
+                        &control,
                     )
                     .await;
                 observer.finish_line()?;
                 result?
             } else {
+                let mut observer = SilentStreamObserver;
                 runtime
-                    .run_model_with_skills(
+                    .run_with_mode_with_skills_stream_controlled_content(
+                        if plan {
+                            AgentRunMode::Plan(PlanDraftTarget::Create)
+                        } else {
+                            AgentRunMode::Execute
+                        },
                         &role,
                         &instructions,
                         &prompt,
@@ -1261,8 +1245,17 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                         session_id.as_deref(),
                         &skills,
                         &[],
+                        false,
+                        &mut observer,
+                        &control,
                     )
                     .await?
+            };
+            let result = match outcome {
+                AgentRunOutcome::Completed { result } => result,
+                AgentRunOutcome::Cancelled { .. } => {
+                    return Err(cli_error("run was cancelled before completion").into());
+                }
             };
             runtime.drain_subagents().await?;
             print_run_response(&result, &result.output)?;

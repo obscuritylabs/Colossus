@@ -5,10 +5,10 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    AgentRunMode, AgentRunOutcome, ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy,
-    PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode,
-    SecurityPostureReport, SessionMessage, SessionMessagePage, SessionSummary, TerminalPreferences,
-    ThemeTextStyle,
+    AgentRunMode, AgentRunOutcome, ModelContent, ModelContentPart, ModelImageReference,
+    ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PlanStatus,
+    ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode, SecurityPostureReport,
+    SessionMessage, SessionMessagePage, SessionSummary, TerminalPreferences, ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{
@@ -31,10 +31,15 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Position, Rect, Size},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Widget, Wrap},
+};
+use ratatui_image::{
+    Resize, StatefulImage,
+    picker::{Picker, ProtocolType},
+    thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io::{self, IsTerminal as _, Stdout, Write as _},
     sync::Arc,
     time::{Duration, Instant},
@@ -84,6 +89,7 @@ pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
 mod completion;
 mod contract;
 mod plan_execution;
+mod preview;
 mod render;
 mod session_browser;
 mod state;
@@ -93,20 +99,21 @@ mod transcript;
 
 pub use app::run_tui;
 pub use contract::{
-    BackgroundNoticeProvider, BootstrapRequest, FooterState, HostCommandResult, HostEvent,
-    HostPlanExecutionOutcome, HostPlanExecutionResult, HostRunResult, InteractiveApprovalMode,
-    InteractiveCommand, InteractiveHost, InteractiveMode, InteractivePlanExecutionRequest,
-    InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
-    InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
-    InteractiveThemePicker, InteractiveThemePickerEntry, LocalCommand, OperationResult,
-    PlanCommand, PlanHostCommand, PlanSelectionUpdate, PromptResponse, ResearchCommand,
-    RuntimeCommand, ScreenMode, TranscriptEntry, TranscriptKind, TuiError, TuiOptions,
-    parse_interactive_command,
+    AttachmentDetach, BackgroundNoticeProvider, BootstrapRequest, FooterState, HostCommandResult,
+    HostEvent, HostPlanExecutionOutcome, HostPlanExecutionResult, HostRunResult,
+    InteractiveApprovalMode, InteractiveCommand, InteractiveHost, InteractiveMode,
+    InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
+    InteractiveRunRequest, InteractiveSessionBrowser, InteractiveSessionBrowserEntry,
+    InteractiveSessionBrowserMessage, InteractiveSnapshot, InteractiveThemePicker,
+    InteractiveThemePickerEntry, LocalCommand, OperationResult, PlanCommand, PlanHostCommand,
+    PlanSelectionUpdate, PromptResponse, ResearchCommand, RuntimeCommand, ScreenMode,
+    TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
 };
 pub use state::TuiState;
 
 use completion::*;
 use plan_execution::*;
+use preview::*;
 use session_browser::*;
 use theme_picker::*;
 

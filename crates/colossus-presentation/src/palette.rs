@@ -334,7 +334,8 @@ impl TerminalPalette {
             PresentationBlock::Card { tone, .. } => return self.tone_style(*tone),
             PresentationBlock::Table(_)
             | PresentationBlock::KeyValue(_)
-            | PresentationBlock::Prompt { .. } => self.meta,
+            | PresentationBlock::Prompt { .. }
+            | PresentationBlock::Image(_) => self.meta,
             PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => self.tool,
             PresentationBlock::Text(_) | PresentationBlock::Markdown(_) => self.assistant,
             PresentationBlock::Blank => TextStyle::plain(),

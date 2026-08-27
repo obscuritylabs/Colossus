@@ -54,6 +54,7 @@ impl ModelProvider for OneTurnProvider {
             capabilities: ModelCapabilities {
                 tool_calls: true,
                 streaming: true,
+                image_inputs: false,
             },
             reasoning_effort: None,
         })

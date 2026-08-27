@@ -18,6 +18,8 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     if screen_mode == ScreenMode::Inline {
         preload_native_history(&mut state, Arc::clone(&host)).await;
     }
+    let picker = preview_picker(screen_mode);
+    state.preview_cache.set_picker(picker);
     let (event_tx, mut event_rx) = mpsc::channel::<HostEvent>(256);
     if let Some(provider) = background_notice {
         let notices = event_tx.clone();
@@ -28,6 +30,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         });
     }
     start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
+    schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode)?;
 
     loop {
@@ -35,6 +38,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
         start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
         continue_native_history_preload(
             &mut state,
@@ -79,6 +83,72 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         }
     }
     Ok(())
+}
+
+fn preview_picker(screen_mode: ScreenMode) -> Picker {
+    if screen_mode != ScreenMode::Alternate
+        || !terminal_can_answer_graphics_query(|name| std::env::var(name))
+    {
+        return Picker::halfblocks();
+    }
+    Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
+}
+
+pub(super) fn terminal_can_answer_graphics_query(
+    variable: impl Fn(&str) -> Result<String, std::env::VarError>,
+) -> bool {
+    const EMULATOR_HINTS: [&str; 8] = [
+        "KITTY_WINDOW_ID",
+        "TERM_PROGRAM",
+        "WEZTERM_EXECUTABLE",
+        "KONSOLE_VERSION",
+        "VTE_VERSION",
+        "WINDOWID",
+        "FOOT_CLIENT_PID",
+        "MLTERM",
+    ];
+    if EMULATOR_HINTS
+        .iter()
+        .any(|name| variable(name).is_ok_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+    variable("TERM").is_ok_and(|term| {
+        ["kitty", "foot", "wezterm", "mintty", "mlterm", "sixel"]
+            .iter()
+            .any(|hint| term.to_ascii_lowercase().contains(hint))
+    })
+}
+
+fn schedule_visible_previews(
+    state: &mut TuiState,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    for image in state.preview_references() {
+        if state.preview_cache.contains(&image.sha256)
+            || state.preview_loading.contains(&image.sha256)
+            || state.preview_failures.contains_key(&image.sha256)
+        {
+            continue;
+        }
+        state.preview_loading.insert(image.sha256.clone());
+        let host = Arc::clone(&host);
+        let events = event_tx.clone();
+        tokio::spawn(async move {
+            let result = match host.preview_image(&image).await {
+                Ok(bytes) => tokio::task::spawn_blocking(move || decode_preview(bytes))
+                    .await
+                    .map_err(|_| "preview decoder stopped unexpectedly".to_owned())
+                    .and_then(|result| result)
+                    .map(Box::new),
+                Err(error) => Err(error),
+            };
+            let _ = events
+                .send(HostEvent::PreviewFinished { image, result })
+                .await;
+        });
+    }
 }
 
 fn start_sandbox_boundary_acknowledgement(
@@ -891,6 +961,12 @@ pub(super) fn start_line(
         }
         InteractiveCommand::Invalid(message) => state.append_entry(error_entry(&message)),
         InteractiveCommand::Turn(prompt) => {
+            if state.mode == InteractiveMode::Research && !state.pending_images.is_empty() {
+                state.append_entry(error_entry(
+                    "Research mode does not accept image inputs. Use /detach all or switch to Execute or Plan mode.",
+                ));
+                return;
+            }
             if let Some(command) = state.research_turn_command(prompt.clone()) {
                 state.append_entry(user_entry(&prompt, TranscriptKind::User));
                 start_host_command(state, command, host, event_tx);
@@ -903,7 +979,11 @@ pub(super) fn start_line(
                     return;
                 }
             };
-            state.append_entry(user_entry(&prompt, TranscriptKind::User));
+            state.append_entry(user_entry_with_images(
+                &prompt,
+                &state.pending_images,
+                TranscriptKind::User,
+            ));
             state.operation = Some(OperationKind::Run);
             state.started_at = Some(Instant::now());
             state.activity = Some("waiting for model".into());
@@ -1251,6 +1331,52 @@ pub(super) fn handle_local_command(
                 temporary: false,
             });
         }
+        LocalCommand::Attach(path) => {
+            if state.pending_images.len() >= 16 {
+                state.append_entry(error_entry("At most 16 images may be pending."));
+                return;
+            }
+            state.operation = Some(OperationKind::Command);
+            state.activity = Some("validating image attachment".into());
+            let task_tx = event_tx.clone();
+            tokio::spawn(async move {
+                let result = host.attach_image(&path).await;
+                let _ = task_tx.send(HostEvent::AttachmentFinished(result)).await;
+            });
+        }
+        LocalCommand::Attachments => {
+            state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document: attachments_document(&state.pending_images),
+                temporary: false,
+            });
+        }
+        LocalCommand::Detach(target) => {
+            let result = match target {
+                AttachmentDetach::All => {
+                    let count = state.pending_images.len();
+                    state.pending_images.clear();
+                    format!("Removed {count} pending image attachment(s).")
+                }
+                AttachmentDetach::Index(index)
+                    if index > 0 && index <= state.pending_images.len() =>
+                {
+                    let image = state.pending_images.remove(index - 1);
+                    format!("Removed pending image {index}: {}.", image.file_name)
+                }
+                AttachmentDetach::Index(_) => {
+                    state.append_entry(error_entry("Pending attachment index is out of range."));
+                    return;
+                }
+            };
+            state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document: PresentationDocument::from_block(PresentationBlock::Text(result)),
+                temporary: false,
+            });
+        }
         LocalCommand::SavePreferences | LocalCommand::ResetPreferences => {
             let preferences = if command == LocalCommand::ResetPreferences {
                 TerminalPreferences::default()
@@ -1398,6 +1524,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     footer,
                     plan_selection,
                 })) => {
+                    state.pending_images.clear();
                     let selection_valid = apply_plan_selection(state, plan_selection);
                     finalize_assistant(state, &result.output);
                     state.footer = footer;
@@ -1411,6 +1538,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     footer,
                     plan_selection,
                 })) => {
+                    state.pending_images.clear();
                     apply_plan_selection(state, plan_selection);
                     state.footer = footer;
                     state.append_entry(TranscriptEntry {
@@ -1534,6 +1662,43 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 // remains eligible to start while ordinary queued prompts stay paused.
                 if state.overlay.is_none() {
                     state.overlay = Some(Overlay::QueuePaused);
+                }
+            }
+        }
+        HostEvent::AttachmentFinished(result) => {
+            state.operation = None;
+            state.activity = None;
+            state.started_at = None;
+            match result {
+                Ok(image) => {
+                    let combined = state
+                        .pending_images
+                        .iter()
+                        .map(|image| image.size_bytes)
+                        .fold(image.size_bytes, u64::saturating_add);
+                    if state.pending_images.len() >= 16 || combined > 32 * 1_048_576 {
+                        state.append_entry(error_entry(
+                            "Pending images exceed the 16-image or 32 MiB bound.",
+                        ));
+                    } else {
+                        state.pending_images.push(image);
+                        state.append_entry(TranscriptEntry {
+                            sequence: None,
+                            kind: TranscriptKind::Command,
+                            document: attachments_document(&state.pending_images),
+                            temporary: false,
+                        });
+                    }
+                }
+                Err(error) => state.append_entry(error_entry(&error)),
+            }
+        }
+        HostEvent::PreviewFinished { image, result } => {
+            state.preview_loading.remove(&image.sha256);
+            match result {
+                Ok(decoded) => state.preview_cache.insert(image.sha256, *decoded),
+                Err(error) => {
+                    state.preview_failures.insert(image.sha256, error);
                 }
             }
         }

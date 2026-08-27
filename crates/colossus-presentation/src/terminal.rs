@@ -498,6 +498,19 @@ impl TerminalDocumentRenderer {
     fn render_block(&self, block: &PresentationBlock, width: usize) -> Vec<String> {
         match block {
             PresentationBlock::Text(text) => wrap_text(&sanitize_terminal_text(text), width),
+            PresentationBlock::Image(image) => self.render_card(
+                &format!("Image · {}", image.file_name),
+                PresentationTone::Neutral,
+                &[PresentationBlock::Text(format!(
+                    "{} · {}x{} · {} bytes · sha256:{}",
+                    image.media_type,
+                    image.width_pixels,
+                    image.height_pixels,
+                    image.size_bytes,
+                    image.sha256.get(..12).unwrap_or(&image.sha256)
+                ))],
+                width,
+            ),
             PresentationBlock::Markdown(markdown) => self.render_markdown(markdown, width),
             PresentationBlock::Prompt {
                 left,

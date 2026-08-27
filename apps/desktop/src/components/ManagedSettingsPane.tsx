@@ -172,6 +172,7 @@ interface ModelEditorDraft {
   maxOutputTokens: number;
   toolCalls: boolean;
   streaming: boolean;
+  imageInputs: boolean;
 }
 
 interface SearchEditorDraft {
@@ -273,6 +274,7 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   maxOutputTokens: 16_384,
   toolCalls: true,
   streaming: true,
+  imageInputs: false,
 };
 
 const EMPTY_SEARCH_DRAFT: SearchEditorDraft = {
@@ -1799,6 +1801,7 @@ export function ManagedSettingsPane({
       capabilities: {
         toolCalls: modelEditor.toolCalls,
         streaming: modelEditor.streaming,
+        imageInputs: modelEditor.imageInputs,
       },
       reasoningEffort: null,
     };
@@ -5285,6 +5288,16 @@ function ModelEditor({
         />
         <span>Streaming</span>
       </label>
+      <label className="compact-switch">
+        <input
+          type="checkbox"
+          checked={draft.imageInputs}
+          onChange={(event) =>
+            onChange({ ...draft, imageInputs: event.target.checked })
+          }
+        />
+        <span>Image inputs</span>
+      </label>
       <div className="mcp-editor-actions">
         <button className="button secondary" type="button" onClick={onCancel}>
           Cancel
@@ -5499,6 +5512,7 @@ function modelDraft(
     maxOutputTokens: model.maxOutputTokens,
     toolCalls: model.capabilities.toolCalls,
     streaming: model.capabilities.streaming,
+    imageInputs: model.capabilities.imageInputs,
   };
 }
 

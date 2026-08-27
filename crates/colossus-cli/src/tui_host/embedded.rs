@@ -1213,6 +1213,19 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         Ok(true)
     }
 
+    async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
+        crate::artifact_commands::import_image_reference(&self.runtime, &PathBuf::from(path))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn preview_image(&self, image: &ModelImageReference) -> Result<Vec<u8>, String> {
+        self.runtime
+            .preview_run_input_image(image)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     async fn execute_command(
         &self,
         command: RuntimeCommand,
@@ -1271,15 +1284,16 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         }
         request.prompt = prompt;
         request.explicit_skills = explicit_skills;
+        let content = interactive_model_content(request.prompt.clone(), request.images.clone());
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };
         let outcome = self
             .runtime
-            .run_with_mode_with_skills_stream_controlled(
+            .run_with_mode_with_skills_stream_controlled_content(
                 request.mode,
                 "primary",
                 "You are Colossus.",
-                &request.prompt,
+                &content,
                 None,
                 Some(&request.session_id),
                 &request.explicit_skills,

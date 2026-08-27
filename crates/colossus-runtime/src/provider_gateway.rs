@@ -354,7 +354,7 @@ impl RiskEvaluator for GatewayRiskEvaluator {
                     .into(),
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
-                        content: prompt,
+                        content: prompt.into(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     }],
@@ -405,6 +405,7 @@ impl GatewayModelProvider {
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
         let route = resolved.route();
         let provider = resolved.provider();
+        validate_route_image_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
         let endpoint = provider
             .profile()
@@ -513,6 +514,7 @@ impl ModelProvider for GatewayModelProvider {
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
         let route = resolved.route();
         let provider = resolved.provider();
+        validate_route_image_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
         let endpoint = provider
             .profile()
@@ -547,6 +549,42 @@ impl ModelProvider for GatewayModelProvider {
             .map_err(model_gateway_error)?;
         bridge.finish(&terminal.bytes, options.include_response_diagnostics)
     }
+}
+
+pub(super) fn validate_route_image_inputs(
+    route: &ModelRoute,
+    provider_kind: ProviderKind,
+    request: &ModelRequest,
+) -> Result<(), ModelProviderError> {
+    let mut images = Vec::new();
+    for message in &request.messages {
+        colossus_contracts::validate_model_message_content(message).map_err(|error| {
+            ModelProviderError::Configuration(format!("model content is invalid: {error}"))
+        })?;
+        for image in message.content.images() {
+            images.push(image.clone());
+        }
+    }
+    if images.is_empty() {
+        return Ok(());
+    }
+    if !route.capabilities.image_inputs {
+        return Err(ModelProviderError::Configuration(format!(
+            "model profile `{}` does not enable image inputs",
+            route.model_profile
+        )));
+    }
+    if provider_kind == ProviderKind::Echo {
+        return Err(ModelProviderError::Configuration(
+            "the Echo provider does not accept image inputs".into(),
+        ));
+    }
+    colossus_media::validate_image_references(images).map_err(|_| {
+        ModelProviderError::Configuration(
+            "provider-visible images exceed a count, byte, dimension, or pixel bound".into(),
+        )
+    })?;
+    Ok(())
 }
 
 pub(super) struct ReleasedProviderStream<'a> {

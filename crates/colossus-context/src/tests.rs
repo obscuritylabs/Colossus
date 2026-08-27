@@ -124,6 +124,7 @@ fn model_route(role: &str) -> ProviderRoute {
         capabilities: ModelCapabilities {
             tool_calls: true,
             streaming: true,
+            image_inputs: false,
         },
         reasoning_effort: None,
     }
@@ -144,10 +145,87 @@ fn preparation_request(messages: Vec<ModelMessage>, force: bool) -> ContextPrepa
 fn message(role: ModelMessageRole, content: impl Into<String>) -> ModelMessage {
     ModelMessage {
         role,
-        content: content.into(),
+        content: ModelContent::from(content.into()),
         tool_call_id: None,
         tool_calls: Vec::new(),
     }
+}
+
+fn image(index: usize, size_bytes: u64) -> ModelImageReference {
+    ModelImageReference {
+        artifact_id: format!("artifact-{index:064x}"),
+        file_name: format!("image-{index}.png"),
+        media_type: "image/png".into(),
+        size_bytes,
+        sha256: format!("{:064x}", index.saturating_add(1)),
+        width_pixels: 1_024,
+        height_pixels: 1_024,
+        detail: colossus_contracts::ModelImageDetail::Auto,
+    }
+}
+
+fn image_message(images: impl IntoIterator<Item = ModelImageReference>) -> ModelMessage {
+    ModelMessage {
+        role: ModelMessageRole::User,
+        content: ModelContent::Parts(
+            images
+                .into_iter()
+                .map(|image| ModelContentPart::Image { image })
+                .collect(),
+        ),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }
+}
+
+#[test]
+fn image_accounting_covers_documented_patch_tile_and_unknown_families() {
+    assert_eq!(image_token_cost("gpt-5.6-sol", 1_024, 1_024), 1_229);
+    assert_eq!(image_token_cost("gpt-5.5", 10_000, 10_000), 12_000);
+    assert_eq!(image_token_cost("gpt-5.4", 2_048, 2_048), 3_000);
+    assert_eq!(image_token_cost("gpt-5.2", 2_048, 2_048), 4_916);
+    assert_eq!(image_token_cost("gpt-4.1-mini", 1_024, 1_024), 1_659);
+    assert_eq!(image_token_cost("gpt-5.1", 1_024, 1_024), 630);
+    assert_eq!(image_token_cost("gpt-4o", 1_024, 1_024), 765);
+    assert_eq!(image_token_cost("gpt-4o-mini", 1_024, 1_024), 25_501);
+    assert!(image_token_cost("unknown-compatible", 1_024, 1_024) >= 25_501);
+}
+
+#[test]
+fn image_compaction_deterministically_keeps_newest_images_without_mutating_history() {
+    let canonical = vec![image_message((0..17).map(|index| image(index, 1)))];
+    let prepared = compact_excess_images(&canonical);
+
+    assert_eq!(canonical[0].content.images().count(), 17);
+    assert_eq!(prepared[0].content.images().count(), 16);
+    let ModelContent::Parts(parts) = &prepared[0].content else {
+        panic!("multipart content");
+    };
+    assert!(matches!(
+        &parts[0],
+        ModelContentPart::Text { text } if text.contains("image-0.png")
+    ));
+    assert!(matches!(
+        &parts[16],
+        ModelContentPart::Image { image } if image.file_name == "image-16.png"
+    ));
+}
+
+#[tokio::test]
+async fn newest_user_turn_over_image_limits_is_rejected_instead_of_compacted() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_journal, _sessions, _snapshots, service) = fixture(ContextConfig::default(), provider);
+    let error = service
+        .prepare(preparation_request(
+            vec![image_message((0..17).map(|index| image(index, 1)))],
+            false,
+        ))
+        .await
+        .expect_err("newest turn must fail locally");
+    assert!(error.to_string().contains("newest user turn exceeds"));
 }
 
 fn fixture(config: ContextConfig, provider: Arc<dyn ModelProvider>) -> Fixture {
@@ -245,7 +323,7 @@ async fn bounded_recent_tool_result_allows_automatic_compaction() {
     });
     let tool_result = ModelMessage {
         role: ModelMessageRole::Tool,
-        content: "x".repeat(64 * 1024),
+        content: "x".repeat(64 * 1024).into(),
         tool_call_id: Some("call-summary".into()),
         tool_calls: Vec::new(),
     };

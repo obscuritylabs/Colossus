@@ -1203,6 +1203,7 @@ async fn configure_managed_codex_runtime(
         capabilities: ModelCapabilitiesSetting {
             tool_calls: true,
             streaming: true,
+            image_inputs: false,
         },
         reasoning_effort: None,
     }];
@@ -1826,6 +1827,7 @@ fn persist_provider_rotation(
         capabilities: ModelCapabilitiesSetting {
             tool_calls: true,
             streaming: true,
+            image_inputs: false,
         },
         reasoning_effort: None,
     }];
@@ -3089,6 +3091,7 @@ mod tests {
                 capabilities: ModelCapabilitiesSetting {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             }],

@@ -470,6 +470,39 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, RuntimeError> {
+        let prompt = colossus_contracts::ModelContent::from(prompt);
+        self.run_with_mode_with_skills_stream_controlled_content(
+            mode,
+            role,
+            instructions,
+            &prompt,
+            max_turns,
+            session_id,
+            explicit_skills,
+            sticky_skills,
+            include_provider_response_diagnostics,
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute one typed local mode with ordered multipart user content.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_mode_with_skills_stream_controlled_content(
+        &self,
+        mode: AgentRunMode,
+        role: &str,
+        instructions: &str,
+        prompt: &colossus_contracts::ModelContent,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        include_provider_response_diagnostics: bool,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
         if let AgentRunMode::Plan(target) = &mode {
             self.validate_plan_target(session_id, target)?;
         }
@@ -480,7 +513,7 @@ impl Runtime {
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
         let composition = self.skill_composer.compose(
             &prepared.base_text,
-            prompt,
+            &prompt.plain_text(),
             explicit_skills,
             sticky_skills,
             self.skills_enabled,
@@ -496,18 +529,21 @@ impl Runtime {
         // one stable allocation before adding the instruction-snapshot task-local scope;
         // embedding it in that additional generic wrapper can exceed Tokio's normal worker
         // thread stack while polling interactive worker runs.
-        let mut run = Box::pin(self.agent.run_in_session_with_mode_stream_controlled(
-            mode,
-            role,
-            &instructions,
-            prompt,
-            max_turns.unwrap_or(self.agent_max_turns),
-            session_id,
-            &active,
-            include_provider_response_diagnostics,
-            observer,
-            control,
-        ));
+        let mut run = Box::pin(
+            self.agent
+                .run_in_session_with_mode_stream_controlled_content(
+                    mode,
+                    role,
+                    &instructions,
+                    prompt,
+                    max_turns.unwrap_or(self.agent_max_turns),
+                    session_id,
+                    &active,
+                    include_provider_response_diagnostics,
+                    observer,
+                    control,
+                ),
+        );
         scope_instruction_snapshot(prepared.snapshot, async {
             loop {
                 tokio::select! {
@@ -680,6 +716,47 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, RuntimeError> {
+        let prompt = colossus_contracts::ModelContent::from(prompt);
+        self.run_public_model_with_mode_and_skills_stream_controlled_content(
+            role,
+            instructions,
+            &prompt,
+            max_turns,
+            run_id,
+            session_id,
+            create_session,
+            explicit_skills,
+            allowed_tools,
+            mode,
+            end_user_id,
+            remote_trace_context,
+            initiator,
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute a trusted typed public mode with ordered multipart user content.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_model_with_mode_and_skills_stream_controlled_content(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &colossus_contracts::ModelContent,
+        max_turns: Option<u16>,
+        run_id: &str,
+        session_id: &str,
+        create_session: bool,
+        explicit_skills: &[String],
+        allowed_tools: &[String],
+        mode: AgentRunMode,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
         if !explicit_skills.is_empty() {
             return Err(RuntimeError::Config(
                 "public application runs cannot activate skills".into(),
@@ -696,7 +773,7 @@ impl Runtime {
         let instructions = prepared.text.clone();
         let mut run = Box::pin(
             self.agent
-                .run_public_with_mode_and_skills_stream_controlled(
+                .run_public_with_mode_and_skills_stream_controlled_content(
                     role,
                     &instructions,
                     prompt,
@@ -1572,6 +1649,7 @@ mod plan_mode_instruction_tests {
                 capabilities: ModelCapabilities {
                     tool_calls: true,
                     streaming: true,
+                    image_inputs: false,
                 },
                 reasoning_effort: None,
             })

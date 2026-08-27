@@ -149,6 +149,9 @@ pub enum InteractiveWorkerRequest {
         instructions: String,
         /// User prompt.
         prompt: String,
+        /// Ordered verified encrypted image references for this turn.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ModelImageReference>,
         /// Optional bounded turn override.
         max_turns: Option<u16>,
         /// Exact durable session.
@@ -160,6 +163,16 @@ pub enum InteractiveWorkerRequest {
         /// Include bounded provider evidence on a failed turn for a trusted local client.
         #[serde(default, skip_serializing_if = "is_false")]
         include_provider_response_diagnostics: bool,
+    },
+    /// Import one local path into the encrypted run-input artifact store.
+    ImageAttach {
+        /// Absolute or worker-workspace-relative local path.
+        path: PathBuf,
+    },
+    /// Retrieve exact verified bytes transiently for a visible local preview.
+    ImagePreview {
+        /// Canonical metadata-only image reference.
+        image: ModelImageReference,
     },
     /// Persist one terminal-history entry under the attached session acknowledgement.
     PresentationHistoryAppend {

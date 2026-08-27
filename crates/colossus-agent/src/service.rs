@@ -170,8 +170,39 @@ impl AgentService {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        let prompt = ModelContent::from(prompt);
+        self.run_in_session_with_mode_stream_controlled_content(
+            mode,
+            role,
+            instructions,
+            &prompt,
+            max_turns,
+            requested_session_id,
+            active_skills,
+            include_provider_response_diagnostics,
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute one typed local run mode with ordered multipart user content.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_mode_stream_controlled_content(
+        &self,
+        mode: AgentRunMode,
+        role: &str,
+        instructions: &str,
+        prompt: &ModelContent,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        include_provider_response_diagnostics: bool,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
         match self
-            .run_with_lineage(
+            .run_with_lineage_content(
                 role,
                 instructions,
                 prompt,
@@ -340,8 +371,49 @@ impl AgentService {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        let prompt = ModelContent::from(prompt);
+        self.run_public_with_mode_and_skills_stream_controlled_content(
+            role,
+            instructions,
+            &prompt,
+            max_turns,
+            run_id,
+            session_id,
+            create_session,
+            active_skills,
+            allowed_tools,
+            mode,
+            end_user_id,
+            remote_trace_context,
+            initiator,
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute a typed public application mode with ordered multipart user content.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_with_mode_and_skills_stream_controlled_content(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &ModelContent,
+        max_turns: u16,
+        run_id: &str,
+        session_id: &str,
+        create_session: bool,
+        active_skills: &[String],
+        allowed_tools: &[String],
+        mode: AgentRunMode,
+        end_user_id: Option<&str>,
+        remote_trace_context: Option<&colossus_contracts::RemoteTraceContext>,
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
         match self
-            .run_with_lineage(
+            .run_with_lineage_content(
                 role,
                 instructions,
                 prompt,
