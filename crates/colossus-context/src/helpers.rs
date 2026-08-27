@@ -279,7 +279,7 @@ pub(super) fn bound_summary_to_target(
         .unwrap_or(usize::MAX)
         .min(MAX_SUMMARY_BYTES);
     prepared[summary_index].content =
-        truncate_bytes(&prepared[summary_index].content, available_bytes);
+        truncate_snapshot_content(&prepared[summary_index].content, available_bytes);
 }
 
 pub(super) fn bound_summary_to_byte_limit(
@@ -296,13 +296,32 @@ pub(super) fn bound_summary_to_byte_limit(
     };
     loop {
         let size = model_request_bytes(instructions, prepared, tools);
-        if size <= limit || prepared[summary_index].content.is_empty() {
+        if size <= limit {
             return;
         }
         let excess = size.saturating_sub(limit).max(1);
         let target = prepared[summary_index].content.len().saturating_sub(excess);
-        prepared[summary_index].content = truncate_bytes(&prepared[summary_index].content, target);
+        let bounded = truncate_snapshot_content(&prepared[summary_index].content, target);
+        if bounded.len() >= prepared[summary_index].content.len() {
+            return;
+        }
+        prepared[summary_index].content = bounded;
     }
+}
+
+fn truncate_snapshot_content(value: &str, limit: usize) -> String {
+    let Some(separator) = value.find("\n\n") else {
+        return truncate_bytes(value, limit);
+    };
+    let summary_start = separator.saturating_add(2);
+    let header = &value[..summary_start];
+    let summary_limit = limit
+        .max(header.len().saturating_add(3))
+        .saturating_sub(header.len());
+    format!(
+        "{header}{}",
+        truncate_bytes(&value[summary_start..], summary_limit)
+    )
 }
 
 pub(super) fn contains_task_word(value: &str) -> bool {

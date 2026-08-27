@@ -433,13 +433,65 @@ async fn projected_tool_arguments_exceeding_provider_budget_fail_before_dispatch
 fn byte_bounding_terminates_when_snapshot_envelope_cannot_fit() {
     let mut prepared = vec![message(
         ModelMessageRole::System,
-        "[Colossus context snapshot]\nsummary",
+        "[Colossus context snapshot]\nsnapshot_id: snapshot-1\nstrategy: deterministic\nsource_message_range: 1-1\n\nsummary",
     )];
 
     bound_summary_to_byte_limit("", &mut prepared, &[], 1);
 
-    assert!(prepared[0].content.is_empty());
+    assert!(
+        prepared[0]
+            .content
+            .starts_with("[Colossus context snapshot]")
+    );
+    assert!(prepared[0].content.ends_with("\n\n..."));
     assert!(model_request_bytes("", &prepared, &[]) > 1);
+}
+
+#[tokio::test]
+async fn snapshot_envelope_is_preflighted_before_summary_effect_or_durable_write() {
+    let provider = Arc::new(SummaryProvider {
+        output: Some("model summary".into()),
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        preserve_recent_messages: 2,
+        ..ContextConfig::default()
+    };
+    let (_journal, _sessions, snapshots, service) =
+        fixture(config, provider.clone() as Arc<dyn ModelProvider>);
+    let messages = vec![
+        message(ModelMessageRole::User, "old request"),
+        message(ModelMessageRole::Assistant, "old response"),
+        message(ModelMessageRole::User, "recent request"),
+        message(ModelMessageRole::Assistant, "recent response"),
+    ];
+    let preserved = messages[2..].to_vec();
+    let preserved_without_instructions = model_request_bytes("", &preserved, &[]);
+    let mut request = preparation_request(messages, false);
+    request.instructions =
+        "x".repeat(MAX_PREPARED_MODEL_REQUEST_BYTES - preserved_without_instructions - 1);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 1_050_000,
+        max_output_tokens: 128_000,
+        safety_margin_tokens: 105_000,
+        input_budget_tokens: 817_000,
+    };
+    assert!(
+        model_request_bytes(&request.instructions, &preserved, &[])
+            <= MAX_PREPARED_MODEL_REQUEST_BYTES
+    );
+
+    let error = service
+        .prepare(request)
+        .await
+        .expect_err("snapshot envelope must be rejected before effects");
+
+    assert!(matches!(
+        error,
+        ContextError::Configuration(message) if message.contains("plus snapshot metadata")
+    ));
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+    assert!(snapshots.list("session-1").expect("snapshots").is_empty());
 }
 
 #[tokio::test]
