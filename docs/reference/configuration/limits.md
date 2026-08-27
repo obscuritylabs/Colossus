@@ -192,6 +192,15 @@ Increasing `maxOutputTokens` reduces the available input budget. Increasing
 `preserveRecentMessages` value can also make compaction less effective because those
 messages are never summarized automatically.
 
+Context preparation also keeps a conservative byte estimate below a fixed budget that
+leaves room inside the 1 MiB pre-effect policy and provider request ceilings. The
+estimate includes both the serialized logical model request and additional escaping
+introduced when provider adapters project structured tool-call arguments. This byte
+budget can trigger compaction before the configured token percentage on very
+large-context models. If the preserved recent messages, tool schemas, retrieved
+material, or instructions alone exceed it, Colossus returns a context configuration
+error before attempting the provider effect.
+
 See [Provider and model configuration](providers-models.md#model-profiles) for complete
 profiles and [Context, memory, and research configuration](context-memory-research.md)
 for compaction behavior.
@@ -319,6 +328,7 @@ bounds. Raising a value in this table does not remove those hard limits.
 | Provider/model configuration is rejected | `maxOutputTokens` plus the safety margin must leave a positive input budget |
 | Compaction happens earlier than expected | Percentages apply to the derived input budget, not the advertised context window |
 | Context still cannot fit after compaction | Reduce preserved messages, retrieved material, tool output, or output reservation |
+| Provider policy byte budget cannot fit the preserved turn | Reduce preserved messages, tool output, retrieved material, tool schemas, or instructions |
 | Child work remains queued | Check `agents status`, worker readiness, and `subagents.maxConcurrent` |
 | Increasing child concurrency does not increase tool parallelism | `sandbox.maxConcurrency` is a separate per-actor/run effect ceiling |
 | Research creates too much external traffic | Lower `research.maxWorkers`; it is independent from child concurrency |

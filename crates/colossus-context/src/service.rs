@@ -378,6 +378,7 @@ impl ContextPreparer for ContextService {
             .await?;
         let original_messages = prepend_bindings(bindings.clone(), messages.clone());
         let original = estimate_tokens(&instructions, &original_messages, &tools);
+        let original_bytes = model_request_bytes(&instructions, &original_messages, &tools);
         let threshold = self
             .config
             .threshold_tokens(budget.limits.input_budget_tokens);
@@ -389,11 +390,19 @@ impl ContextPreparer for ContextService {
         );
         let active_messages = prepend_bindings(bindings.clone(), active_messages);
         let active_estimate = estimate_tokens(&instructions, &active_messages, &tools);
+        let active_bytes = model_request_bytes(&instructions, &active_messages, &tools);
         let should_create = force
             || (self.config.auto_compaction
-                && original > threshold
-                && (active.is_none() || active_estimate > threshold));
+                && (original > threshold || original_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES)
+                && (active.is_none()
+                    || active_estimate > threshold
+                    || active_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES));
         if !should_create {
+            if active_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+                return Err(ContextError::Configuration(format!(
+                    "the prepared model request requires {active_bytes} budgeted bytes, exceeding the {MAX_PREPARED_MODEL_REQUEST_BYTES}-byte provider policy budget; enable automatic compaction or reduce preserved messages, retrieved material, tool output, or instructions"
+                )));
+            }
             return Ok(PreparedContext {
                 messages: active_messages,
                 token_estimate: active_estimate,
@@ -420,6 +429,11 @@ impl ContextPreparer for ContextService {
             source_end = messages.len();
         }
         if source_end == 0 {
+            if original_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+                return Err(ContextError::Configuration(format!(
+                    "the newest logical turn requires {original_bytes} budgeted bytes, exceeding the {MAX_PREPARED_MODEL_REQUEST_BYTES}-byte provider policy budget and cannot be compacted without violating recent-message preservation"
+                )));
+            }
             if original > budget.limits.input_budget_tokens {
                 return Err(ContextError::Configuration(format!(
                     "the newest logical turn requires {original} estimated tokens, exceeding the {} token effective input budget for model profile {} and cannot be compacted without violating recent-message preservation",
@@ -445,6 +459,12 @@ impl ContextPreparer for ContextService {
         }
         let preserved = prepend_bindings(bindings.clone(), messages[source_end..].to_vec());
         let preserved_estimate = estimate_tokens(&instructions, &preserved, &tools);
+        let preserved_bytes = model_request_bytes(&instructions, &preserved, &tools);
+        if preserved_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+            return Err(ContextError::Configuration(format!(
+                "preserved recent messages require {preserved_bytes} budgeted bytes, exceeding the {MAX_PREPARED_MODEL_REQUEST_BYTES}-byte provider policy budget"
+            )));
+        }
         if preserved_estimate.saturating_add(64) > budget.limits.input_budget_tokens {
             return Err(ContextError::Configuration(format!(
                 "preserved recent messages require at least {preserved_estimate} estimated tokens plus snapshot metadata, exceeding the {} token effective input budget for model profile {}",
@@ -457,11 +477,23 @@ impl ContextPreparer for ContextService {
         let mut prepared = apply_snapshot(&snapshot, &messages);
         prepared = prepend_bindings(bindings, prepared);
         bound_summary_to_target(&instructions, &mut prepared, &tools, target);
+        bound_summary_to_byte_limit(
+            &instructions,
+            &mut prepared,
+            &tools,
+            MAX_PREPARED_MODEL_REQUEST_BYTES,
+        );
         let estimate = estimate_tokens(&instructions, &prepared, &tools);
         if estimate > budget.limits.input_budget_tokens {
             return Err(ContextError::Configuration(format!(
                 "preserved recent messages require {estimate} estimated tokens, exceeding the {} token effective input budget for model profile {}",
                 budget.limits.input_budget_tokens, budget.model_profile
+            )));
+        }
+        let prepared_bytes = model_request_bytes(&instructions, &prepared, &tools);
+        if prepared_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+            return Err(ContextError::Configuration(format!(
+                "compacted context still requires {prepared_bytes} budgeted bytes, exceeding the {MAX_PREPARED_MODEL_REQUEST_BYTES}-byte provider policy budget"
             )));
         }
         Ok(PreparedContext {

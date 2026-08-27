@@ -221,6 +221,37 @@ pub(super) fn estimate_tokens(
         .max(1)
 }
 
+pub(super) fn model_request_bytes(
+    instructions: &str,
+    messages: &[ModelMessage],
+    tools: &[ModelToolDefinition],
+) -> usize {
+    let logical_bytes = serde_json::to_vec(&ModelRequest {
+        instructions: instructions.into(),
+        messages: messages.to_vec(),
+        tools: tools.to_vec(),
+        max_output_tokens: None,
+    })
+    .map_or(usize::MAX, |bytes| bytes.len());
+    // Network provider adapters encode structured tool arguments as a JSON string.
+    // Account for the additional quotes and escaping so the provider-neutral request
+    // cannot fit this budget while its projected wire request exceeds the hard cap.
+    let projected_argument_overhead = messages
+        .iter()
+        .flat_map(|message| &message.tool_calls)
+        .map(|call| {
+            serde_json::to_vec(&call.arguments).map_or(usize::MAX, |bytes| {
+                bytes
+                    .iter()
+                    .filter(|&&byte| matches!(byte, b'"' | b'\\'))
+                    .count()
+                    .saturating_add(2)
+            })
+        })
+        .fold(0_usize, usize::saturating_add);
+    logical_bytes.saturating_add(projected_argument_overhead)
+}
+
 pub(super) fn bound_summary_to_target(
     instructions: &str,
     prepared: &mut [ModelMessage],
@@ -249,6 +280,29 @@ pub(super) fn bound_summary_to_target(
         .min(MAX_SUMMARY_BYTES);
     prepared[summary_index].content =
         truncate_bytes(&prepared[summary_index].content, available_bytes);
+}
+
+pub(super) fn bound_summary_to_byte_limit(
+    instructions: &str,
+    prepared: &mut [ModelMessage],
+    tools: &[ModelToolDefinition],
+    limit: usize,
+) {
+    let Some(summary_index) = prepared
+        .iter()
+        .position(|message| message.content.starts_with("[Colossus context snapshot]"))
+    else {
+        return;
+    };
+    loop {
+        let size = model_request_bytes(instructions, prepared, tools);
+        if size <= limit || prepared[summary_index].content.is_empty() {
+            return;
+        }
+        let excess = size.saturating_sub(limit).max(1);
+        let target = prepared[summary_index].content.len().saturating_sub(excess);
+        prepared[summary_index].content = truncate_bytes(&prepared[summary_index].content, target);
+    }
 }
 
 pub(super) fn contains_task_word(value: &str) -> bool {
@@ -325,6 +379,9 @@ pub(super) fn truncate_chars(value: &str, limit: usize) -> String {
 pub(super) fn truncate_bytes(value: &str, limit: usize) -> String {
     if value.len() <= limit {
         return value.into();
+    }
+    if limit < 3 {
+        return String::new();
     }
     let mut end = limit.saturating_sub(3).min(value.len());
     while !value.is_char_boundary(end) {

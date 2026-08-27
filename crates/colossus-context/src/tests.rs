@@ -282,6 +282,167 @@ async fn bounded_recent_tool_result_allows_automatic_compaction() {
 }
 
 #[tokio::test]
+async fn provider_policy_byte_budget_triggers_compaction_before_large_model_token_threshold() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        preserve_recent_messages: 2,
+        ..ContextConfig::default()
+    };
+    let (_journal, sessions, snapshots, service) =
+        fixture(config, provider as Arc<dyn ModelProvider>);
+    let messages = vec![
+        message(
+            ModelMessageRole::User,
+            format!(
+                "old large request {}",
+                "x".repeat(MAX_PREPARED_MODEL_REQUEST_BYTES)
+            ),
+        ),
+        message(ModelMessageRole::Assistant, "old response"),
+        message(ModelMessageRole::User, "recent request"),
+        message(ModelMessageRole::Assistant, "recent response"),
+    ];
+    for value in &messages {
+        sessions
+            .append_message("session-1", "run-1", value.clone(), user_actor())
+            .expect("message");
+    }
+    let mut request = preparation_request(messages, false);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 1_050_000,
+        max_output_tokens: 128_000,
+        safety_margin_tokens: 105_000,
+        input_budget_tokens: 817_000,
+    };
+    let original_estimate =
+        estimate_tokens(&request.instructions, &request.messages, &request.tools);
+    assert!(
+        original_estimate
+            < ContextConfig::default().threshold_tokens(request.route.limits.input_budget_tokens)
+    );
+
+    let prepared = service.prepare(request).await.expect("prepared");
+
+    assert!(prepared.compacted);
+    assert!(prepared.snapshot_created);
+    assert!(
+        model_request_bytes("test", &prepared.messages, &[]) <= MAX_PREPARED_MODEL_REQUEST_BYTES
+    );
+    assert_eq!(snapshots.list("session-1").expect("snapshots").len(), 1);
+}
+
+#[tokio::test]
+async fn oversized_preserved_turn_returns_context_error_before_provider_dispatch() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_journal, _sessions, snapshots, service) = fixture(ContextConfig::default(), provider);
+    let messages = vec![message(
+        ModelMessageRole::User,
+        "x".repeat(MAX_PREPARED_MODEL_REQUEST_BYTES),
+    )];
+    let mut request = preparation_request(messages, false);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 1_050_000,
+        max_output_tokens: 128_000,
+        safety_margin_tokens: 105_000,
+        input_budget_tokens: 817_000,
+    };
+
+    let error = service
+        .prepare(request)
+        .await
+        .expect_err("oversized newest turn must fail before provider dispatch");
+
+    assert!(matches!(
+        error,
+        ContextError::Configuration(message)
+            if message.contains("provider policy budget")
+                && message.contains("cannot be compacted")
+    ));
+    assert!(snapshots.list("session-1").expect("snapshots").is_empty());
+}
+
+#[tokio::test]
+async fn projected_tool_arguments_exceeding_provider_budget_fail_before_dispatch() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_journal, _sessions, snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    let mut tool_call = message(ModelMessageRole::Assistant, "");
+    tool_call.tool_calls.push(ModelToolCall {
+        call_id: "call-large-arguments".into(),
+        name: "test.large_arguments".into(),
+        arguments: json!({"payload": "\\\"".repeat(120_000)}),
+    });
+    let messages = vec![
+        message(ModelMessageRole::User, "run the tool"),
+        tool_call,
+        ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: "done".into(),
+            tool_call_id: Some("call-large-arguments".into()),
+            tool_calls: Vec::new(),
+        },
+    ];
+    let mut request = preparation_request(messages, false);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 1_050_000,
+        max_output_tokens: 128_000,
+        safety_margin_tokens: 105_000,
+        input_budget_tokens: 817_000,
+    };
+    let logical_bytes = serde_json::to_vec(&ModelRequest {
+        instructions: request.instructions.clone(),
+        messages: request.messages.clone(),
+        tools: request.tools.clone(),
+        max_output_tokens: None,
+    })
+    .expect("logical request")
+    .len();
+    assert!(logical_bytes < MAX_PREPARED_MODEL_REQUEST_BYTES);
+    assert!(
+        model_request_bytes(&request.instructions, &request.messages, &request.tools)
+            > MAX_PREPARED_MODEL_REQUEST_BYTES
+    );
+
+    let error = service
+        .prepare(request)
+        .await
+        .expect_err("projected provider request must fail before dispatch");
+
+    assert!(matches!(
+        error,
+        ContextError::Configuration(message)
+            if message.contains("provider policy budget")
+                && message.contains("cannot be compacted")
+    ));
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+    assert!(snapshots.list("session-1").expect("snapshots").is_empty());
+}
+
+#[test]
+fn byte_bounding_terminates_when_snapshot_envelope_cannot_fit() {
+    let mut prepared = vec![message(
+        ModelMessageRole::System,
+        "[Colossus context snapshot]\nsummary",
+    )];
+
+    bound_summary_to_byte_limit("", &mut prepared, &[], 1);
+
+    assert!(prepared[0].content.is_empty());
+    assert!(model_request_bytes("", &prepared, &[]) > 1);
+}
+
+#[tokio::test]
 async fn below_threshold_does_not_create_snapshot() {
     let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
         output: Some("unused".into()),
