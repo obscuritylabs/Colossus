@@ -5789,7 +5789,7 @@ export function managedMcpServer(draft: McpEditorDraft): ManagedMcpServer {
     name: draft.name,
     transport: draft.transport,
     command: draft.transport === "stdio" ? draft.commandOrUrl : null,
-    args: splitLines(draft.argsText),
+    args: draft.transport === "stdio" ? splitLines(draft.argsText) : [],
     workingDirectory:
       draft.transport === "stdio" && draft.workingDirectory.trim()
         ? draft.workingDirectory.trim()

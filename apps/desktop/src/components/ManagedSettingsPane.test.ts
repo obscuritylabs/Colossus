@@ -441,6 +441,47 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain('type="checkbox" checked=""');
   });
 
+  it("drops hidden stdio arguments when switching an MCP server to HTTP", () => {
+    const draft = mcpDraft({
+      id: "mcp-local-tools",
+      label: "Local tools",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            name: "local-tools",
+            transport: "stdio",
+            command: "/opt/colossus/bin/mcp-server",
+            args: ["--stdio", "--label=one,two"],
+            workingDirectory: null,
+            environmentCredentials: {},
+            url: null,
+            headers: {},
+            credentialHeaders: {},
+            allowStateless: false,
+            oauth: null,
+            allowedTools: ["search"],
+            researchTools: [],
+            timeoutMs: null,
+            maxOutputBytes: null,
+          },
+        },
+      ],
+    });
+
+    const switched = managedMcpServer({
+      ...draft,
+      transport: "streamable_http",
+      commandOrUrl: "https://mcp.example.test/rpc",
+    });
+
+    expect(draft.argsText).toBe("--stdio\n--label=one,two");
+    expect(switched.args).toEqual([]);
+    expect(switched.url).toBe("https://mcp.example.test/rpc");
+  });
+
   it.each([
     {
       name: "local-tools",
