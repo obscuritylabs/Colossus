@@ -126,6 +126,14 @@ built-in default, a Global override, or a Workspace override. **Inherit** remove
 override instead of copying the current value. The read-only effective YAML view is
 sanitized and marks Desktop-owned runtime identities and private storage paths.
 
+Global catalog editors preserve the complete managed resource revision. In particular,
+model reasoning effort and image-input capability, nullable provider defaults, explicit
+telemetry sensitivity acknowledgments, and the complete MCP transport contract can be
+reviewed without hand-editing YAML. MCP exposes exact arguments and tool names one per
+line, working directories, multiple native credential bindings, non-secret static
+headers, OAuth, research projections, stateless HTTP, and optional runtime limits.
+Credential values remain native-only; the editor stores and displays identifiers.
+
 Use **Import config** in a Workspace to inspect `.colossus/config.yaml` without modifying
 the repository. Desktop proposes reusable catalog resources, Workspace overrides, and
 native credential mappings. Same-name conflicts require **Rename**, **Replace**, or
@@ -159,6 +167,14 @@ and may use ambient host filesystem, process, environment, and HTTP(S) resources
 interface keeps a persistent warning visible. Choose **Workspace isolated** or
 **Offline isolated** to restore platform containment; choose **Development** or
 **Minimal** to narrow tool decisions independently.
+
+The Work surface keeps every released, listable session record available. **Snapshots**
+lists immutable context-compaction records and opens their summary, message range,
+pinned facts, open tasks, touched files, notable tool results, and strategy. **Resources**
+links plans, sources, snapshots, and artifacts and expands delegated agents, goals,
+tasks, decisions, memories, and research runs for direct inspection. The session map
+uses bounded projections; opening these views never exposes canonical secrets or deletes
+conversation history.
 Managed Local's native layer requires an operating-system confirmation before widening
 access or execution authority. Its
 primary credential has exactly the run and prompt scopes plus the reviewed built-in tool

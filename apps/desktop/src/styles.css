@@ -3040,7 +3040,8 @@ p {
 .session-map-detail-status.status-active,
 .session-map-detail-status.status-running,
 .session-map-detail-status.status-completed,
-.session-map-detail-status.status-complete {
+.session-map-detail-status.status-complete,
+.session-map-detail-status.status-immutable {
   border-color: #226348;
   background: #102b25;
   color: #55d49b;
@@ -3127,7 +3128,8 @@ p {
 }
 
 .session-map-detail-copy p,
-.session-map-detail-copy pre {
+.session-map-detail-copy pre,
+.session-map-detail-copy ul {
   margin: 0;
   color: #9cafc3;
   font-family: inherit;
@@ -3135,6 +3137,14 @@ p {
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.session-map-detail-copy ul {
+  padding-left: 18px;
+}
+
+.session-map-detail-copy li + li {
+  margin-top: 5px;
 }
 
 .session-activity {
@@ -4374,6 +4384,7 @@ p {
 }
 
 .session-plan-list,
+.session-snapshot-list,
 .session-source-list,
 .session-artifact-group ol {
   display: grid;
@@ -4384,6 +4395,7 @@ p {
 }
 
 .session-plan-list article,
+.session-snapshot-list article,
 .session-source-list > li {
   display: grid;
   min-width: 0;
@@ -4397,6 +4409,7 @@ p {
 }
 
 .session-plan-list article > div:nth-child(2),
+.session-snapshot-list article > div:nth-child(2),
 .session-source-list > li > span:nth-child(2) {
   display: grid;
   min-width: 0;
@@ -4435,8 +4448,22 @@ p {
 }
 
 .session-plan-list small,
+.session-snapshot-list small,
 .session-source-list small,
 .session-resource-groups small {
+  color: #71869e;
+  font-size: 0.55rem;
+}
+
+.session-snapshot-list article > div:nth-child(2) > p {
+  max-width: 70ch;
+  margin: 2px 0 0;
+  color: #93a6bb;
+  font-size: 0.59rem;
+  line-height: 1.5;
+}
+
+.session-snapshot-counts {
   color: #71869e;
   font-size: 0.55rem;
 }
@@ -4522,7 +4549,8 @@ p {
 
 .session-resource-groups > button,
 .session-resource-unavailable,
-.session-artifact-group > header {
+.session-artifact-group > header,
+.session-record-group > summary {
   display: grid;
   min-width: 0;
   grid-template-columns: 20px minmax(0, 1fr) auto 16px;
@@ -4539,6 +4567,7 @@ p {
 .session-resource-groups > button > span,
 .session-resource-unavailable > span,
 .session-artifact-group > header > span,
+.session-record-group > summary > span,
 .session-artifact-group button > span {
   display: grid;
   min-width: 0;
@@ -4551,9 +4580,95 @@ p {
 }
 
 .session-resource-groups > button:hover,
-.session-resource-groups > button:focus-visible {
+.session-resource-groups > button:focus-visible,
+.session-record-group > summary:hover,
+.session-record-group > summary:focus-visible {
   border-color: #35597d;
   background: #10243a;
+}
+
+.session-record-group {
+  border: 1px solid #243b55;
+  border-radius: 9px;
+  background: #0d1d2e;
+}
+
+.session-record-group > summary {
+  border: 0;
+  background: transparent;
+  color: #7faee6;
+  cursor: pointer;
+  list-style: none;
+}
+
+.session-record-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-record-group > summary > svg:last-child {
+  transition: transform 140ms ease;
+}
+
+.session-record-group[open] > summary > svg:last-child {
+  transform: rotate(90deg);
+}
+
+.session-record-group > p {
+  margin: 0;
+  padding: 0 16px 13px 43px;
+  color: #71869e;
+  font-size: 0.57rem;
+}
+
+.session-record-group ol {
+  display: grid;
+  gap: 2px;
+  padding: 0 8px 8px 43px;
+  margin: 0;
+  list-style: none;
+}
+
+.session-record-group li button {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #7898bb;
+  text-align: left;
+}
+
+.session-record-group li button:hover,
+.session-record-group li button:focus-visible {
+  background: #10243a;
+}
+
+.session-record-group li button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.session-record-group li strong,
+.session-record-group li small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-record-group li strong {
+  color: #b8c9dc;
+  font-size: 0.61rem;
+}
+
+.session-record-group li small {
+  color: #71869e;
+  font-size: 0.53rem;
 }
 
 .session-artifact-group {
@@ -10008,6 +10123,7 @@ textarea {
   }
 
   .session-plan-list article,
+  .session-snapshot-list article,
   .session-source-list > li {
     grid-template-columns: 34px minmax(0, 1fr);
   }
@@ -10903,6 +11019,14 @@ textarea {
   font-size: 0.72rem;
 }
 
+.managed-field-row > div > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.63rem;
+  line-height: 1.35;
+}
+
 .managed-field-row small {
   display: block;
   margin-top: 3px;
@@ -11033,6 +11157,10 @@ textarea {
   font-size: 0.68rem;
 }
 
+.managed-settings-actions > span.is-error {
+  color: #ffadb3;
+}
+
 .mcp-editor {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -11060,6 +11188,50 @@ textarea {
 
 .mcp-editor-wide {
   grid-column: span 2;
+}
+
+.mcp-bindings-editor,
+.mcp-oauth-editor {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+}
+
+.mcp-bindings-editor {
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.mcp-bindings-editor legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.mcp-binding-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.mcp-binding-row:has(label:nth-of-type(3)) {
+  grid-template-columns:
+    minmax(110px, 0.8fr) minmax(100px, 0.55fr) minmax(150px, 1fr)
+    auto;
+}
+
+.mcp-binding-row > .icon-button {
+  margin-bottom: 2px;
+}
+
+.mcp-oauth-editor {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #091827;
 }
 
 .mcp-editor-actions {
@@ -11157,6 +11329,14 @@ textarea {
   width: 17px;
   height: 17px;
   accent-color: var(--blue);
+}
+
+.compact-switch small {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 0.61rem;
+  line-height: 1.35;
 }
 
 .search-result-row {
@@ -11332,6 +11512,12 @@ textarea {
     grid-column: auto;
   }
 
+  .mcp-binding-row,
+  .mcp-binding-row:has(label:nth-of-type(3)),
+  .mcp-oauth-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .managed-resource-header {
     display: none;
   }
@@ -11419,11 +11605,16 @@ textarea {
   }
 
   .managed-settings-actions {
+    flex-wrap: wrap;
     padding: 10px 16px;
   }
 
-  .managed-settings-actions > span {
+  .managed-settings-actions > span:not(.is-error) {
     display: none;
+  }
+
+  .managed-settings-actions > span.is-error {
+    flex: 1 0 100%;
   }
 }
 

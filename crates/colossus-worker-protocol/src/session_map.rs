@@ -171,6 +171,32 @@ pub struct WorkerSessionMemory {
     pub superseded_by: Option<String>,
 }
 
+/// One immutable context snapshot released for the selected session map.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerSessionContextSnapshot {
+    /// Durable snapshot identifier.
+    pub id: String,
+    /// First canonical message represented by the snapshot.
+    pub source_start_sequence: u64,
+    /// Last canonical message represented by the snapshot.
+    pub source_end_sequence: u64,
+    /// Bounded future-context summary.
+    pub summary: String,
+    /// Bounded durable requirements and facts.
+    pub pinned_facts: Vec<String>,
+    /// Bounded unfinished user requests.
+    pub open_tasks: Vec<String>,
+    /// Bounded workspace paths observed in released tool results.
+    pub files_touched: Vec<String>,
+    /// Bounded notable released tool outcomes.
+    pub notable_tool_results: Vec<String>,
+    /// Canonical compaction strategy.
+    pub strategy: String,
+    /// UTC creation timestamp.
+    pub created_at: String,
+}
+
 /// One canonical research run released for the selected session map.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -244,8 +270,47 @@ pub struct WorkerSessionMap {
     pub decisions: Vec<WorkerSessionDecision>,
     /// Bounded policy-released memories.
     pub memories: Vec<WorkerSessionMemory>,
+    /// Bounded immutable context snapshots.
+    pub context_snapshots: Vec<WorkerSessionContextSnapshot>,
     /// Bounded canonical research runs.
     pub research_runs: Vec<WorkerSessionResearchRun>,
     /// Bounded released research sources.
     pub research_sources: Vec<WorkerSessionResearchSource>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_snapshot_uses_the_desktop_camel_case_contract() {
+        let snapshot = WorkerSessionContextSnapshot {
+            id: "snapshot-1".into(),
+            source_start_sequence: 3,
+            source_end_sequence: 17,
+            summary: "Bounded summary".into(),
+            pinned_facts: vec!["Pinned".into()],
+            open_tasks: vec!["Finish".into()],
+            files_touched: vec!["src/lib.rs".into()],
+            notable_tool_results: vec!["Tests passed".into()],
+            strategy: "hybrid_model".into(),
+            created_at: "2026-08-27T23:00:00Z".into(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(snapshot).expect("snapshot JSON"),
+            serde_json::json!({
+                "id": "snapshot-1",
+                "sourceStartSequence": 3,
+                "sourceEndSequence": 17,
+                "summary": "Bounded summary",
+                "pinnedFacts": ["Pinned"],
+                "openTasks": ["Finish"],
+                "filesTouched": ["src/lib.rs"],
+                "notableToolResults": ["Tests passed"],
+                "strategy": "hybrid_model",
+                "createdAt": "2026-08-27T23:00:00Z",
+            })
+        );
+    }
 }

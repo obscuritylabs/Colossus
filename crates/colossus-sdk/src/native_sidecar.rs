@@ -1,17 +1,15 @@
 use crate::{
-    AgentRunClient, ApiResult, ArchiveThreadRequest, ArtifactClient, ArtifactReference, Backend,
-    BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
-    CredentialProvider, DownloadedArtifact, GetRunRequest, GetRunResponse, GrpcBackend,
-    GrpcConnectOptions, Interaction, InteractionAnswer, InteractionContent, InteractionStatus,
-    ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
-    MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
-    RespondInteractionRequest, RespondInteractionResponse, RestoreThreadRequest, RunUpdateKind,
-    RunUpdateStream, SdkError, SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig,
-    SidecarLifecycle, SidecarOptions, ThreadLifecycle, TlsFingerprint, UploadArtifactRequest,
-    WatchRunRequest,
+    AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArchiveThreadRequest,
+    ArtifactClient, ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
+    CreateRunRequest, CreateRunResponse, CredentialProvider, DownloadedArtifact, GetRunRequest,
+    GetRunResponse, GrpcBackend, GrpcConnectOptions, Interaction, InteractionAnswer,
+    InteractionContent, InteractionStatus, ListRunsRequest, ListRunsResponse,
+    ListSessionActivityRequest, ListSessionActivityResponse, MacosCodeSigningRequirement,
+    NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
+    RespondInteractionResponse, RestoreThreadRequest, RunUpdateKind, RunUpdateStream, SdkError,
+    SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle,
+    SidecarOptions, ThreadLifecycle, TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
 };
-#[cfg(test)]
-use crate::{ApiError, ApiErrorReason};
 use async_trait::async_trait;
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, ChildFrame, ConfigurationInspectionRequest,
@@ -266,14 +264,14 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                     return Err(error);
                 }
             };
-            let capabilities = running.transports.primary.capabilities();
+            let capabilities = running.transports().primary.capabilities();
             let artifacts = running
-                .transports
+                .transports()
                 .primary
                 .artifacts()
                 .map(|client| Arc::new(SwitchingArtifactClient::new(client)));
             let agent_runs = Arc::new(SwitchingAgentRunClient::new(
-                running.transports.agent_runs(),
+                running.transports().agent_runs(),
             ));
             let state = Arc::new(ManagedSidecarState {
                 options: options.clone(),
@@ -352,7 +350,7 @@ struct RunningChild {
     process_tree: ManagedProcessTree,
     discovery: ManagedDiscovery,
     guardian: Option<BootstrapWriter>,
-    transports: ConnectedTransports,
+    transports: Option<ConnectedTransports>,
 }
 
 #[cfg(unix)]
@@ -910,6 +908,18 @@ struct AgentRunTransports {
 
 #[cfg(unix)]
 impl RunningChild {
+    fn transports(&self) -> &ConnectedTransports {
+        self.transports
+            .as_ref()
+            .expect("running child retains its transports")
+    }
+
+    async fn close_transports(&mut self) {
+        if let Some(transports) = self.transports.take() {
+            transports.close().await;
+        }
+    }
+
     fn kill_tree(&mut self) {
         self.process_tree.terminate();
         let _ = self.child.start_kill();
@@ -1024,6 +1034,10 @@ impl Backend for ManagedSidecarBackend {
         let running = self.state.process.lock().await.take();
         self.state.closing.store(true, Ordering::Release);
         self.agent_runs.mark_closed();
+        self.agent_runs.release().await;
+        if let Some(artifacts) = &self.artifacts {
+            artifacts.release().await;
+        }
         if let Err(error) = stop_monitor_for_close(&self.state.monitor, &self.state.status).await {
             self.state.status.send_replace(NativeSidecarStatus::Failed(
                 NativeSidecarFailure::SupervisionFailed,
@@ -1033,7 +1047,11 @@ impl Backend for ManagedSidecarBackend {
         let Some(mut running) = running else {
             return Ok(());
         };
-        running.transports.close().await;
+        // Release every SDK-owned gRPC channel before guardian EOF asks the
+        // sidecar's HTTP/2 server to drain. Retaining these channels makes a clean
+        // shutdown wait for its full deadline and turns a safe configuration
+        // restart into a rollback.
+        running.close_transports().await;
         drop(running.guardian.take());
         let outcome = match timeout(GRACEFUL_CLOSE_TIMEOUT, running.child.wait()).await {
             Ok(Ok(status)) => {
@@ -1148,7 +1166,7 @@ impl Drop for ManagedSidecarBackend {
 }
 
 struct SwitchingAgentRunClient {
-    current: RwLock<AgentRunTransports>,
+    current: RwLock<Option<AgentRunTransports>>,
     closed: watch::Sender<bool>,
 }
 
@@ -1156,18 +1174,22 @@ impl SwitchingAgentRunClient {
     fn new(initial: AgentRunTransports) -> Self {
         let (closed, _) = watch::channel(false);
         Self {
-            current: RwLock::new(initial),
+            current: RwLock::new(Some(initial)),
             closed,
         }
     }
 
-    async fn current(&self) -> AgentRunTransports {
+    async fn current(&self) -> ApiResult<AgentRunTransports> {
         let current = self.current.read().await;
-        current.clone()
+        current.clone().ok_or_else(sidecar_closed_error)
     }
 
     async fn replace(&self, next: AgentRunTransports) {
-        *self.current.write().await = next;
+        *self.current.write().await = Some(next);
+    }
+
+    async fn release(&self) {
+        self.current.write().await.take();
     }
 
     fn mark_closed(&self) {
@@ -1176,37 +1198,57 @@ impl SwitchingAgentRunClient {
 }
 
 struct SwitchingArtifactClient {
-    current: RwLock<Arc<dyn ArtifactClient>>,
+    current: RwLock<Option<Arc<dyn ArtifactClient>>>,
 }
 
 impl SwitchingArtifactClient {
     fn new(initial: Arc<dyn ArtifactClient>) -> Self {
         Self {
-            current: RwLock::new(initial),
+            current: RwLock::new(Some(initial)),
         }
     }
 
-    async fn current(&self) -> Arc<dyn ArtifactClient> {
-        self.current.read().await.clone()
+    async fn current(&self) -> ApiResult<Arc<dyn ArtifactClient>> {
+        self.current
+            .read()
+            .await
+            .clone()
+            .ok_or_else(sidecar_closed_error)
     }
 
     async fn replace(&self, next: Arc<dyn ArtifactClient>) {
-        *self.current.write().await = next;
+        *self.current.write().await = Some(next);
+    }
+
+    async fn release(&self) {
+        self.current.write().await.take();
+    }
+}
+
+fn sidecar_closed_error() -> ApiError {
+    ApiError {
+        code: ApiErrorCode::Unavailable,
+        reason: ApiErrorReason::InternalInvariant,
+        message: "the Colossus sidecar client was closed".into(),
+        correlation_id: None,
+        retryable: false,
+        outcome: colossus_api::OutcomeCertainty::Known,
+        violations: Vec::new(),
     }
 }
 
 #[async_trait]
 impl ArtifactClient for SwitchingArtifactClient {
     async fn upload(&self, request: UploadArtifactRequest) -> ApiResult<ArtifactReference> {
-        self.current().await.upload(request).await
+        self.current().await?.upload(request).await
     }
 
     async fn get(&self, artifact_id: &str) -> ApiResult<ArtifactReference> {
-        self.current().await.get(artifact_id).await
+        self.current().await?.get(artifact_id).await
     }
 
     async fn download(&self, artifact_id: &str) -> ApiResult<DownloadedArtifact> {
-        self.current().await.download(artifact_id).await
+        self.current().await?.download(artifact_id).await
     }
 }
 
@@ -1222,11 +1264,11 @@ fn expose_approval_broker_capability(interaction: &mut Interaction) {
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
-        self.current().await.primary.create_run(request).await
+        self.current().await?.primary.create_run(request).await
     }
 
     async fn get_run(&self, request: GetRunRequest) -> ApiResult<GetRunResponse> {
-        let transports = self.current().await;
+        let transports = self.current().await?;
         let mut response = transports.primary.get_run(request).await?;
         if transports.approval_broker.is_some() {
             response
@@ -1238,7 +1280,7 @@ impl AgentRunClient for SwitchingAgentRunClient {
     }
 
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
-        self.current().await.primary.list_runs(request).await
+        self.current().await?.primary.list_runs(request).await
     }
 
     async fn list_session_activity(
@@ -1246,14 +1288,14 @@ impl AgentRunClient for SwitchingAgentRunClient {
         request: ListSessionActivityRequest,
     ) -> ApiResult<ListSessionActivityResponse> {
         self.current()
-            .await
+            .await?
             .primary
             .list_session_activity(request)
             .await
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
-        let transports = self.current().await;
+        let transports = self.current().await?;
         let stream = transports.primary.watch_run(request).await?;
         if transports.approval_broker.is_none() {
             return Ok(stream);
@@ -1285,22 +1327,22 @@ impl AgentRunClient for SwitchingAgentRunClient {
     }
 
     async fn cancel_run(&self, request: CancelRunRequest) -> ApiResult<CancelRunResponse> {
-        self.current().await.primary.cancel_run(request).await
+        self.current().await?.primary.cancel_run(request).await
     }
 
     async fn archive_thread(&self, request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
-        self.current().await.primary.archive_thread(request).await
+        self.current().await?.primary.archive_thread(request).await
     }
 
     async fn restore_thread(&self, request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
-        self.current().await.primary.restore_thread(request).await
+        self.current().await?.primary.restore_thread(request).await
     }
 
     async fn respond_interaction(
         &self,
         request: RespondInteractionRequest,
     ) -> ApiResult<RespondInteractionResponse> {
-        let transports = self.current().await;
+        let transports = self.current().await?;
         if matches!(&request.response, InteractionAnswer::Approval { .. }) {
             transports
                 .approval_broker
@@ -1339,8 +1381,12 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
         // discovery cleanup before any await can launch a replacement generation.
         exited.guardian.take();
         if exited.force_kill_and_cleanup().is_err() {
-            exited.transports.close().await;
+            exited.close_transports().await;
             state.agent_runs.mark_closed();
+            state.agent_runs.release().await;
+            if let Some(artifacts) = &state.artifacts {
+                artifacts.release().await;
+            }
             state.status.send_replace(NativeSidecarStatus::Failed(
                 NativeSidecarFailure::SupervisionFailed,
             ));
@@ -1370,10 +1416,10 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
             }
             state
                 .agent_runs
-                .replace(restarted.transports.agent_runs())
+                .replace(restarted.transports().agent_runs())
                 .await;
             if let Some(artifacts) = &state.artifacts {
-                let Some(next) = restarted.transports.primary.artifacts() else {
+                let Some(next) = restarted.transports().primary.artifacts() else {
                     let mut restarted = restarted;
                     restarted.guardian.take();
                     restarted.kill_tree();
@@ -1391,8 +1437,12 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
             // Only an exhausted lifecycle permanently closes the old generation.
             // During a recoverable crash, the transport must fail naturally with a
             // retryable UNAVAILABLE so durable watches reopen against the replacement.
-            exited.transports.close().await;
+            exited.close_transports().await;
             state.agent_runs.mark_closed();
+            state.agent_runs.release().await;
+            if let Some(artifacts) = &state.artifacts {
+                artifacts.release().await;
+            }
             state
                 .status
                 .send_replace(NativeSidecarStatus::Failed(terminal_failure));
@@ -1576,7 +1626,7 @@ async fn launch_child(
         process_tree,
         discovery,
         guardian: Some(guardian),
-        transports,
+        transports: Some(transports),
     })
 }
 
@@ -2340,6 +2390,8 @@ mod tests {
 
     struct UnusedAgentRuns;
 
+    struct UnusedArtifacts;
+
     struct RoutingAgentRuns(&'static str);
 
     struct ApprovalReadAgentRuns;
@@ -2412,6 +2464,21 @@ mod tests {
             _request: RespondInteractionRequest,
         ) -> ApiResult<RespondInteractionResponse> {
             unreachable!("run operation is not exercised")
+        }
+    }
+
+    #[async_trait]
+    impl ArtifactClient for UnusedArtifacts {
+        async fn upload(&self, _request: UploadArtifactRequest) -> ApiResult<ArtifactReference> {
+            unreachable!("artifact operation is not exercised")
+        }
+
+        async fn get(&self, _artifact_id: &str) -> ApiResult<ArtifactReference> {
+            unreachable!("artifact operation is not exercised")
+        }
+
+        async fn download(&self, _artifact_id: &str) -> ApiResult<DownloadedArtifact> {
+            unreachable!("artifact operation is not exercised")
         }
     }
 
@@ -2974,6 +3041,38 @@ mod tests {
             .await
             .expect("terminal supervisor state must wake waiters");
         assert!(client.is_closed());
+    }
+
+    #[tokio::test]
+    async fn explicit_close_releases_switching_transport_owners() {
+        let primary = Arc::new(UnusedAgentRuns);
+        let primary_weak = Arc::downgrade(&primary);
+        let client = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: primary.clone(),
+            approval_broker: None,
+        });
+        drop(primary);
+
+        let artifact = Arc::new(UnusedArtifacts);
+        let artifact_weak = Arc::downgrade(&artifact);
+        let artifacts = SwitchingArtifactClient::new(artifact.clone());
+        drop(artifact);
+
+        client.mark_closed();
+        client.release().await;
+        artifacts.release().await;
+
+        assert!(primary_weak.upgrade().is_none());
+        assert!(artifact_weak.upgrade().is_none());
+        assert!(client.is_closed());
+        let run_error = client.current().await.err().expect("closed run transport");
+        assert_eq!(run_error.code, ApiErrorCode::Unavailable);
+        let artifact_error = artifacts
+            .current()
+            .await
+            .err()
+            .expect("closed artifact transport");
+        assert_eq!(artifact_error.code, ApiErrorCode::Unavailable);
     }
 
     #[tokio::test]

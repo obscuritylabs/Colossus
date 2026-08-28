@@ -8,10 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 17 adds metadata-only image requests and bounded transient preview responses.
-/// Older workers cannot validate those request shapes, so both sides reject the mismatch
-/// and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 17;
+/// Version 18 adds context snapshots to the strict session-map response. Older workers
+/// cannot produce that required field and older clients reject it, so both sides reject
+/// the mismatch during the handshake and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 18;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 ///

@@ -70,6 +70,11 @@ colossus --config .colossus/config.yaml context restore \
 Restore changes the active derived snapshot for future turns. It does not delete later
 messages or mutate the snapshot.
 
+In Desktop, open a thread and select **Snapshots** to list the same immutable records.
+Select a snapshot to inspect its bounded summary, source message range, pinned facts,
+open tasks, touched files, notable tool results, and compaction strategy. **Resources**
+also links snapshots beside every other released, listable session record.
+
 ## Expected result
 
 New runs append to the selected session. Context status identifies the active snapshot

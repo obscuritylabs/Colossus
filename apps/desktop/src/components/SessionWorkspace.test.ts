@@ -6,8 +6,11 @@ import { buildSessionMapFixture } from "../dev/operations-studio-fixture";
 import type { RunView } from "../state";
 import type { Run } from "../types";
 import type { AgentParticipant } from "./AgentFlow";
+import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
 import {
   SessionPlansView,
+  SessionResourcesView,
+  SessionSnapshotsView,
   SessionTopology,
   SessionWorkspaceTabs,
 } from "./SessionWorkspace";
@@ -58,6 +61,7 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain('aria-current="page">Topology');
     expect(markup).toContain("Conversation");
     expect(markup).toContain("Plans");
+    expect(markup).toContain("Snapshots");
     expect(markup).toContain("Activity");
     expect(markup).toContain("Sources");
     expect(markup).toContain("Resources");
@@ -155,5 +159,71 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain("<h4>Simple repository orientation plan</h4>");
     expect(markup).toContain("<strong>Review project foundations</strong>");
     expect(markup).not.toContain("### Simple repository orientation plan");
+  });
+
+  it("lists context snapshots and exposes their complete bounded record", () => {
+    const sessionMap = buildSessionMapFixture();
+    const snapshot = sessionMap.contextSnapshots[0]!;
+    const markup = renderToStaticMarkup(
+      createElement(SessionSnapshotsView, {
+        sessionMap,
+        loading: false,
+        error: "",
+        onSelectResource: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Context snapshots");
+    expect(markup).toContain(
+      `Messages ${snapshot.sourceStartSequence}–${snapshot.sourceEndSequence}`,
+    );
+    expect(markup).toContain(snapshot.summary);
+    expect(markup).toContain("View snapshot");
+
+    const detail = renderToStaticMarkup(
+      createElement(SessionMapDetailsPanel, {
+        resource: { family: "snapshots", value: snapshot },
+        spaceName: "Colossus",
+        onBack: vi.fn(),
+      }),
+    );
+    expect(detail).toContain("Context snapshot");
+    expect(detail).toContain("Pinned facts");
+    expect(detail).toContain("Open tasks");
+    expect(detail).toContain("Files touched");
+    expect(detail).toContain("Notable tool results");
+    expect(detail).toContain(snapshot.pinnedFacts[0]!);
+  });
+
+  it("lists every durable session-map family in Resources", () => {
+    const sessionMap = buildSessionMapFixture();
+    const markup = renderToStaticMarkup(
+      createElement(SessionResourcesView, {
+        views: [],
+        artifacts: [],
+        sessionMap,
+        loading: false,
+        error: "",
+        onChangeView: vi.fn(),
+        onSelectArtifact: vi.fn(),
+        onSelectResource: vi.fn(),
+      }),
+    );
+
+    for (const label of [
+      "Plans",
+      "Sources",
+      "Context snapshots",
+      "Artifacts",
+      "Delegated agents",
+      "Goals",
+      "Tasks",
+      "Key decisions",
+      "Memories",
+      "Research",
+    ]) {
+      expect(markup).toContain(label);
+    }
+    expect(markup).not.toContain("No released decisions");
   });
 });

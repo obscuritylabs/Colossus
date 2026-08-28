@@ -95,6 +95,100 @@ test("settings dropdowns use styled app-owned menus with keyboard support", asyn
   await expect(page.getByRole("listbox")).toHaveCount(0);
 });
 
+test("managed settings expose complete catalog editors without horizontal overflow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.getByRole("button", { name: "Edit primary", exact: true }).click();
+  await expect(
+    page.getByRole("combobox", { name: "Reasoning effort" }),
+  ).toBeVisible();
+  await expect(page.getByText("Image inputs", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close model editor" }).click();
+
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Edit primary-provider", exact: true })
+    .click();
+  await expect(page.getByPlaceholder("Adapter default")).toBeVisible();
+  await page.getByRole("button", { name: "Close provider editor" }).click();
+
+  await page.getByRole("button", { name: "MCP", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Edit splunk-search", exact: true })
+    .click();
+  for (const label of [
+    "Static headers",
+    "Research tool projections",
+    "Timeout (ms)",
+    "Maximum output (bytes)",
+  ]) {
+    await expect(page.getByLabel(label, { exact: true })).toBeVisible();
+  }
+  await expect(
+    page.getByText("Credential headers", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("OAuth client configuration", { exact: true }),
+  ).toBeVisible();
+
+  const pane = page.locator(".managed-settings-shell");
+  const bounds = await pane.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+});
+
+test("session snapshots and every durable record family are listable and inspectable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Snapshots", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Context snapshots" }),
+  ).toBeVisible();
+  await expect(page.getByText(/Messages 1–18/u)).toBeVisible();
+  await page.getByRole("button", { name: "View snapshot" }).first().click();
+  await expect(
+    page.getByText("Context snapshot", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Pinned facts", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Open tasks", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to thread details" }).click();
+
+  await page.getByRole("button", { name: "Resources", exact: true }).click();
+  const resources = page.getByRole("region", { name: "Resources" });
+  for (const label of [
+    "Delegated agents",
+    "Goals",
+    "Tasks",
+    "Key decisions",
+    "Memories",
+    "Research",
+  ]) {
+    await expect(resources.getByText(label, { exact: true })).toBeVisible();
+  }
+  await resources.getByText("Key decisions", { exact: true }).click();
+  await resources
+    .getByRole("button", { name: /Keep execution boundary unchanged/u })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Keep execution boundary unchanged",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
 test("required app-owned dropdowns retain form validation", async ({
   page,
 }) => {
@@ -430,7 +524,7 @@ test("Session Map renders its topology with React Flow SVG edges", async ({
   const primary = page.locator(".session-map-primary");
   const firstFamily = page.locator(".session-map-family").first();
   await expect(flow).toBeVisible();
-  await expect(page.locator(".react-flow__edge-path")).toHaveCount(12);
+  await expect(page.locator(".react-flow__edge-path")).toHaveCount(13);
   await expect(page.locator(".session-map-network")).toHaveCount(0);
   await expect(page.locator(".session-map-trunk")).toHaveCount(0);
 

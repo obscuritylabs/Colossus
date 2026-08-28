@@ -2,7 +2,6 @@ import {
   IconAdjustments,
   IconArrowsMaximize,
   IconBook2,
-  IconCheck,
   IconChecklist,
   IconChevronRight,
   IconExternalLink,
@@ -43,7 +42,13 @@ const SessionTopologyGraph = lazy(() =>
 );
 
 export type SessionWorkspaceView =
-  "conversation" | "topology" | "plans" | "activity" | "sources" | "resources";
+  | "conversation"
+  | "topology"
+  | "plans"
+  | "snapshots"
+  | "activity"
+  | "sources"
+  | "resources";
 
 const SESSION_TABS: ReadonlyArray<{
   id: SessionWorkspaceView;
@@ -52,6 +57,7 @@ const SESSION_TABS: ReadonlyArray<{
   { id: "conversation", label: "Conversation" },
   { id: "topology", label: "Topology" },
   { id: "plans", label: "Plans" },
+  { id: "snapshots", label: "Snapshots" },
   { id: "activity", label: "Activity" },
   { id: "sources", label: "Sources" },
   { id: "resources", label: "Resources" },
@@ -91,6 +97,7 @@ type SessionMapFamily =
   | "plans"
   | "decisions"
   | "memories"
+  | "snapshots"
   | "research"
   | "sources"
   | "artifacts";
@@ -119,6 +126,12 @@ const FAMILY_META: ReadonlyArray<{
     icon: IconScale,
   },
   { id: "memories", label: "Memories", layer: "context", icon: IconBook2 },
+  {
+    id: "snapshots",
+    label: "Context snapshots",
+    layer: "context",
+    icon: IconAdjustments,
+  },
   { id: "research", label: "Research", layer: "research", icon: IconSearch },
   { id: "sources", label: "Sources", layer: "research", icon: IconFileText },
   { id: "artifacts", label: "Artifacts", layer: "outputs", icon: IconFolders },
@@ -159,6 +172,8 @@ function familyRecords(
       return map.decisions.map((value) => ({ family, value }));
     case "memories":
       return map.memories.map((value) => ({ family, value }));
+    case "snapshots":
+      return map.contextSnapshots.map((value) => ({ family, value }));
     case "research":
       return map.researchRuns.map((value) => ({ family, value }));
     case "sources":
@@ -182,6 +197,11 @@ function recordTitle(record: SessionMapResource): string {
       return record.value.title;
     case "memories":
       return record.value.text;
+    case "snapshots":
+      return (
+        record.value.summary ||
+        `Messages ${record.value.sourceStartSequence}–${record.value.sourceEndSequence}`
+      );
     case "research":
       return record.value.question;
     case "sources":
@@ -190,7 +210,9 @@ function recordTitle(record: SessionMapResource): string {
 }
 
 function recordStatus(record: SessionMapResource): string {
-  return record.family === "sources" ? record.value.kind : record.value.status;
+  if (record.family === "sources") return record.value.kind;
+  if (record.family === "snapshots") return "immutable";
+  return record.value.status;
 }
 
 function recordId(record: SessionMapResource): string {
@@ -214,6 +236,8 @@ function recordMeta(
       return `${record.value.priority} · ${record.value.source}`;
     case "memories":
       return `${record.value.scope} · ${record.value.kind}`;
+    case "snapshots":
+      return `${record.value.strategy.replaceAll("_", " ")} · messages ${record.value.sourceStartSequence}–${record.value.sourceEndSequence}`;
     case "research":
       return `${record.value.depth} · ${record.value.sourceCount} sources`;
     case "sources":
@@ -597,16 +621,175 @@ export function SessionSourcesView({
   );
 }
 
+export function SessionSnapshotsView({
+  sessionMap,
+  loading,
+  error,
+  onSelectResource,
+}: {
+  sessionMap: SessionMap | null;
+  loading: boolean;
+  error: string;
+  onSelectResource: (resource: SessionMapResource) => void;
+}) {
+  const snapshots = sessionMap?.contextSnapshots ?? [];
+  return (
+    <section
+      className="session-resource-view"
+      aria-labelledby="session-snapshots-title"
+    >
+      <header className="session-view-summary">
+        <div>
+          <h3 id="session-snapshots-title">Context snapshots</h3>
+          <p>
+            Immutable summaries used to compact model context without deleting
+            canonical conversation history.
+          </p>
+        </div>
+        <span>{snapshots.length}</span>
+      </header>
+      {loading && sessionMap === null ? (
+        <div className="session-view-empty">
+          <IconAdjustments size={26} stroke={1.5} aria-hidden="true" />
+          <strong>Loading context snapshots</strong>
+          <span>Reading bounded records from the selected session.</span>
+        </div>
+      ) : error !== "" && sessionMap === null ? (
+        <div className="session-view-empty is-error" role="alert">
+          <IconAdjustments size={26} stroke={1.5} aria-hidden="true" />
+          <strong>Context snapshots are unavailable</strong>
+          <span>{error}</span>
+        </div>
+      ) : snapshots.length === 0 ? (
+        <div className="session-view-empty">
+          <IconAdjustments size={26} stroke={1.5} aria-hidden="true" />
+          <strong>No context snapshots</strong>
+          <span>
+            Automatic or manual context compaction will create immutable
+            snapshots here.
+          </span>
+        </div>
+      ) : (
+        <ol className="session-snapshot-list">
+          {snapshots.map((snapshot) => {
+            const resource: SessionMapResource = {
+              family: "snapshots",
+              value: snapshot,
+            };
+            return (
+              <li key={snapshot.id}>
+                <article>
+                  <span className="session-resource-icon" aria-hidden="true">
+                    <IconAdjustments size={18} stroke={1.6} />
+                  </span>
+                  <div>
+                    <button
+                      className="session-plan-title"
+                      type="button"
+                      onClick={() => onSelectResource(resource)}
+                    >
+                      Messages {snapshot.sourceStartSequence}–
+                      {snapshot.sourceEndSequence}
+                    </button>
+                    <small>
+                      {snapshot.strategy.replaceAll("_", " ")} · {snapshot.id}
+                    </small>
+                    <p>{snapshot.summary || "No summary was recorded."}</p>
+                    <span className="session-snapshot-counts">
+                      {snapshot.pinnedFacts.length} facts ·{" "}
+                      {snapshot.openTasks.length} open tasks ·{" "}
+                      {snapshot.filesTouched.length} files
+                    </span>
+                  </div>
+                  <div className="session-resource-actions">
+                    <button
+                      type="button"
+                      onClick={() => onSelectResource(resource)}
+                    >
+                      View snapshot
+                    </button>
+                  </div>
+                </article>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {error !== "" && sessionMap !== null ? (
+        <p className="session-map-stale-note">{error}</p>
+      ) : null}
+    </section>
+  );
+}
+
+const RESOURCE_RECORD_FAMILIES = FAMILY_META.filter(
+  ({ id }) => !["artifacts", "plans", "sources", "snapshots"].includes(id),
+);
+
+function SessionRecordGroup({
+  map,
+  family,
+  onSelectResource,
+}: {
+  map: SessionMap;
+  family: (typeof RESOURCE_RECORD_FAMILIES)[number];
+  onSelectResource: (resource: SessionMapResource) => void;
+}) {
+  const records = familyRecords(map, family.id);
+  const Icon = family.icon;
+  return (
+    <details className="session-record-group">
+      <summary>
+        <Icon size={18} stroke={1.6} aria-hidden="true" />
+        <span>
+          <strong>{family.label}</strong>
+          <small>Durable records available in this session</small>
+        </span>
+        <b>{records.length}</b>
+        <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
+      </summary>
+      {records.length === 0 ? (
+        <p>No {family.label.toLocaleLowerCase()} are stored.</p>
+      ) : (
+        <ol>
+          {records.map((record) => (
+            <li key={recordId(record)}>
+              <button type="button" onClick={() => onSelectResource(record)}>
+                <span>
+                  <strong>{recordTitle(record)}</strong>
+                  <small>
+                    {recordMeta(record, false)} ·{" "}
+                    {recordStatus(record).replaceAll("_", " ")}
+                  </small>
+                </span>
+                <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </details>
+  );
+}
+
 export function SessionResourcesView({
   views,
   artifacts,
+  sessionMap,
+  loading,
+  error,
   onChangeView,
   onSelectArtifact,
+  onSelectResource,
 }: {
   views: readonly RunView[];
   artifacts: readonly ArtifactViewItem[];
+  sessionMap: SessionMap | null;
+  loading: boolean;
+  error: string;
   onChangeView: (view: SessionWorkspaceView) => void;
   onSelectArtifact: (artifactId: string) => void;
+  onSelectResource: (resource: SessionMapResource) => void;
 }) {
   const plans = selectSessionPlans(views);
   const sources = selectSessionSources(views);
@@ -638,6 +821,15 @@ export function SessionResourcesView({
             <small>Released research evidence</small>
           </span>
           <b>{sources.length}</b>
+          <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
+        </button>
+        <button type="button" onClick={() => onChangeView("snapshots")}>
+          <IconAdjustments size={18} stroke={1.6} aria-hidden="true" />
+          <span>
+            <strong>Context snapshots</strong>
+            <small>Immutable compacted context</small>
+          </span>
+          <b>{sessionMap?.contextSnapshots.length ?? 0}</b>
           <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
         </button>
         <div className="session-artifact-group">
@@ -675,14 +867,34 @@ export function SessionResourcesView({
             </ol>
           )}
         </div>
-        <div className="session-resource-unavailable">
-          <IconMessageCircle size={18} stroke={1.6} aria-hidden="true" />
-          <span>
-            <strong>Decisions</strong>
-            <small>No released decisions in this session</small>
-          </span>
-          <IconCheck size={15} stroke={1.7} aria-hidden="true" />
-        </div>
+        {loading && sessionMap === null ? (
+          <div className="session-resource-unavailable">
+            <IconMessageCircle size={18} stroke={1.6} aria-hidden="true" />
+            <span>
+              <strong>Loading durable records</strong>
+              <small>Reading the selected session map</small>
+            </span>
+          </div>
+        ) : null}
+        {error !== "" && sessionMap === null ? (
+          <div className="session-resource-unavailable is-error" role="alert">
+            <IconMessageCircle size={18} stroke={1.6} aria-hidden="true" />
+            <span>
+              <strong>Durable records are unavailable</strong>
+              <small>{error}</small>
+            </span>
+          </div>
+        ) : null}
+        {sessionMap === null
+          ? null
+          : RESOURCE_RECORD_FAMILIES.map((family) => (
+              <SessionRecordGroup
+                key={family.id}
+                map={sessionMap}
+                family={family}
+                onSelectResource={onSelectResource}
+              />
+            ))}
       </div>
     </section>
   );
