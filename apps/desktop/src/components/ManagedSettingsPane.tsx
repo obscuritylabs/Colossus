@@ -66,6 +66,7 @@ import type {
   ManagedMcpDiagnostic,
   ManagedMcpOAuthLogin,
   ManagedMcpOAuthStatus,
+  ManagedMcpResearchTool,
   ManagedRuntimeDiagnostic,
   ManagedModelCatalogValue,
   ManagedProviderCatalogValue,
@@ -73,6 +74,7 @@ import type {
   ManagedSettingsSnapshot,
   ManagedSpaceConfigurationSnapshot,
   ManagedTelemetryProfile,
+  ReasoningEffort,
   RepositoryConfigurationProposal,
   RuntimeTarget,
   TerminalKind,
@@ -141,28 +143,46 @@ interface SpaceDraft {
   credentialOverrides: Record<string, string>;
 }
 
-interface McpEditorDraft {
+export interface McpCredentialBindingDraft {
+  name: string;
+  credentialId: string;
+  scheme: string;
+}
+
+export interface McpEditorDraft {
   resourceId: string | null;
   label: string;
   name: string;
   transport: ManagedMcpServer["transport"];
   commandOrUrl: string;
-  args: string;
-  allowedTools: string;
-  credentialId: string;
+  argsText: string;
+  workingDirectory: string;
+  environmentCredentials: McpCredentialBindingDraft[];
+  headers: Record<string, string>;
+  credentialHeaders: McpCredentialBindingDraft[];
+  allowStateless: boolean;
+  oauthEnabled: boolean;
+  oauthClientId: string;
+  oauthClientSecretCredentialId: string;
+  oauthCallbackPort: number;
+  oauthScopesText: string;
+  allowedToolsText: string;
+  researchTools: ManagedMcpResearchTool[];
+  timeoutMs: number | null;
+  maxOutputBytes: number | null;
 }
 
-interface ProviderEditorDraft {
+export interface ProviderEditorDraft {
   resourceId: string | null;
   label: string;
   profile: string;
   kind: ManagedProviderCatalogValue["kind"];
   baseUrl: string;
   credentialId: string;
-  timeoutMs: number;
+  timeoutMs: number | null;
 }
 
-interface ModelEditorDraft {
+export interface ModelEditorDraft {
   resourceId: string | null;
   label: string;
   profile: string;
@@ -173,6 +193,7 @@ interface ModelEditorDraft {
   toolCalls: boolean;
   streaming: boolean;
   imageInputs: boolean;
+  reasoningEffort: ReasoningEffort | null;
 }
 
 interface SearchEditorDraft {
@@ -186,7 +207,7 @@ interface SearchEditorDraft {
   timeoutMs: number;
 }
 
-interface TelemetryEditorDraft extends ManagedTelemetryProfile {
+export interface TelemetryEditorDraft extends ManagedTelemetryProfile {
   resourceId: string | null;
   label: string;
   resourceAttributesText: string;
@@ -249,9 +270,21 @@ const EMPTY_MCP_DRAFT: McpEditorDraft = {
   name: "",
   transport: "stdio",
   commandOrUrl: "",
-  args: "",
-  allowedTools: "",
-  credentialId: "",
+  argsText: "",
+  workingDirectory: "",
+  environmentCredentials: [],
+  headers: {},
+  credentialHeaders: [],
+  allowStateless: false,
+  oauthEnabled: false,
+  oauthClientId: "",
+  oauthClientSecretCredentialId: "",
+  oauthCallbackPort: 8765,
+  oauthScopesText: "",
+  allowedToolsText: "",
+  researchTools: [],
+  timeoutMs: null,
+  maxOutputBytes: null,
 };
 
 const EMPTY_PROVIDER_DRAFT: ProviderEditorDraft = {
@@ -261,7 +294,7 @@ const EMPTY_PROVIDER_DRAFT: ProviderEditorDraft = {
   kind: "openai_compatible",
   baseUrl: "https://",
   credentialId: "",
-  timeoutMs: 120_000,
+  timeoutMs: null,
 };
 
 const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
@@ -275,6 +308,7 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   toolCalls: true,
   streaming: true,
   imageInputs: false,
+  reasoningEffort: null,
 };
 
 const EMPTY_SEARCH_DRAFT: SearchEditorDraft = {
@@ -1691,33 +1725,7 @@ export function ManagedSettingsPane({
 
   async function saveMcp() {
     if (!mcpEditor) return;
-    const credential = mcpEditor.credentialId;
-    const server: ManagedMcpServer = {
-      name: mcpEditor.name,
-      transport: mcpEditor.transport,
-      command: mcpEditor.transport === "stdio" ? mcpEditor.commandOrUrl : null,
-      args: splitList(mcpEditor.args),
-      workingDirectory: null,
-      environmentCredentials:
-        credential && mcpEditor.transport === "stdio"
-          ? { MCP_TOKEN: credential }
-          : {},
-      url:
-        mcpEditor.transport === "streamable_http"
-          ? mcpEditor.commandOrUrl
-          : null,
-      headers: {},
-      credentialHeaders:
-        credential && mcpEditor.transport === "streamable_http"
-          ? { Authorization: { scheme: "Bearer", credentialId: credential } }
-          : {},
-      allowStateless: false,
-      oauth: null,
-      allowedTools: splitList(mcpEditor.allowedTools),
-      researchTools: [],
-      timeoutMs: 30_000,
-      maxOutputBytes: 1_048_576,
-    };
+    const server = managedMcpServer(mcpEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
       resourceId: mcpEditor.resourceId,
@@ -1755,19 +1763,7 @@ export function ManagedSettingsPane({
 
   async function saveProvider() {
     if (!providerEditor) return;
-    const provider: ManagedProviderCatalogValue = {
-      profile: providerEditor.profile,
-      kind: providerEditor.kind,
-      baseUrl:
-        providerEditor.kind === "open_ai_codex"
-          ? "https://chatgpt.com/backend-api/codex"
-          : providerEditor.baseUrl,
-      credentialId:
-        providerEditor.kind === "open_ai_codex" || !providerEditor.credentialId
-          ? null
-          : providerEditor.credentialId,
-      timeoutMs: providerEditor.timeoutMs,
-    };
+    const provider = managedProvider(providerEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
       resourceId: providerEditor.resourceId,
@@ -1792,19 +1788,7 @@ export function ManagedSettingsPane({
 
   async function saveModel() {
     if (!modelEditor) return;
-    const model: ManagedModelCatalogValue = {
-      profile: modelEditor.profile,
-      providerProfile: modelEditor.providerProfile,
-      model: modelEditor.model,
-      contextWindowTokens: modelEditor.contextWindowTokens,
-      maxOutputTokens: modelEditor.maxOutputTokens,
-      capabilities: {
-        toolCalls: modelEditor.toolCalls,
-        streaming: modelEditor.streaming,
-        imageInputs: modelEditor.imageInputs,
-      },
-      reasoningEffort: null,
-    };
+    const model = managedModel(modelEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
       resourceId: modelEditor.resourceId,
@@ -1864,38 +1848,7 @@ export function ManagedSettingsPane({
 
   async function saveTelemetry() {
     if (!telemetryEditor) return;
-    const resourceAttributes = Object.fromEntries(
-      telemetryEditor.resourceAttributesText
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const separator = line.indexOf("=");
-          return separator > 0
-            ? [
-                line.slice(0, separator).trim(),
-                line.slice(separator + 1).trim(),
-              ]
-            : [line, ""];
-        }),
-    );
-    const telemetry: ManagedTelemetryProfile = {
-      name: telemetryEditor.name,
-      endpoint: telemetryEditor.endpoint || null,
-      protocol: telemetryEditor.protocol,
-      timeoutMs: telemetryEditor.timeoutMs,
-      tracesEnabled: telemetryEditor.tracesEnabled,
-      traceSampleRatioMillionths: telemetryEditor.traceSampleRatioMillionths,
-      metricsEnabled: telemetryEditor.metricsEnabled,
-      metricExportIntervalMs: telemetryEditor.metricExportIntervalMs,
-      logsOtlp: telemetryEditor.logsOtlp,
-      logsStdoutJson: telemetryEditor.logsStdoutJson,
-      journalPayloads: telemetryEditor.journalPayloads,
-      acknowledgeSensitiveContent: telemetryEditor.journalPayloads === "full",
-      acknowledgeInsecureTransport:
-        telemetryEditor.acknowledgeInsecureTransport,
-      resourceAttributes,
-    };
+    const telemetry = managedTelemetry(telemetryEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
       resourceId: telemetryEditor.resourceId,
@@ -2214,6 +2167,7 @@ export function ManagedSettingsPane({
             <SettingsActionBar
               dirty={defaultsDirty}
               busy={busy}
+              failure={failure}
               label="Create global revision"
               onDiscard={() => setDefaults(defaultsDraft(snapshot))}
               onApply={() => void saveDefaults()}
@@ -2332,6 +2286,7 @@ export function ManagedSettingsPane({
           <SettingsActionBar
             dirty={spaceDirty}
             busy={busy}
+            failure={failure}
             label="Apply Workspace changes"
             onDiscard={() =>
               selectedSpace && setSpace(spaceDraft(selectedSpace))
@@ -4024,7 +3979,7 @@ function AuthorityControls({
   );
 }
 
-function FieldGrid({
+export function FieldGrid({
   descriptors,
   values,
   effective,
@@ -4060,6 +4015,7 @@ function FieldGrid({
           >
             <div>
               <strong>{descriptor.title}</strong>
+              <span>{descriptor.description}</span>
               <small>
                 {descriptor.section} · {descriptor.id}
               </small>
@@ -4640,22 +4596,29 @@ export function RepositoryImportDialog({
   );
 }
 
-function SettingsActionBar({
+export function SettingsActionBar({
   dirty,
   busy,
+  failure,
   label,
   onDiscard,
   onApply,
 }: {
   dirty: boolean;
   busy: boolean;
+  failure: string;
   label: string;
   onDiscard: () => void;
   onApply: () => void;
 }) {
   return (
     <div className="managed-settings-actions">
-      <span>{dirty ? "Unsaved changes" : "No local changes"}</span>
+      <span
+        className={failure ? "is-error" : undefined}
+        role={failure ? "alert" : undefined}
+      >
+        {failure || (dirty ? "Unsaved changes" : "No local changes")}
+      </span>
       <button
         className="button secondary"
         type="button"
@@ -4980,6 +4943,10 @@ function TelemetryEditor({
               ...draft,
               journalPayloads: event.target
                 .value as ManagedTelemetryProfile["journalPayloads"],
+              acknowledgeSensitiveContent:
+                event.target.value === "full"
+                  ? draft.acknowledgeSensitiveContent
+                  : false,
             })
           }
         >
@@ -5012,17 +4979,39 @@ function TelemetryEditor({
         />
       </label>
       {draft.journalPayloads === "full" ? (
-        <p className="authority-warning mcp-editor-wide">
-          <IconAlertTriangle size={17} />
-          Full payload export requires native confirmation when a Workspace
-          applies this revision.
-        </p>
+        <label className="compact-switch authority-warning mcp-editor-wide">
+          <SwitchInput
+            checked={draft.acknowledgeSensitiveContent}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                acknowledgeSensitiveContent: event.target.checked,
+              })
+            }
+          />
+          <span>
+            I acknowledge that full journal payloads may contain sensitive
+            content
+            <small>
+              This explicit acknowledgment is stored with the profile and is
+              required before the revision can be saved.
+            </small>
+          </span>
+        </label>
       ) : null}
       <div className="mcp-editor-actions">
         <button className="button secondary" type="button" onClick={onCancel}>
           Cancel
         </button>
-        <button className="button primary" type="submit" disabled={busy}>
+        <button
+          className="button primary"
+          type="submit"
+          disabled={
+            busy ||
+            (draft.journalPayloads === "full" &&
+              !draft.acknowledgeSensitiveContent)
+          }
+        >
           <IconCheck size={16} /> Save revision
         </button>
       </div>
@@ -5138,11 +5127,17 @@ function ProviderEditor({
           type="number"
           min={1}
           max={3_600_000}
-          value={draft.timeoutMs}
+          value={draft.timeoutMs ?? ""}
+          placeholder="Adapter default"
           onChange={(event) =>
-            onChange({ ...draft, timeoutMs: Number(event.target.value) })
+            onChange({
+              ...draft,
+              timeoutMs:
+                event.target.value === "" ? null : Number(event.target.value),
+            })
           }
         />
+        <small>Leave empty to use the adapter default.</small>
       </label>
       <div className="mcp-editor-actions">
         <button className="button secondary" type="button" onClick={onCancel}>
@@ -5298,6 +5293,37 @@ function ModelEditor({
         />
         <span>Image inputs</span>
       </label>
+      <label>
+        <span>Reasoning effort</span>
+        <DropdownSelect
+          value={draft.reasoningEffort ?? "inherit"}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              reasoningEffort:
+                event.target.value === "inherit"
+                  ? null
+                  : (event.target.value as ReasoningEffort),
+            })
+          }
+        >
+          <option value="inherit">Provider default</option>
+          {[
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+          ].map((effort) => (
+            <option key={effort} value={effort}>
+              {effort}
+            </option>
+          ))}
+        </DropdownSelect>
+      </label>
       <div className="mcp-editor-actions">
         <button className="button secondary" type="button" onClick={onCancel}>
           Cancel
@@ -5310,7 +5336,7 @@ function ModelEditor({
   );
 }
 
-function McpEditor({
+export function McpEditor({
   draft,
   credentials,
   busy,
@@ -5370,6 +5396,10 @@ function McpEditor({
             onChange({
               ...draft,
               transport: event.target.value as ManagedMcpServer["transport"],
+              allowStateless:
+                event.target.value === "streamable_http"
+                  ? draft.allowStateless
+                  : false,
             })
           }
         >
@@ -5387,40 +5417,213 @@ function McpEditor({
           }
         />
       </label>
-      <label>
-        <span>Arguments</span>
-        <input
-          value={draft.args}
-          placeholder="--flag, value"
-          onChange={(event) => onChange({ ...draft, args: event.target.value })}
-        />
-      </label>
-      <label>
+      {draft.transport === "stdio" ? (
+        <>
+          <label className="mcp-editor-wide">
+            <span>Arguments</span>
+            <textarea
+              rows={3}
+              value={draft.argsText}
+              placeholder="One exact argument per line"
+              onChange={(event) =>
+                onChange({ ...draft, argsText: event.target.value })
+              }
+            />
+          </label>
+          <label className="mcp-editor-wide">
+            <span>Working directory</span>
+            <input
+              value={draft.workingDirectory}
+              placeholder="Runtime default"
+              onChange={(event) =>
+                onChange({ ...draft, workingDirectory: event.target.value })
+              }
+            />
+          </label>
+          <CredentialBindingsEditor
+            title="Environment credential bindings"
+            nameLabel="Variable"
+            bindings={draft.environmentCredentials}
+            credentials={credentials}
+            onChange={(environmentCredentials) =>
+              onChange({ ...draft, environmentCredentials })
+            }
+          />
+        </>
+      ) : (
+        <>
+          <label className="mcp-editor-wide">
+            <span>Static headers (non-secret JSON)</span>
+            <JsonFieldEditor
+              label="Static headers"
+              value={draft.headers}
+              onChange={(headers) =>
+                onChange({
+                  ...draft,
+                  headers: isStringRecord(headers) ? headers : draft.headers,
+                })
+              }
+            />
+            <small>Use credential headers below for every secret value.</small>
+          </label>
+          <CredentialBindingsEditor
+            title="Credential headers"
+            nameLabel="Header"
+            includeScheme
+            disabled={draft.oauthEnabled}
+            bindings={draft.credentialHeaders}
+            credentials={credentials}
+            onChange={(credentialHeaders) =>
+              onChange({ ...draft, credentialHeaders })
+            }
+          />
+          <label className="compact-switch mcp-editor-wide">
+            <input
+              type="checkbox"
+              checked={draft.oauthEnabled}
+              disabled={draft.credentialHeaders.length > 0}
+              onChange={(event) =>
+                onChange({ ...draft, oauthEnabled: event.target.checked })
+              }
+            />
+            <span>
+              OAuth client configuration
+              {draft.credentialHeaders.length > 0 ? (
+                <small>Remove credential headers before enabling OAuth.</small>
+              ) : null}
+            </span>
+          </label>
+          {draft.oauthEnabled ? (
+            <div className="mcp-oauth-editor mcp-editor-wide">
+              <label>
+                <span>Client ID</span>
+                <input
+                  required
+                  value={draft.oauthClientId}
+                  onChange={(event) =>
+                    onChange({ ...draft, oauthClientId: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                <span>Client secret credential</span>
+                <CredentialSelect
+                  value={draft.oauthClientSecretCredentialId}
+                  credentials={credentials}
+                  onChange={(oauthClientSecretCredentialId) =>
+                    onChange({ ...draft, oauthClientSecretCredentialId })
+                  }
+                />
+              </label>
+              <label>
+                <span>Callback port</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={65_535}
+                  value={draft.oauthCallbackPort}
+                  onChange={(event) =>
+                    onChange({
+                      ...draft,
+                      oauthCallbackPort: Number(event.target.value),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Scopes</span>
+                <textarea
+                  rows={3}
+                  value={draft.oauthScopesText}
+                  placeholder="One scope per line"
+                  onChange={(event) =>
+                    onChange({
+                      ...draft,
+                      oauthScopesText: event.target.value,
+                    })
+                  }
+                />
+              </label>
+            </div>
+          ) : null}
+        </>
+      )}
+      <label className="mcp-editor-wide">
         <span>Allowed tools</span>
-        <input
-          value={draft.allowedTools}
-          placeholder="search, read"
+        <textarea
+          rows={3}
+          value={draft.allowedToolsText}
+          placeholder="One exact tool name per line"
           onChange={(event) =>
-            onChange({ ...draft, allowedTools: event.target.value })
+            onChange({ ...draft, allowedToolsText: event.target.value })
+          }
+        />
+      </label>
+      <label className="mcp-editor-wide">
+        <span>Research tool projections</span>
+        <JsonFieldEditor
+          label="Research tool projections"
+          value={draft.researchTools}
+          onChange={(researchTools) =>
+            onChange({
+              ...draft,
+              researchTools: Array.isArray(researchTools)
+                ? (researchTools as ManagedMcpResearchTool[])
+                : draft.researchTools,
+            })
           }
         />
       </label>
       <label>
-        <span>Credential</span>
-        <DropdownSelect
-          value={draft.credentialId}
+        <span>Timeout (ms)</span>
+        <input
+          type="number"
+          min={1}
+          value={draft.timeoutMs ?? ""}
+          placeholder="Runtime default"
           onChange={(event) =>
-            onChange({ ...draft, credentialId: event.target.value })
+            onChange({
+              ...draft,
+              timeoutMs:
+                event.target.value === "" ? null : Number(event.target.value),
+            })
           }
-        >
-          <option value="">None</option>
-          {credentials.map((credential) => (
-            <option key={credential.id} value={credential.id}>
-              {credential.label}
-            </option>
-          ))}
-        </DropdownSelect>
+        />
       </label>
+      <label>
+        <span>Maximum output (bytes)</span>
+        <input
+          type="number"
+          min={1}
+          value={draft.maxOutputBytes ?? ""}
+          placeholder="Runtime default"
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              maxOutputBytes:
+                event.target.value === "" ? null : Number(event.target.value),
+            })
+          }
+        />
+      </label>
+      {draft.transport === "streamable_http" ? (
+        <label className="compact-switch mcp-editor-wide">
+          <input
+            type="checkbox"
+            checked={draft.allowStateless}
+            onChange={(event) =>
+              onChange({ ...draft, allowStateless: event.target.checked })
+            }
+          />
+          <span>
+            Allow stateless HTTP
+            <small>
+              Permit this server to omit MCP session IDs. Enable only when the
+              endpoint documents stateless MCP support.
+            </small>
+          </span>
+        </label>
+      ) : null}
       <div className="mcp-editor-actions">
         <button className="button secondary" type="button" onClick={onCancel}>
           Cancel
@@ -5434,26 +5637,264 @@ function McpEditor({
   );
 }
 
-function mcpDraft(entry: CatalogEntry<ManagedMcpServer>): McpEditorDraft {
+function CredentialSelect({
+  value,
+  credentials,
+  required = false,
+  onChange,
+}: {
+  value: string;
+  credentials: ManagedSettingsSnapshot["globalConfiguration"]["credentials"];
+  required?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <DropdownSelect
+      value={value}
+      required={required}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">None</option>
+      {credentials.map((credential) => (
+        <option key={credential.id} value={credential.id}>
+          {credential.label}
+        </option>
+      ))}
+    </DropdownSelect>
+  );
+}
+
+function CredentialBindingsEditor({
+  title,
+  nameLabel,
+  includeScheme = false,
+  disabled = false,
+  bindings,
+  credentials,
+  onChange,
+}: {
+  title: string;
+  nameLabel: string;
+  includeScheme?: boolean;
+  disabled?: boolean;
+  bindings: McpCredentialBindingDraft[];
+  credentials: ManagedSettingsSnapshot["globalConfiguration"]["credentials"];
+  onChange: (bindings: McpCredentialBindingDraft[]) => void;
+}) {
+  function update(index: number, patch: Partial<McpCredentialBindingDraft>) {
+    onChange(
+      bindings.map((binding, candidate) =>
+        candidate === index ? { ...binding, ...patch } : binding,
+      ),
+    );
+  }
+  return (
+    <fieldset className="mcp-bindings-editor mcp-editor-wide">
+      <legend>{title}</legend>
+      {bindings.map((binding, index) => (
+        <div className="mcp-binding-row" key={`${binding.name}-${index}`}>
+          <label>
+            <span>{nameLabel}</span>
+            <input
+              required
+              value={binding.name}
+              onChange={(event) => update(index, { name: event.target.value })}
+            />
+          </label>
+          {includeScheme ? (
+            <label>
+              <span>Scheme</span>
+              <input
+                value={binding.scheme}
+                placeholder="Bearer"
+                onChange={(event) =>
+                  update(index, { scheme: event.target.value })
+                }
+              />
+            </label>
+          ) : null}
+          <label>
+            <span>Credential</span>
+            <CredentialSelect
+              value={binding.credentialId}
+              credentials={credentials}
+              required
+              onChange={(credentialId) => update(index, { credentialId })}
+            />
+          </label>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={`Remove ${nameLabel.toLowerCase()} binding ${index + 1}`}
+            onClick={() =>
+              onChange(bindings.filter((_, candidate) => candidate !== index))
+            }
+          >
+            <IconTrash size={16} />
+          </button>
+        </div>
+      ))}
+      <button
+        className="button secondary"
+        type="button"
+        disabled={disabled}
+        onClick={() =>
+          onChange([...bindings, { name: "", credentialId: "", scheme: "" }])
+        }
+      >
+        <IconPlus size={15} /> Add binding
+      </button>
+    </fieldset>
+  );
+}
+
+export function mcpDraft(
+  entry: CatalogEntry<ManagedMcpServer>,
+): McpEditorDraft {
   const server = currentValue(entry);
-  const credentialId =
-    Object.values(server.environmentCredentials)[0] ??
-    Object.values(server.credentialHeaders)[0]?.credentialId ??
-    server.oauth?.clientSecretCredentialId ??
-    "";
   return {
     resourceId: entry.id,
     label: entry.label,
     name: server.name,
     transport: server.transport,
     commandOrUrl: server.command ?? server.url ?? "",
-    args: server.args.join(", "),
-    allowedTools: server.allowedTools.join(", "),
-    credentialId,
+    argsText: server.args.join("\n"),
+    workingDirectory: server.workingDirectory ?? "",
+    environmentCredentials: Object.entries(server.environmentCredentials).map(
+      ([name, credentialId]) => ({ name, credentialId, scheme: "" }),
+    ),
+    headers: server.headers,
+    credentialHeaders: Object.entries(server.credentialHeaders).map(
+      ([name, value]) => ({
+        name,
+        credentialId: value.credentialId,
+        scheme: value.scheme ?? "",
+      }),
+    ),
+    allowStateless: server.allowStateless,
+    oauthEnabled: server.oauth !== null,
+    oauthClientId: server.oauth?.clientId ?? "",
+    oauthClientSecretCredentialId: server.oauth?.clientSecretCredentialId ?? "",
+    oauthCallbackPort: server.oauth?.callbackPort ?? 0,
+    oauthScopesText: server.oauth?.scopes.join("\n") ?? "",
+    allowedToolsText: server.allowedTools.join("\n"),
+    researchTools: server.researchTools,
+    timeoutMs: server.timeoutMs,
+    maxOutputBytes: server.maxOutputBytes,
   };
 }
 
-function providerDraft(
+export function managedMcpServer(draft: McpEditorDraft): ManagedMcpServer {
+  return {
+    name: draft.name,
+    transport: draft.transport,
+    command: draft.transport === "stdio" ? draft.commandOrUrl : null,
+    args: splitLines(draft.argsText),
+    workingDirectory:
+      draft.transport === "stdio" && draft.workingDirectory.trim()
+        ? draft.workingDirectory.trim()
+        : null,
+    environmentCredentials:
+      draft.transport === "stdio"
+        ? credentialBindingRecord(draft.environmentCredentials)
+        : {},
+    url: draft.transport === "streamable_http" ? draft.commandOrUrl : null,
+    headers: draft.transport === "streamable_http" ? draft.headers : {},
+    credentialHeaders:
+      draft.transport === "streamable_http"
+        ? Object.fromEntries(
+            draft.credentialHeaders
+              .filter(({ name, credentialId }) => name && credentialId)
+              .map(({ name, scheme, credentialId }) => [
+                name,
+                { scheme: scheme.trim() || null, credentialId },
+              ]),
+          )
+        : {},
+    allowStateless:
+      draft.transport === "streamable_http" && draft.allowStateless,
+    oauth:
+      draft.transport === "streamable_http" && draft.oauthEnabled
+        ? {
+            clientId: draft.oauthClientId,
+            clientSecretCredentialId:
+              draft.oauthClientSecretCredentialId || null,
+            callbackPort: draft.oauthCallbackPort,
+            scopes: splitLines(draft.oauthScopesText),
+          }
+        : null,
+    allowedTools: splitLines(draft.allowedToolsText),
+    researchTools: draft.researchTools,
+    timeoutMs: draft.timeoutMs,
+    maxOutputBytes: draft.maxOutputBytes,
+  };
+}
+
+export function managedProvider(
+  draft: ProviderEditorDraft,
+): ManagedProviderCatalogValue {
+  const codex = draft.kind === "open_ai_codex";
+  return {
+    profile: draft.profile,
+    kind: draft.kind,
+    baseUrl: codex ? "https://chatgpt.com/backend-api/codex" : draft.baseUrl,
+    credentialId: codex || !draft.credentialId ? null : draft.credentialId,
+    timeoutMs: draft.timeoutMs,
+  };
+}
+
+export function managedModel(
+  draft: ModelEditorDraft,
+): ManagedModelCatalogValue {
+  return {
+    profile: draft.profile,
+    providerProfile: draft.providerProfile,
+    model: draft.model,
+    contextWindowTokens: draft.contextWindowTokens,
+    maxOutputTokens: draft.maxOutputTokens,
+    capabilities: {
+      toolCalls: draft.toolCalls,
+      streaming: draft.streaming,
+      imageInputs: draft.imageInputs,
+    },
+    reasoningEffort: draft.reasoningEffort,
+  };
+}
+
+export function managedTelemetry(
+  draft: TelemetryEditorDraft,
+): ManagedTelemetryProfile {
+  const resourceAttributes = Object.fromEntries(
+    draft.resourceAttributesText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return separator > 0
+          ? [line.slice(0, separator).trim(), line.slice(separator + 1).trim()]
+          : [line, ""];
+      }),
+  );
+  return {
+    name: draft.name,
+    endpoint: draft.endpoint || null,
+    protocol: draft.protocol,
+    timeoutMs: draft.timeoutMs,
+    tracesEnabled: draft.tracesEnabled,
+    traceSampleRatioMillionths: draft.traceSampleRatioMillionths,
+    metricsEnabled: draft.metricsEnabled,
+    metricExportIntervalMs: draft.metricExportIntervalMs,
+    logsOtlp: draft.logsOtlp,
+    logsStdoutJson: draft.logsStdoutJson,
+    journalPayloads: draft.journalPayloads,
+    acknowledgeSensitiveContent: draft.acknowledgeSensitiveContent,
+    acknowledgeInsecureTransport: draft.acknowledgeInsecureTransport,
+    resourceAttributes,
+  };
+}
+
+export function providerDraft(
   entry: CatalogEntry<ManagedProviderCatalogValue>,
 ): ProviderEditorDraft {
   const provider = currentValue(entry);
@@ -5464,7 +5905,7 @@ function providerDraft(
     kind: provider.kind,
     baseUrl: provider.baseUrl,
     credentialId: provider.credentialId ?? "",
-    timeoutMs: provider.timeoutMs ?? 120_000,
+    timeoutMs: provider.timeoutMs ?? null,
   };
 }
 
@@ -5484,7 +5925,7 @@ function searchDraft(
   };
 }
 
-function telemetryDraft(
+export function telemetryDraft(
   entry: CatalogEntry<ManagedTelemetryProfile>,
 ): TelemetryEditorDraft {
   const telemetry = currentValue(entry);
@@ -5498,7 +5939,7 @@ function telemetryDraft(
   };
 }
 
-function modelDraft(
+export function modelDraft(
   entry: CatalogEntry<ManagedModelCatalogValue>,
 ): ModelEditorDraft {
   const model = currentValue(entry);
@@ -5513,6 +5954,7 @@ function modelDraft(
     toolCalls: model.capabilities.toolCalls,
     streaming: model.capabilities.streaming,
     imageInputs: model.capabilities.imageInputs,
+    reasoningEffort: model.reasoningEffort,
   };
 }
 
@@ -5813,11 +6255,30 @@ function removeDraftField(
   setDraft({ ...draft, fields });
 }
 
-function splitList(value: string): string[] {
+function splitLines(value: string): string[] {
   return value
-    .split(",")
+    .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function credentialBindingRecord(
+  bindings: McpCredentialBindingDraft[],
+): Record<string, string> {
+  return Object.fromEntries(
+    bindings
+      .filter(({ name, credentialId }) => name && credentialId)
+      .map(({ name, credentialId }) => [name, credentialId]),
+  );
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry) => typeof entry === "string")
+  );
 }
 
 function fixtureImportProposal(

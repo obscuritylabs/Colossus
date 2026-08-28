@@ -15,8 +15,8 @@ pub use delegate::{
 };
 pub use endpoint::worker_ipc_endpoint;
 pub use session_map::{
-    WorkerSessionDecision, WorkerSessionDelegate, WorkerSessionGoal, WorkerSessionMap,
-    WorkerSessionMemory, WorkerSessionPlan, WorkerSessionResearchRun, WorkerSessionResearchSource,
-    WorkerSessionTask,
+    WorkerSessionContextSnapshot, WorkerSessionDecision, WorkerSessionDelegate, WorkerSessionGoal,
+    WorkerSessionMap, WorkerSessionMemory, WorkerSessionPlan, WorkerSessionResearchRun,
+    WorkerSessionResearchSource, WorkerSessionTask,
 };
 pub use wire::{MAX_FRAME_BYTES, PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlError};

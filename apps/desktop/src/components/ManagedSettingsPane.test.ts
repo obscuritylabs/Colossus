@@ -4,8 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopStatus,
+  CatalogEntry,
   ManagedCredentialMetadata,
   ManagedExtensionInventory,
+  ManagedMcpServer,
+  ManagedModelCatalogValue,
+  ManagedProviderCatalogValue,
+  ManagedTelemetryProfile,
   RepositoryConfigurationProposal,
   SpaceSummary,
 } from "../types";
@@ -13,11 +18,22 @@ import {
   advancedSectionContainsField,
   buildManagedSettingsFixture,
   ExtensionCatalog,
+  FieldGrid,
+  managedModel,
+  managedProvider,
+  managedTelemetry,
   managedFieldDestination,
   ManagedSettingsPane,
+  managedMcpServer,
+  McpEditor,
+  mcpDraft,
+  modelDraft,
+  providerDraft,
   RepositoryImportDialog,
+  SettingsActionBar,
   SpaceSettingsBody,
   spaceDraft,
+  telemetryDraft,
 } from "./ManagedSettingsPane";
 
 const space: SpaceSummary = {
@@ -373,6 +389,305 @@ describe("ManagedSettingsPane", () => {
     expect(markup).not.toContain("apiKey");
     expect(markup).not.toContain("clientSecret");
     expect(markup).not.toContain("credentialValue");
+  });
+
+  it("preserves the explicit stateless HTTP opt-in across MCP revisions", () => {
+    const draft = mcpDraft({
+      id: "mcp-cloudflare",
+      label: "Cloudflare docs",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            name: "cloudflare",
+            transport: "streamable_http",
+            command: null,
+            args: [],
+            workingDirectory: null,
+            environmentCredentials: {},
+            url: "https://docs.mcp.cloudflare.com/mcp",
+            headers: {},
+            credentialHeaders: {},
+            allowStateless: true,
+            oauth: null,
+            allowedTools: ["search_cloudflare_documentation"],
+            researchTools: [],
+            timeoutMs: 30_000,
+            maxOutputBytes: 1_048_576,
+          },
+        },
+      ],
+    });
+
+    expect(draft.allowStateless).toBe(true);
+    expect(managedMcpServer(draft).allowStateless).toBe(true);
+    expect(
+      managedMcpServer({ ...draft, transport: "stdio" }).allowStateless,
+    ).toBe(false);
+
+    const markup = renderToStaticMarkup(
+      createElement(McpEditor, {
+        draft,
+        credentials: [],
+        busy: false,
+        onChange: vi.fn(),
+        onCancel: vi.fn(),
+        onSave: vi.fn(),
+      }),
+    );
+    expect(markup).toContain("Allow stateless HTTP");
+    expect(markup).toContain('type="checkbox" checked=""');
+  });
+
+  it.each([
+    {
+      name: "local-tools",
+      transport: "stdio" as const,
+      command: "/opt/colossus/bin/mcp-server",
+      args: ["--label=one,two", "--exact value"],
+      workingDirectory: "/workspace/services/docs",
+      environmentCredentials: {
+        GITHUB_TOKEN: "credential-github",
+        SPLUNK_TOKEN: "credential-splunk",
+      },
+      url: null,
+      headers: {},
+      credentialHeaders: {},
+      allowStateless: false,
+      oauth: null,
+      allowedTools: ["search,exact", "read_document"],
+      researchTools: [
+        {
+          tool: "search,exact",
+          title: "Search docs",
+          arguments: { limit: 8, nested: { enabled: true } },
+        },
+      ],
+      timeoutMs: null,
+      maxOutputBytes: 2_097_152,
+    },
+    {
+      name: "remote-tools",
+      transport: "streamable_http" as const,
+      command: null,
+      args: [],
+      workingDirectory: null,
+      environmentCredentials: {},
+      url: "https://mcp.example.test/rpc",
+      headers: { "X-Workspace": "engineering", Accept: "application/json" },
+      credentialHeaders: {
+        Authorization: {
+          scheme: "Bearer",
+          credentialId: "credential-bearer",
+        },
+        "X-Api-Key": { scheme: null, credentialId: "credential-api" },
+      },
+      allowStateless: true,
+      oauth: {
+        clientId: "desktop-client",
+        clientSecretCredentialId: "credential-oauth",
+        callbackPort: 8787,
+        scopes: ["read:tools", "execute:tools"],
+      },
+      allowedTools: ["search", "read"],
+      researchTools: [],
+      timeoutMs: 45_000,
+      maxOutputBytes: null,
+    },
+  ])("round-trips every durable $transport MCP setting", (server) => {
+    const entry: CatalogEntry<ManagedMcpServer> = {
+      id: `mcp-${server.name}`,
+      label: server.name,
+      currentRevision: 1,
+      archived: false,
+      revisions: [{ revision: 1, value: server }],
+    };
+
+    const draft = mcpDraft(entry);
+
+    expect(managedMcpServer(draft)).toEqual(server);
+    expect(draft.argsText).toContain(server.args[0] ?? "");
+  });
+
+  it("renders every MCP setting without secret-value inputs", () => {
+    const server: ManagedMcpServer = {
+      name: "remote-tools",
+      transport: "streamable_http",
+      command: null,
+      args: [],
+      workingDirectory: null,
+      environmentCredentials: {},
+      url: "https://mcp.example.test/rpc",
+      headers: { "X-Workspace": "engineering" },
+      credentialHeaders: {
+        Authorization: {
+          scheme: "Bearer",
+          credentialId: "credential-bearer",
+        },
+      },
+      allowStateless: true,
+      oauth: {
+        clientId: "desktop-client",
+        clientSecretCredentialId: "credential-bearer",
+        callbackPort: 8787,
+        scopes: ["read:tools"],
+      },
+      allowedTools: ["search"],
+      researchTools: [
+        { tool: "search", title: "Search", arguments: { limit: 4 } },
+      ],
+      timeoutMs: null,
+      maxOutputBytes: null,
+    };
+    const draft = mcpDraft({
+      id: "mcp-remote",
+      label: "Remote",
+      currentRevision: 1,
+      archived: false,
+      revisions: [{ revision: 1, value: server }],
+    });
+    const markup = renderToStaticMarkup(
+      createElement(McpEditor, {
+        draft,
+        credentials: [
+          {
+            id: "credential-bearer",
+            label: "Bearer token",
+            kind: "bearer_token",
+            backend: "desktop",
+            createdAtMs: 1,
+          },
+        ],
+        busy: false,
+        onChange: vi.fn(),
+        onCancel: vi.fn(),
+        onSave: vi.fn(),
+      }),
+    );
+
+    for (const label of [
+      "Static headers",
+      "Credential headers",
+      "OAuth client configuration",
+      "Client ID",
+      "Client secret credential",
+      "Callback port",
+      "Scopes",
+      "Allowed tools",
+      "Research tool projections",
+      "Timeout (ms)",
+      "Maximum output (bytes)",
+    ]) {
+      expect(markup).toContain(label);
+    }
+    expect(markup).not.toContain('type="password"');
+  });
+
+  it("round-trips provider defaults, model reasoning, and telemetry acknowledgments", () => {
+    const provider: ManagedProviderCatalogValue = {
+      profile: "openrouter",
+      kind: "openai_compatible",
+      baseUrl: "https://openrouter.ai/api/v1",
+      credentialId: "credential-openrouter",
+      timeoutMs: null,
+    };
+    const providerEntry: CatalogEntry<ManagedProviderCatalogValue> = {
+      id: "provider-openrouter",
+      label: "OpenRouter",
+      currentRevision: 1,
+      archived: false,
+      revisions: [{ revision: 1, value: provider }],
+    };
+    expect(managedProvider(providerDraft(providerEntry))).toEqual(provider);
+
+    const model: ManagedModelCatalogValue = {
+      profile: "reasoning",
+      providerProfile: "openrouter",
+      model: "example/reasoning",
+      contextWindowTokens: 200_000,
+      maxOutputTokens: 32_000,
+      capabilities: {
+        toolCalls: true,
+        streaming: false,
+        imageInputs: true,
+      },
+      reasoningEffort: "xhigh",
+    };
+    const modelEntry: CatalogEntry<ManagedModelCatalogValue> = {
+      id: "model-reasoning",
+      label: "Reasoning",
+      currentRevision: 1,
+      archived: false,
+      revisions: [{ revision: 1, value: model }],
+    };
+    expect(managedModel(modelDraft(modelEntry))).toEqual(model);
+
+    const telemetry: ManagedTelemetryProfile = {
+      name: "colossus-desktop",
+      endpoint: "http://collector.example.test:4318",
+      protocol: "http_protobuf",
+      timeoutMs: 11_000,
+      tracesEnabled: true,
+      traceSampleRatioMillionths: 250_000,
+      metricsEnabled: false,
+      metricExportIntervalMs: 75_000,
+      logsOtlp: true,
+      logsStdoutJson: true,
+      journalPayloads: "full",
+      acknowledgeSensitiveContent: true,
+      acknowledgeInsecureTransport: true,
+      resourceAttributes: {
+        "service.namespace": "colossus",
+        "deployment.environment": "preview",
+      },
+    };
+    const telemetryEntry: CatalogEntry<ManagedTelemetryProfile> = {
+      id: "telemetry-preview",
+      label: "Preview collector",
+      currentRevision: 1,
+      archived: false,
+      revisions: [{ revision: 1, value: telemetry }],
+    };
+    expect(managedTelemetry(telemetryDraft(telemetryEntry))).toEqual(telemetry);
+  });
+
+  it("renders a control and help text for every managed field descriptor", () => {
+    const descriptors = buildManagedSettingsFixture(desktop()).fieldDescriptors;
+    const markup = renderToStaticMarkup(
+      createElement(FieldGrid, {
+        descriptors,
+        values: {},
+        effective: new Map(),
+        scope: "global",
+        onChange: vi.fn(),
+        onInherit: vi.fn(),
+      }),
+    );
+
+    for (const descriptor of descriptors) {
+      expect(markup).toContain(`id="managed-setting-${descriptor.id}"`);
+      expect(markup).toContain(descriptor.description);
+      expect(markup).toContain(`aria-label="${descriptor.title}"`);
+    }
+  });
+
+  it("keeps apply failures visible in the sticky action bar", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SettingsActionBar, {
+        dirty: true,
+        busy: false,
+        failure: "The previous Colossus connection did not close cleanly.",
+        label: "Apply Workspace changes",
+        onDiscard: vi.fn(),
+        onApply: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("did not close cleanly");
+    expect(markup).toContain("Apply Workspace changes");
   });
 
   it.each([

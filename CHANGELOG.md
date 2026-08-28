@@ -8,6 +8,30 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.6] - 2026-08-28
+
+### Added
+
+- Added bounded context-snapshot inspection to the Desktop session map, including a
+  dedicated list, complete snapshot details, topology nodes, and live refresh while the
+  Snapshots or Resources view is active.
+- Added list-and-inspect access from Desktop Resources for every durable session-map
+  family: delegated agents, goals, tasks, plans, decisions, memories, context snapshots,
+  research runs, sources, and released artifacts.
+
+### Changed
+
+- Expanded Desktop catalog editors to preserve the full managed provider, model,
+  telemetry, and MCP contracts. MCP revisions now expose exact line-delimited arguments
+  and tool names, working directories, multiple environment and header credential
+  bindings, non-secret static headers, OAuth, research projections, stateless HTTP, and
+  nullable runtime limits.
+- Added field descriptions to every managed setting and explicit controls for provider
+  default timeouts, model reasoning effort, image-input capability, and sensitive
+  telemetry acknowledgment.
+- Bumped the Rust workspace, internal dependency pins, Desktop native dependencies, fuzz
+  dependency, and all corresponding lockfiles to `0.10.10-preview.6` in the release PR.
+
 ### Fixed
 
 - Made the Unix direct installer compatible with Ubuntu's common user-private-group
@@ -16,6 +40,12 @@ include breaking changes while the public API is still settling.
   prefix; replaceable prefixes, group-writable bins under accessible prefixes, and
   world-writable destinations still fail closed with explicit installation-failure
   output.
+- Kept Desktop settings apply failures visible in the sticky action bar instead of
+  clearing the only actionable error during a managed-runtime restart.
+- Released SDK-owned run and artifact channels before sidecar shutdown so applying a
+  managed configuration can restart cleanly instead of timing out and rolling back.
+- Prevented edits from silently replacing nullable provider timeouts, model reasoning
+  effort, telemetry acknowledgments, or advanced MCP fields with UI defaults.
 
 ## [0.10.10-preview.5] - 2026-08-25
 

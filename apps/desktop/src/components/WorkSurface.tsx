@@ -62,6 +62,7 @@ import { SessionMapDetailsPanel } from "./SessionMapDetailsPanel";
 import {
   SessionPlansView,
   SessionResourcesView,
+  SessionSnapshotsView,
   SessionSourcesView,
   SessionTopology,
   SessionWorkspaceTabs,
@@ -1099,6 +1100,13 @@ export function WorkSurface({
                   onOpenPlanWorkflow={onOpenPlanWorkflow}
                   onRevisePlan={onRevisePlan}
                 />
+              ) : sessionWorkspaceView === "snapshots" ? (
+                <SessionSnapshotsView
+                  sessionMap={sessionMap}
+                  loading={sessionMapLoading}
+                  error={sessionMapError}
+                  onSelectResource={openSessionResource}
+                />
               ) : sessionWorkspaceView === "sources" ? (
                 <SessionSourcesView
                   views={conversationViews}
@@ -1108,8 +1116,12 @@ export function WorkSurface({
                 <SessionResourcesView
                   views={conversationViews}
                   artifacts={artifacts}
+                  sessionMap={sessionMap}
+                  loading={sessionMapLoading}
+                  error={sessionMapError}
                   onChangeView={changeSessionWorkspaceView}
                   onSelectArtifact={openArtifactFromResources}
+                  onSelectResource={openSessionResource}
                 />
               ) : (
                 <>

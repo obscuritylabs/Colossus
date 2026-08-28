@@ -879,6 +879,19 @@ export interface SessionMapMemory {
   supersededBy?: string;
 }
 
+export interface SessionMapContextSnapshot {
+  id: string;
+  sourceStartSequence: number;
+  sourceEndSequence: number;
+  summary: string;
+  pinnedFacts: string[];
+  openTasks: string[];
+  filesTouched: string[];
+  notableToolResults: string[];
+  strategy: string;
+  createdAt: string;
+}
+
 export interface SessionMapResearchRun {
   id: string;
   question: string;
@@ -914,6 +927,7 @@ export interface SessionMap {
   plans: SessionMapPlan[];
   decisions: SessionMapDecision[];
   memories: SessionMapMemory[];
+  contextSnapshots: SessionMapContextSnapshot[];
   researchRuns: SessionMapResearchRun[];
   researchSources: SessionMapResearchSource[];
 }
@@ -925,6 +939,7 @@ export type SessionMapResource =
   | { family: "plans"; value: SessionMapPlan }
   | { family: "decisions"; value: SessionMapDecision }
   | { family: "memories"; value: SessionMapMemory }
+  | { family: "snapshots"; value: SessionMapContextSnapshot }
   | { family: "research"; value: SessionMapResearchRun }
   | { family: "sources"; value: SessionMapResearchSource };
 

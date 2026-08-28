@@ -1,8 +1,8 @@
 use super::*;
 use colossus_worker_protocol::{
-    WorkerSessionDecision, WorkerSessionDelegate, WorkerSessionGoal, WorkerSessionMap,
-    WorkerSessionMemory, WorkerSessionPlan, WorkerSessionResearchRun, WorkerSessionResearchSource,
-    WorkerSessionTask,
+    WorkerSessionContextSnapshot, WorkerSessionDecision, WorkerSessionDelegate, WorkerSessionGoal,
+    WorkerSessionMap, WorkerSessionMemory, WorkerSessionPlan, WorkerSessionResearchRun,
+    WorkerSessionResearchSource, WorkerSessionTask,
 };
 
 const MAX_IDENTIFIER_BYTES: usize = 128;
@@ -10,6 +10,7 @@ const MAX_RECORDS_PER_FAMILY: usize = 32;
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_DETAIL_BYTES: usize = 8 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 16 * 1024;
+const MAX_SNAPSHOT_LIST_ITEMS: usize = 32;
 // The authenticated control frame base64-encodes its payload. Keeping the raw map
 // below 2 MiB leaves ample room beneath the 4 MiB frame ceiling for that expansion,
 // the signed envelope, and protocol metadata.
@@ -161,6 +162,7 @@ fn bound_session_map_payload(mut map: WorkerSessionMap) -> Result<WorkerSessionM
         pop_extra!(map.plans);
         pop_extra!(map.decisions);
         pop_extra!(map.memories);
+        pop_extra!(map.context_snapshots);
         pop_extra!(map.research_runs);
         pop_extra!(map.research_sources);
         if !removed {
@@ -288,6 +290,25 @@ pub(super) async fn inspect_session_map(
             superseded_by: memory.superseded_by,
         })
         .collect();
+    let context_snapshots = runtime
+        .context_snapshots(session_id)
+        .await?
+        .into_iter()
+        .rev()
+        .take(MAX_RECORDS_PER_FAMILY)
+        .map(|snapshot| WorkerSessionContextSnapshot {
+            id: snapshot.id,
+            source_start_sequence: snapshot.source_start_sequence,
+            source_end_sequence: snapshot.source_end_sequence,
+            summary: bounded_text(&snapshot.summary, MAX_DOCUMENT_BYTES),
+            pinned_facts: bounded_snapshot_items(snapshot.pinned_facts),
+            open_tasks: bounded_snapshot_items(snapshot.open_tasks),
+            files_touched: bounded_snapshot_items(snapshot.files_touched),
+            notable_tool_results: bounded_snapshot_items(snapshot.notable_tool_results),
+            strategy: bounded_text(&snapshot.strategy, MAX_TITLE_BYTES),
+            created_at: snapshot.created_at,
+        })
+        .collect();
 
     let canonical_research =
         runtime.list_research_runs(Some(session_id), MAX_RECORDS_PER_FAMILY)?;
@@ -341,9 +362,18 @@ pub(super) async fn inspect_session_map(
         plans,
         decisions,
         memories,
+        context_snapshots,
         research_runs,
         research_sources,
     })
+}
+
+fn bounded_snapshot_items(items: Vec<String>) -> Vec<String> {
+    items
+        .into_iter()
+        .take(MAX_SNAPSHOT_LIST_ITEMS)
+        .map(|item| bounded_text(&item, MAX_DETAIL_BYTES))
+        .collect()
 }
 
 #[cfg(test)]
@@ -381,6 +411,19 @@ mod tests {
         assert!(bounded.is_char_boundary(bounded.len()));
         assert!(bounded.len() <= 64);
         assert!(bounded.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn context_snapshot_lists_are_count_and_byte_bounded() {
+        let items = (0..(MAX_SNAPSHOT_LIST_ITEMS + 8))
+            .map(|index| format!("{index}-{}", "界".repeat(MAX_DETAIL_BYTES)))
+            .collect();
+
+        let bounded = bounded_snapshot_items(items);
+
+        assert_eq!(bounded.len(), MAX_SNAPSHOT_LIST_ITEMS);
+        assert!(bounded.iter().all(|item| item.len() <= MAX_DETAIL_BYTES));
+        assert!(bounded.iter().all(|item| item.ends_with(TRUNCATION_MARKER)));
     }
 
     #[test]
@@ -429,6 +472,7 @@ mod tests {
             plans: Vec::new(),
             decisions: Vec::new(),
             memories: Vec::new(),
+            context_snapshots: Vec::new(),
             research_runs,
             research_sources: Vec::new(),
         };

@@ -4101,7 +4101,9 @@ export default function App() {
   useEffect(() => {
     const run = activeRun;
     if (
-      activeSessionWorkspaceView !== "topology" ||
+      !["topology", "snapshots", "resources"].includes(
+        activeSessionWorkspaceView,
+      ) ||
       run === undefined ||
       FIXTURE_MODE ||
       activeRoute?.kind !== "managed_local"

@@ -207,6 +207,45 @@ export function buildSessionMapFixture(): SessionMap {
         updatedAt: "2026-07-20T14:32:00Z",
       },
     ],
+    contextSnapshots: [
+      {
+        id: "fixture-context-snapshot-2",
+        sourceStartSequence: 1,
+        sourceEndSequence: 18,
+        summary:
+          "The session is hardening Desktop runtime recovery while preserving the existing authority boundary.",
+        pinnedFacts: [
+          "Use Rust 1.96 and edition 2024.",
+          "Managed Local must fail closed on workspace identity drift.",
+        ],
+        openTasks: [
+          "Complete responsive Desktop validation.",
+          "Run the repository completion gate.",
+        ],
+        filesTouched: [
+          "apps/desktop/src/App.tsx",
+          "crates/colossus-worker/src/session_map_inspection.rs",
+        ],
+        notableToolResults: [
+          "The worker control path remained bounded and authenticated.",
+        ],
+        strategy: "hybrid_model",
+        createdAt: "2026-07-20T14:34:30Z",
+      },
+      {
+        id: "fixture-context-snapshot-1",
+        sourceStartSequence: 1,
+        sourceEndSequence: 8,
+        summary:
+          "Initial Desktop bootstrap investigation and trust-boundary map.",
+        pinnedFacts: ["Do not broaden runtime authority."],
+        openTasks: ["Trace the sidecar shutdown path."],
+        filesTouched: [],
+        notableToolResults: [],
+        strategy: "deterministic",
+        createdAt: "2026-07-20T14:32:00Z",
+      },
+    ],
     researchRuns: [
       {
         id: "fixture-research-patterns",

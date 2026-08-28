@@ -6,6 +6,7 @@ import {
   IconScale,
   IconSearch,
   IconTargetArrow,
+  IconAdjustments,
 } from "@tabler/icons-react";
 import type { ComponentType, ReactNode } from "react";
 
@@ -32,6 +33,11 @@ function resourceTitle(resource: SessionMapResource): string {
       return resource.value.title;
     case "memories":
       return resource.value.text;
+    case "snapshots":
+      return (
+        resource.value.summary ||
+        `Messages ${resource.value.sourceStartSequence}–${resource.value.sourceEndSequence}`
+      );
     case "research":
       return resource.value.question;
     case "sources":
@@ -40,11 +46,13 @@ function resourceTitle(resource: SessionMapResource): string {
 }
 
 function resourceStatus(resource: SessionMapResource): string {
-  return resource.family === "sources" ? "released" : resource.value.status;
+  if (resource.family === "sources") return "released";
+  if (resource.family === "snapshots") return "immutable";
+  return resource.value.status;
 }
 
 function resourceUpdatedAt(resource: SessionMapResource): string {
-  return resource.family === "sources"
+  return resource.family === "sources" || resource.family === "snapshots"
     ? resource.value.createdAt
     : resource.value.updatedAt;
 }
@@ -59,6 +67,7 @@ const FAMILY_META: Record<
   plans: { label: "Plan", icon: IconFileText },
   decisions: { label: "Key decision", icon: IconScale },
   memories: { label: "Memory", icon: IconBook2 },
+  snapshots: { label: "Context snapshot", icon: IconAdjustments },
   research: { label: "Research", icon: IconSearch },
   sources: { label: "Source", icon: IconFileText },
 };
@@ -126,6 +135,23 @@ export function SessionMapDetailsPanel({
               {Math.round(resource.value.confidence * 100)}%
             </Detail>
             <Detail label="Source">{readable(resource.value.source)}</Detail>
+          </>
+        ) : null}
+        {resource.family === "snapshots" ? (
+          <>
+            <Detail label="Strategy">
+              {readable(resource.value.strategy)}
+            </Detail>
+            <Detail label="Message range">
+              {resource.value.sourceStartSequence}–
+              {resource.value.sourceEndSequence}
+            </Detail>
+            <Detail label="Pinned facts">
+              {resource.value.pinnedFacts.length}
+            </Detail>
+            <Detail label="Open tasks">
+              {resource.value.openTasks.length}
+            </Detail>
           </>
         ) : null}
         {resource.family === "goals" ? (
@@ -235,6 +261,25 @@ export function SessionMapDetailsPanel({
             <p>{resource.value.rationale}</p>
           </>
         ) : null}
+        {resource.family === "snapshots" ? (
+          <>
+            <h4>Summary</h4>
+            <p>{resource.value.summary || "No summary was recorded."}</p>
+            <SnapshotList
+              title="Pinned facts"
+              items={resource.value.pinnedFacts}
+            />
+            <SnapshotList title="Open tasks" items={resource.value.openTasks} />
+            <SnapshotList
+              title="Files touched"
+              items={resource.value.filesTouched}
+            />
+            <SnapshotList
+              title="Notable tool results"
+              items={resource.value.notableToolResults}
+            />
+          </>
+        ) : null}
         {resource.family === "research" ? (
           <>
             <h4>Released report</h4>
@@ -255,5 +300,19 @@ export function SessionMapDetailsPanel({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function SnapshotList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <>
+      <h4>{title}</h4>
+      <ul>
+        {items.map((item, index) => (
+          <li key={`${index}:${item}`}>{item}</li>
+        ))}
+      </ul>
+    </>
   );
 }

@@ -463,11 +463,16 @@ test("session map inspection is selected-Space scoped and releases bounded canon
   assert.match(projection, /list_subagents\(Some\(session_id\)/u);
   assert.match(projection, /list_tasks\(Some\(session_id\)/u);
   assert.match(projection, /list_research_runs\(Some\(session_id\)/u);
+  assert.match(projection, /context_snapshots\(session_id\)/u);
+  assert.match(projection, /bounded_snapshot_items/u);
 
   const renderer = read("apps/desktop/src/App.tsx");
   assert.match(renderer, /getSessionMap\(runId\)/u);
   assert.match(renderer, /next\.sessionId === sessionId/u);
-  assert.match(renderer, /activeSessionWorkspaceView !== "topology"/u);
+  assert.match(
+    renderer,
+    /\["topology", "snapshots", "resources"\]\.includes\(\s*activeSessionWorkspaceView/u,
+  );
   assert.match(
     renderer,
     /requestSessionMap\(run\.runId, run\.sessionId, false\)/u,
