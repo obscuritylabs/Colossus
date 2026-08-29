@@ -31,7 +31,7 @@ pub use executor::*;
 #[cfg(test)]
 use executor::{
     RemoteOperationResult, execute_remote_operation, parse_tools_result, protocol_input,
-    redact_value, remote_timeout_error, tools_page_contains_secret,
+    redact_value, remote_call_failure, remote_timeout_error, tools_page_contains_secret,
 };
 
 mod config;

@@ -6,7 +6,7 @@ use colossus_contracts::{
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
-use colossus_tools::StaticToolRegistry;
+use colossus_tools::{MAX_MODEL_TOOL_MESSAGE_BYTES, StaticToolRegistry};
 use std::{
     collections::VecDeque,
     sync::{
@@ -152,6 +152,10 @@ impl ModelProvider for ScriptedProvider {
 
 struct EchoTools;
 
+struct LargeOutputTools {
+    output: String,
+}
+
 struct PartialFailureProvider;
 
 struct MidRunDiagnosticProvider {
@@ -293,6 +297,67 @@ impl ToolExecutor for EchoTools {
             call_id: call.call_id,
             name: call.name,
             output: call.arguments["text"].as_str().unwrap_or_default().into(),
+            exit_code: 0,
+        })
+    }
+}
+
+struct ReportedErrorTools;
+
+#[async_trait]
+impl ToolExecutor for ReportedErrorTools {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        _context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: json!({
+                "server": "gitlab",
+                "tool": "get_merge_request",
+                "result": {
+                    "content": [{
+                        "type": "text",
+                        "text": "404 Project Not Found",
+                    }],
+                    "isError": true,
+                }
+            })
+            .to_string(),
+            exit_code: 1,
+        })
+    }
+}
+
+struct DynamicInvalidTools;
+
+#[async_trait]
+impl ToolExecutor for DynamicInvalidTools {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        _context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        Err(ToolError::InvalidArguments {
+            tool: call.name,
+            message: "server gitlab did not advertise tool merge_request_diffs; related available tools: get_merge_request_diffs, list_merge_request_diffs".into(),
+        })
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for LargeOutputTools {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        _context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: self.output.clone(),
             exit_code: 0,
         })
     }
@@ -1414,6 +1479,81 @@ async fn an_unoffered_tool_call_is_returned_to_the_model_as_a_recoverable_result
 }
 
 #[tokio::test]
+async fn reported_tool_errors_reach_the_next_model_turn_without_ending_the_run() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::ToolCallRequested {
+            call_id: "call-mcp".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "lookup"}),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "recovered after inspecting the tool error".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(ReportedErrorTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+
+    let result = service
+        .run("primary", "test", "recover from a reported tool error", 2)
+        .await
+        .expect("reported tool error must remain recoverable");
+
+    assert_eq!(result.output, "recovered after inspecting the tool error");
+    let requests = provider.requests.lock().expect("requests");
+    let recovery = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::Tool)
+        .expect("reported error observation");
+    assert!(recovery.content.contains("404 Project Not Found"));
+    assert!(recovery.content.contains("isError"));
+}
+
+#[tokio::test]
+async fn dynamically_invalid_tool_arguments_reach_the_next_model_turn() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::ToolCallRequested {
+            call_id: "call-mcp".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "lookup"}),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "retried with the advertised tool name".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(DynamicInvalidTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+
+    let result = service
+        .run("primary", "test", "correct a dynamic tool argument", 2)
+        .await
+        .expect("dynamic argument errors must remain recoverable");
+
+    assert_eq!(result.output, "retried with the advertised tool name");
+    let requests = provider.requests.lock().expect("requests");
+    let recovery = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::Tool)
+        .expect("invalid argument observation");
+    assert!(recovery.content.contains("invalid_arguments"));
+    assert!(recovery.content.contains("get_merge_request_diffs"));
+    assert!(recovery.content.contains("list_merge_request_diffs"));
+}
+
+#[tokio::test]
 async fn every_provider_turn_records_context_preparation() {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
@@ -2066,6 +2206,92 @@ async fn tool_turn_preserves_call_and_result_before_final_turn() {
 }
 
 #[tokio::test]
+async fn oversized_tool_result_remains_complete_in_run_events_but_session_is_bounded() {
+    let full_output = format!(
+        "{{\"id\":\"large-result\",\"status\":\"ok\",\"payload\":\"{}\"}}",
+        "x".repeat(900_000)
+    );
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::ToolCallRequested {
+            call_id: "call-large".into(),
+            name: "web.search".into(),
+            arguments: json!({"query": "shipping label alarm", "limit": 1}),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "done".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["web.search".into()]).expect("catalog")),
+        Arc::new(LargeOutputTools {
+            output: full_output.clone(),
+        }),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+    let mut observer = RecordingRunObserver::default();
+
+    let result = service
+        .run_in_session_with_skills_stream("primary", "test", "search", 4, None, &[], &mut observer)
+        .await
+        .expect("agent run");
+
+    let requests = provider.requests.lock().expect("requests");
+    let observation_message = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::Tool)
+        .expect("provider tool observation");
+    assert!(
+        serde_json::to_vec(observation_message)
+            .expect("serialized observation")
+            .len()
+            <= MAX_MODEL_TOOL_MESSAGE_BYTES
+    );
+    let observation: Value = serde_json::from_str(
+        observation_message
+            .content
+            .as_text()
+            .expect("tool observation text"),
+    )
+    .expect("valid observation JSON");
+    assert_eq!(
+        observation["_colossusToolObservation"]["originalBytes"],
+        full_output.len()
+    );
+    assert_eq!(observation["data"]["id"], "large-result");
+    let observation_content = observation_message.content.clone();
+    drop(requests);
+
+    assert!(observer.events.iter().any(|event| {
+        matches!(
+            &event.event,
+            RunEvent::ToolCompleted { result, .. } if result.output == full_output
+        )
+    }));
+    let run_events = journal
+        .read_stream(&format!("run:{}", result.run_id))
+        .expect("run events");
+    let completed = run_events
+        .iter()
+        .find(|event| event.event_type == "tool.call.completed.v1")
+        .expect("completed tool event");
+    let completed_payload = journal.decrypt_payload(completed).expect("tool payload");
+    assert_eq!(completed_payload["output"], full_output);
+    let session_messages = sessions
+        .list_messages(result.session_id.as_deref().expect("session id"))
+        .expect("session messages");
+    let stored_tool = session_messages
+        .iter()
+        .find(|record| record.message.role == ModelMessageRole::Tool)
+        .expect("stored observation");
+    assert_eq!(stored_tool.message.content, observation_content);
+}
+
+#[tokio::test]
 async fn cancellation_before_provider_call_starts_no_external_effect() {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
@@ -2473,6 +2699,74 @@ async fn resumed_session_restores_prior_messages_and_persists_new_turn() {
         .expect("session");
     assert_eq!(summary.message_count, 4);
     assert_eq!(summary.last_run_id.as_deref(), Some(second.run_id.as_str()));
+}
+
+#[tokio::test]
+async fn resumed_legacy_session_projects_oversized_tool_history_without_a_context_service() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::FinalOutput {
+            text: "continued".into(),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("legacy-large", Some("legacy"), test_actor())
+        .expect("session");
+    let legacy_messages = [
+        ModelMessage {
+            role: ModelMessageRole::User,
+            content: "old request".into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+        ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: String::new().into(),
+            tool_call_id: None,
+            tool_calls: vec![ModelToolCall {
+                call_id: "legacy-large-call".into(),
+                name: "echo".into(),
+                arguments: json!({"text": "old"}),
+            }],
+        },
+        ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: "x".repeat(900_000).into(),
+            tool_call_id: Some("legacy-large-call".into()),
+            tool_calls: Vec::new(),
+        },
+    ];
+    for message in legacy_messages {
+        sessions
+            .append_message("legacy-large", "legacy-run", message, test_actor())
+            .expect("legacy message");
+    }
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    service
+        .run_in_session("primary", "test", "continue", 1, Some("legacy-large"))
+        .await
+        .expect("resumed run");
+
+    let requests = provider.requests.lock().expect("requests");
+    let projected = requests[0]
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::Tool)
+        .expect("projected legacy tool result");
+    assert!(serde_json::to_vec(projected).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES);
+    drop(requests);
+    let canonical = sessions
+        .list_messages("legacy-large")
+        .expect("canonical messages");
+    assert_eq!(canonical[2].message.content.len(), 900_000);
 }
 
 #[tokio::test]

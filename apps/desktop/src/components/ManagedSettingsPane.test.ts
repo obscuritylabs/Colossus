@@ -20,6 +20,11 @@ import {
   ExtensionCatalog,
   FieldGrid,
   managedModel,
+  managedModelConsumers,
+  managedCredentialConsumers,
+  managedProviderConsumers,
+  managedSearchProfileConsumers,
+  managedTelemetryConsumers,
   managedProvider,
   managedTelemetry,
   managedFieldDestination,
@@ -34,6 +39,7 @@ import {
   SpaceSettingsBody,
   spaceDraft,
   telemetryDraft,
+  updateMcpDraftName,
 } from "./ManagedSettingsPane";
 
 const space: SpaceSummary = {
@@ -267,6 +273,156 @@ describe("ManagedSettingsPane", () => {
     expect(serialized).not.toContain("accessToken");
   });
 
+  it("reports active credential consumers from renderer-safe metadata", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const credentialId = "credential-openapi";
+    snapshot.globalConfiguration.credentials.push({
+      id: credentialId,
+      label: "OpenAPI production",
+      kind: "api_key",
+      backend: "desktop",
+      createdAtMs: 1,
+    });
+    snapshot.globalConfiguration.providers[0]!.revisions[0]!.value.credentialId =
+      credentialId;
+    snapshot.spaces[0]!.configuration.credentialOverrides.OPENAI_API_KEY =
+      credentialId;
+
+    expect(managedCredentialConsumers(snapshot, credentialId)).toEqual([
+      "Provider · openapi",
+      "Workspace · Colossus",
+    ]);
+
+    snapshot.globalConfiguration.providers[0]!.archived = true;
+    expect(managedCredentialConsumers(snapshot, credentialId)).toEqual([
+      "Workspace · Colossus",
+    ]);
+  });
+
+  it("reports active search profile consumers from pinned workspace metadata", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const search = {
+      id: "search-engineering",
+      label: "Engineering search",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            profile: "engineering-search",
+            kind: "searxng" as const,
+            endpoint: "https://search.example.test/search",
+            credentialId: null,
+            authHeader: null,
+            timeoutMs: 30_000,
+          },
+        },
+      ],
+    };
+    snapshot.globalConfiguration.searchProviders.push(search);
+    snapshot.spaces[0]!.configuration.catalogRevisions[`search:${search.id}`] =
+      {
+        resourceId: search.id,
+        revision: search.currentRevision,
+      };
+    snapshot.spaces[0]!.configuration.searchRoles.agent = "engineering-search";
+
+    expect(managedSearchProfileConsumers(snapshot, search.id)).toEqual([
+      "Colossus",
+    ]);
+
+    snapshot.spaces[0]!.archived = true;
+    expect(managedSearchProfileConsumers(snapshot, search.id)).toEqual([]);
+
+    snapshot.spaces[0]!.archived = false;
+    search.archived = true;
+    expect(managedSearchProfileConsumers(snapshot, search.id)).toEqual([]);
+  });
+
+  it("reports active model consumers from pinned workspace metadata", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const model = snapshot.globalConfiguration.models[0]!;
+    const profile = model.revisions[0]!.value.profile;
+    snapshot.spaces[0]!.configuration.catalogRevisions[`model:${model.id}`] = {
+      resourceId: model.id,
+      revision: model.currentRevision,
+    };
+    snapshot.spaces[0]!.configuration.modelRoles.primary = profile;
+
+    expect(managedModelConsumers(snapshot, model.id)).toEqual(["Colossus"]);
+
+    snapshot.spaces[0]!.archived = true;
+    expect(managedModelConsumers(snapshot, model.id)).toEqual([]);
+
+    snapshot.spaces[0]!.archived = false;
+    model.archived = true;
+    expect(managedModelConsumers(snapshot, model.id)).toEqual([]);
+  });
+
+  it("reports active provider consumers from the model catalog", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const provider = snapshot.globalConfiguration.providers[0]!;
+    const model = snapshot.globalConfiguration.models[0]!;
+
+    expect(managedProviderConsumers(snapshot, provider.id)).toEqual([
+      model.label,
+    ]);
+
+    model.archived = true;
+    expect(managedProviderConsumers(snapshot, provider.id)).toEqual([]);
+
+    model.archived = false;
+    provider.archived = true;
+    expect(managedProviderConsumers(snapshot, provider.id)).toEqual([]);
+  });
+
+  it("reports active telemetry consumers from workspace assignments", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const telemetry: CatalogEntry<ManagedTelemetryProfile> = {
+      id: "telemetry-local",
+      label: "Local collector",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            name: "colossus-desktop",
+            endpoint: "http://127.0.0.1:4317",
+            protocol: "grpc",
+            timeoutMs: 10_000,
+            tracesEnabled: true,
+            traceSampleRatioMillionths: 100_000,
+            metricsEnabled: true,
+            metricExportIntervalMs: 60_000,
+            logsOtlp: true,
+            logsStdoutJson: false,
+            journalPayloads: "metadata",
+            acknowledgeSensitiveContent: false,
+            acknowledgeInsecureTransport: false,
+            resourceAttributes: {},
+          },
+        },
+      ],
+    };
+    snapshot.globalConfiguration.telemetryProfiles.push(telemetry);
+    snapshot.spaces[0]!.configuration.catalogRevisions[
+      `telemetry:${telemetry.id}`
+    ] = { resourceId: telemetry.id, revision: 1 };
+
+    expect(managedTelemetryConsumers(snapshot, telemetry.id)).toEqual([
+      "Colossus",
+    ]);
+
+    snapshot.spaces[0]!.archived = true;
+    expect(managedTelemetryConsumers(snapshot, telemetry.id)).toEqual([]);
+
+    snapshot.spaces[0]!.archived = false;
+    telemetry.archived = true;
+    expect(managedTelemetryConsumers(snapshot, telemetry.id)).toEqual([]);
+  });
+
   it("renders scope, provenance, lifecycle, and dirty-state controls", () => {
     const markup = renderPane();
 
@@ -439,6 +595,99 @@ describe("ManagedSettingsPane", () => {
     );
     expect(markup).toContain("Allow stateless HTTP");
     expect(markup).toContain('type="checkbox" checked=""');
+  });
+
+  it("uses the server name as the catalog label until a custom label is set", () => {
+    const base = mcpDraft({
+      id: "mcp-splunk",
+      label: "splunk",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            name: "splunk",
+            transport: "streamable_http",
+            command: null,
+            args: [],
+            workingDirectory: null,
+            environmentCredentials: {},
+            url: "http://127.0.0.1:18000/mcp",
+            headers: {},
+            credentialHeaders: {},
+            allowStateless: true,
+            oauth: null,
+            allowedTools: ["*"],
+            researchTools: [],
+            timeoutMs: null,
+            maxOutputBytes: null,
+          },
+        },
+      ],
+    });
+
+    expect(updateMcpDraftName(base, "splunk-local")).toMatchObject({
+      name: "splunk-local",
+      label: "splunk-local",
+    });
+    expect(
+      updateMcpDraftName(
+        { ...base, label: "Splunk Production" },
+        "splunk-local",
+      ),
+    ).toMatchObject({
+      name: "splunk-local",
+      label: "Splunk Production",
+    });
+  });
+
+  it("groups the primary MCP workflow and keeps catalog metadata advanced", () => {
+    const draft = mcpDraft({
+      id: "mcp-local-tools",
+      label: "Local tools",
+      currentRevision: 1,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            name: "local-tools",
+            transport: "stdio",
+            command: "mcp-local-tools",
+            args: [],
+            workingDirectory: null,
+            environmentCredentials: {},
+            url: null,
+            headers: {},
+            credentialHeaders: {},
+            allowStateless: false,
+            oauth: null,
+            allowedTools: ["*"],
+            researchTools: [],
+            timeoutMs: null,
+            maxOutputBytes: null,
+          },
+        },
+      ],
+    });
+    const markup = renderToStaticMarkup(
+      createElement(McpEditor, {
+        draft,
+        credentials: [],
+        busy: false,
+        onChange: vi.fn(),
+        onCancel: vi.fn(),
+        onSave: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Connection");
+    expect(markup).toContain("Access");
+    expect(markup).toContain("Advanced settings");
+    expect(markup).toContain("Display label (optional)");
+    expect(markup).toContain('<details class="mcp-editor-advanced">');
+    expect(markup).not.toContain("<span>Label</span>");
   });
 
   it("drops hidden stdio arguments when switching an MCP server to HTTP", () => {

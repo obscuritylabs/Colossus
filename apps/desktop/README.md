@@ -63,6 +63,35 @@ Fixtures are development-only. Production builds use the native bridge.
 The renderer is an interface only. Model, tool, policy, sandbox, and canonical-state
 logic belongs in the Rust application and runtime crates.
 
+## UI foundations
+
+Desktop appearance is owned by `src/theme/`:
+
+- `theme.css` defines color, typography, spacing, radius, control, and settings-layout
+  tokens. Dark and light palettes override semantic tokens rather than component rules.
+- `appearance.ts` owns the versioned device-local preference contract and safe parsing.
+- `AppearanceProvider.tsx` resolves System, Dark, and Light color modes, applies Compact,
+  Comfortable, or Large text sizing, and reacts to operating-system theme changes.
+
+New components should use semantic tokens such as `--surface-panel`, `--text-strong`,
+`--font-size-body`, and `--control-height`; do not add palette-specific hex values or
+one-off font sizes. New settings tabs should render one `.managed-settings-body` and let
+the shared `--settings-content-max` contract own width and centering. Pane-specific
+maximum widths make tabs jump as users navigate and are not supported.
+
+Use the state tokens for interactive surfaces instead of inventing component colors:
+`--surface-hover`, `--surface-selected`, `--focus-ring`, and the semantic success,
+warning, and danger families. Source and artifact previews use the shared `--code-*`
+tokens. Syntax highlighting must request the resolved appearance theme so Shiki token
+colors change with the surrounding code canvas. Visible supporting copy must be at least
+the `--font-size-caption` size; denser metadata should change layout before shrinking
+below that floor.
+
+Appearance changes require browser coverage in both color themes, all three text sizes,
+responsive overflow checks, and hover/focus coverage for interactive rows. Include an
+Axe scan when adding visible states. The Desktop contract suite rejects fixed component
+background colors and typography smaller than the caption token.
+
 ## Checks
 
 Renderer checks:

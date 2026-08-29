@@ -75,6 +75,42 @@ fn remote_call_timeout_certainty_follows_dispatch_stage() {
 }
 
 #[test]
+fn complete_json_rpc_tool_errors_are_confirmed_results() {
+    let call = McpOperation::CallTool {
+        server: "fixture".into(),
+        tool: "lookup".into(),
+        description: None,
+        annotations: None,
+        arguments: json!({}),
+        input_schema: Box::new(json!({"type": "object"})),
+        schema_sha256: "unused-by-error-classification".into(),
+    };
+    let result = remote_call_failure(
+        rmcp::ServiceError::McpError(rmcp::ErrorData::internal_error(
+            "project not found",
+            Some(json!({"private": "omitted"})),
+        )),
+        &call,
+    )
+    .expect("confirmed protocol error");
+
+    let RemoteOperationResult::Call(result) = result else {
+        panic!("tool result");
+    };
+    assert_eq!(result.is_error, Some(true));
+    let rendered = serde_json::to_string(&result).expect("rendered result");
+    assert!(rendered.contains("mcp_json_rpc_error"));
+    assert!(rendered.contains("project not found"));
+    assert!(!rendered.contains("private"));
+
+    let error = match remote_call_failure(rmcp::ServiceError::TransportClosed, &call) {
+        Err(error) => error,
+        Ok(_) => panic!("transport loss must remain uncertain"),
+    };
+    assert!(matches!(error, ExecutionError::OutcomeUnknown(_)));
+}
+
+#[test]
 fn discovered_schema_is_enforced_before_call() {
     let input_schema = json!({
         "type": "object",

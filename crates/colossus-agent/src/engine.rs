@@ -236,6 +236,7 @@ impl AgentService {
                 "{error}; start a new session or repair this legacy session from durable effect evidence"
             ),
         })?;
+        messages = project_model_tool_observations(&messages);
         if !route.capabilities.tool_calls
             && messages.iter().any(|message| {
                 message.role == ModelMessageRole::Tool || !message.tool_calls.is_empty()
@@ -928,7 +929,7 @@ impl AgentService {
                 pending_tool_turn.clone(),
                 system_actor(),
             )?;
-            let mut tool_messages = Vec::with_capacity(calls.len());
+            let mut tool_results = Vec::with_capacity(calls.len());
             let mut post_commit_events = Vec::<RunEvent>::new();
             let mut terminal = None::<(AgentError, String, String, &'static str, Value)>;
             for (call_index, call) in calls.iter().cloned().enumerate() {
@@ -955,7 +956,7 @@ impl AgentService {
                             call: pending.clone(),
                             elapsed_seconds: started.elapsed().as_secs_f64(),
                         });
-                        tool_messages.push(tool_result_message(&result));
+                        tool_results.push(result);
                     }
                     break;
                 }
@@ -1038,7 +1039,7 @@ impl AgentService {
                             call: pending.clone(),
                             elapsed_seconds: started.elapsed().as_secs_f64(),
                         });
-                        tool_messages.push(tool_result_message(&result));
+                        tool_results.push(result);
                     }
                     terminal = Some((
                         AgentError::PlanWriteRequired,
@@ -1114,7 +1115,7 @@ impl AgentService {
                                     "outcome_certainty": "not_executed",
                                 }),
                             )?;
-                            tool_messages.push(tool_result_message(&result));
+                            tool_results.push(result);
                         }
                         terminal = Some((
                             error,
@@ -1138,8 +1139,11 @@ impl AgentService {
                         .await
                     {
                         Ok(result) => result,
-                        Err(ToolError::Unknown(_) | ToolError::InvalidArguments { .. }) => {
-                            unreachable!("validated call became unknown or invalid")
+                        Err(ToolError::Unknown(message)) => {
+                            tool_error_result(&call, "unknown_tool", &message)
+                        }
+                        Err(ToolError::InvalidArguments { message, .. }) => {
+                            tool_error_result(&call, "invalid_arguments", &message)
                         }
                         Err(ToolError::Failed(message)) => {
                             tool_error_result(&call, "execution_error", &message)
@@ -1176,7 +1180,7 @@ impl AgentService {
                                     }),
                                 )
                             })?;
-                            tool_messages.push(tool_result_message(&result));
+                            tool_results.push(result);
                             for pending in calls.iter().skip(call_index.saturating_add(1)) {
                                 let skipped = unexecuted_tool_result(pending, &call.call_id, code);
                                 self.append(
@@ -1200,7 +1204,7 @@ impl AgentService {
                                     call: pending.clone(),
                                     elapsed_seconds: started.elapsed().as_secs_f64(),
                                 });
-                                tool_messages.push(tool_result_message(&skipped));
+                                tool_results.push(skipped);
                             }
                             terminal = Some((
                                 error.into(),
@@ -1229,7 +1233,7 @@ impl AgentService {
                         let message = error.to_string();
                         let code = tool_error_code(&error);
                         let result = terminal_tool_error_result(&call, &error);
-                        tool_messages.push(tool_result_message(&result));
+                        tool_results.push(result);
                         for pending in calls.iter().skip(call_index.saturating_add(1)) {
                             let skipped = unexecuted_tool_result(pending, &call.call_id, code);
                             post_commit_events.push(RunEvent::ToolCancelled {
@@ -1237,7 +1241,7 @@ impl AgentService {
                                 call: pending.clone(),
                                 elapsed_seconds: started.elapsed().as_secs_f64(),
                             });
-                            tool_messages.push(tool_result_message(&skipped));
+                            tool_results.push(skipped);
                         }
                         terminal = Some((
                             error.into(),
@@ -1259,7 +1263,6 @@ impl AgentService {
                     duration_seconds: tool_started.elapsed().as_secs_f64(),
                     elapsed_seconds: started.elapsed().as_secs_f64(),
                 };
-                let tool_message = tool_result_message(&result);
                 let tool_error_type = (result.exit_code != 0).then_some("tool.failed");
                 tool_span.record(
                     "otel.status_code",
@@ -1290,7 +1293,7 @@ impl AgentService {
                         Err(error) => {
                             let message =
                                 format!("plan tool returned an invalid canonical record: {error}");
-                            tool_messages.push(tool_message);
+                            tool_results.push(result);
                             post_commit_events.push(completed_event);
                             for pending in calls.iter().skip(call_index.saturating_add(1)) {
                                 let skipped = unexecuted_tool_result(
@@ -1303,7 +1306,7 @@ impl AgentService {
                                     call: pending.clone(),
                                     elapsed_seconds: started.elapsed().as_secs_f64(),
                                 });
-                                tool_messages.push(tool_result_message(&skipped));
+                                tool_results.push(skipped);
                             }
                             terminal = Some((
                                 AgentError::Configuration(message.clone()),
@@ -1336,7 +1339,7 @@ impl AgentService {
                         let message =
                             "plan tool returned a record outside the bound Plan Mode target"
                                 .to_owned();
-                        tool_messages.push(tool_message);
+                        tool_results.push(result);
                         post_commit_events.push(completed_event);
                         for pending in calls.iter().skip(call_index.saturating_add(1)) {
                             let skipped = unexecuted_tool_result(
@@ -1349,7 +1352,7 @@ impl AgentService {
                                 call: pending.clone(),
                                 elapsed_seconds: started.elapsed().as_secs_f64(),
                             });
-                            tool_messages.push(tool_result_message(&skipped));
+                            tool_results.push(skipped);
                         }
                         terminal = Some((
                             AgentError::Configuration(message.clone()),
@@ -1403,9 +1406,10 @@ impl AgentService {
                     )
                 })?;
                 post_commit_events.push(completed_event);
-                tool_messages.push(tool_message);
+                tool_results.push(result);
             }
 
+            let tool_messages = tool_result_observation_messages(&tool_results);
             next_messages.extend(tool_messages.iter().cloned());
             validate_model_transcript(&next_messages).map_err(|error| {
                 AgentError::Configuration(format!(

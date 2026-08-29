@@ -18,6 +18,8 @@ import type {
   WorkspaceFile,
   WorkspaceSummary,
 } from "../types";
+import type { ResolvedColorTheme } from "../theme/appearance";
+import { useAppearance } from "../theme/AppearanceProvider";
 
 const MAX_OPEN_FILES = 8;
 
@@ -88,12 +90,19 @@ function entryIcon(entry: WorkspaceEntry, expanded: boolean) {
 async function highlight(
   content: string,
   language: string,
+  colorTheme: ResolvedColorTheme,
 ): Promise<import("../syntax-highlighter").HighlightedLine[]> {
   const { highlightSource } = await import("../syntax-highlighter");
-  return highlightSource(content, language);
+  return highlightSource(content, language, colorTheme);
 }
 
-function HighlightedCode({ file }: { file: WorkspaceFile }) {
+function HighlightedCode({
+  file,
+  colorTheme,
+}: {
+  file: WorkspaceFile;
+  colorTheme: ResolvedColorTheme;
+}) {
   const [lines, setLines] = useState<
     import("../syntax-highlighter").HighlightedLine[] | null
   >(null);
@@ -101,7 +110,7 @@ function HighlightedCode({ file }: { file: WorkspaceFile }) {
   useEffect(() => {
     let current = true;
     setLines(null);
-    void highlight(file.content, file.language)
+    void highlight(file.content, file.language, colorTheme)
       .then((highlighted) => {
         if (current) {
           setLines(highlighted);
@@ -119,7 +128,7 @@ function HighlightedCode({ file }: { file: WorkspaceFile }) {
     return () => {
       current = false;
     };
-  }, [file.content, file.language]);
+  }, [colorTheme, file.content, file.language]);
 
   const visibleLines =
     lines ??
@@ -171,6 +180,7 @@ export function WorkspaceFiles({
   onOpenSettings,
   openRequest,
 }: WorkspaceFilesProps) {
+  const { resolvedColorTheme } = useAppearance();
   const [directories, setDirectories] = useState<
     ReadonlyMap<string, WorkspaceDirectory>
   >(new Map());
@@ -549,7 +559,10 @@ export function WorkspaceFiles({
               <span>{humanFileSize(activeFile.sizeBytes)}</span>
               <span>UTF-8</span>
             </div>
-            <HighlightedCode file={activeFile} />
+            <HighlightedCode
+              file={activeFile}
+              colorTheme={resolvedColorTheme}
+            />
           </section>
         ) : loadingPath !== null ? (
           <div className="file-preview-empty">

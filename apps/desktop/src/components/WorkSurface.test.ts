@@ -241,6 +241,8 @@ describe("WorkSurface side panels", () => {
     expect(markup).toContain('id="thread-details-title"');
     expect(markup).toContain("Colossus");
     expect(markup).toContain("bootstrap.rs");
+    expect(markup).toContain("Snapshots");
+    expect(markup).toContain("All resources");
     expect(markup).not.toContain("src/bootstrap.rs");
   });
 });

@@ -595,10 +595,10 @@ pub(super) fn tool_gateway_error(error: GatewayError) -> ToolError {
 pub(super) fn mcp_runtime_tool_error(error: RuntimeError) -> ToolError {
     match error {
         RuntimeError::Gateway(error) => tool_gateway_error(error),
-        RuntimeError::Mcp(McpError::UnknownServer(message) | McpError::ToolDenied(message)) => {
-            ToolError::Denied(message)
-        }
-        RuntimeError::Mcp(McpError::InvalidArguments(message)) => ToolError::InvalidArguments {
+        RuntimeError::Mcp(McpError::ToolDenied(message)) => ToolError::Denied(message),
+        RuntimeError::Mcp(
+            McpError::UnknownServer(message) | McpError::InvalidArguments(message),
+        ) => ToolError::InvalidArguments {
             tool: "mcp.call".into(),
             message,
         },

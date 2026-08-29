@@ -235,6 +235,9 @@ pub(super) async fn invoke_mcp_tool(
     tool: &str,
     arguments: Value,
 ) -> Result<McpCallOutput, RuntimeError> {
+    if !executor.allows_tool(server, tool)? {
+        return Err(McpError::ToolDenied(format!("{server}:{tool}")).into());
+    }
     let discovered = discover_mcp_tools(
         gateway,
         executor,
@@ -247,7 +250,7 @@ pub(super) async fn invoke_mcp_tool(
     let tool_spec = discovered
         .iter()
         .find(|candidate| candidate.name == tool)
-        .ok_or_else(|| McpError::ToolDenied(format!("{server}:{tool}")))?;
+        .ok_or_else(|| unadvertised_mcp_tool_error(server, tool, &discovered))?;
     validate_tool_arguments(tool_spec, &arguments)?;
     let request = executor.request(
         actor,
@@ -271,4 +274,27 @@ pub(super) async fn invoke_mcp_tool(
         ));
     }
     Ok(output)
+}
+
+pub(super) fn unadvertised_mcp_tool_error(
+    server: &str,
+    tool: &str,
+    discovered: &[McpToolSummary],
+) -> McpError {
+    const MAX_RELATED_TOOLS: usize = 8;
+
+    let related = discovered
+        .iter()
+        .filter(|candidate| candidate.name.contains(tool) || tool.contains(&candidate.name))
+        .take(MAX_RELATED_TOOLS)
+        .map(|candidate| candidate.name.as_str())
+        .collect::<Vec<_>>();
+    let guidance = if related.is_empty() {
+        "call mcp.tools for the exact available names".into()
+    } else {
+        format!("related available tools: {}", related.join(", "))
+    };
+    McpError::InvalidArguments(format!(
+        "server {server} did not advertise tool {tool}; {guidance}"
+    ))
 }

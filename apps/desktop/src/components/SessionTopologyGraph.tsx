@@ -79,7 +79,7 @@ const DEFAULT_EDGE_OPTIONS = {
   focusable: false,
   selectable: false,
   deletable: false,
-  style: { stroke: "#3a5777", strokeWidth: 1 },
+  style: { stroke: "var(--border-strong)", strokeWidth: 1 },
 } as const;
 
 function PrimaryNodeCard({ data }: { data: PrimaryNodeData }) {
@@ -399,7 +399,10 @@ export function SessionTopologyGraph({
         zoomOnScroll={false}
         zoomOnDoubleClick={false}
         preventScrolling={false}
-        onlyRenderVisibleElements
+        // Keep bounded canonical controls mounted while fitView settles after
+        // a family expands. This preserves focus and accessible names instead
+        // of temporarily removing the control that initiated the update.
+        onlyRenderVisibleElements={false}
       />
     </div>
   );

@@ -958,8 +958,11 @@ impl ToolExecutor for GatewayToolExecutor {
                         message: "arguments must be an object".into(),
                     }
                 })?;
-                self.execute_mcp_tool(&call, context, &server, &tool, arguments)
-                    .await?
+                let result = self
+                    .execute_mcp_tool(&call, context, &server, &tool, arguments)
+                    .await?;
+                exit_code = result.exit_code;
+                result.output
             }
             "web.search" => {
                 let query = required_tool_string(&call, "query")?.to_owned();

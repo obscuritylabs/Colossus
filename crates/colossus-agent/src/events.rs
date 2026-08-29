@@ -364,15 +364,6 @@ pub(super) fn cancelled_tool_result(call: &ToolCall) -> ToolResult {
     }
 }
 
-pub(super) fn tool_result_message(result: &ToolResult) -> ModelMessage {
-    ModelMessage {
-        role: ModelMessageRole::Tool,
-        content: result.output.clone().into(),
-        tool_call_id: Some(result.call_id.clone()),
-        tool_calls: Vec::new(),
-    }
-}
-
 pub(super) fn system_actor() -> Actor {
     Actor {
         actor_type: ActorType::System,

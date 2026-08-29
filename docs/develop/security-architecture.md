@@ -70,6 +70,30 @@ references. Filesystem reads, provider output, network responses, process output
 memory retrieval remain quarantined until mandatory post-effect policy permits release.
 A denial cannot leak private bytes through output, errors, audit payloads, or observers.
 
+Tool execution and model observation have separate output bounds. After post-effect
+release, the complete released `ToolResult` remains available to the terminal run event
+and canonical run evidence. Before provider continuation or session persistence, the
+agent projects that result into a bounded, valid JSON observation. Oversized structured
+results retain salient fields; text and collection previews retain bounded head/tail
+content; encoded binary payloads are replaced by metadata; and every truncated
+observation records its original byte count and SHA-256 digest. The projection preserves
+the canonical tool name and call ID, never grants access to unreleased bytes, and is
+reapplied as a derived view when older session history is prepared for a provider.
+
+A complete, bounded JSON-RPC error frame from an MCP server is a confirmed server
+response. Colossus normalizes it into a quarantined `CallToolResult` with `isError: true`,
+then applies credential redaction and the ordinary post-effect release decision before
+the agent can inspect it. Missing, truncated, malformed, disconnected, or timed-out MCP
+responses after dispatch retain outcome-unknown semantics and terminate the run rather
+than inviting an unsafe retry.
+
+Model-supplied MCP server names, live tool names, and live tool arguments are dynamic
+inputs beneath the statically offered `mcp.call` tool. Unknown servers, tools that an
+allow-all server does not advertise, and arguments rejected by the discovered schema
+return bounded invalid-argument observations so a later model turn can correct them.
+An exact tool excluded by an explicit configured allowlist remains a terminal policy
+denial and never reaches the call adapter.
+
 Provider and model diagnostics have an explicit local-operator release. The CLI
 `--include-provider-response` option and the local TUI `/models doctor` and `/provider
 doctor` commands can return the credential-free request plus at most 16 KiB of a failed
@@ -729,8 +753,10 @@ from interrupting valid research while an inner external operation is active; ex
 OPA policy remains responsible for supplying an equivalent bounded research deadline.
 
 Provider-visible tool turns preserve the same certainty boundary. The agent stages an
-assistant tool-call message with exactly one terminal tool-result message per emitted call
-and commits the complete turn to the session in one journal transaction. Before any tool
+assistant tool-call message with exactly one terminal tool-observation message per emitted
+call and commits the structurally complete turn to the session in one journal transaction;
+the complete released result remains in the canonical run evidence rather than the
+provider-visible session projection. Before any tool
 effect begins, the session records a pending-turn marker with the exact provider call IDs;
 pre-effect validation rejects duplicate or reused IDs. The atomic message batch also settles
 that marker. A crash or uncertain batch commit therefore leaves a durable replay guard that

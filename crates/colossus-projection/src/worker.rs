@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::Mutex;
+use std::{collections::BTreeMap, sync::Mutex};
 
 /// Pure event-to-projection reducer.
 pub trait ProjectionHandler: Send + Sync {
@@ -83,47 +83,27 @@ impl ProjectionWorker {
         let mut applied = 0_u64;
         let mut passive_batches = Vec::new();
         let mut passive_applied = 0_u64;
+        let mut pages = BTreeMap::new();
         for handler in &self.handlers {
             let position = self.store.position(handler.name())?;
-            let work = self
-                .journal
-                .read_projection_work(position.saturating_add(1), limit_per_projection)?;
-            let mut through_sequence = position;
-            let mut events = Vec::with_capacity(work.len());
-            for item in work {
-                let expected_sequence = through_sequence.saturating_add(1);
-                if item.global_sequence != expected_sequence {
-                    return Err(StoreError::Verification(format!(
-                        "projection {} expected outbox sequence {expected_sequence}, got {}",
+            let from_sequence = position.saturating_add(1);
+            let page = match pages.get(&from_sequence) {
+                Some(page) => Arc::clone(page),
+                None => {
+                    let page = Arc::new(self.read_page(
                         handler.name(),
-                        item.global_sequence
-                    )));
+                        from_sequence,
+                        limit_per_projection,
+                    )?);
+                    pages.insert(from_sequence, Arc::clone(&page));
+                    page
                 }
-                let event = self
-                    .journal
-                    .read_global(item.global_sequence, 1)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        StoreError::Verification(format!(
-                            "projection outbox sequence {} has no journal event",
-                            item.global_sequence
-                        ))
-                    })?;
-                if event.global_sequence != item.global_sequence || event.event_id != item.event_id
-                {
-                    return Err(StoreError::Verification(format!(
-                        "projection outbox sequence {} does not match its journal event",
-                        item.global_sequence
-                    )));
-                }
-                through_sequence = item.global_sequence;
-                events.push(event);
-            }
-            if events.is_empty() {
+            };
+            let Some((_, last_event)) = page.last() else {
                 continue;
-            }
-            if events.iter().all(|event| !handler.applies_to(event)) {
+            };
+            let through_sequence = last_event.global_sequence;
+            if page.iter().all(|(_, event)| !handler.applies_to(event)) {
                 passive_batches.push(ProjectionBatch {
                     projection: handler.name().into(),
                     expected_position: position,
@@ -142,17 +122,26 @@ impl ProjectionWorker {
             }
 
             let mut projected_position = position;
-            for event in events {
-                let mutations = if handler.applies_to(&event) {
-                    let payload = if handler.requires_payload() {
-                        self.journal.decrypt_payload(&event)?
-                    } else {
-                        Value::Null
-                    };
-                    handler.project(self.store.as_ref(), &event, &payload)?
+            let mut passive_through = None;
+            for (_, event) in page.iter() {
+                if !handler.applies_to(event) {
+                    passive_through = Some(event.global_sequence);
+                    continue;
+                }
+                if let Some(through_sequence) = passive_through.take() {
+                    self.apply_passive_span(
+                        handler.name(),
+                        &mut projected_position,
+                        through_sequence,
+                        &mut applied,
+                    )?;
+                }
+                let payload = if handler.requires_payload() {
+                    self.journal.decrypt_payload(event)?
                 } else {
-                    Vec::new()
+                    Value::Null
                 };
+                let mutations = handler.project(self.store.as_ref(), event, &payload)?;
                 self.store.apply(ProjectionBatch {
                     projection: handler.name().into(),
                     expected_position: projected_position,
@@ -161,6 +150,14 @@ impl ProjectionWorker {
                 })?;
                 projected_position = event.global_sequence;
                 applied = applied.saturating_add(1);
+            }
+            if let Some(through_sequence) = passive_through {
+                self.apply_passive_span(
+                    handler.name(),
+                    &mut projected_position,
+                    through_sequence,
+                    &mut applied,
+                )?;
             }
         }
         if !passive_batches.is_empty() {
@@ -171,6 +168,65 @@ impl ProjectionWorker {
             applied,
             projections: self.status()?,
         })
+    }
+
+    fn read_page(
+        &self,
+        projection: &str,
+        from_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<(ProjectionWorkItem, EventEnvelope)>, StoreError> {
+        let work = self.journal.read_projection_work(from_sequence, limit)?;
+        let mut expected_sequence = from_sequence;
+        for item in &work {
+            if item.global_sequence != expected_sequence {
+                return Err(StoreError::Verification(format!(
+                    "projection {projection} expected outbox sequence {expected_sequence}, got {}",
+                    item.global_sequence
+                )));
+            }
+            expected_sequence = expected_sequence.saturating_add(1);
+        }
+        let events = self.journal.read_global(from_sequence, work.len())?;
+        if events.len() != work.len() {
+            let missing_sequence = work
+                .get(events.len())
+                .map_or(expected_sequence, |item| item.global_sequence);
+            return Err(StoreError::Verification(format!(
+                "projection outbox sequence {missing_sequence} has no journal event"
+            )));
+        }
+        work.into_iter()
+            .zip(events)
+            .map(|(item, event)| {
+                if event.global_sequence != item.global_sequence || event.event_id != item.event_id
+                {
+                    return Err(StoreError::Verification(format!(
+                        "projection outbox sequence {} does not match its journal event",
+                        item.global_sequence
+                    )));
+                }
+                Ok((item, event))
+            })
+            .collect()
+    }
+
+    fn apply_passive_span(
+        &self,
+        projection: &str,
+        projected_position: &mut u64,
+        through_sequence: u64,
+        applied: &mut u64,
+    ) -> Result<(), StoreError> {
+        self.store.apply(ProjectionBatch {
+            projection: projection.into(),
+            expected_position: *projected_position,
+            through_sequence,
+            mutations: Vec::new(),
+        })?;
+        *applied = applied.saturating_add(through_sequence.saturating_sub(*projected_position));
+        *projected_position = through_sequence;
+        Ok(())
     }
 
     /// Replay bounded batches until every projection is current.

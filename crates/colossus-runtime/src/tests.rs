@@ -2091,6 +2091,120 @@ fn ephemeral_runtime_uses_fresh_process_local_state_without_storage_files() {
 }
 
 #[tokio::test]
+async fn background_projection_maintenance_advances_during_long_host_operations() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime");
+
+    runtime
+        .create_session(Some("maintenance"))
+        .expect("create session");
+    assert!(
+        runtime
+            .projection_status()
+            .expect("lagged projections")
+            .iter()
+            .any(|projection| projection.lag > 0)
+    );
+
+    runtime
+        .run_with_background_projection_maintenance(tokio::time::sleep(
+            std::time::Duration::from_millis(1_100),
+        ))
+        .await;
+
+    assert!(
+        runtime
+            .projection_status()
+            .expect("maintained projections")
+            .iter()
+            .all(|projection| projection.ready)
+    );
+}
+
+#[test]
+fn mcp_agent_tool_results_preserve_reported_error_status() {
+    let successful: colossus_mcp::McpCallOutput = serde_json::from_value(json!({
+        "server": "fixture",
+        "tool": "lookup",
+        "result": {"content": [], "isError": false}
+    }))
+    .expect("successful MCP result");
+    let failed: colossus_mcp::McpCallOutput = serde_json::from_value(json!({
+        "server": "fixture",
+        "tool": "lookup",
+        "result": {
+            "content": [{"type": "text", "text": "project not found"}],
+            "isError": true
+        }
+    }))
+    .expect("failed MCP result");
+
+    let successful = crate::mcp_agent_tool_result(successful).expect("successful agent result");
+    let failed = crate::mcp_agent_tool_result(failed).expect("failed agent result");
+    assert_eq!(successful.exit_code, 0);
+    assert_eq!(failed.exit_code, 1);
+    assert!(failed.output.contains("project not found"));
+}
+
+#[test]
+fn mcp_model_input_errors_are_recoverable_but_allowlist_denials_remain_terminal() {
+    let unknown = crate::mcp_runtime_tool_error(RuntimeError::Mcp(
+        colossus_mcp::McpError::UnknownServer("unknown".into()),
+    ));
+    let invalid = crate::mcp_runtime_tool_error(RuntimeError::Mcp(
+        colossus_mcp::McpError::InvalidArguments("bad dynamic arguments".into()),
+    ));
+    let denied = crate::mcp_runtime_tool_error(RuntimeError::Mcp(
+        colossus_mcp::McpError::ToolDenied("gitlab:delete_project".into()),
+    ));
+
+    assert!(matches!(
+        unknown,
+        colossus_ports::ToolError::InvalidArguments { .. }
+    ));
+    assert!(matches!(
+        invalid,
+        colossus_ports::ToolError::InvalidArguments { .. }
+    ));
+    assert!(matches!(denied, colossus_ports::ToolError::Denied(_)));
+}
+
+#[test]
+fn unadvertised_mcp_tools_include_bounded_related_name_guidance() {
+    let tool = |name: &str| colossus_mcp::McpToolSummary {
+        server: "gitlab".into(),
+        name: name.into(),
+        title: None,
+        description: None,
+        annotations: None,
+        input_schema: json!({"type": "object"}),
+        schema_sha256: "fixture".into(),
+    };
+    let error = crate::unadvertised_mcp_tool_error(
+        "gitlab",
+        "merge_request_diffs",
+        &[
+            tool("get_merge_request_diffs"),
+            tool("list_merge_request_diffs"),
+            tool("list_projects"),
+        ],
+    );
+    let message = error.to_string();
+
+    assert!(message.contains("get_merge_request_diffs"));
+    assert!(message.contains("list_merge_request_diffs"));
+    assert!(!message.contains("list_projects"));
+}
+
+#[tokio::test]
 async fn run_input_reads_honor_image_size_without_widening_ordinary_effects() {
     let workspace = private_tempdir();
     let candidate = workspace.path().join("candidate.bin");

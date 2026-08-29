@@ -34,6 +34,26 @@ requests, normalized events, bounded correction, and terminal max-turn behavior.
 runtime translates validated tool operations into application requests and effect
 gateway calls.
 
+## Runtime composition structure
+
+The runtime keeps its public facade stable while separating the startup responsibilities
+that a future host needs to reason about independently:
+
+- `config` owns the strict serialized schema and path resolution; `adapter_composition`
+  constructs provider, search, and memory adapters from that already-validated schema.
+- `storage_composition` opens keys, the canonical journal, projection storage, recovery
+  state, and non-secret storage diagnostics as one unit.
+- `access_policy` resolves the model-visible catalog and effect policy together. A host
+  cannot assemble a tool catalog independently from its action and resource authority.
+- `composition` owns ordering, recovery, and final service wiring after those narrower
+  units succeed.
+- `agent_runs`, `plan_runs`, and `goal_runs` respectively own generic model dispatch,
+  Plan lifecycle orchestration, and bounded durable Goal execution.
+
+These are private composition boundaries, not alternate public APIs. CLI, TUI, worker,
+gRPC, and embedded callers continue to enter through `Runtime` and the stable SDK
+contracts.
+
 ## Provider streams
 
 Provider adapters normalize Responses-compatible or Chat-Completions-compatible streams.

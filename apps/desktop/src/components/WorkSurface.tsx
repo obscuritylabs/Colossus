@@ -392,11 +392,25 @@ export function WorkSurface({
     [selectedPlanId, sessionPlans],
   );
   const sessionResourceCounts = useMemo(() => {
+    const sourceCount = selectSessionSources(conversationViews).length;
+    const durableMapCount =
+      sessionMap === null
+        ? 0
+        : sessionMap.delegates.length +
+          sessionMap.goals.length +
+          sessionMap.tasks.length +
+          sessionMap.decisions.length +
+          sessionMap.memories.length +
+          sessionMap.contextSnapshots.length +
+          sessionMap.researchRuns.length;
     return {
       planCount: sessionPlans.length,
-      sourceCount: selectSessionSources(conversationViews).length,
+      resourceCount:
+        sessionPlans.length + sourceCount + artifacts.length + durableMapCount,
+      snapshotCount: sessionMap?.contextSnapshots.length ?? 0,
+      sourceCount,
     };
-  }, [conversationViews, sessionPlans.length]);
+  }, [artifacts.length, conversationViews, sessionMap, sessionPlans.length]);
 
   useEffect(() => {
     if (selectedSessionId === null) {
@@ -639,6 +653,11 @@ export function WorkSurface({
     }
     setActiveDrawer(null);
     requestAnimationFrame(() => trigger?.focus());
+  }
+
+  function openSessionViewFromDetails(view: SessionWorkspaceView) {
+    setSessionWorkspaceView(view);
+    closeDrawer();
   }
 
   function toggleDrawer(
@@ -1413,10 +1432,12 @@ export function WorkSurface({
                     delegateError={delegateError}
                     sessionRunCount={conversationViews.length}
                     sessionPlanCount={sessionResourceCounts.planCount}
+                    sessionResourceCount={sessionResourceCounts.resourceCount}
+                    sessionSnapshotCount={sessionResourceCounts.snapshotCount}
                     sessionSourceCount={sessionResourceCounts.sourceCount}
                     onSelectParticipant={onSelectParticipant}
                     onBackToThread={onBackToThreadDetails}
-                    onOpenSessionView={setSessionWorkspaceView}
+                    onOpenSessionView={openSessionViewFromDetails}
                   />
                 ) : (
                   <PlanDetailsPanel

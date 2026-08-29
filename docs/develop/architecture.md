@@ -104,6 +104,11 @@ infrastructure adapters implement ports and are assembled only by the runtime.
   resource obligations. Ambient obligations remain request-bound and require the
   acknowledged danger runtime envelope.
 - CLI and TUI construct requests, invoke application services, and render typed results.
+- A released `ToolResult` is the complete run-facing result used by terminal events and
+  run evidence. The agent derives a separate bounded, parseable tool observation for
+  model continuation and session history. `colossus-tools` owns that projection;
+  `colossus-context` reapplies it when preparing legacy session history so an older
+  unbounded result cannot make the newest logical turn impossible to compact.
 - Desktop persists folder-backed `WorkspaceProfile` records and presents them as
   Workspaces. One natively selected Workspace projects its workspace, provider/model, access,
   execution-boundary, and terminal configuration into the existing command boundary;

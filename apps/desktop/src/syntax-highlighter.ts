@@ -1,6 +1,9 @@
 import { createHighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import githubDarkDefault from "@shikijs/themes/github-dark-default";
+import githubLightDefault from "@shikijs/themes/github-light-default";
+
+import type { ResolvedColorTheme } from "./theme/appearance";
 
 type LanguageInput = (typeof import("@shikijs/langs/rust"))["default"];
 
@@ -37,7 +40,7 @@ const LANGUAGE_LOADERS: Readonly<Record<string, () => Promise<LanguageInput>>> =
   };
 
 const highlighter = createHighlighterCore({
-  themes: [githubDarkDefault],
+  themes: [githubDarkDefault, githubLightDefault],
   langs: [],
   engine: createJavaScriptRegexEngine(),
 });
@@ -53,6 +56,7 @@ export type HighlightedLine = HighlightedToken[];
 export async function highlightSource(
   content: string,
   language: string,
+  colorTheme: ResolvedColorTheme,
 ): Promise<HighlightedLine[]> {
   const loaded = await highlighter;
   const loader = LANGUAGE_LOADERS[language];
@@ -69,7 +73,8 @@ export async function highlightSource(
   const languageToHighlight = loader === undefined ? "plaintext" : language;
   const result = loaded.codeToTokens(content, {
     lang: languageToHighlight,
-    theme: "github-dark-default",
+    theme:
+      colorTheme === "light" ? "github-light-default" : "github-dark-default",
   });
   return result.tokens.map((line) =>
     line.map((token) => ({

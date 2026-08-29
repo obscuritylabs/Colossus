@@ -2,7 +2,8 @@ use super::*;
 use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
-    ServiceExt as _,
+    ServiceError, ServiceExt as _,
+    model::{ContentBlock, ErrorData},
     transport::{
         auth::{
             AuthClient, AuthError, AuthorizationManager, AuthorizationSession,
@@ -342,6 +343,15 @@ impl McpExecutor {
     /// Deterministic configured server names.
     pub fn server_names(&self) -> Vec<String> {
         self.servers.keys().cloned().collect()
+    }
+
+    /// Return whether one configured server permits an exact tool name.
+    pub fn allows_tool(&self, server: &str, tool: &str) -> Result<bool, McpError> {
+        let server = self
+            .servers
+            .get(server)
+            .ok_or_else(|| McpError::UnknownServer(server.into()))?;
+        Ok(server.allowed_tools.allows(tool))
     }
 
     /// Build research call templates with recursive `{query}` substitution.
@@ -1131,6 +1141,43 @@ pub(super) enum RemoteOperationResult {
     Call(CallToolResult),
 }
 
+fn confirmed_protocol_error_result(error: ErrorData) -> CallToolResult {
+    const MAX_ERROR_MESSAGE_CHARS: usize = 32 * 1024;
+
+    let message_chars = error.message.chars().count();
+    let message = bounded_string(&error.message, MAX_ERROR_MESSAGE_CHARS);
+    CallToolResult::error(vec![ContentBlock::text(
+        json!({
+            "error": {
+                "type": "mcp_json_rpc_error",
+                "code": error.code.0,
+                "message": message,
+                "message_truncated": message_chars > MAX_ERROR_MESSAGE_CHARS,
+            }
+        })
+        .to_string(),
+    )])
+}
+
+pub(super) fn remote_call_failure(
+    error: ServiceError,
+    operation: &McpOperation,
+) -> Result<RemoteOperationResult, ExecutionError> {
+    match error {
+        // A complete JSON-RPC error frame confirms that the server answered this
+        // request. Normalize it into the MCP tool-error channel so the released,
+        // redacted result can guide a later turn. Transport loss and timeouts still
+        // have unknown outcomes and must terminate the run.
+        ServiceError::McpError(error) => Ok(RemoteOperationResult::Call(
+            confirmed_protocol_error_result(error),
+        )),
+        _ => Err(operation_error(
+            operation,
+            "MCP Streamable HTTP operation failed",
+        )),
+    }
+}
+
 pub(super) async fn execute_remote_operation<C>(
     http: C,
     server: &ConfiguredServer,
@@ -1188,7 +1235,7 @@ where
                 .call_tool(CallToolRequestParams::new(tool.clone()).with_arguments(arguments))
                 .await
                 .map(RemoteOperationResult::Call)
-                .map_err(|_| operation_error(operation, "MCP Streamable HTTP operation failed"))
+                .or_else(|error| remote_call_failure(error, operation))
         }
     };
     let _ = service.close_with_timeout(Duration::from_millis(500)).await;

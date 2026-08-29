@@ -95,6 +95,461 @@ test("settings dropdowns use styled app-owned menus with keyboard support", asyn
   await expect(page.getByRole("listbox")).toHaveCount(0);
 });
 
+test("appearance preferences are readable, consistent, and persistent", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const globalTabs = [
+    "Providers",
+    "Models",
+    "Credentials",
+    "MCP",
+    "Search",
+    "Telemetry",
+    "Defaults",
+    "Desktop",
+  ] as const;
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+
+  const colorTheme = page.getByRole("combobox", {
+    name: /Color theme/u,
+  });
+  await colorTheme.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Light", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-theme-preference",
+    "light",
+  );
+  await page.waitForTimeout(160);
+
+  for (const tab of globalTabs) {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    const lightAccessibility = await new AxeBuilder({ page })
+      .include(".managed-settings-body")
+      .analyze();
+    expect(
+      lightAccessibility.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+      `${tab} should remain accessible in the light theme`,
+    ).toEqual([]);
+  }
+
+  for (const [tab, rowSelector] of [
+    ["Providers", ".provider-row"],
+    ["Models", ".model-row"],
+    ["Credentials", ".credential-list .managed-list-row"],
+    ["Search", ".search-profile-row"],
+    ["Telemetry", ".telemetry-row"],
+  ] as const) {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    const row = page.locator(rowSelector).first();
+    await row.hover();
+    await expect(row).toHaveCSS("background-color", "rgb(230, 237, 246)");
+    const hoverAccessibility = await new AxeBuilder({ page })
+      .include(rowSelector)
+      .analyze();
+    expect(
+      hoverAccessibility.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+      `${tab} hover state should remain accessible in the light theme`,
+    ).toEqual([]);
+  }
+
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await colorTheme.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Dark", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.waitForTimeout(160);
+
+  for (const tab of globalTabs) {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    const darkAccessibility = await new AxeBuilder({ page })
+      .include(".managed-settings-body")
+      .analyze();
+    expect(
+      darkAccessibility.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+      `${tab} should remain accessible in the dark theme`,
+    ).toEqual([]);
+  }
+
+  const textSize = page.getByRole("combobox", { name: /Text size/u });
+  for (const [label, value, expectedRootSize] of [
+    ["Compact", "compact", "15px"],
+    ["Comfortable", "comfortable", "16px"],
+    ["Large", "large", "18px"],
+  ] as const) {
+    await textSize.click();
+    await page
+      .getByRole("listbox")
+      .getByRole("option", { name: label, exact: true })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-text-size", value);
+    await expect
+      .poll(() =>
+        page
+          .locator("html")
+          .evaluate((element) => getComputedStyle(element).fontSize),
+      )
+      .toBe(expectedRootSize);
+  }
+
+  const paneWidths: number[] = [];
+  for (const tab of globalTabs) {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    const dimensions = await page
+      .locator(".managed-settings-body")
+      .evaluate((element) => ({
+        width: element.getBoundingClientRect().width,
+        shellClientWidth:
+          element.closest(".managed-settings-shell")?.clientWidth ?? 0,
+        shellScrollWidth:
+          element.closest(".managed-settings-shell")?.scrollWidth ?? 0,
+      }));
+    paneWidths.push(dimensions.width);
+    expect(dimensions.width).toBeLessThanOrEqual(1180);
+    expect(dimensions.shellScrollWidth).toBeLessThanOrEqual(
+      dimensions.shellClientWidth + 1,
+    );
+  }
+  expect(Math.max(...paneWidths) - Math.min(...paneWidths)).toBeLessThanOrEqual(
+    1,
+  );
+
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+  const readableCopySizes = await page
+    .locator(
+      ".managed-heading-copy, .managed-settings-body small, .managed-settings-body .eyebrow",
+    )
+    .evaluateAll((elements) =>
+      elements
+        .filter((element) => {
+          const style = getComputedStyle(element);
+          return style.display !== "none" && style.visibility !== "hidden";
+        })
+        .map((element) =>
+          Number.parseFloat(getComputedStyle(element).fontSize),
+        ),
+    );
+  expect(Math.min(...readableCopySizes)).toBeGreaterThanOrEqual(13.5);
+
+  await page.setViewportSize({ width: 700, height: 800 });
+  for (const tab of globalTabs) {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    const bounds = await page
+      .locator(".managed-settings-shell")
+      .evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+    expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+  }
+
+  const compactNavigationBounds = await page
+    .getByRole("button", { name: "Open Workspace navigation", exact: true })
+    .evaluate((element) => element.getBoundingClientRect().toJSON());
+  const compactHeadingBounds = await page
+    .getByRole("heading", { name: "Desktop settings", exact: true })
+    .evaluate((element) => element.getBoundingClientRect().toJSON());
+  expect(compactNavigationBounds.right).toBeLessThanOrEqual(
+    compactHeadingBounds.left,
+  );
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-text-size", "large");
+});
+
+test("system theme follows operating-system color changes", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-theme-preference",
+    "system",
+  );
+
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
+test("light theme keeps session inspection surfaces readable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+
+  const colorTheme = page.getByRole("combobox", { name: /Color theme/u });
+  await colorTheme.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Light", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Work", exact: true }).click();
+
+  await page.getByRole("button", { name: "Topology", exact: true }).click();
+  await expect(page.locator(".session-map-stage")).toHaveCSS(
+    "background-color",
+    "rgb(255, 255, 255)",
+  );
+  await expect(page.locator(".session-map-family").first()).toHaveCSS(
+    "background-color",
+    "rgb(247, 249, 252)",
+  );
+
+  await page.getByRole("button", { name: "Snapshots", exact: true }).click();
+  await expect(
+    page.locator(".session-snapshot-list article").first(),
+  ).toHaveCSS("background-color", "rgb(247, 249, 252)");
+
+  await page.getByRole("button", { name: "Resources", exact: true }).click();
+  await expect(
+    page.locator(".session-resource-groups > button").first(),
+  ).toHaveCSS("background-color", "rgb(247, 249, 252)");
+
+  await page.getByRole("button", { name: "Open thread details" }).click();
+  const details = page.getByRole("dialog", { name: "Thread details" });
+  await expect(details.locator(".thread-details-panel")).toHaveCSS(
+    "background-color",
+    "rgb(240, 244, 248)",
+  );
+  await expect(details.locator(".thread-details-list > div").first()).toHaveCSS(
+    "background-color",
+    "rgb(247, 249, 252)",
+  );
+
+  const results = await new AxeBuilder({ page })
+    .include(".thread-details-panel")
+    .analyze();
+  expect(
+    results.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+
+  await details.getByRole("button", { name: /All resources/u }).click();
+  await expect(details).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Resources" })).toBeVisible();
+});
+
+test("light theme keeps workspace shell surfaces readable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+
+  const colorTheme = page.getByRole("combobox", { name: /Color theme/u });
+  await colorTheme.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Light", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await expect(
+    page.locator(".connection-badge.connection-connected"),
+  ).toHaveCSS("background-color", "rgb(230, 245, 238)");
+  await expect(page.locator(".markdown-content table")).toHaveCSS(
+    "background-color",
+    "rgb(255, 255, 255)",
+  );
+  await expect(page.locator(".markdown-content th").first()).toHaveCSS(
+    "background-color",
+    "rgb(237, 243, 249)",
+  );
+  await expect(page.locator(".work-composer-dock")).toHaveCSS(
+    "background-color",
+    "rgb(240, 244, 248)",
+  );
+  await expect(page.locator(".work-composer")).toHaveCSS(
+    "background-color",
+    "rgb(255, 255, 255)",
+  );
+  await expect(
+    page.locator('.space-destinations button[aria-current="page"]'),
+  ).toHaveCSS("background-color", "rgb(229, 239, 255)");
+
+  const workAccessibility = await new AxeBuilder({ page })
+    .include(".work-surface")
+    .analyze();
+  expect(
+    workAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+
+  await page
+    .locator(".space-destinations")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await expect(page.locator(".space-settings-context")).toHaveCSS(
+    "background-color",
+    "rgb(237, 243, 249)",
+  );
+  await expect(page.locator(".authority-summary")).toHaveCSS(
+    "background-color",
+    "rgb(240, 244, 248)",
+  );
+  await expect(page.locator(".authority-item").first()).toHaveCSS(
+    "background-color",
+    "rgb(255, 255, 255)",
+  );
+  await expect(page.locator(".managed-settings-actions")).toHaveCSS(
+    "background-color",
+    "rgb(247, 249, 252)",
+  );
+
+  const settingsAccessibility = await new AxeBuilder({ page })
+    .include(".managed-settings-shell")
+    .analyze();
+  expect(
+    settingsAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("artifact, file, and workspace destination surfaces follow both themes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+
+  const colorTheme = page.getByRole("combobox", { name: /Color theme/u });
+  await colorTheme.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Light", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Work", exact: true }).click();
+
+  await page
+    .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
+    .click();
+  const artifactDialog = page.getByRole("dialog", {
+    name: "Artifact preview",
+  });
+  await expect(artifactDialog.locator(".artifact-workspace")).toHaveCSS(
+    "background-color",
+    "rgb(247, 249, 252)",
+  );
+  await expect(artifactDialog.locator(".artifact-tabs")).toHaveCSS(
+    "background-color",
+    "rgb(237, 243, 249)",
+  );
+  await expect(artifactDialog.locator(".artifact-preview")).toHaveCSS(
+    "background-color",
+    "rgb(247, 249, 252)",
+  );
+  await expect(artifactDialog.locator(".artifact-preview pre")).toHaveCSS(
+    "font-size",
+    "13px",
+  );
+  const lightArtifactAccessibility = await new AxeBuilder({ page })
+    .include(".artifact-workspace")
+    .analyze();
+  expect(
+    lightArtifactAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+  await artifactDialog
+    .getByRole("button", { name: "Close artifacts drawer" })
+    .click();
+
+  await page.getByRole("button", { name: "Open files panel" }).click();
+  const fileDialog = page.getByRole("dialog", { name: "Workspace files" });
+  await expect(fileDialog.locator(".file-explorer")).toHaveCSS(
+    "background-color",
+    "rgb(237, 242, 247)",
+  );
+  await expect(fileDialog.locator(".file-code-scroll")).toHaveCSS(
+    "background-color",
+    "rgb(247, 249, 252)",
+  );
+  const lightFileAccessibility = await new AxeBuilder({ page })
+    .include(".workspace-files-drawer")
+    .analyze();
+  expect(
+    lightFileAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+  await fileDialog.getByRole("button", { name: "Close files drawer" }).click();
+
+  for (const [destination, selector, expectedBackground] of [
+    ["Capabilities", ".overview-section", "rgb(255, 255, 255)"],
+    ["Activity", ".activity-list article", "rgb(255, 255, 255)"],
+    ["Library", ".artifact-library-list article", "rgb(255, 255, 255)"],
+    ["Connections", ".target-grid > button:nth-child(2)", "rgb(240, 244, 248)"],
+  ] as const) {
+    await page
+      .locator(".space-destinations")
+      .getByRole("button", { name: destination, exact: true })
+      .click();
+    await expect(page.locator(selector).first()).toHaveCSS(
+      "background-color",
+      expectedBackground,
+    );
+    const destinationAccessibility = await new AxeBuilder({ page })
+      .include(".operations-surface")
+      .analyze();
+    expect(
+      destinationAccessibility.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+      `${destination} should remain accessible in the light theme`,
+    ).toEqual([]);
+  }
+
+  await page
+    .locator(".space-destinations")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await colorTheme.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Dark", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page
+    .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
+    .click();
+  await expect(page.locator(".artifact-preview")).toHaveCSS(
+    "background-color",
+    "rgb(8, 18, 30)",
+  );
+  await expect(page.locator(".artifact-tabs")).toHaveCSS(
+    "background-color",
+    "rgb(17, 34, 55)",
+  );
+});
+
 test("managed settings expose complete catalog editors without horizontal overflow", async ({
   page,
 }) => {
@@ -104,23 +559,292 @@ test("managed settings expose complete catalog editors without horizontal overfl
 
   await page.getByRole("button", { name: "Models", exact: true }).click();
   await page.getByRole("button", { name: "Edit primary", exact: true }).click();
+  const modelLabel = page.getByRole("textbox", {
+    name: /^Display label/u,
+  });
+  const reasoningEffort = page.getByRole("combobox", {
+    name: "Reasoning effort",
+  });
+  await expect(reasoningEffort).toBeVisible();
   await expect(
-    page.getByRole("combobox", { name: "Reasoning effort" }),
+    page.getByRole("heading", { name: "Provider connection", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Token limits", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Supported features", exact: true }),
+  ).toBeVisible();
+  const modelLabelHeight = await modelLabel.evaluate(
+    (element) => element.getBoundingClientRect().height,
+  );
+  const reasoningFieldHeight = await reasoningEffort.evaluate(
+    (element) => element.parentElement?.getBoundingClientRect().height ?? 0,
+  );
+  expect(Math.abs(modelLabelHeight - reasoningFieldHeight)).toBeLessThanOrEqual(
+    1,
+  );
   await expect(page.getByText("Image inputs", { exact: true })).toBeVisible();
+  const modelResults = await new AxeBuilder({ page })
+    .include(".models-settings")
+    .analyze();
+  expect(
+    modelResults.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
   await page.getByRole("button", { name: "Close model editor" }).click();
 
   await page.getByRole("button", { name: "Providers", exact: true }).click();
   await page
     .getByRole("button", { name: "Edit primary-provider", exact: true })
     .click();
-  await expect(page.getByPlaceholder("Adapter default")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Connection", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Authentication", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Runtime", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByPlaceholder("Provider default")).toBeVisible();
+  const providerAdapter = page.getByRole("combobox", { name: /^Adapter/u });
+  await providerAdapter.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Codex subscription", exact: true })
+    .click();
+  await expect(
+    page.getByRole("textbox", { name: /^Endpoint URL/u }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: /^Credential reference/u }),
+  ).toBeDisabled();
+  const providerResults = await new AxeBuilder({ page })
+    .include(".providers-settings")
+    .analyze();
+  expect(
+    providerResults.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
   await page.getByRole("button", { name: "Close provider editor" }).click();
 
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Credentials", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Stored securely on this device", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Values are entered in a system dialog and are not shown again.",
+      {
+        exact: true,
+      },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Add credential", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  const githubCredential = page
+    .getByRole("listitem")
+    .filter({ hasText: "GitHub workspace token" });
+  const documentationCredential = page
+    .getByRole("listitem")
+    .filter({ hasText: "Documentation API key" });
+  await expect(
+    githubCredential.getByText("Used by 1", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    documentationCredential.getByText("Used by 2", { exact: true }),
+  ).toBeVisible();
+  const credentialsAccessibility = await new AxeBuilder({ page })
+    .include(".credentials-settings")
+    .analyze();
+  expect(
+    credentialsAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Search services", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Available by workspace", { exact: true }),
+  ).toBeVisible();
+  const engineeringSearch = page
+    .getByRole("listitem")
+    .filter({ hasText: "Engineering search" });
+  await expect(
+    engineeringSearch.getByText("Credential attached", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    engineeringSearch.getByText("Used by 1", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit Engineering search", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Identity", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Connection", exact: true }),
+  ).toBeVisible();
+  const searchLabel = page.getByLabel("Display label", { exact: false });
+  const searchAdapter = page.getByRole("combobox", {
+    name: /Adapter/u,
+  });
+  const searchLabelHeight = await searchLabel.evaluate(
+    (element) => element.getBoundingClientRect().height,
+  );
+  const searchAdapterHeight = await searchAdapter.evaluate(
+    (element) => element.parentElement?.getBoundingClientRect().height ?? 0,
+  );
+  expect(Math.abs(searchLabelHeight - searchAdapterHeight)).toBeLessThanOrEqual(
+    1,
+  );
+  await expect(
+    page.getByLabel("Authentication header", { exact: false }),
+  ).not.toBeVisible();
+  await page.getByText("Request controls", { exact: true }).click();
+  await expect(
+    page.getByLabel("Authentication header", { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Timeout (ms)", { exact: false })).toBeVisible();
+
+  const searchAccessibility = await new AxeBuilder({ page })
+    .include(".search-settings")
+    .analyze();
+  expect(
+    searchAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+  await page.getByRole("button", { name: "Close search editor" }).click();
+
+  await page.getByRole("button", { name: "Telemetry", exact: true }).click();
+  await expect(
+    page.getByText("Review shared data", { exact: true }),
+  ).toBeVisible();
+  const localCollector = page
+    .getByRole("listitem")
+    .filter({ hasText: "Local collector" });
+  await expect(
+    localCollector.getByText("OTLP gRPC", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    localCollector.getByText("3 OTLP signals", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    localCollector.getByText("Metadata only", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    localCollector.getByText("Used by 1", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit Local collector", exact: true })
+    .click();
+  for (const heading of [
+    "Identity",
+    "Collector destination",
+    "Signals",
+    "Audit record content",
+    "Resource attributes",
+  ]) {
+    await expect(
+      page.getByRole("heading", { name: heading, exact: true }),
+    ).toBeVisible();
+  }
+  const telemetryLabel = page.getByLabel("Display label", { exact: false });
+  const telemetryProtocol = page.getByRole("combobox", {
+    name: "Protocol",
+    exact: true,
+  });
+  const telemetryLabelHeight = await telemetryLabel.evaluate(
+    (element) => element.getBoundingClientRect().height,
+  );
+  const telemetryProtocolHeight = await telemetryProtocol.evaluate(
+    (element) => element.parentElement?.getBoundingClientRect().height ?? 0,
+  );
+  expect(
+    Math.abs(telemetryLabelHeight - telemetryProtocolHeight),
+  ).toBeLessThanOrEqual(1);
+  await page.getByRole("switch", { name: "Traces", exact: true }).uncheck();
+  await expect(
+    page.getByRole("spinbutton", { name: "Trace sample (millionths)" }),
+  ).toBeDisabled();
+  await page.getByRole("switch", { name: "Traces", exact: true }).check();
+  const journalPayloads = page.getByRole("combobox", {
+    name: "Audit content",
+    exact: true,
+  });
+  await journalPayloads.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Full sensitive payloads", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Save changes", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("switch", {
+      name: "Acknowledge sensitive journal content",
+      exact: true,
+    })
+    .check();
+  await expect(
+    page.getByRole("button", { name: "Save changes", exact: true }),
+  ).toBeEnabled();
+  const telemetryAccessibility = await new AxeBuilder({ page })
+    .include(".telemetry-settings")
+    .analyze();
+  expect(
+    telemetryAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+  await page.getByRole("button", { name: "Close telemetry editor" }).click();
+
   await page.getByRole("button", { name: "MCP", exact: true }).click();
+  const splunkRow = page.getByRole("row", {
+    name: /splunk-search streamable http/u,
+  });
+  await expect(
+    splunkRow.getByText("splunk-search", { exact: true }),
+  ).toHaveCount(1);
   await page
     .getByRole("button", { name: "Edit splunk-search", exact: true })
     .click();
+  await expect(
+    page.getByRole("heading", { name: "Connection", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Access", exact: true }),
+  ).toBeVisible();
+  const serverName = page.getByLabel("Server name", { exact: false });
+  const transport = page.getByRole("combobox", {
+    name: "Transport",
+    exact: true,
+  });
+  await expect(serverName).toBeVisible();
+  await expect(transport).toBeVisible();
+  const serverNameHeight = await serverName.evaluate(
+    (element) => element.getBoundingClientRect().height,
+  );
+  const transportFieldHeight = await transport.evaluate(
+    (element) => element.parentElement?.getBoundingClientRect().height ?? 0,
+  );
+  expect(Math.abs(serverNameHeight - transportFieldHeight)).toBeLessThanOrEqual(
+    1,
+  );
+  await expect(page.getByLabel("Research tool projections")).not.toBeVisible();
+  await page.getByText("Advanced settings", { exact: true }).click();
   for (const label of [
     "Static headers",
     "Research tool projections",
@@ -134,6 +858,451 @@ test("managed settings expose complete catalog editors without horizontal overfl
   ).toBeVisible();
   await expect(
     page.getByText("OAuth client configuration", { exact: true }),
+  ).toBeVisible();
+
+  const editorWidth = await page
+    .locator(".mcp-server-editor")
+    .evaluate((element) => element.getBoundingClientRect().width);
+  expect(editorWidth).toBeLessThanOrEqual(1080);
+
+  const editorAccessibility = await new AxeBuilder({ page })
+    .include(".mcp-server-editor")
+    .analyze();
+  expect(
+    editorAccessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+  await page.getByRole("button", { name: "Close MCP editor" }).click();
+
+  await page.getByRole("button", { name: "Defaults", exact: true }).click();
+  await expect(
+    page.getByText("Set the values workspaces use unless they override them.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Stop a run after this many agent turns.", { exact: true }),
+  ).toBeVisible();
+  await page.getByText("Advanced defaults", { exact: true }).click();
+  const repeatedDescriptions = await page
+    .locator(".managed-field-row")
+    .evaluateAll(
+      (rows) =>
+        rows.filter((row) => {
+          const title = row.querySelector("strong")?.textContent?.trim();
+          const description = row
+            .querySelector("div > span")
+            ?.textContent?.trim();
+          return title === description;
+        }).length,
+    );
+  expect(repeatedDescriptions).toBe(0);
+
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Desktop settings", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Manage the workspace and local services that belong to this Desktop installation.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Desktop-only controls", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Managed workspace", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "This Desktop", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Saved runtimes", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Configure runtime", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Add external runtime", exact: true }),
+  ).toBeVisible();
+
+  const pane = page.locator(".managed-settings-shell");
+  const bounds = await pane.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+});
+
+test("credential management stays secure, clear, and compact", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page
+    .getByRole("dialog", { name: "Workspace navigation" })
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+
+  await expect(
+    page.getByText("Stored securely on this device", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await page
+    .getByLabel("Display label", { exact: false })
+    .fill("Splunk admin token");
+  const credentialType = page.getByRole("combobox", {
+    name: /Credential type/u,
+  });
+  await credentialType.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Bearer token", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Add credential", exact: true })
+    .click();
+
+  const addedCredential = page
+    .getByRole("listitem")
+    .filter({ hasText: "Splunk admin token" });
+  await expect(addedCredential).toBeVisible();
+  await expect(
+    addedCredential.getByText("Not referenced", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Credential stored securely.", { exact: true }),
+  ).toBeVisible();
+
+  const pane = page.locator(".managed-settings-shell");
+  const bounds = await pane.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+});
+
+test("search services stay complete, clear, and compact", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page
+    .getByRole("dialog", { name: "Workspace navigation" })
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+
+  await expect(
+    page.getByText("Adding a service here does not enable it automatically.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Add search service", exact: true })
+    .click();
+  await page.getByLabel("Display label", { exact: false }).fill("Web results");
+  await page.getByLabel("Profile ID", { exact: false }).fill("web-results");
+  const adapter = page.getByRole("combobox", { name: /Adapter/u });
+  await adapter.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "SerpAPI", exact: true })
+    .click();
+  await expect(
+    page.getByText("Credential required", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Endpoint URL", { exact: false })
+    .fill("https://serpapi.com/search");
+
+  const credential = page.getByRole("combobox", {
+    name: /Credential reference/u,
+  });
+  await page
+    .locator(".search-editor")
+    .getByRole("button", { name: "Add search service" })
+    .click();
+  await expect(credential).toBeFocused();
+  await expect(credential).toHaveAttribute("aria-invalid", "true");
+
+  await credential.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Documentation API key", exact: true })
+    .click();
+  await page.getByText("Request controls", { exact: true }).click();
+  await expect(
+    page.getByLabel("Authentication header", { exact: false }),
+  ).toHaveCount(0);
+  await page.getByLabel("Timeout (ms)", { exact: false }).fill("45000");
+  await page
+    .locator(".search-editor")
+    .getByRole("button", { name: "Add search service" })
+    .click();
+
+  const addedProfile = page
+    .getByRole("listitem")
+    .filter({ hasText: "Web results" });
+  await expect(addedProfile).toBeVisible();
+  await expect(
+    addedProfile.getByText("Credential attached", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("Not used", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("45s · v1", { exact: true }),
+  ).toBeVisible();
+
+  const pane = page.locator(".managed-settings-shell");
+  const bounds = await pane.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+});
+
+test("model settings stay clear, complete, and compact", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page
+    .getByRole("dialog", { name: "Workspace navigation" })
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+
+  await expect(
+    page.getByText(
+      "Turn on only the features this model supports: tools, streaming, and images.",
+      {
+        exact: true,
+      },
+    ),
+  ).toBeVisible();
+  const primaryModel = page
+    .getByRole("listitem")
+    .filter({ hasText: "primary" });
+  await expect(primaryModel.getByText("Tools", { exact: true })).toBeVisible();
+  await expect(
+    primaryModel.getByText("Streaming", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    primaryModel.getByText("Used by 4", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Add model", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: /^Display label/u })
+    .fill("Vision model");
+  await page.getByRole("textbox", { name: /^Profile ID/u }).fill("vision");
+  await page
+    .getByRole("textbox", { name: /^Model identifier/u })
+    .fill("fixture-vision");
+  await page
+    .getByRole("spinbutton", { name: /^Context window \(tokens\)/u })
+    .fill("256000");
+  await page
+    .getByRole("spinbutton", { name: /^Maximum output \(tokens\)/u })
+    .fill("32000");
+  await page.getByRole("checkbox", { name: /Image inputs/u }).check();
+  const reasoningEffort = page.getByRole("combobox", {
+    name: /^Reasoning effort/u,
+  });
+  await reasoningEffort.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "high", exact: true })
+    .click();
+  await page
+    .locator(".model-editor")
+    .getByRole("button", { name: "Add model" })
+    .click();
+
+  const addedModel = page
+    .getByRole("listitem")
+    .filter({ hasText: "Vision model" });
+  await expect(addedModel).toBeVisible();
+  await expect(addedModel.getByText("Images", { exact: true })).toBeVisible();
+  await expect(addedModel.getByText("Not used", { exact: true })).toBeVisible();
+  await expect(
+    addedModel.getByText("256k context · 32k output · v1", { exact: true }),
+  ).toBeVisible();
+
+  const pane = page.locator(".managed-settings-shell");
+  const bounds = await pane.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+});
+
+test("provider connections stay clear, secure, and compact", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page
+    .getByRole("dialog", { name: "Workspace navigation" })
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+
+  await expect(
+    page.getByText(
+      "Colossus stores which credential to use, not its secret value.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const primaryProvider = page
+    .getByRole("listitem")
+    .filter({ hasText: "primary-provider" });
+  await expect(
+    primaryProvider.getByText("OpenAI compatible", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    primaryProvider.getByText("Used by 1", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Add provider", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: /^Display label/u })
+    .fill("OpenAI production");
+  await page
+    .getByRole("textbox", { name: /^Profile ID/u })
+    .fill("openai-production");
+  const adapter = page.getByRole("combobox", { name: /^Adapter/u });
+  await adapter.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "OpenAI Responses", exact: true })
+    .click();
+  await page
+    .getByRole("textbox", { name: /^Endpoint URL/u })
+    .fill("https://api.openai.com/v1");
+  const credential = page.getByRole("combobox", {
+    name: /^Credential reference/u,
+  });
+  await credential.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Documentation API key", exact: true })
+    .click();
+  await page
+    .getByRole("spinbutton", { name: /^Request timeout \(ms\)/u })
+    .fill("45000");
+  await page
+    .locator(".provider-editor")
+    .getByRole("button", { name: "Add provider" })
+    .click();
+
+  const addedProvider = page
+    .getByRole("listitem")
+    .filter({ hasText: "OpenAI production" });
+  await expect(addedProvider).toBeVisible();
+  await expect(
+    addedProvider.getByText("OpenAI Responses", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProvider.getByText("Credential attached", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProvider.getByText("No models", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProvider.getByText("45s timeout · v1", { exact: true }),
+  ).toBeVisible();
+
+  const pane = page.locator(".managed-settings-shell");
+  const bounds = await pane.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+});
+
+test("telemetry connections stay clear and compact", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.getByRole("button", { name: "Open work navigation" }).click();
+  await page
+    .getByRole("dialog", { name: "Workspace navigation" })
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Telemetry", exact: true }).click();
+
+  await expect(
+    page.getByText(
+      "Full audit records can include prompts, responses, and tool input or output.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Add telemetry connection", exact: true })
+    .click();
+  await page
+    .getByRole("textbox", { name: /^Display label/u })
+    .fill("Production observability");
+  await page
+    .getByRole("textbox", { name: /^Service name/u })
+    .fill("colossus-production");
+  await page
+    .getByRole("textbox", { name: /^Collector endpoint/u })
+    .fill("https://otel.example.test:4318");
+  const protocol = page.getByRole("combobox", {
+    name: "Protocol",
+    exact: true,
+  });
+  await protocol.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "OTLP HTTP/protobuf", exact: true })
+    .click();
+  await page
+    .getByRole("spinbutton", { name: "Timeout (ms)", exact: true })
+    .fill("15000");
+  await page.getByRole("switch", { name: "Metrics", exact: true }).uncheck();
+  await page.getByRole("switch", { name: "JSON stdout", exact: true }).check();
+  const journalPayloads = page.getByRole("combobox", {
+    name: "Audit content",
+    exact: true,
+  });
+  await journalPayloads.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Disabled", exact: true })
+    .click();
+  await page
+    .locator(".telemetry-editor")
+    .getByRole("button", { name: "Add telemetry connection" })
+    .click();
+
+  const addedProfile = page
+    .getByRole("listitem")
+    .filter({ hasText: "Production observability" });
+  await expect(addedProfile).toBeVisible();
+  await expect(
+    addedProfile.getByText("otel.example.test:4318", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("OTLP HTTP/protobuf", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("2 OTLP signals", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("Audit content off", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("Not used", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    addedProfile.getByText("15s · v1", { exact: true }),
   ).toBeVisible();
 
   const pane = page.locator(".managed-settings-shell");
@@ -199,19 +1368,25 @@ test("required app-owned dropdowns retain form validation", async ({
   await page.getByRole("button", { name: "Add model", exact: true }).click();
 
   const provider = page.getByRole("combobox", {
-    name: "Provider",
-    exact: true,
+    name: /^Provider profile/u,
   });
   await provider.click();
   await page
     .getByRole("option", { name: "Select provider", exact: true })
     .click();
-  await page.getByRole("textbox", { name: "Label" }).fill("Validation model");
-  await page.getByRole("textbox", { name: "Profile" }).fill("validation-model");
+  await page
+    .getByRole("textbox", { name: "Display label" })
+    .fill("Validation model");
+  await page
+    .getByRole("textbox", { name: "Profile ID" })
+    .fill("validation-model");
   await page
     .getByRole("textbox", { name: "Model identifier" })
     .fill("fixture-validation");
-  await page.getByRole("button", { name: "Save revision" }).click();
+  await page
+    .locator(".model-editor")
+    .getByRole("button", { name: "Add model" })
+    .click();
 
   await expect(
     page.getByRole("heading", { name: "Add model", exact: true }),

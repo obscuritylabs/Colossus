@@ -16,7 +16,9 @@ use colossus_ports::{
     ModelProviderError, ProviderEventObserver, ProviderTurnOptions, RunControl, RunEventObserver,
     SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
 };
-use colossus_tools::model_definitions;
+use colossus_tools::{
+    model_definitions, project_model_tool_observations, tool_result_observation_messages,
+};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 use thiserror::Error;
