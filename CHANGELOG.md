@@ -49,6 +49,7 @@ include breaking changes while the public API is still settling.
   artifact previews in both light and dark themes.
 - Corrected workspace-file navigation semantics, scroll-region keyboard access, and
   explorer path contrast.
+- Bounded provider-controlled tool names in reduced model-observation metadata.
 
 ## [0.10.10-preview.6] - 2026-08-28
 

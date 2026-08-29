@@ -8,6 +8,7 @@ pub const MAX_MODEL_TOOL_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_MODEL_TOOL_TURN_BYTES: usize = 256 * 1024;
 
 const MIN_TOOL_MESSAGE_BUDGET_BYTES: usize = 512;
+pub(crate) const MAX_OBSERVATION_METADATA_TEXT_BYTES: usize = 128;
 const MAX_JSON_DEPTH: usize = 16;
 const MAX_BINARY_SANITIZE_DEPTH: usize = 128;
 const IMPORTANT_KEYS: &[&str] = &[
@@ -338,10 +339,19 @@ fn observation_envelope(
     details.insert("truncated".into(), Value::Bool(true));
     details.insert("format".into(), Value::String(format.into()));
     if let Some(tool_name) = metadata.tool_name {
-        details.insert("toolName".into(), Value::String(tool_name.into()));
+        details.insert(
+            "toolName".into(),
+            Value::String(head_tail_text(
+                tool_name,
+                MAX_OBSERVATION_METADATA_TEXT_BYTES,
+            )),
+        );
     }
     if let Some(call_id) = metadata.call_id {
-        details.insert("callId".into(), Value::String(call_id.into()));
+        details.insert(
+            "callId".into(),
+            Value::String(head_tail_text(call_id, MAX_OBSERVATION_METADATA_TEXT_BYTES)),
+        );
     }
     if let Some(exit_code) = metadata.exit_code {
         details.insert("exitCode".into(), Value::from(exit_code));

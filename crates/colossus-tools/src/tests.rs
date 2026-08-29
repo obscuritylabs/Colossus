@@ -977,6 +977,38 @@ fn maximum_valid_call_ids_cannot_bypass_tool_observation_bounds() {
 }
 
 #[test]
+fn oversized_provider_tool_name_cannot_bypass_tool_observation_bounds() {
+    let tool_name = format!("unknown-{}-tool", "🛠".repeat(40_000));
+    let output = json!({
+        "error": {
+            "type": "unknown",
+            "tool": tool_name,
+            "recoverable": true,
+        },
+        "detail": "y".repeat(100_000),
+    })
+    .to_string();
+    let messages =
+        tool_result_observation_messages(&[result(&tool_name, "call-unknown-tool", output)]);
+
+    assert!(
+        serde_json::to_vec(&messages[0]).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES
+    );
+    let observation: Value = serde_json::from_str(
+        messages[0]
+            .content
+            .as_text()
+            .expect("tool observation text"),
+    )
+    .expect("valid observation JSON");
+    let projected_name = observation["_colossusToolObservation"]["toolName"]
+        .as_str()
+        .expect("projected tool name");
+    assert!(projected_name.len() <= MAX_OBSERVATION_METADATA_TEXT_BYTES);
+    assert!(projected_name.contains("bytes omitted"));
+}
+
+#[test]
 fn legacy_projection_is_derived_and_does_not_mutate_source_messages() {
     let source = vec![
         ModelMessage {
