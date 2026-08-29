@@ -151,7 +151,7 @@ export function ArtifactWorkspace({
             id="artifact-preview"
             role="tabpanel"
             aria-label={active.fileName}
-            tabIndex={-1}
+            tabIndex={0}
           >
             {active.previewLines !== undefined ? (
               <pre aria-label={`${active.fileName} preview`}>

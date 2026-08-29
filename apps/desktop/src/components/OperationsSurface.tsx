@@ -104,7 +104,7 @@ function FleetView({
         title="Derived capability catalog"
         description="A read-only view derived from the selected sidecar, access profile, tools, skills, workflows, and agents."
       />
-      <div className="overview-scroll">
+      <div className="overview-scroll" tabIndex={0}>
         <section className="overview-section">
           <div className="section-heading">
             <div>
@@ -311,7 +311,7 @@ function LibraryView({ artifacts }: Pick<OperationsSurfaceProps, "artifacts">) {
         title="Artifact library"
         description="Safe metadata for files and outputs released through run messages."
       />
-      <div className="overview-scroll">
+      <div className="overview-scroll" tabIndex={0}>
         <section className="overview-section">
           <div className="section-heading">
             <div>
@@ -366,7 +366,7 @@ function ActivityView({ activity }: Pick<OperationsSurfaceProps, "activity">) {
         title="What the system is doing"
         description="A bounded, newest-first feed of released operational events."
       />
-      <div className="overview-scroll">
+      <div className="overview-scroll" tabIndex={0}>
         <section className="overview-section activity-section">
           <div className="activity-list">
             {activity.map((item) => (
@@ -436,7 +436,7 @@ function ConnectionsView({
         title="Connections"
         description="Workspaces own local sidecars. External daemons remain shared connection targets."
       />
-      <div className="overview-scroll">
+      <div className="overview-scroll" tabIndex={0}>
         <section className="overview-section">
           <div className="section-heading">
             <div>
@@ -635,7 +635,7 @@ function SettingsView({
         : "Not configured";
   return (
     <>
-      <div className="overview-scroll settings-scroll">
+      <div className="overview-scroll settings-scroll" tabIndex={0}>
         <ManagedSettingsPane
           desktop={desktop}
           connecting={connecting}

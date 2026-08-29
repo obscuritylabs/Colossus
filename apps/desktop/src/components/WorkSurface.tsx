@@ -886,7 +886,7 @@ export function WorkSurface({
               ref={detailsTriggerRef}
               className="button secondary compact thread-details-open-button"
               type="button"
-              aria-label="Open thread details"
+              aria-label={`${activeDrawer === "details" ? "Close" : "Open"} thread details`}
               aria-controls="work-side-drawer"
               aria-expanded={activeDrawer === "details"}
               onClick={() => toggleDrawer("details")}

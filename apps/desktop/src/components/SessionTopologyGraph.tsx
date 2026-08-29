@@ -70,7 +70,7 @@ const RECORD_GAP = 7;
 
 const FIT_VIEW_OPTIONS = {
   padding: 0.08,
-  minZoom: 0.55,
+  minZoom: 0.35,
   maxZoom: 1,
 } as const;
 
@@ -387,7 +387,7 @@ export function SessionTopologyGraph({
         onNodeClick={allowNodePointerEvents}
         fitView
         fitViewOptions={FIT_VIEW_OPTIONS}
-        minZoom={0.55}
+        minZoom={FIT_VIEW_OPTIONS.minZoom}
         maxZoom={1.4}
         nodesDraggable={false}
         nodesConnectable={false}

@@ -140,6 +140,7 @@ function HighlightedCode({
     <div
       className="file-code-scroll"
       aria-label={`${file.name} source preview`}
+      tabIndex={0}
     >
       <div className="file-code" role="presentation">
         {visibleLines.map((line, index) => (
@@ -458,12 +459,12 @@ export function WorkspaceFiles({
 
         {available ? (
           <>
-            <div className="file-tree" role="tree" aria-label="Workspace tree">
+            <nav className="file-tree" aria-label="Workspace tree">
               {renderDirectory("", 0)}
               {directoryLoading.has("") ? (
                 <p className="file-tree-loading">Loading workspace…</p>
               ) : null}
-            </div>
+            </nav>
             <footer className="file-explorer-footer">
               <IconShieldLock size={15} stroke={1.7} aria-hidden="true" />
               <span>
@@ -507,7 +508,7 @@ export function WorkspaceFiles({
           </span>
         </header>
 
-        <div className="file-tabs" role="tablist" aria-label="Open files">
+        <nav className="file-tabs" aria-label="Open files">
           {openPaths.map((path) => {
             const opened = files.get(path);
             const name = opened?.name ?? path.split("/").at(-1) ?? path;
@@ -516,8 +517,7 @@ export function WorkspaceFiles({
                 <button
                   className="file-tab"
                   type="button"
-                  role="tab"
-                  aria-selected={activePath === path}
+                  aria-pressed={activePath === path}
                   title={path}
                   onClick={() => setActivePath(path)}
                 >
@@ -536,7 +536,7 @@ export function WorkspaceFiles({
               </div>
             );
           })}
-        </div>
+        </nav>
 
         {error !== "" ? (
           <div className="file-preview-error" role="alert">

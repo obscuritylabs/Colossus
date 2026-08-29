@@ -43,6 +43,12 @@ include breaking changes while the public API is still settling.
   execute, preserving the model-observation byte ceiling and transcript correlation.
 - Kept appearance changes synchronized across open Desktop windows and made denied
   renderer storage access fall back safely during startup and preference updates.
+- Kept Desktop destination names stable when visual attention counts are present and
+  kept every canonical Session Map control in view at the supported compact viewport.
+- Restored keyboard access and WCAG AA line-number contrast for scrollable Desktop
+  artifact previews in both light and dark themes.
+- Corrected workspace-file navigation semantics, scroll-region keyboard access, and
+  explorer path contrast.
 
 ## [0.10.10-preview.6] - 2026-08-28
 

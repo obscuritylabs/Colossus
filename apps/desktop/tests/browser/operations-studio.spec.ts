@@ -325,12 +325,16 @@ test("light theme keeps session inspection surfaces readable", async ({
     page.locator(".session-resource-groups > button").first(),
   ).toHaveCSS("background-color", "rgb(247, 249, 252)");
 
-  await page.getByRole("button", { name: "Open thread details" }).click();
-  const details = page.getByRole("dialog", { name: "Thread details" });
-  await expect(details.locator(".thread-details-panel")).toHaveCSS(
-    "background-color",
-    "rgb(240, 244, 248)",
-  );
+  const detailsTrigger = page.getByRole("button", {
+    name: /thread details$/u,
+  });
+  if ((await detailsTrigger.getAttribute("aria-expanded")) !== "true") {
+    await detailsTrigger.click();
+  }
+  const details = page.getByRole("complementary", {
+    name: "Thread details",
+  });
+  await expect(details).toHaveCSS("background-color", "rgb(240, 244, 248)");
   await expect(details.locator(".thread-details-list > div").first()).toHaveCSS(
     "background-color",
     "rgb(247, 249, 252)",
@@ -449,22 +453,22 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
   await page
     .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
     .click();
-  const artifactDialog = page.getByRole("dialog", {
-    name: "Artifact preview",
+  const artifactPanel = page.getByRole("complementary", {
+    name: "Work artifacts",
   });
-  await expect(artifactDialog.locator(".artifact-workspace")).toHaveCSS(
+  await expect(artifactPanel).toHaveCSS(
     "background-color",
     "rgb(247, 249, 252)",
   );
-  await expect(artifactDialog.locator(".artifact-tabs")).toHaveCSS(
+  await expect(artifactPanel.locator(".artifact-tabs")).toHaveCSS(
     "background-color",
     "rgb(237, 243, 249)",
   );
-  await expect(artifactDialog.locator(".artifact-preview")).toHaveCSS(
+  await expect(artifactPanel.locator(".artifact-preview")).toHaveCSS(
     "background-color",
     "rgb(247, 249, 252)",
   );
-  await expect(artifactDialog.locator(".artifact-preview pre")).toHaveCSS(
+  await expect(artifactPanel.locator(".artifact-preview pre")).toHaveCSS(
     "font-size",
     "13px",
   );
@@ -476,17 +480,15 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
       ["critical", "serious"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
-  await artifactDialog
-    .getByRole("button", { name: "Close artifacts drawer" })
-    .click();
+  await page.getByRole("button", { name: "Close artifacts drawer" }).click();
 
   await page.getByRole("button", { name: "Open files panel" }).click();
-  const fileDialog = page.getByRole("dialog", { name: "Workspace files" });
-  await expect(fileDialog.locator(".file-explorer")).toHaveCSS(
+  const filePanel = page.locator(".workspace-files-drawer");
+  await expect(filePanel.locator(".file-explorer")).toHaveCSS(
     "background-color",
     "rgb(237, 242, 247)",
   );
-  await expect(fileDialog.locator(".file-code-scroll")).toHaveCSS(
+  await expect(filePanel.locator(".file-code-scroll")).toHaveCSS(
     "background-color",
     "rgb(247, 249, 252)",
   );
@@ -498,7 +500,7 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
       ["critical", "serious"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
-  await fileDialog.getByRole("button", { name: "Close files drawer" }).click();
+  await page.getByRole("button", { name: "Close files drawer" }).click();
 
   for (const [destination, selector, expectedBackground] of [
     ["Capabilities", ".overview-section", "rgb(255, 255, 255)"],

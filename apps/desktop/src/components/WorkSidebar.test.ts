@@ -190,6 +190,17 @@ describe("WorkSidebar", () => {
     expect(markup).toContain("Library");
   });
 
+  it("keeps destination names stable when a visual attention count is present", () => {
+    const markup = renderSidebar({
+      spaces: [{ ...SPACE, attentionCount: 2 }],
+    });
+
+    expect(openingButtonTag(markup, 'aria-label="Work"')).toContain(
+      'aria-label="Work"',
+    );
+    expect(markup).toContain('class="space-attention-badge">2</span>');
+  });
+
   it("shows Space startup without disabling search or navigation", () => {
     const nextSpace: SpaceSummary = {
       ...SPACE,

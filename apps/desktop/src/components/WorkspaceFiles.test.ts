@@ -45,6 +45,14 @@ describe("WorkspaceFiles", () => {
     expect(markup).toContain("Read-only");
     expect(markup).toContain("Select a file to preview");
     expect(markup).toContain("existing policy and approval path");
+    expect(markup).toContain(
+      '<nav class="file-tree" aria-label="Workspace tree">',
+    );
+    expect(markup).toContain(
+      '<nav class="file-tabs" aria-label="Open files"></nav>',
+    );
+    expect(markup).not.toContain('role="tree"');
+    expect(markup).not.toContain('role="tablist"');
     expect(markup).not.toContain('id="primary-workspace"');
   });
 
