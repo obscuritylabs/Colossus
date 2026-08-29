@@ -8,6 +8,38 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.7] - 2026-08-29
+
+### Added
+
+- Added system, light, and dark Desktop appearance preferences with a shared theme
+  provider, accessible settings controls, and theme-aware syntax highlighting.
+- Added bounded provider-visible tool observations that preserve structured salient
+  fields and head/tail previews while omitting encoded binary data and recording the
+  original byte count plus SHA-256 digest.
+
+### Changed
+
+- Split the runtime composition surface into focused access-policy, adapter, storage,
+  goal, and plan modules while preserving its public behavior and thin crate root.
+- Expanded Desktop managed settings, Workspace resource inspection, and browser
+  acceptance coverage for the complete supported configuration surface.
+- Made background projection maintenance drain bounded follow-up work promptly so long
+  agent and workflow runs do not leave avoidable shutdown work behind.
+- Bumped the Rust workspace, internal dependency pins, Desktop native dependencies, fuzz
+  dependency, and all corresponding lockfiles to `0.10.10-preview.7`.
+
+### Fixed
+
+- Normalized complete MCP JSON-RPC errors into confirmed, redacted tool failures while
+  preserving outcome-unknown handling for transport loss, malformed responses, and
+  post-dispatch timeouts.
+- Returned model-selected unknown MCP servers, unadvertised tools, and schema-invalid
+  arguments as recoverable observations with bounded tool-name guidance; explicit
+  configured allowlist denials remain terminal and fail closed.
+- Kept complete released tool results in canonical run evidence while projecting bounded
+  valid JSON into session history, including when resuming legacy oversized histories.
+
 ## [0.10.10-preview.6] - 2026-08-28
 
 ### Added
