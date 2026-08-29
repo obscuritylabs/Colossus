@@ -1,8 +1,8 @@
 use super::*;
 use async_trait::async_trait;
 use colossus_contracts::{
-    ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderResponseDiagnostic,
-    ProviderRoute, ProviderTurn, SessionMessage, SessionSummary,
+    MAX_MODEL_TOOL_CALL_ID_BYTES, ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext,
+    ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, SessionMessage, SessionSummary,
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -1852,6 +1852,62 @@ async fn duplicate_tool_call_ids_are_rejected_before_any_tool_executes() {
             .all(|message| message.role != ModelMessageRole::Assistant)
     );
     validate_model_transcript(&durable).expect("settled durable transcript");
+}
+
+#[tokio::test]
+async fn oversized_tool_call_id_is_rejected_before_any_tool_executes() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "x".repeat(MAX_MODEL_TOOL_CALL_ID_BYTES + 1),
+            name: "echo".into(),
+            arguments: json!({"text": "must not execute"}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("oversized-call-id", None, test_actor())
+        .expect("session");
+    let executor = Arc::new(CountingTools {
+        calls: AtomicUsize::new(0),
+    });
+    let service = AgentService::new(
+        journal,
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    let error = service
+        .run_in_session(
+            "primary",
+            "test",
+            "reject an oversized provider call id",
+            2,
+            Some("oversized-call-id"),
+        )
+        .await
+        .expect_err("oversized call id is rejected");
+    assert!(matches!(
+        error,
+        AgentError::Configuration(ref message)
+            if message.contains("invalid tool transcript") && message.contains("exceeding")
+    ));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        sessions
+            .list_messages("oversized-call-id")
+            .expect("messages")
+            .len(),
+        1
+    );
+    assert_eq!(
+        sessions
+            .pending_tool_turn("oversized-call-id")
+            .expect("no write-ahead marker"),
+        None
+    );
 }
 
 #[tokio::test]

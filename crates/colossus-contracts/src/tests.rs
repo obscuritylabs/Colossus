@@ -1,9 +1,9 @@
 use super::{
-    Actor, ActorType, AgentRunMode, ExecutionContext, ModelCapabilities, ModelContent,
-    ModelContentPart, ModelImageDetail, ModelImageReference, ModelMessage, ModelMessageRole,
-    ModelToolCall, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PolicyDecision, RunEvent,
-    ThemeName, ThemeSpinner, validate_assistant_tool_call_turn, validate_model_message_content,
-    validate_model_transcript,
+    Actor, ActorType, AgentRunMode, ExecutionContext, MAX_MODEL_TOOL_CALL_ID_BYTES,
+    ModelCapabilities, ModelContent, ModelContentPart, ModelImageDetail, ModelImageReference,
+    ModelMessage, ModelMessageRole, ModelToolCall, PlanDraftTarget, PlanExecutionStrategy,
+    PlanRecord, PolicyDecision, RunEvent, ThemeName, ThemeSpinner,
+    validate_assistant_tool_call_turn, validate_model_message_content, validate_model_transcript,
 };
 
 fn image_reference() -> ModelImageReference {
@@ -368,5 +368,24 @@ fn assistant_tool_call_turn_rejects_reused_ids_before_execution() {
             .expect_err("empty call id")
             .detail
             .contains("without a call id")
+    );
+    let oversized = "x".repeat(MAX_MODEL_TOOL_CALL_ID_BYTES + 1);
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&[&oversized]))
+            .expect_err("oversized call id")
+            .detail
+            .contains("exceeding")
+    );
+    assert!(
+        validate_model_transcript(&[assistant(&[&oversized]), result(&oversized)])
+            .expect_err("legacy transcript with oversized call id")
+            .detail
+            .contains("exceeding")
+    );
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&["call\ninvalid"]))
+            .expect_err("control-bearing call id")
+            .detail
+            .contains("non-printable")
     );
 }

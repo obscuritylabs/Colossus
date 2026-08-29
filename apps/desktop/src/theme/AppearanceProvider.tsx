@@ -11,9 +11,11 @@ import type { PropsWithChildren } from "react";
 import {
   DEFAULT_APPEARANCE,
   applyAppearance,
-  readAppearancePreference,
+  appearanceStorage,
+  readHostAppearancePreference,
   resolveColorTheme,
-  storeAppearancePreference,
+  storeHostAppearancePreference,
+  subscribeToAppearancePreference,
 } from "./appearance";
 import type {
   AppearancePreference,
@@ -43,7 +45,7 @@ function readInitialPreference() {
   if (typeof window === "undefined") {
     return DEFAULT_APPEARANCE;
   }
-  return readAppearancePreference(window.localStorage);
+  return readHostAppearancePreference(window);
 }
 
 export function initializeAppearance() {
@@ -78,9 +80,17 @@ export function AppearanceProvider({
     return () => media.removeEventListener("change", handleChange);
   }, []);
 
+  useEffect(() => {
+    const storage = appearanceStorage(window);
+    if (storage === null) {
+      return;
+    }
+    return subscribeToAppearancePreference(window, storage, setPreference);
+  }, []);
+
   useLayoutEffect(() => {
     applyAppearance(document.documentElement, preference, systemPrefersDark);
-    storeAppearancePreference(window.localStorage, preference);
+    storeHostAppearancePreference(window, preference);
   }, [preference, systemPrefersDark]);
 
   const value = useMemo<AppearanceContextValue>(

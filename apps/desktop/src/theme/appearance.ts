@@ -15,6 +15,27 @@ export interface AppearanceStorage {
   setItem(key: string, value: string): void;
 }
 
+export interface AppearanceStorageHost {
+  readonly localStorage: AppearanceStorage;
+}
+
+export interface AppearanceStorageEvent {
+  readonly key: string | null;
+  readonly newValue: string | null;
+  readonly storageArea: AppearanceStorage | null;
+}
+
+export interface AppearanceStorageEventTarget {
+  addEventListener(
+    type: "storage",
+    listener: (event: AppearanceStorageEvent) => void,
+  ): void;
+  removeEventListener(
+    type: "storage",
+    listener: (event: AppearanceStorageEvent) => void,
+  ): void;
+}
+
 export interface AppearanceRoot {
   setAttribute(name: string, value: string): void;
 }
@@ -64,6 +85,25 @@ export function readAppearancePreference(
   }
 }
 
+export function appearanceStorage(
+  host: AppearanceStorageHost,
+): AppearanceStorage | null {
+  try {
+    return host.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+export function readHostAppearancePreference(
+  host: AppearanceStorageHost,
+): AppearancePreference {
+  const storage = appearanceStorage(host);
+  return storage === null
+    ? DEFAULT_APPEARANCE
+    : readAppearancePreference(storage);
+}
+
 export function storeAppearancePreference(
   storage: AppearanceStorage,
   preference: AppearancePreference,
@@ -73,6 +113,34 @@ export function storeAppearancePreference(
   } catch {
     // Appearance preferences are best-effort and must never block the app.
   }
+}
+
+export function storeHostAppearancePreference(
+  host: AppearanceStorageHost,
+  preference: AppearancePreference,
+) {
+  const storage = appearanceStorage(host);
+  if (storage !== null) {
+    storeAppearancePreference(storage, preference);
+  }
+}
+
+export function subscribeToAppearancePreference(
+  target: AppearanceStorageEventTarget,
+  storage: AppearanceStorage,
+  listener: (preference: AppearancePreference) => void,
+) {
+  const handleStorage = (event: AppearanceStorageEvent) => {
+    if (
+      (event.key !== APPEARANCE_STORAGE_KEY && event.key !== null) ||
+      (event.storageArea !== null && event.storageArea !== storage)
+    ) {
+      return;
+    }
+    listener(parseAppearancePreference(event.newValue));
+  };
+  target.addEventListener("storage", handleStorage);
+  return () => target.removeEventListener("storage", handleStorage);
 }
 
 export function resolveColorTheme(

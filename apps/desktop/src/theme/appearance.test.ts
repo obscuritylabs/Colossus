@@ -4,10 +4,14 @@ import {
   APPEARANCE_STORAGE_KEY,
   DEFAULT_APPEARANCE,
   applyAppearance,
+  appearanceStorage,
   parseAppearancePreference,
   readAppearancePreference,
+  readHostAppearancePreference,
   resolveColorTheme,
   storeAppearancePreference,
+  storeHostAppearancePreference,
+  subscribeToAppearancePreference,
 } from "./appearance";
 
 describe("appearance preferences", () => {
@@ -56,6 +60,83 @@ describe("appearance preferences", () => {
     expect(() =>
       storeAppearancePreference(unavailable, DEFAULT_APPEARANCE),
     ).not.toThrow();
+
+    const deniedHost = {
+      get localStorage(): never {
+        throw new Error("denied");
+      },
+    };
+    expect(appearanceStorage(deniedHost)).toBeNull();
+    expect(readHostAppearancePreference(deniedHost)).toEqual(
+      DEFAULT_APPEARANCE,
+    );
+    expect(() =>
+      storeHostAppearancePreference(deniedHost, DEFAULT_APPEARANCE),
+    ).not.toThrow();
+  });
+
+  it("synchronizes only local appearance storage changes", () => {
+    const localStorage = {
+      getItem: () => null,
+      setItem: () => undefined,
+    };
+    const sessionStorage = {
+      getItem: () => null,
+      setItem: () => undefined,
+    };
+    let storageListener:
+      | ((event: {
+          key: string | null;
+          newValue: string | null;
+          storageArea: typeof localStorage | null;
+        }) => void)
+      | undefined;
+    const target = {
+      addEventListener: (
+        _type: "storage",
+        listener: typeof storageListener,
+      ) => {
+        storageListener = listener;
+      },
+      removeEventListener: (
+        _type: "storage",
+        listener: typeof storageListener,
+      ) => {
+        if (storageListener === listener) {
+          storageListener = undefined;
+        }
+      },
+    };
+    const observed: (typeof DEFAULT_APPEARANCE)[] = [];
+    const unsubscribe = subscribeToAppearancePreference(
+      target,
+      localStorage,
+      (preference) => observed.push(preference),
+    );
+
+    storageListener?.({
+      key: "unrelated",
+      newValue: JSON.stringify({ colorTheme: "dark", textSize: "large" }),
+      storageArea: localStorage,
+    });
+    storageListener?.({
+      key: APPEARANCE_STORAGE_KEY,
+      newValue: JSON.stringify({ colorTheme: "dark", textSize: "large" }),
+      storageArea: sessionStorage,
+    });
+    storageListener?.({
+      key: APPEARANCE_STORAGE_KEY,
+      newValue: JSON.stringify({ colorTheme: "dark", textSize: "large" }),
+      storageArea: localStorage,
+    });
+    storageListener?.({ key: null, newValue: null, storageArea: localStorage });
+
+    expect(observed).toEqual([
+      { colorTheme: "dark", textSize: "large" },
+      DEFAULT_APPEARANCE,
+    ]);
+    unsubscribe();
+    expect(storageListener).toBeUndefined();
   });
 
   it("resolves system color and applies all root state attributes", () => {

@@ -1,6 +1,7 @@
 use super::*;
 use colossus_contracts::{
-    ModelContent, ModelContentPart, ModelMessage, ModelMessageRole, ToolResult,
+    MAX_MODEL_TOOL_CALL_ID_BYTES, ModelContent, ModelContentPart, ModelMessage, ModelMessageRole,
+    ToolResult,
 };
 
 #[test]
@@ -949,6 +950,30 @@ fn parallel_tool_observations_share_one_turn_budget_and_preserve_small_results()
             && serde_json::from_str::<Value>(message.content.as_text().expect("observation text"))
                 .is_ok()
     }));
+}
+
+#[test]
+fn maximum_valid_call_ids_cannot_bypass_tool_observation_bounds() {
+    let results = (0..128)
+        .map(|index| {
+            let call_id = format!("{index:03}-{}", "x".repeat(124));
+            assert_eq!(call_id.len(), MAX_MODEL_TOOL_CALL_ID_BYTES);
+            result("mcp.call", &call_id, "y".repeat(100_000))
+        })
+        .collect::<Vec<_>>();
+
+    let messages = tool_result_observation_messages(&results);
+    let serialized = messages
+        .iter()
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .collect::<Vec<_>>();
+
+    assert!(
+        serialized
+            .iter()
+            .all(|bytes| *bytes <= MAX_MODEL_TOOL_MESSAGE_BYTES)
+    );
+    assert!(serialized.iter().sum::<usize>() <= MAX_MODEL_TOOL_TURN_BYTES);
 }
 
 #[test]

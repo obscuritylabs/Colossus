@@ -39,6 +39,10 @@ include breaking changes while the public API is still settling.
   configured allowlist denials remain terminal and fail closed.
 - Kept complete released tool results in canonical run evidence while projecting bounded
   valid JSON into session history, including when resuming legacy oversized histories.
+- Rejected oversized or non-printable provider tool-call identifiers before any tool can
+  execute, preserving the model-observation byte ceiling and transcript correlation.
+- Kept appearance changes synchronized across open Desktop windows and made denied
+  renderer storage access fall back safely during startup and preference updates.
 
 ## [0.10.10-preview.6] - 2026-08-28
 
