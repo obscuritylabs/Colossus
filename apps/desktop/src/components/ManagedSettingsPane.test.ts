@@ -35,6 +35,7 @@ import {
   modelDraft,
   providerDraft,
   RepositoryImportDialog,
+  runtimeDiagnosticKey,
   SettingsActionBar,
   SpaceSettingsBody,
   spaceDraft,
@@ -171,6 +172,49 @@ function renderPane(): string {
       onInstallUpdate: vi.fn(),
       onImportCaBundle: vi.fn(),
       onRemoveCaBundle: vi.fn(),
+    }),
+  );
+}
+
+function renderProviderDiagnostics(
+  runtimeDiagnostics: Parameters<
+    typeof SpaceSettingsBody
+  >[0]["runtimeDiagnostics"],
+): string {
+  const snapshot = buildManagedSettingsFixture(desktop());
+  const selectedSpace = snapshot.spaces[0]!;
+  return renderToStaticMarkup(
+    createElement(SpaceSettingsBody, {
+      tab: "providers",
+      snapshot,
+      selectedSpace,
+      draft: spaceDraft(selectedSpace),
+      setDraft: vi.fn(),
+      descriptors: snapshot.fieldDescriptors,
+      effective: new Map(
+        selectedSpace.effectiveValues.map((value) => [value.fieldId, value]),
+      ),
+      focusedFieldId: null,
+      expandedAdvancedSections: new Set<string>(),
+      onAdvancedSectionToggle: vi.fn(),
+      busy: false,
+      mcpDiagnostics: {},
+      mcpOauthStatuses: {},
+      mcpOauthLogins: {},
+      mcpOauthCallbacks: {},
+      onMcpOauthCallback: vi.fn(),
+      onTestMcp: vi.fn(),
+      onLoadMcpOAuthStatus: vi.fn(),
+      onLoginMcpOAuth: vi.fn(),
+      onCompleteMcpOAuth: vi.fn(),
+      onLogoutMcpOAuth: vi.fn(),
+      runtimeDiagnostics,
+      onTestRuntimeProfile: vi.fn(),
+      onTestSearchRole: vi.fn(),
+      onTestTelemetry: vi.fn(),
+      extensionInventory: null,
+      extensionInventoryBusy: false,
+      onRefreshExtensionInventory: vi.fn(),
     }),
   );
 }
@@ -541,6 +585,42 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain("Authority summary");
     expect(markup).toContain("No local changes");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("scopes runtime diagnostic cache entries to the workspace", () => {
+    const sharedProfile = "shared-profile";
+    const keys = [
+      runtimeDiagnosticKey("workspace-a", "provider", sharedProfile),
+      runtimeDiagnosticKey("workspace-b", "provider", sharedProfile),
+      runtimeDiagnosticKey("workspace-a", "model", sharedProfile),
+      runtimeDiagnosticKey("workspace-a", "search", sharedProfile),
+      runtimeDiagnosticKey("workspace-a", "telemetry", sharedProfile),
+    ];
+
+    expect(new Set(keys).size).toBe(keys.length);
+
+    const diagnostic = {
+      kind: "provider" as const,
+      profile: "openapi",
+      ready: false,
+      checks: [
+        {
+          name: "workspace-probe",
+          status: "fail" as const,
+          detail: "foreign-workspace-diagnostic",
+        },
+      ],
+      resultCount: null,
+    };
+    const foreignMarkup = renderProviderDiagnostics({
+      [runtimeDiagnosticKey("workspace-b", "provider", "openapi")]: diagnostic,
+    });
+    const localMarkup = renderProviderDiagnostics({
+      [runtimeDiagnosticKey(space.spaceId, "provider", "openapi")]: diagnostic,
+    });
+
+    expect(foreignMarkup).not.toContain("foreign-workspace-diagnostic");
+    expect(localMarkup).toContain("foreign-workspace-diagnostic");
   });
 
   it("renders the live OTLP diagnostic only for an active selected profile", () => {

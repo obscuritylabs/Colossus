@@ -111,6 +111,45 @@ fn complete_json_rpc_tool_errors_are_confirmed_results() {
 }
 
 #[test]
+fn stdio_json_rpc_tool_errors_are_confirmed_and_redacted() {
+    let frames = [
+        json!({
+            "jsonrpc": "2.0",
+            "id": INITIALIZE_REQUEST_ID,
+            "result": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "stdio-fixture", "version": "1.0.0"}
+            }
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": MCP_REQUEST_ID,
+            "error": {
+                "code": -32603,
+                "message": "credential-value project not found",
+                "data": {"private": "credential-value"}
+            }
+        }),
+    ];
+    let mut stdout = Vec::new();
+    for frame in frames {
+        serde_json::to_writer(&mut stdout, &frame).expect("protocol frame");
+        stdout.push(b'\n');
+    }
+
+    let server = configured_http_server("https://mcp.example.test".into());
+    let output = parse_call(&stdout, &server, "lookup", &["credential-value".into()])
+        .expect("confirmed stdio protocol error");
+    assert_eq!(output.result.is_error, Some(true));
+    let rendered = serde_json::to_string(&output).expect("rendered result");
+    assert!(rendered.contains("mcp_json_rpc_error"));
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("credential-value"));
+    assert!(!rendered.contains("private"));
+}
+
+#[test]
 fn discovered_schema_is_enforced_before_call() {
     let input_schema = json!({
         "type": "object",

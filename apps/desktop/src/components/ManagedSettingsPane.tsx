@@ -1152,6 +1152,14 @@ export function spaceDraft(
   };
 }
 
+export function runtimeDiagnosticKey(
+  spaceId: string,
+  kind: ManagedRuntimeDiagnostic["kind"],
+  profile: string,
+): string {
+  return JSON.stringify([spaceId, kind, profile]);
+}
+
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -2032,15 +2040,16 @@ export function ManagedSettingsPane({
     profile: string,
   ) {
     if (!selectedSpace) return;
+    const spaceId = selectedSpace.id;
     await runMcpDiagnostic(async () => {
       const diagnostic = isTauriRuntime()
         ? kind === "provider"
-          ? await diagnoseManagedProvider(selectedSpace.id, profile)
-          : await diagnoseManagedModel(selectedSpace.id, profile)
+          ? await diagnoseManagedProvider(spaceId, profile)
+          : await diagnoseManagedModel(spaceId, profile)
         : fixtureRuntimeDiagnostic(kind, profile);
       setRuntimeDiagnostics((current) => ({
         ...current,
-        [`${kind}:${profile}`]: diagnostic,
+        [runtimeDiagnosticKey(spaceId, kind, profile)]: diagnostic,
       }));
       setNotice(
         `${profile} ${kind} diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
@@ -2050,13 +2059,14 @@ export function ManagedSettingsPane({
 
   async function testSearchRole(role: "agent" | "research") {
     if (!selectedSpace) return;
+    const spaceId = selectedSpace.id;
     await runMcpDiagnostic(async () => {
       const diagnostic = isTauriRuntime()
-        ? await diagnoseManagedSearch(selectedSpace.id, role)
+        ? await diagnoseManagedSearch(spaceId, role)
         : fixtureRuntimeDiagnostic("search", role);
       setRuntimeDiagnostics((current) => ({
         ...current,
-        [`search:${role}`]: diagnostic,
+        [runtimeDiagnosticKey(spaceId, "search", role)]: diagnostic,
       }));
       setNotice(`${role} search diagnostic passed.`);
     });
@@ -2064,17 +2074,18 @@ export function ManagedSettingsPane({
 
   async function testTelemetry(resourceId: string) {
     if (!selectedSpace) return;
+    const spaceId = selectedSpace.id;
     const entry = snapshot.globalConfiguration.telemetryProfiles.find(
       (candidate) => candidate.id === resourceId,
     );
     if (!entry) return;
     await runMcpDiagnostic(async () => {
       const diagnostic = isTauriRuntime()
-        ? await diagnoseManagedTelemetry(selectedSpace.id, entry.label)
+        ? await diagnoseManagedTelemetry(spaceId, entry.label)
         : fixtureRuntimeDiagnostic("telemetry", entry.label);
       setRuntimeDiagnostics((current) => ({
         ...current,
-        [`telemetry:${resourceId}`]: diagnostic,
+        [runtimeDiagnosticKey(spaceId, "telemetry", resourceId)]: diagnostic,
       }));
       setNotice(
         `${entry.label} telemetry diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
@@ -4327,7 +4338,10 @@ export function SpaceSettingsBody({
           </div>
           <div className="managed-diagnostic-actions">
             {(["agent", "research"] as const).map((role) => {
-              const diagnostic = runtimeDiagnostics[`search:${role}`];
+              const diagnostic =
+                runtimeDiagnostics[
+                  runtimeDiagnosticKey(selectedSpace.id, "search", role)
+                ];
               return (
                 <div key={role}>
                   <button
@@ -4409,12 +4423,20 @@ export function SpaceSettingsBody({
                     Test OTLP exporters
                   </button>
                   {runtimeDiagnostics[
-                    `telemetry:${draft.selectedTelemetry}`
+                    runtimeDiagnosticKey(
+                      selectedSpace.id,
+                      "telemetry",
+                      draft.selectedTelemetry,
+                    )
                   ] ? (
                     <DiagnosticResult
                       value={
                         runtimeDiagnostics[
-                          `telemetry:${draft.selectedTelemetry}`
+                          runtimeDiagnosticKey(
+                            selectedSpace.id,
+                            "telemetry",
+                            draft.selectedTelemetry,
+                          )
                         ]!
                       }
                     />
@@ -4640,7 +4662,10 @@ export function SpaceSettingsBody({
               .filter((entry) => draft.selectedProviders.includes(entry.id))
               .map((entry) => {
                 const profile = currentValue(entry).profile;
-                const diagnostic = runtimeDiagnostics[`provider:${profile}`];
+                const diagnostic =
+                  runtimeDiagnostics[
+                    runtimeDiagnosticKey(selectedSpace.id, "provider", profile)
+                  ];
                 return (
                   <div key={`provider:${entry.id}`}>
                     <button
@@ -4660,7 +4685,10 @@ export function SpaceSettingsBody({
               })}
             {selectedModels.map((entry) => {
               const profile = currentValue(entry).profile;
-              const diagnostic = runtimeDiagnostics[`model:${profile}`];
+              const diagnostic =
+                runtimeDiagnostics[
+                  runtimeDiagnosticKey(selectedSpace.id, "model", profile)
+                ];
               return (
                 <div key={`model:${entry.id}`}>
                   <button

@@ -1011,6 +1011,20 @@ fn response_result(bytes: &[u8], id: i64) -> Result<Value, String> {
         .ok_or_else(|| "MCP response has neither result nor error".into())
 }
 
+fn call_response_result(bytes: &[u8], id: i64) -> Result<CallToolResult, String> {
+    let value = response_value(bytes, id)?;
+    if let Some(error) = value.get("error") {
+        let error: ErrorData = serde_json::from_value(error.clone())
+            .map_err(|error| format!("invalid MCP JSON-RPC error: {error}"))?;
+        return Ok(confirmed_protocol_error_result(error));
+    }
+    let result = value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "MCP response has neither result nor error".to_owned())?;
+    serde_json::from_value(result).map_err(|error| format!("invalid MCP tool result: {error}"))
+}
+
 fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
     let result: InitializeResult =
         serde_json::from_value(response_result(stdout, INITIALIZE_REQUEST_ID)?)
@@ -1108,15 +1122,14 @@ pub(super) fn parse_tools_result(
     })
 }
 
-fn parse_call(
+pub(super) fn parse_call(
     stdout: &[u8],
     server: &ConfiguredServer,
     tool: &str,
     secrets: &[String],
 ) -> Result<McpCallOutput, String> {
     validate_initialize(stdout)?;
-    let result: CallToolResult = serde_json::from_value(response_result(stdout, MCP_REQUEST_ID)?)
-        .map_err(|error| format!("invalid MCP tool result: {error}"))?;
+    let result = call_response_result(stdout, MCP_REQUEST_ID)?;
     parse_call_result(result, server, tool, secrets)
 }
 
