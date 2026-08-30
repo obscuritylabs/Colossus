@@ -5,6 +5,7 @@ use colossus_contracts::{
 use colossus_ports::ModelProviderError;
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
+use colossus_tools::MAX_MODEL_TOOL_TURN_BYTES;
 use colossus_work::{EventSourcedWorkRepository, WorkService};
 use std::sync::{
     Mutex,
@@ -149,6 +150,42 @@ fn message(role: ModelMessageRole, content: impl Into<String>) -> ModelMessage {
         tool_call_id: None,
         tool_calls: Vec::new(),
     }
+}
+
+fn sequential_knowledge_messages(count: usize, result_bytes: usize) -> Vec<ModelMessage> {
+    let mut messages = vec![message(
+        ModelMessageRole::User,
+        "correlate the production incidents",
+    )];
+    for index in 0..count {
+        let call_id = format!("knowledge-{index}");
+        let mut assistant = message(ModelMessageRole::Assistant, "");
+        assistant.tool_calls.push(ModelToolCall {
+            call_id: call_id.clone(),
+            name: "mcp.call".into(),
+            arguments: json!({
+                "server": "knowledge",
+                "tool": "knowledge.search",
+                "arguments": {"query": format!("incident {index}")},
+            }),
+        });
+        messages.push(assistant);
+        messages.push(ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: json!({
+                "audit_id": format!("audit-{index}"),
+                "results": [{
+                    "title": format!("incident result {index}"),
+                    "content": "x".repeat(result_bytes),
+                }],
+            })
+            .to_string()
+            .into(),
+            tool_call_id: Some(call_id),
+            tool_calls: Vec::new(),
+        });
+    }
+    messages
 }
 
 fn image(index: usize, size_bytes: u64) -> ModelImageReference {
@@ -534,6 +571,47 @@ async fn oversized_preserved_turn_returns_context_error_before_provider_dispatch
             if message.contains("provider policy budget")
                 && message.contains("cannot be compacted")
     ));
+    assert!(snapshots.list("session-1").expect("snapshots").is_empty());
+}
+
+#[tokio::test]
+async fn sequential_tool_batches_are_bounded_before_newest_turn_compaction() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_journal, _sessions, snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    let messages = sequential_knowledge_messages(27, 40_000);
+    let mut request = preparation_request(messages.clone(), false);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 1_050_000,
+        max_output_tokens: 128_000,
+        safety_margin_tokens: 105_000,
+        input_budget_tokens: 817_000,
+    };
+    assert!(
+        model_request_bytes(&request.instructions, &messages, &request.tools)
+            > MAX_PREPARED_MODEL_REQUEST_BYTES
+    );
+
+    let prepared = service.prepare(request).await.expect("bounded context");
+    let tool_bytes = prepared
+        .messages
+        .iter()
+        .filter(|message| message.role == ModelMessageRole::Tool)
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .sum::<usize>();
+
+    assert!(tool_bytes <= MAX_MODEL_TOOL_TURN_BYTES);
+    assert!(
+        model_request_bytes("test", &prepared.messages, &[]) <= MAX_PREPARED_MODEL_REQUEST_BYTES
+    );
+    assert!(!prepared.compacted);
+    assert!(!prepared.snapshot_created);
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
     assert!(snapshots.list("session-1").expect("snapshots").is_empty());
 }
 

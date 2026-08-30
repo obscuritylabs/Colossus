@@ -57,9 +57,12 @@ contracts.
 ## Provider streams
 
 Provider adapters normalize Responses-compatible or Chat-Completions-compatible streams.
-Each event is quarantined, post-authorized where required, durably appended, and only
-then sent to an observer. An interrupted stream preserves already released events and
-returns uncertainty rather than synthesized completion.
+Consecutive model-text deltas are coalesced without reordering until they reach 4 KiB,
+100 ms elapses, or a different event arrives. Each resulting event is quarantined,
+post-authorized where required, durably appended, and only then sent to an observer.
+This keeps interactive streaming responsive while making policy and journal volume
+independent of a provider's token-fragment granularity. An interrupted stream preserves
+already released events and returns uncertainty rather than synthesized completion.
 
 ## Worker transport
 

@@ -3,6 +3,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::fmt;
 
 const MAX_HOST_CREDENTIALS: usize = 64;
+const MAX_STREAMED_MODEL_DELTA_BATCH_BYTES: usize = 4 * 1024;
+const STREAMED_MODEL_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Strict content placed inside a provider effect request.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -590,6 +592,77 @@ async fn emit_stream_item(
     Ok(result)
 }
 
+struct ProviderStreamEmitter<'a> {
+    permit: &'a ExecutionPermit,
+    observer: &'a mut dyn QuarantinedEffectObserver,
+    pending_model_delta: String,
+}
+
+impl<'a> ProviderStreamEmitter<'a> {
+    fn new(permit: &'a ExecutionPermit, observer: &'a mut dyn QuarantinedEffectObserver) -> Self {
+        Self {
+            permit,
+            observer,
+            pending_model_delta: String::new(),
+        }
+    }
+
+    fn has_pending_model_delta(&self) -> bool {
+        !self.pending_model_delta.is_empty()
+    }
+
+    async fn push(&mut self, event: ProviderEvent) -> Result<(), ExecutionError> {
+        let ProviderEvent::ModelDelta { text } = event else {
+            self.flush().await?;
+            emit_stream_item(
+                ProviderStreamItem::Event { event },
+                self.permit,
+                self.observer,
+            )
+            .await?;
+            return Ok(());
+        };
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut remaining = text.as_str();
+        while !remaining.is_empty() {
+            let available =
+                MAX_STREAMED_MODEL_DELTA_BATCH_BYTES.saturating_sub(self.pending_model_delta.len());
+            let mut take = remaining.len().min(available);
+            while take > 0 && !remaining.is_char_boundary(take) {
+                take = take.saturating_sub(1);
+            }
+            if take == 0 {
+                self.flush().await?;
+                continue;
+            }
+            self.pending_model_delta.push_str(&remaining[..take]);
+            remaining = &remaining[take..];
+            if self.pending_model_delta.len() == MAX_STREAMED_MODEL_DELTA_BATCH_BYTES {
+                self.flush().await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn flush(&mut self) -> Result<(), ExecutionError> {
+        if self.pending_model_delta.is_empty() {
+            return Ok(());
+        }
+        let text = std::mem::take(&mut self.pending_model_delta);
+        emit_stream_item(
+            ProviderStreamItem::Event {
+                event: ProviderEvent::ModelDelta { text },
+            },
+            self.permit,
+            self.observer,
+        )
+        .await?;
+        Ok(())
+    }
+}
+
 impl ProviderExecutor {
     async fn execute_permitted(
         &self,
@@ -1086,7 +1159,21 @@ impl ProviderExecutor {
         let mut state = ProviderStreamState::new(self.profile.kind, tool_names);
         let mut raw_bytes = 0_usize;
         let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
+        let mut emitter = ProviderStreamEmitter::new(permit, observer);
+        let mut flush_interval = tokio::time::interval(STREAMED_MODEL_DELTA_FLUSH_INTERVAL);
+        flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        flush_interval.tick().await;
+        loop {
+            let chunk = tokio::select! {
+                chunk = stream.next() => chunk,
+                _ = flush_interval.tick(), if emitter.has_pending_model_delta() => {
+                    emitter.flush().await?;
+                    continue;
+                }
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
             let chunk = chunk.map_err(|error| {
                 provider_execution_error(ProviderError::Transport(error.to_string()))
             })?;
@@ -1110,14 +1197,16 @@ impl ProviderExecutor {
                 })?;
                 secret.redact_value(&mut value);
                 for event in state.ingest(value).map_err(provider_execution_error)? {
-                    emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
+                    emitter.push(event).await?;
                 }
             }
         }
         decoder.finish().map_err(provider_execution_error)?;
         for event in state.finish().map_err(provider_execution_error)? {
-            emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
+            emitter.push(event).await?;
         }
+        emitter.flush().await?;
+        drop(emitter);
         let response_id = state.response_id().map(str::to_owned);
         emit_stream_item(
             ProviderStreamItem::Completed {

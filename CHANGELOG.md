@@ -8,6 +8,26 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.8] - 2026-08-30
+
+### Changed
+
+- Bumped the Rust workspace, internal dependency pins, Desktop native dependencies, fuzz
+  dependency, and all corresponding lockfiles to `0.10.10-preview.8`.
+
+### Fixed
+
+- Applied the 256 KiB aggregate provider-visible tool-observation budget across the
+  complete user logical turn, including sequential assistant/tool cycles, so many
+  individually bounded MCP results cannot overflow the protected context tail.
+- Preserved the original byte count and SHA-256 digest when an already-bounded tool
+  observation is projected again under a smaller logical-turn allocation.
+- Coalesced consecutive streamed model-text deltas into ordered batches of at most
+  4 KiB or 100 ms before post-effect release, preventing provider tokenization from
+  amplifying one long response into tens of thousands of policy and journal events.
+- Resolved effect-stream concurrency from the indexed journal tail instead of replaying
+  the complete effect stream before every streamed release event.
+
 ## [0.10.10-preview.7] - 2026-08-29
 
 ### Added

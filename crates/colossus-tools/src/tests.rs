@@ -1,7 +1,7 @@
 use super::*;
 use colossus_contracts::{
     MAX_MODEL_TOOL_CALL_ID_BYTES, ModelContent, ModelContentPart, ModelMessage, ModelMessageRole,
-    ToolResult,
+    ModelToolCall, ToolResult,
 };
 
 #[test]
@@ -950,6 +950,193 @@ fn parallel_tool_observations_share_one_turn_budget_and_preserve_small_results()
             && serde_json::from_str::<Value>(message.content.as_text().expect("observation text"))
                 .is_ok()
     }));
+}
+
+fn sequential_tool_transcript(outputs: &[String]) -> Vec<ModelMessage> {
+    let mut messages = vec![ModelMessage {
+        role: ModelMessageRole::User,
+        content: "investigate the incident".into(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }];
+    for (index, output) in outputs.iter().enumerate() {
+        let call_id = format!("knowledge-{index}");
+        messages.push(ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: ModelContent::default(),
+            tool_call_id: None,
+            tool_calls: vec![ModelToolCall {
+                call_id: call_id.clone(),
+                name: "mcp.call".into(),
+                arguments: json!({
+                    "server": "knowledge",
+                    "tool": "knowledge.search",
+                    "arguments": {"query": format!("incident {index}")},
+                }),
+            }],
+        });
+        messages.push(ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: output.clone().into(),
+            tool_call_id: Some(call_id),
+            tool_calls: Vec::new(),
+        });
+    }
+    messages
+}
+
+#[test]
+fn sequential_tool_observations_share_one_logical_turn_budget() {
+    let outputs = (0..27)
+        .map(|index| {
+            json!({
+                "audit_id": format!("audit-{index}"),
+                "results": [{
+                    "title": format!("incident result {index}"),
+                    "content": "x".repeat(40_000),
+                }],
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    let source = sequential_tool_transcript(&outputs);
+    let canonical = source.clone();
+
+    let projected = project_model_tool_observations(&source);
+    let combined = projected
+        .iter()
+        .filter(|message| message.role == ModelMessageRole::Tool)
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .sum::<usize>();
+
+    assert_eq!(source, canonical);
+    assert_eq!(projected.len(), source.len());
+    assert!(combined <= MAX_MODEL_TOOL_TURN_BYTES);
+    for (source, projected) in source.iter().zip(&projected) {
+        if source.role != ModelMessageRole::Tool {
+            assert_eq!(projected, source);
+            continue;
+        }
+        assert_eq!(projected.tool_call_id, source.tool_call_id);
+        let observation: Value = serde_json::from_str(
+            projected
+                .content
+                .as_text()
+                .expect("projected observation text"),
+        )
+        .expect("valid projected observation");
+        assert_eq!(
+            observation["_colossusToolObservation"]["toolName"],
+            "mcp.call"
+        );
+        assert_eq!(
+            observation["_colossusToolObservation"]["callId"],
+            projected.tool_call_id.as_deref().expect("call id")
+        );
+    }
+}
+
+#[test]
+fn repeated_projection_preserves_original_observation_provenance() {
+    let outputs = (0..8)
+        .map(|index| {
+            json!({
+                "id": format!("result-{index}"),
+                "content": "y".repeat(100_000),
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    let stored = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, output)| {
+            tool_result_observation_messages(&[result(
+                "mcp.call",
+                &format!("knowledge-{index}"),
+                output.clone(),
+            )])
+            .pop()
+            .expect("stored observation")
+        })
+        .collect::<Vec<_>>();
+    let expected = stored
+        .iter()
+        .map(|message| {
+            let value: Value =
+                serde_json::from_str(message.content.as_text().expect("stored observation text"))
+                    .expect("stored observation JSON");
+            (
+                value["_colossusToolObservation"]["originalBytes"].clone(),
+                value["_colossusToolObservation"]["sha256"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut transcript = sequential_tool_transcript(&vec![String::new(); stored.len()]);
+    for (message, stored) in transcript
+        .iter_mut()
+        .filter(|message| message.role == ModelMessageRole::Tool)
+        .zip(stored)
+    {
+        *message = stored;
+    }
+
+    let projected = project_model_tool_observations(&transcript);
+    let reprojected = project_model_tool_observations(&projected);
+
+    assert_eq!(projected, reprojected);
+    for (message, (original_bytes, digest)) in projected
+        .iter()
+        .filter(|message| message.role == ModelMessageRole::Tool)
+        .zip(expected)
+    {
+        let observation: Value = serde_json::from_str(
+            message
+                .content
+                .as_text()
+                .expect("reprojected observation text"),
+        )
+        .expect("reprojected observation JSON");
+        assert_eq!(
+            observation["_colossusToolObservation"]["originalBytes"],
+            original_bytes
+        );
+        assert_eq!(observation["_colossusToolObservation"]["sha256"], digest);
+        assert!(
+            observation["data"]
+                .get("_colossusToolObservation")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn separate_user_turns_receive_independent_tool_observation_budgets() {
+    let outputs = (0..8)
+        .map(|index| format!("result-{index}-{}", "z".repeat(40_000)))
+        .collect::<Vec<_>>();
+    let mut source = sequential_tool_transcript(&outputs);
+    source.extend(sequential_tool_transcript(&outputs));
+
+    let projected = project_model_tool_observations(&source);
+    let per_turn = projected
+        .split(|message| message.role == ModelMessageRole::User)
+        .filter(|turn| !turn.is_empty())
+        .map(|turn| {
+            turn.iter()
+                .filter(|message| message.role == ModelMessageRole::Tool)
+                .map(|message| serde_json::to_vec(message).expect("message").len())
+                .sum::<usize>()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(per_turn.len(), 2);
+    assert!(
+        per_turn
+            .iter()
+            .all(|bytes| *bytes <= MAX_MODEL_TOOL_TURN_BYTES)
+    );
+    assert!(per_turn.iter().sum::<usize>() > MAX_MODEL_TOOL_TURN_BYTES);
 }
 
 #[test]

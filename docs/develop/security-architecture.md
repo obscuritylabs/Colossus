@@ -70,6 +70,13 @@ references. Filesystem reads, provider output, network responses, process output
 memory retrieval remain quarantined until mandatory post-effect policy permits release.
 A denial cannot leak private bytes through output, errors, audit payloads, or observers.
 
+Provider text streaming preserves exact text and order while coalescing consecutive
+token-sized deltas into batches of at most 4 KiB or 100 ms before they enter post-effect
+release. A non-text event flushes the pending text first. Every resulting batch remains
+quarantined, independently post-authorized when required, and durably evidenced; the
+batching only prevents an external provider's fragment size from creating unbounded
+policy, journal, projection, and shutdown work.
+
 Tool execution and model observation have separate output bounds. After post-effect
 release, the complete released `ToolResult` remains available to the terminal run event
 and canonical run evidence. Before provider continuation or session persistence, the
@@ -78,7 +85,11 @@ results retain salient fields; text and collection previews retain bounded head/
 content; encoded binary payloads are replaced by metadata; and every truncated
 observation records its original byte count and SHA-256 digest. The projection preserves
 the canonical tool name and call ID, never grants access to unreleased bytes, and is
-reapplied as a derived view when older session history is prepared for a provider.
+reapplied as a derived view when older session history is prepared for a provider. One
+observation may occupy at most 64 KiB, and all observations after one user message and
+before the next share a 256 KiB aggregate budget. Assistant continuation messages do not
+reset that aggregate budget, so a long sequence of individually bounded MCP results
+cannot accumulate into an unbounded protected turn.
 
 A complete, bounded JSON-RPC error frame from an MCP server is a confirmed server
 response. Colossus normalizes it into a quarantined `CallToolResult` with `isError: true`,

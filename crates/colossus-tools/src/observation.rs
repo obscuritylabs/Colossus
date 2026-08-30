@@ -1,10 +1,11 @@
 use colossus_contracts::{ModelMessage, ModelMessageRole, ToolResult};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeMap;
 
 /// Maximum serialized size of one model-visible tool-result message.
 pub const MAX_MODEL_TOOL_MESSAGE_BYTES: usize = 64 * 1024;
-/// Maximum combined serialized size of one contiguous model-visible tool-result turn.
+/// Maximum combined serialized size of model-visible tool results in one user logical turn.
 pub const MAX_MODEL_TOOL_TURN_BYTES: usize = 256 * 1024;
 
 const MIN_TOOL_MESSAGE_BUDGET_BYTES: usize = 512;
@@ -49,6 +50,16 @@ struct JsonReductionLimits {
     object_fields: usize,
 }
 
+#[derive(Clone, Copy)]
+struct ExistingObservation<'a> {
+    format: &'a str,
+    original_bytes: u64,
+    digest: &'a str,
+    content_key: &'a str,
+    content: &'a Value,
+    metadata: ObservationMetadata<'a>,
+}
+
 /// Convert complete released tool results into bounded model-visible messages.
 ///
 /// Complete results remain owned by the caller for audit, presentation, and any
@@ -71,42 +82,63 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
             exit_code: Some(result.exit_code),
         })
         .collect::<Vec<_>>();
-    project_tool_run(&messages, &metadata)
+    project_tool_messages(&messages, &metadata)
 }
 
-/// Return a provider-visible copy whose tool-result turns obey model observation bounds.
+/// Return a provider-visible copy whose user logical turns obey model observation bounds.
 ///
 /// This is also the compatibility path for sessions written before observations were
-/// bounded. Non-tool messages and already-fitting tool messages remain byte-for-byte
-/// equivalent, and the canonical input slice is never mutated.
+/// bounded. Non-tool messages remain byte-for-byte equivalent, tool messages remain
+/// unchanged when their complete logical turn fits, and the canonical input slice is
+/// never mutated.
 pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMessage> {
-    let mut projected = Vec::with_capacity(messages.len());
-    let mut index = 0;
-    while index < messages.len() {
-        if messages[index].role != ModelMessageRole::Tool {
-            projected.push(messages[index].clone());
-            index = index.saturating_add(1);
+    let mut projected = messages.to_vec();
+    let mut logical_start = 0;
+    for index in 1..=projected.len() {
+        let logical_end =
+            index == projected.len() || projected[index].role == ModelMessageRole::User;
+        if !logical_end {
             continue;
         }
-
-        let start = index;
-        while index < messages.len() && messages[index].role == ModelMessageRole::Tool {
-            index = index.saturating_add(1);
-        }
-        let run = &messages[start..index];
-        let metadata = run
-            .iter()
-            .map(|message| ObservationMetadata {
-                call_id: message.tool_call_id.as_deref(),
-                ..ObservationMetadata::default()
-            })
-            .collect::<Vec<_>>();
-        projected.extend(project_tool_run(run, &metadata));
+        project_logical_turn(&mut projected[logical_start..index]);
+        logical_start = index;
     }
     projected
 }
 
-fn project_tool_run(
+fn project_logical_turn(messages: &mut [ModelMessage]) {
+    let tool_names = messages
+        .iter()
+        .flat_map(|message| message.tool_calls.iter())
+        .map(|call| (call.call_id.as_str(), call.name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let tool_indices = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| (message.role == ModelMessageRole::Tool).then_some(index))
+        .collect::<Vec<_>>();
+    let tool_messages = tool_indices
+        .iter()
+        .map(|index| messages[*index].clone())
+        .collect::<Vec<_>>();
+    let metadata = tool_messages
+        .iter()
+        .map(|message| ObservationMetadata {
+            tool_name: message
+                .tool_call_id
+                .as_deref()
+                .and_then(|call_id| tool_names.get(call_id).copied()),
+            call_id: message.tool_call_id.as_deref(),
+            exit_code: None,
+        })
+        .collect::<Vec<_>>();
+    let projected = project_tool_messages(&tool_messages, &metadata);
+    for (index, message) in tool_indices.into_iter().zip(projected) {
+        messages[index] = message;
+    }
+}
+
+fn project_tool_messages(
     messages: &[ModelMessage],
     metadata: &[ObservationMetadata<'_>],
 ) -> Vec<ModelMessage> {
@@ -196,6 +228,9 @@ fn project_tool_message(
     let output = output.as_ref();
 
     let parsed = serde_json::from_str::<Value>(output).ok();
+    if let Some(existing) = parsed.as_ref().and_then(existing_observation) {
+        return project_existing_tool_message(message, metadata, existing, message_budget);
+    }
     let normalized = parsed.as_ref().map(normalize_oversized_json);
     let digest = sha256_hex(output.as_bytes());
     let mut output_budget = message_budget.saturating_sub(96).max(256);
@@ -223,22 +258,149 @@ fn project_tool_message(
     }
 
     let mut candidate = message.clone();
-    candidate.content = metadata_only_observation(output, normalized.is_some(), metadata, &digest)
-        .to_string()
-        .into();
+    candidate.content = metadata_only_observation(
+        u64::try_from(output.len()).unwrap_or(u64::MAX),
+        normalized.is_some(),
+        metadata,
+        &digest,
+    )
+    .to_string()
+    .into();
     if serialized_message_bytes(&candidate) <= message_budget {
         return candidate;
     }
 
-    // An infeasible preferred allocation can occur only for a malformed or legacy run with
-    // hundreds of parallel results. Preserve provider correlation and shed observation content
-    // rather than allowing the aggregate budget to grow without bound.
+    // An infeasible preferred allocation can occur only for a malformed or legacy turn with
+    // hundreds of results. Preserve provider correlation and shed observation content rather
+    // than allowing the aggregate budget to grow without bound.
     candidate.content = String::new().into();
     debug_assert!(
         serialized_message_bytes(&candidate) <= message_budget,
         "the structural tool-result message exceeds its aggregate allocation"
     );
     candidate
+}
+
+fn existing_observation(value: &Value) -> Option<ExistingObservation<'_>> {
+    let details = value.get("_colossusToolObservation")?.as_object()?;
+    if !details.get("truncated")?.as_bool()? {
+        return None;
+    }
+    let format = details.get("format")?.as_str()?;
+    if !matches!(format, "json" | "text") {
+        return None;
+    }
+    let original_bytes = details.get("originalBytes")?.as_u64()?;
+    let digest = details.get("sha256")?.as_str()?;
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let (content_key, content) = if let Some(content) = value.get("preview") {
+        ("preview", content)
+    } else {
+        ("data", value.get("data")?)
+    };
+    Some(ExistingObservation {
+        format,
+        original_bytes,
+        digest,
+        content_key,
+        content,
+        metadata: ObservationMetadata {
+            tool_name: details.get("toolName").and_then(Value::as_str),
+            call_id: details.get("callId").and_then(Value::as_str),
+            exit_code: details
+                .get("exitCode")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok()),
+        },
+    })
+}
+
+fn project_existing_tool_message(
+    message: &ModelMessage,
+    metadata: ObservationMetadata<'_>,
+    existing: ExistingObservation<'_>,
+    message_budget: usize,
+) -> ModelMessage {
+    let metadata = ObservationMetadata {
+        tool_name: metadata.tool_name.or(existing.metadata.tool_name),
+        call_id: metadata.call_id.or(existing.metadata.call_id),
+        exit_code: metadata.exit_code.or(existing.metadata.exit_code),
+    };
+    let mut output_budget = message_budget.saturating_sub(96).max(256);
+    for _ in 0..16 {
+        let observation = render_existing_observation(existing, metadata, output_budget);
+        let mut candidate = message.clone();
+        candidate.content = observation.into();
+        let candidate_bytes = serialized_message_bytes(&candidate);
+        if candidate_bytes <= message_budget {
+            return candidate;
+        }
+        let excess = candidate_bytes.saturating_sub(message_budget).max(1);
+        let next = output_budget.saturating_sub(excess);
+        if next >= output_budget || next < 256 {
+            break;
+        }
+        output_budget = next;
+    }
+
+    let mut candidate = message.clone();
+    candidate.content = metadata_only_observation(
+        existing.original_bytes,
+        existing.format == "json",
+        metadata,
+        existing.digest,
+    )
+    .to_string()
+    .into();
+    if serialized_message_bytes(&candidate) <= message_budget {
+        return candidate;
+    }
+    candidate.content = String::new().into();
+    debug_assert!(
+        serialized_message_bytes(&candidate) <= message_budget,
+        "the structural tool-result message exceeds its aggregate allocation"
+    );
+    candidate
+}
+
+fn render_existing_observation(
+    existing: ExistingObservation<'_>,
+    metadata: ObservationMetadata<'_>,
+    budget: usize,
+) -> String {
+    match (existing.format, existing.content_key) {
+        ("json", "data") => render_json_observation(
+            existing.original_bytes,
+            existing.content,
+            metadata,
+            existing.digest,
+            budget,
+        ),
+        ("text", "preview") => existing.content.as_str().map_or_else(
+            || {
+                metadata_only_observation(existing.original_bytes, false, metadata, existing.digest)
+                    .to_string()
+            },
+            |preview| {
+                render_text_observation(
+                    preview,
+                    existing.original_bytes,
+                    metadata,
+                    existing.digest,
+                    budget,
+                )
+            },
+        ),
+        _ => metadata_only_observation(
+            existing.original_bytes,
+            existing.format == "json",
+            metadata,
+            existing.digest,
+        )
+        .to_string(),
+    }
 }
 
 fn render_observation(
@@ -248,22 +410,30 @@ fn render_observation(
     digest: &str,
     budget: usize,
 ) -> String {
+    let original_bytes = u64::try_from(output.len()).unwrap_or(u64::MAX);
     if let Some(value) = normalized {
-        render_json_observation(output, value, metadata, digest, budget)
+        render_json_observation(original_bytes, value, metadata, digest, budget)
     } else {
-        render_text_observation(output, metadata, digest, budget)
+        render_text_observation(output, original_bytes, metadata, digest, budget)
     }
 }
 
 fn render_json_observation(
-    output: &str,
+    original_bytes: u64,
     value: &Value,
     metadata: ObservationMetadata<'_>,
     digest: &str,
     budget: usize,
 ) -> String {
     let value = omit_binary_values(value, MAX_BINARY_SANITIZE_DEPTH, None);
-    let full = observation_envelope(output, "json", metadata, digest, "data", value.clone());
+    let full = observation_envelope(
+        original_bytes,
+        "json",
+        metadata,
+        digest,
+        "data",
+        value.clone(),
+    );
     if serialized_value_bytes(&full) <= budget {
         return full.to_string();
     }
@@ -276,13 +446,14 @@ fn render_json_observation(
             object_fields: (64_usize >> step).max(2),
         };
         let reduced = reduce_json(&value, limits.depth, limits, None);
-        let candidate = observation_envelope(output, "json", metadata, digest, "data", reduced);
+        let candidate =
+            observation_envelope(original_bytes, "json", metadata, digest, "data", reduced);
         if serialized_value_bytes(&candidate) <= budget {
             return candidate.to_string();
         }
     }
 
-    metadata_only_observation(output, true, metadata, digest).to_string()
+    metadata_only_observation(original_bytes, true, metadata, digest).to_string()
 }
 
 fn omit_binary_values(value: &Value, remaining_depth: usize, key: Option<&str>) -> Value {
@@ -319,6 +490,7 @@ fn omit_binary_values(value: &Value, remaining_depth: usize, key: Option<&str>) 
 
 fn render_text_observation(
     output: &str,
+    original_bytes: u64,
     metadata: ObservationMetadata<'_>,
     digest: &str,
     budget: usize,
@@ -327,7 +499,7 @@ fn render_text_observation(
     loop {
         let preview = head_tail_text(output, preview_budget);
         let candidate = observation_envelope(
-            output,
+            original_bytes,
             "text",
             metadata,
             digest,
@@ -340,14 +512,14 @@ fn render_text_observation(
         }
         let next = preview_budget.saturating_sub(bytes.saturating_sub(budget).max(1));
         if next >= preview_budget || next == 0 {
-            return metadata_only_observation(output, false, metadata, digest).to_string();
+            return metadata_only_observation(original_bytes, false, metadata, digest).to_string();
         }
         preview_budget = next;
     }
 }
 
 fn observation_envelope(
-    output: &str,
+    original_bytes: u64,
     format: &str,
     metadata: ObservationMetadata<'_>,
     digest: &str,
@@ -375,10 +547,7 @@ fn observation_envelope(
     if let Some(exit_code) = metadata.exit_code {
         details.insert("exitCode".into(), Value::from(exit_code));
     }
-    details.insert(
-        "originalBytes".into(),
-        Value::from(u64::try_from(output.len()).unwrap_or(u64::MAX)),
-    );
+    details.insert("originalBytes".into(), Value::from(original_bytes));
     details.insert("sha256".into(), Value::String(digest.into()));
 
     let mut envelope = Map::new();
@@ -388,13 +557,13 @@ fn observation_envelope(
 }
 
 fn metadata_only_observation(
-    output: &str,
+    original_bytes: u64,
     json_format: bool,
     metadata: ObservationMetadata<'_>,
     digest: &str,
 ) -> Value {
     observation_envelope(
-        output,
+        original_bytes,
         if json_format { "json" } else { "text" },
         metadata,
         digest,

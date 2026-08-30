@@ -328,7 +328,7 @@ bounds. Raising a value in this table does not remove those hard limits.
 | Provider/model configuration is rejected | `maxOutputTokens` plus the safety margin must leave a positive input budget |
 | Compaction happens earlier than expected | Percentages apply to the derived input budget, not the advertised context window |
 | Context still cannot fit after compaction | Reduce preserved messages, retrieved material, tool output, or output reservation |
-| Provider policy byte budget cannot fit the preserved turn | Reduce preserved messages, tool output, retrieved material, tool schemas, or instructions |
+| Provider policy byte budget cannot fit the preserved turn | Tool-result observations are already bounded across the complete user turn; reduce other preserved messages, tool-call arguments, retrieved material, tool schemas, or instructions |
 | Child work remains queued | Check `agents status`, worker readiness, and `subagents.maxConcurrent` |
 | Increasing child concurrency does not increase tool parallelism | `sandbox.maxConcurrency` is a separate per-actor/run effect ceiling |
 | Research creates too much external traffic | Lower `research.maxWorkers`; it is independent from child concurrency |
