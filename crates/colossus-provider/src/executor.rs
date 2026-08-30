@@ -1163,47 +1163,55 @@ impl ProviderExecutor {
         let mut flush_interval = tokio::time::interval(STREAMED_MODEL_DELTA_FLUSH_INTERVAL);
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         flush_interval.tick().await;
-        loop {
-            let chunk = tokio::select! {
-                chunk = stream.next() => chunk,
-                _ = flush_interval.tick(), if emitter.has_pending_model_delta() => {
-                    emitter.flush().await?;
-                    continue;
-                }
-            };
-            let Some(chunk) = chunk else {
-                break;
-            };
-            let chunk = chunk.map_err(|error| {
-                provider_execution_error(ProviderError::Transport(error.to_string()))
-            })?;
-            raw_bytes = raw_bytes.saturating_add(chunk.len());
-            if raw_bytes > limit {
-                return Err(provider_execution_error(ProviderError::Malformed(
-                    "raw provider event stream exceeds the permitted output bound".into(),
-                )));
-            }
-            for data in decoder.feed(&chunk).map_err(provider_execution_error)? {
-                let mut data = data;
-                secret.redact_bytes(&mut data);
-                if data == b"[DONE]" {
-                    state.mark_done();
-                    continue;
-                }
-                let mut value: Value = serde_json::from_slice(&data).map_err(|error| {
-                    provider_execution_error(ProviderError::Malformed(format!(
-                        "provider SSE data is not valid JSON: {error}"
-                    )))
+        let stream_result = async {
+            loop {
+                let chunk = tokio::select! {
+                    chunk = stream.next() => chunk,
+                    _ = flush_interval.tick(), if emitter.has_pending_model_delta() => {
+                        emitter.flush().await?;
+                        continue;
+                    }
+                };
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                let chunk = chunk.map_err(|error| {
+                    provider_execution_error(ProviderError::Transport(error.to_string()))
                 })?;
-                secret.redact_value(&mut value);
-                for event in state.ingest(value).map_err(provider_execution_error)? {
-                    emitter.push(event).await?;
+                raw_bytes = raw_bytes.saturating_add(chunk.len());
+                if raw_bytes > limit {
+                    return Err(provider_execution_error(ProviderError::Malformed(
+                        "raw provider event stream exceeds the permitted output bound".into(),
+                    )));
+                }
+                for data in decoder.feed(&chunk).map_err(provider_execution_error)? {
+                    let mut data = data;
+                    secret.redact_bytes(&mut data);
+                    if data == b"[DONE]" {
+                        state.mark_done();
+                        continue;
+                    }
+                    let mut value: Value = serde_json::from_slice(&data).map_err(|error| {
+                        provider_execution_error(ProviderError::Malformed(format!(
+                            "provider SSE data is not valid JSON: {error}"
+                        )))
+                    })?;
+                    secret.redact_value(&mut value);
+                    for event in state.ingest(value).map_err(provider_execution_error)? {
+                        emitter.push(event).await?;
+                    }
                 }
             }
+            decoder.finish().map_err(provider_execution_error)?;
+            for event in state.finish().map_err(provider_execution_error)? {
+                emitter.push(event).await?;
+            }
+            Ok(())
         }
-        decoder.finish().map_err(provider_execution_error)?;
-        for event in state.finish().map_err(provider_execution_error)? {
-            emitter.push(event).await?;
+        .await;
+        if let Err(error) = stream_result {
+            emitter.flush().await?;
+            return Err(error);
         }
         emitter.flush().await?;
         drop(emitter);

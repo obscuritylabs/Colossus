@@ -62,7 +62,8 @@ Consecutive model-text deltas are coalesced without reordering until they reach 
 post-authorized where required, durably appended, and only then sent to an observer.
 This keeps interactive streaming responsive while making policy and journal volume
 independent of a provider's token-fragment granularity. An interrupted stream preserves
-already released events and returns uncertainty rather than synthesized completion.
+already released events, flushes accepted buffered text through the same release gate,
+and returns uncertainty rather than synthesized completion.
 
 ## Worker transport
 

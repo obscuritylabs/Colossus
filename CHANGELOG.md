@@ -21,10 +21,12 @@ include breaking changes while the public API is still settling.
   complete user logical turn, including sequential assistant/tool cycles, so many
   individually bounded MCP results cannot overflow the protected context tail.
 - Preserved the original byte count and SHA-256 digest when an already-bounded tool
-  observation is projected again under a smaller logical-turn allocation.
+  observation is projected again under a smaller logical-turn allocation, while fresh
+  tool output always derives provenance from its actual released bytes.
 - Coalesced consecutive streamed model-text deltas into ordered batches of at most
   4 KiB or 100 ms before post-effect release, preventing provider tokenization from
-  amplifying one long response into tens of thousands of policy and journal events.
+  amplifying one long response into tens of thousands of policy and journal events;
+  accepted buffered text is released before a later stream failure is returned.
 - Resolved effect-stream concurrency from the indexed journal tail instead of replaying
   the complete effect stream before every streamed release event.
 

@@ -9,6 +9,7 @@ pub const MAX_MODEL_TOOL_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_MODEL_TOOL_TURN_BYTES: usize = 256 * 1024;
 
 const MIN_TOOL_MESSAGE_BUDGET_BYTES: usize = 512;
+const OBSERVATION_ENVELOPE_BUDGET_BYTES: usize = 1024;
 pub(crate) const MAX_OBSERVATION_METADATA_TEXT_BYTES: usize = 128;
 const MAX_JSON_DEPTH: usize = 16;
 const MAX_BINARY_SANITIZE_DEPTH: usize = 128;
@@ -50,6 +51,12 @@ struct JsonReductionLimits {
     object_fields: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExistingObservationHandling {
+    TreatAsFreshOutput,
+    PreserveProvenance,
+}
+
 #[derive(Clone, Copy)]
 struct ExistingObservation<'a> {
     format: &'a str,
@@ -82,7 +89,11 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
             exit_code: Some(result.exit_code),
         })
         .collect::<Vec<_>>();
-    project_tool_messages(&messages, &metadata)
+    project_tool_messages(
+        &messages,
+        &metadata,
+        ExistingObservationHandling::TreatAsFreshOutput,
+    )
 }
 
 /// Return a provider-visible copy whose user logical turns obey model observation bounds.
@@ -132,7 +143,11 @@ fn project_logical_turn(messages: &mut [ModelMessage]) {
             exit_code: None,
         })
         .collect::<Vec<_>>();
-    let projected = project_tool_messages(&tool_messages, &metadata);
+    let projected = project_tool_messages(
+        &tool_messages,
+        &metadata,
+        ExistingObservationHandling::PreserveProvenance,
+    );
     for (index, message) in tool_indices.into_iter().zip(projected) {
         messages[index] = message;
     }
@@ -141,15 +156,31 @@ fn project_logical_turn(messages: &mut [ModelMessage]) {
 fn project_tool_messages(
     messages: &[ModelMessage],
     metadata: &[ObservationMetadata<'_>],
+    existing_observation_handling: ExistingObservationHandling,
 ) -> Vec<ModelMessage> {
     debug_assert_eq!(messages.len(), metadata.len());
     let serialized = messages
         .iter()
         .map(serialized_message_bytes)
         .collect::<Vec<_>>();
-    let desired = serialized
+    let desired = messages
         .iter()
-        .map(|size| (*size).min(MAX_MODEL_TOOL_MESSAGE_BYTES))
+        .zip(&serialized)
+        .map(|(message, size)| {
+            let collision = existing_observation_handling
+                == ExistingObservationHandling::TreatAsFreshOutput
+                && serde_json::from_str::<Value>(&message.content.plain_text())
+                    .ok()
+                    .as_ref()
+                    .and_then(existing_observation)
+                    .is_some();
+            size.saturating_add(if collision {
+                OBSERVATION_ENVELOPE_BUDGET_BYTES
+            } else {
+                0
+            })
+            .min(MAX_MODEL_TOOL_MESSAGE_BYTES)
+        })
         .collect::<Vec<_>>();
     let minimum = serialized
         .iter()
@@ -161,7 +192,9 @@ fn project_tool_messages(
         .iter()
         .zip(metadata)
         .zip(budgets)
-        .map(|((message, metadata), budget)| project_tool_message(message, *metadata, budget))
+        .map(|((message, metadata), budget)| {
+            project_tool_message(message, *metadata, budget, existing_observation_handling)
+        })
         .collect()
 }
 
@@ -220,15 +253,22 @@ fn project_tool_message(
     message: &ModelMessage,
     metadata: ObservationMetadata<'_>,
     message_budget: usize,
+    existing_observation_handling: ExistingObservationHandling,
 ) -> ModelMessage {
-    if serialized_message_bytes(message) <= message_budget {
-        return message.clone();
-    }
     let output = message.content.plain_text();
     let output = output.as_ref();
 
     let parsed = serde_json::from_str::<Value>(output).ok();
-    if let Some(existing) = parsed.as_ref().and_then(existing_observation) {
+    let existing = parsed.as_ref().and_then(existing_observation);
+    let fresh_observation_collision = existing_observation_handling
+        == ExistingObservationHandling::TreatAsFreshOutput
+        && existing.is_some();
+    if serialized_message_bytes(message) <= message_budget && !fresh_observation_collision {
+        return message.clone();
+    }
+    if existing_observation_handling == ExistingObservationHandling::PreserveProvenance
+        && let Some(existing) = existing
+    {
         return project_existing_tool_message(message, metadata, existing, message_budget);
     }
     let normalized = parsed.as_ref().map(normalize_oversized_json);

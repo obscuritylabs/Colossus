@@ -75,7 +75,9 @@ token-sized deltas into batches of at most 4 KiB or 100 ms before they enter pos
 release. A non-text event flushes the pending text first. Every resulting batch remains
 quarantined, independently post-authorized when required, and durably evidenced; the
 batching only prevents an external provider's fragment size from creating unbounded
-policy, journal, projection, and shutdown work.
+policy, journal, projection, and shutdown work. If a later transport or decoding error
+terminates the stream, already accepted buffered text is flushed through the same
+release boundary before the error is returned.
 
 Tool execution and model observation have separate output bounds. After post-effect
 release, the complete released `ToolResult` remains available to the terminal run event
@@ -85,7 +87,10 @@ results retain salient fields; text and collection previews retain bounded head/
 content; encoded binary payloads are replaced by metadata; and every truncated
 observation records its original byte count and SHA-256 digest. The projection preserves
 the canonical tool name and call ID, never grants access to unreleased bytes, and is
-reapplied as a derived view when older session history is prepared for a provider. One
+reapplied as a derived view when older session history is prepared for a provider.
+Fresh released output always computes the byte count and digest from its own bytes; only
+the derived history-reprojection path recognizes an existing observation envelope, so
+tool-controlled JSON cannot supply trusted provenance. One
 observation may occupy at most 64 KiB, and all observations after one user message and
 before the next share a 256 KiB aggregate budget. Assistant continuation messages do not
 reset that aggregate budget, so a long sequence of individually bounded MCP results

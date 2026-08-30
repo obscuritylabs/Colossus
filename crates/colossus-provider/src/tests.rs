@@ -2490,6 +2490,70 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
 }
 
 #[tokio::test]
+async fn buffered_model_delta_is_released_before_stream_failure() {
+    let body = [
+        r#"data: {"id":"chat-partial","choices":[{"index":0,"delta":{"content":"accepted partial text"},"finish_reason":null}]}
+
+"#,
+        "data: {\"id\":\n\n",
+    ]
+    .concat();
+    let (base_url, server) = one_sse_server(body).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let gateway = EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [74_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+
+    gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect_err("malformed provider stream must fail");
+
+    assert!(released.0.iter().any(|item| matches!(
+        item,
+        ProviderStreamItem::Event {
+            event: ProviderEvent::ModelDelta { text }
+        } if text == "accepted partial text"
+    )));
+    assert!(
+        !released
+            .0
+            .iter()
+            .any(|item| matches!(item, ProviderStreamItem::Completed { .. }))
+    );
+    assert!(
+        journal
+            .read_global(1, 100)
+            .expect("audit events")
+            .iter()
+            .any(|event| event.event_type == "effect.chunk_released.v1")
+    );
+    server.await.expect("server task");
+}
+
+#[tokio::test]
 async fn dense_sse_deltas_are_coalesced_before_policy_release_and_audit() {
     let mut body = String::new();
     let oversized_delta = "🚀".repeat(2_048);
