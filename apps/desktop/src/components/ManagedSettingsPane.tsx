@@ -775,6 +775,54 @@ function currentValue<T>(entry: CatalogEntry<T>): T {
   );
 }
 
+function referencedValue<T>(
+  entries: CatalogEntry<T>[],
+  reference: { resourceId: string; revision: number },
+): T | undefined {
+  return entries
+    .find((entry) => entry.id === reference.resourceId)
+    ?.revisions.find((revision) => revision.revision === reference.revision)
+    ?.value;
+}
+
+function mcpUsesCredential(
+  server: ManagedMcpServer,
+  credentialId: string,
+): boolean {
+  return (
+    Object.values(server.environmentCredentials).includes(credentialId) ||
+    Object.values(server.credentialHeaders).some(
+      (binding) => binding.credentialId === credentialId,
+    ) ||
+    server.oauth?.clientSecretCredentialId === credentialId
+  );
+}
+
+function catalogReferenceUsesCredential(
+  global: ManagedSettingsSnapshot["globalConfiguration"],
+  catalogKey: string,
+  reference: { resourceId: string; revision: number },
+  credentialId: string,
+): boolean {
+  if (catalogKey.startsWith("provider:")) {
+    return (
+      referencedValue(global.providers, reference)?.credentialId ===
+      credentialId
+    );
+  }
+  if (catalogKey.startsWith("search:")) {
+    return (
+      referencedValue(global.searchProviders, reference)?.credentialId ===
+      credentialId
+    );
+  }
+  if (catalogKey.startsWith("mcp:")) {
+    const server = referencedValue(global.mcpServers, reference);
+    return server !== undefined && mcpUsesCredential(server, credentialId);
+  }
+  return false;
+}
+
 export function managedCredentialConsumers(
   snapshot: Pick<ManagedSettingsSnapshot, "globalConfiguration" | "spaces">,
   credentialId: string,
@@ -794,24 +842,26 @@ export function managedCredentialConsumers(
   }
   for (const entry of global.mcpServers) {
     if (entry.archived) continue;
-    const server = currentValue(entry);
-    const referenced =
-      Object.values(server.environmentCredentials).includes(credentialId) ||
-      Object.values(server.credentialHeaders).some(
-        (binding) => binding.credentialId === credentialId,
-      ) ||
-      server.oauth?.clientSecretCredentialId === credentialId;
-    if (referenced) {
+    if (mcpUsesCredential(currentValue(entry), credentialId)) {
       consumers.add(`MCP server · ${entry.label}`);
     }
   }
   for (const space of snapshot.spaces) {
-    if (
-      !space.archived &&
-      Object.values(space.configuration.credentialOverrides).includes(
+    if (space.archived) continue;
+    const overrideUsesCredential = Object.values(
+      space.configuration.credentialOverrides,
+    ).includes(credentialId);
+    const pinnedRevisionUsesCredential = Object.entries(
+      space.configuration.catalogRevisions,
+    ).some(([catalogKey, reference]) =>
+      catalogReferenceUsesCredential(
+        global,
+        catalogKey,
+        reference,
         credentialId,
-      )
-    ) {
+      ),
+    );
+    if (overrideUsesCredential || pinnedRevisionUsesCredential) {
       consumers.add(`Workspace · ${space.name}`);
     }
   }

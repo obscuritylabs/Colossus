@@ -299,6 +299,110 @@ describe("ManagedSettingsPane", () => {
     ]);
   });
 
+  it("reports credentials used by pinned historical catalog revisions", () => {
+    const credentialId = "credential-old";
+    const providerSnapshot = buildManagedSettingsFixture(desktop());
+    const provider = providerSnapshot.globalConfiguration.providers[0]!;
+    provider.revisions[0]!.value.credentialId = credentialId;
+    provider.revisions.push({
+      revision: 2,
+      value: {
+        ...provider.revisions[0]!.value,
+        credentialId: "credential-new",
+      },
+    });
+    provider.currentRevision = 2;
+    providerSnapshot.spaces[0]!.configuration.catalogRevisions[
+      `provider:${provider.id}`
+    ] = { resourceId: provider.id, revision: 1 };
+
+    expect(managedCredentialConsumers(providerSnapshot, credentialId)).toEqual([
+      "Workspace · Colossus",
+    ]);
+
+    const searchSnapshot = buildManagedSettingsFixture(desktop());
+    searchSnapshot.globalConfiguration.searchProviders.push({
+      id: "search-main",
+      label: "Search",
+      currentRevision: 2,
+      archived: false,
+      revisions: [
+        {
+          revision: 1,
+          value: {
+            profile: "search-main",
+            kind: "searxng",
+            endpoint: "https://old-search.example.test/search",
+            credentialId,
+            authHeader: "X-Api-Key",
+            timeoutMs: 30_000,
+          },
+        },
+        {
+          revision: 2,
+          value: {
+            profile: "search-main",
+            kind: "searxng",
+            endpoint: "https://search.example.test/search",
+            credentialId: "credential-new",
+            authHeader: "X-Api-Key",
+            timeoutMs: 30_000,
+          },
+        },
+      ],
+    });
+    searchSnapshot.spaces[0]!.configuration.catalogRevisions[
+      "search:search-main"
+    ] = { resourceId: "search-main", revision: 1 };
+
+    expect(managedCredentialConsumers(searchSnapshot, credentialId)).toEqual([
+      "Workspace · Colossus",
+    ]);
+
+    const mcpSnapshot = buildManagedSettingsFixture(desktop());
+    const mcp: ManagedMcpServer = {
+      name: "remote-tools",
+      transport: "streamable_http",
+      command: null,
+      args: [],
+      workingDirectory: null,
+      environmentCredentials: { MCP_TOKEN: credentialId },
+      url: "https://mcp.example.test/rpc",
+      headers: {},
+      credentialHeaders: {},
+      allowStateless: true,
+      oauth: null,
+      allowedTools: ["search"],
+      researchTools: [],
+      timeoutMs: 30_000,
+      maxOutputBytes: null,
+    };
+    mcpSnapshot.globalConfiguration.mcpServers.push({
+      id: "mcp-main",
+      label: "MCP",
+      currentRevision: 2,
+      archived: false,
+      revisions: [
+        { revision: 1, value: mcp },
+        {
+          revision: 2,
+          value: {
+            ...mcp,
+            environmentCredentials: { MCP_TOKEN: "credential-new" },
+          },
+        },
+      ],
+    });
+    mcpSnapshot.spaces[0]!.configuration.catalogRevisions["mcp:mcp-main"] = {
+      resourceId: "mcp-main",
+      revision: 1,
+    };
+
+    expect(managedCredentialConsumers(mcpSnapshot, credentialId)).toEqual([
+      "Workspace · Colossus",
+    ]);
+  });
+
   it("reports active search profile consumers from pinned workspace metadata", () => {
     const snapshot = buildManagedSettingsFixture(desktop());
     const search = {

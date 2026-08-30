@@ -977,6 +977,25 @@ fn maximum_valid_call_ids_cannot_bypass_tool_observation_bounds() {
 }
 
 #[test]
+fn excessive_parallel_results_reduce_below_the_preferred_minimum_budget() {
+    let results = (0..513)
+        .map(|index| result("mcp.call", &format!("call-{index}"), "y".repeat(4_096)))
+        .collect::<Vec<_>>();
+
+    let messages = tool_result_observation_messages(&results);
+    let serialized = messages
+        .iter()
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .collect::<Vec<_>>();
+
+    assert_eq!(messages.len(), results.len());
+    assert!(serialized.iter().sum::<usize>() <= MAX_MODEL_TOOL_TURN_BYTES);
+    assert!(messages.iter().all(|message| {
+        serde_json::from_str::<Value>(message.content.as_text().expect("observation text")).is_ok()
+    }));
+}
+
+#[test]
 fn oversized_provider_tool_name_cannot_bypass_tool_observation_bounds() {
     let tool_name = format!("unknown-{}-tool", "🛠".repeat(40_000));
     let output = json!({

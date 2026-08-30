@@ -137,9 +137,11 @@ fn waterfill_budgets(desired: &[usize], minimum: &[usize], total: usize) -> Vec<
     if desired.iter().copied().sum::<usize>() <= total {
         return desired.to_vec();
     }
-    if minimum.iter().copied().sum::<usize>() >= total {
+    let minimum_sum = minimum.iter().copied().sum::<usize>();
+    if minimum_sum == total {
         return minimum.to_vec();
     }
+    let minimum_is_feasible = minimum_sum < total;
 
     let mut low = 0_usize;
     let mut high = desired.iter().copied().max().unwrap_or_default();
@@ -148,7 +150,11 @@ fn waterfill_budgets(desired: &[usize], minimum: &[usize], total: usize) -> Vec<
         let used = desired
             .iter()
             .zip(minimum)
-            .map(|(desired, minimum)| (*desired).min(middle).max(*minimum))
+            .map(|(desired, minimum)| {
+                (*desired)
+                    .min(middle)
+                    .max(if minimum_is_feasible { *minimum } else { 0 })
+            })
             .fold(0_usize, usize::saturating_add);
         if used <= total {
             low = middle;
@@ -160,7 +166,11 @@ fn waterfill_budgets(desired: &[usize], minimum: &[usize], total: usize) -> Vec<
     let mut budgets = desired
         .iter()
         .zip(minimum)
-        .map(|(desired, minimum)| (*desired).min(low).max(*minimum))
+        .map(|(desired, minimum)| {
+            (*desired)
+                .min(low)
+                .max(if minimum_is_feasible { *minimum } else { 0 })
+        })
         .collect::<Vec<_>>();
     let mut remaining = total.saturating_sub(budgets.iter().copied().sum::<usize>());
     for (budget, desired) in budgets.iter_mut().zip(desired) {
@@ -180,9 +190,6 @@ fn project_tool_message(
     message_budget: usize,
 ) -> ModelMessage {
     if serialized_message_bytes(message) <= message_budget {
-        return message.clone();
-    }
-    if message.content.images().next().is_some() {
         return message.clone();
     }
     let output = message.content.plain_text();
@@ -219,6 +226,18 @@ fn project_tool_message(
     candidate.content = metadata_only_observation(output, normalized.is_some(), metadata, &digest)
         .to_string()
         .into();
+    if serialized_message_bytes(&candidate) <= message_budget {
+        return candidate;
+    }
+
+    // An infeasible preferred allocation can occur only for a malformed or legacy run with
+    // hundreds of parallel results. Preserve provider correlation and shed observation content
+    // rather than allowing the aggregate budget to grow without bound.
+    candidate.content = String::new().into();
+    debug_assert!(
+        serialized_message_bytes(&candidate) <= message_budget,
+        "the structural tool-result message exceeds its aggregate allocation"
+    );
     candidate
 }
 
