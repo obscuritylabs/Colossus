@@ -1352,6 +1352,73 @@ fn bounded_result(
     })
 }
 
+pub(super) fn bounded_call_result(
+    output: &McpCallOutput,
+    max_output_bytes: u64,
+) -> Result<QuarantinedEffectResult, ExecutionError> {
+    let bytes = serde_json::to_vec(output).map_err(failed)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= max_output_bytes {
+        return Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes,
+            effect_succeeded: true,
+        });
+    }
+    if output.result.is_error != Some(true) {
+        return Err(failed("MCP adapter result exceeds its policy output bound"));
+    }
+
+    // A complete MCP error is a confirmed outcome, even when its released result is
+    // larger than a server-specific output cap. Preserve that certainty in a compact,
+    // valid CallToolResult rather than reclassifying the call as outcome-unknown.
+    let original_bytes = bytes.len();
+    let original_sha256 = hex_sha256(&bytes);
+    let original = String::from_utf8(bytes).map_err(failed)?;
+    let original_error_type = if original.contains("mcp_json_rpc_error") {
+        "mcp_json_rpc_error"
+    } else {
+        "mcp_tool_error"
+    };
+    let original_chars = original.chars().count();
+    let mut preview_chars = original_chars.min(32 * 1024);
+    loop {
+        let compact = McpCallOutput {
+            server: output.server.clone(),
+            tool: output.tool.clone(),
+            result: CallToolResult::error(vec![ContentBlock::text(
+                json!({
+                    "error": {
+                        "type": "mcp_confirmed_error",
+                        "original_error_type": original_error_type,
+                        "preview": bounded_string(&original, preview_chars),
+                        "preview_truncated": preview_chars < original_chars,
+                        "original_bytes": original_bytes,
+                        "original_sha256": original_sha256,
+                    }
+                })
+                .to_string(),
+            )]),
+        };
+        let compact_bytes = serde_json::to_vec(&compact).map_err(failed)?;
+        let compact_len = u64::try_from(compact_bytes.len()).unwrap_or(u64::MAX);
+        if compact_len <= max_output_bytes {
+            return Ok(QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: compact_bytes,
+                effect_succeeded: true,
+            });
+        }
+        if preview_chars == 0 {
+            return Err(failed(
+                "MCP confirmed-error envelope exceeds its policy output bound",
+            ));
+        }
+        let excess = compact_len.saturating_sub(max_output_bytes);
+        preview_chars =
+            preview_chars.saturating_sub(usize::try_from(excess).unwrap_or(usize::MAX).max(1));
+    }
+}
+
 #[async_trait]
 impl EffectExecutor for McpExecutor {
     async fn execute(
@@ -1438,7 +1505,7 @@ impl EffectExecutor for McpExecutor {
                 (McpOperation::CallTool { tool, .. }, RemoteOperationResult::Call(result)) => {
                     let output = parse_call_result(result, &server, tool, &secrets)
                         .map_err(|error| operation_error(&input.operation, error))?;
-                    bounded_result(&output, max_output_bytes)
+                    bounded_call_result(&output, max_output_bytes)
                         .map_err(|error| operation_error(&input.operation, error))
                 }
                 _ => Err(operation_error(
@@ -1493,7 +1560,7 @@ impl EffectExecutor for McpExecutor {
                 let output = parse_call(&stdout, &server, tool, &secrets).map_err(|error| {
                     operation_error(&input.operation, redact_text(error, &secrets))
                 })?;
-                bounded_result(&output, max_output_bytes)
+                bounded_call_result(&output, max_output_bytes)
                     .map_err(|error| operation_error(&input.operation, error))
             }
         }

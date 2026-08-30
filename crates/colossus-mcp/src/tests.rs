@@ -111,6 +111,47 @@ fn complete_json_rpc_tool_errors_are_confirmed_results() {
 }
 
 #[test]
+fn confirmed_json_rpc_errors_fit_custom_output_caps() {
+    let call = McpOperation::CallTool {
+        server: "fixture".into(),
+        tool: "lookup".into(),
+        description: None,
+        annotations: None,
+        arguments: json!({}),
+        input_schema: Box::new(json!({"type": "object"})),
+        schema_sha256: "unused-by-error-compaction".into(),
+    };
+    let result = remote_call_failure(
+        rmcp::ServiceError::McpError(rmcp::ErrorData::internal_error(
+            format!("project not found: {}", "x".repeat(32 * 1024)),
+            Some(json!({"private": "private-value"})),
+        )),
+        &call,
+    )
+    .expect("confirmed protocol error");
+    let RemoteOperationResult::Call(result) = result else {
+        panic!("tool result");
+    };
+    let output = McpCallOutput {
+        server: "s".repeat(128),
+        tool: "t".repeat(128),
+        result,
+    };
+
+    let bounded = bounded_call_result(&output, 1024).expect("bounded confirmed result");
+    assert!(bounded.bytes.len() <= 1024);
+    let compact: McpCallOutput =
+        serde_json::from_slice(&bounded.bytes).expect("valid compact result");
+    assert_eq!(compact.result.is_error, Some(true));
+    let rendered = serde_json::to_string(&compact).expect("rendered compact result");
+    assert!(rendered.contains("mcp_confirmed_error"));
+    assert!(rendered.contains("mcp_json_rpc_error"));
+    assert!(rendered.contains("original_sha256"));
+    assert!(rendered.contains("preview_truncated"));
+    assert!(!rendered.contains("private-value"));
+}
+
+#[test]
 fn stdio_json_rpc_tool_errors_are_confirmed_and_redacted() {
     let frames = [
         json!({

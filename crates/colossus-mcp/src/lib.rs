@@ -30,8 +30,8 @@ use executor::resolve_path;
 pub use executor::*;
 #[cfg(test)]
 use executor::{
-    RemoteOperationResult, execute_remote_operation, parse_call, parse_tools_result,
-    protocol_input, redact_value, remote_call_failure, remote_timeout_error,
+    RemoteOperationResult, bounded_call_result, execute_remote_operation, parse_call,
+    parse_tools_result, protocol_input, redact_value, remote_call_failure, remote_timeout_error,
     tools_page_contains_secret,
 };
 
