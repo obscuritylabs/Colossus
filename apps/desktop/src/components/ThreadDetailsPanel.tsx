@@ -1,4 +1,5 @@
 import {
+  IconAdjustments,
   IconAlertCircle,
   IconArrowLeft,
   IconBook2,
@@ -46,6 +47,8 @@ interface ThreadDetailsPanelProps {
   delegateError: string;
   sessionRunCount: number;
   sessionPlanCount: number;
+  sessionResourceCount: number;
+  sessionSnapshotCount: number;
   sessionSourceCount: number;
   onSelectParticipant: (participant: AgentParticipant) => void;
   onBackToThread: () => void;
@@ -143,6 +146,7 @@ function DelegateRunDetails({
   spaceName,
   sessionRunCount,
   sessionPlanCount,
+  sessionSnapshotCount,
   sessionSourceCount,
   fileCount,
   onOpenSessionView,
@@ -156,6 +160,7 @@ function DelegateRunDetails({
   spaceName: string;
   sessionRunCount: number;
   sessionPlanCount: number;
+  sessionSnapshotCount: number;
   sessionSourceCount: number;
   fileCount: number;
   onOpenSessionView: (view: SessionWorkspaceView) => void;
@@ -380,6 +385,12 @@ function DelegateRunDetails({
           <b>{sessionSourceCount}</b>
           <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
         </button>
+        <button type="button" onClick={() => onOpenSessionView("snapshots")}>
+          <IconAdjustments size={15} stroke={1.6} aria-hidden="true" />
+          <span>Context snapshots</span>
+          <b>{sessionSnapshotCount}</b>
+          <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
+        </button>
         <button type="button" onClick={() => onOpenSessionView("resources")}>
           <IconFileText size={15} stroke={1.6} aria-hidden="true" />
           <span>Artifacts</span>
@@ -404,6 +415,8 @@ export function ThreadDetailsPanel({
   delegateError,
   sessionRunCount,
   sessionPlanCount,
+  sessionResourceCount,
+  sessionSnapshotCount,
   sessionSourceCount,
   onSelectParticipant,
   onBackToThread,
@@ -444,6 +457,7 @@ export function ThreadDetailsPanel({
           spaceName={spaceName}
           sessionRunCount={sessionRunCount}
           sessionPlanCount={sessionPlanCount}
+          sessionSnapshotCount={sessionSnapshotCount}
           sessionSourceCount={sessionSourceCount}
           fileCount={files.length}
           onOpenSessionView={onOpenSessionView}
@@ -604,6 +618,18 @@ export function ThreadDetailsPanel({
           <IconBook2 size={15} stroke={1.6} aria-hidden="true" />
           <span>Sources</span>
           <b>{sessionSourceCount}</b>
+          <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
+        </button>
+        <button type="button" onClick={() => onOpenSessionView("snapshots")}>
+          <IconAdjustments size={15} stroke={1.6} aria-hidden="true" />
+          <span>Snapshots</span>
+          <b>{sessionSnapshotCount}</b>
+          <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
+        </button>
+        <button type="button" onClick={() => onOpenSessionView("resources")}>
+          <IconFolder size={15} stroke={1.6} aria-hidden="true" />
+          <span>All resources</span>
+          <b>{sessionResourceCount}</b>
           <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
         </button>
       </section>

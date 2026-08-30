@@ -153,65 +153,27 @@ pub(super) async fn discover_mcp_tools(
     let servers =
         selected_server.map_or_else(|| executor.server_names(), |server| vec![server.to_owned()]);
     let mut tools = Vec::new();
+    let mut serialized_output_bytes = 2_usize;
     for server in servers {
-        let mut cursor = None;
-        let mut cursors = BTreeSet::new();
-        let mut server_names = BTreeSet::new();
-        let mut completed = false;
-        for _ in 0..MAX_MCP_PAGES {
-            let request = executor.request(
-                actor.clone(),
-                context.clone(),
-                McpOperation::ListTools {
-                    server: server.clone(),
-                    cursor: cursor.clone(),
-                },
-            )?;
-            let released = gateway.execute(request, effect_executor).await?;
-            let page: McpToolsPage = serde_json::from_slice(&released.bytes).map_err(|error| {
-                RuntimeError::Config(format!("invalid MCP tools page: {error}"))
-            })?;
-            if page.server != server {
-                return Err(RuntimeError::Config(
-                    "released MCP tools page names another server".into(),
-                ));
-            }
-            for tool in page.tools {
-                if !server_names.insert(tool.name.clone()) {
-                    return Err(RuntimeError::Config(format!(
-                        "MCP server {server} returned duplicate tool {} across pages",
-                        tool.name
-                    )));
-                }
-                if server_names.len() > MAX_MCP_TOOLS {
-                    return Err(RuntimeError::Config(format!(
-                        "MCP server {server} exceeded {MAX_MCP_TOOLS} discovered tools"
-                    )));
-                }
-                tools.push(tool);
+        visit_mcp_server_tools(
+            gateway,
+            executor,
+            effect_executor,
+            &actor,
+            &context,
+            &server,
+            |tool| {
+                push_bounded_mcp_discovery_tool(&mut tools, &mut serialized_output_bytes, tool)?;
                 if tools.len() > MAX_MCP_TOOLS.saturating_mul(executor.server_names().len().max(1))
                 {
                     return Err(RuntimeError::Config(
                         "MCP discovery exceeded its aggregate tool bound".into(),
                     ));
                 }
-            }
-            let Some(next) = page.next_cursor else {
-                completed = true;
-                break;
-            };
-            if next.is_empty() || !cursors.insert(next.clone()) {
-                return Err(RuntimeError::Config(format!(
-                    "MCP server {server} returned an empty or cyclic pagination cursor"
-                )));
-            }
-            cursor = Some(next);
-        }
-        if !completed {
-            return Err(RuntimeError::Config(format!(
-                "MCP server {server} exceeded {MAX_MCP_PAGES} discovery pages"
-            )));
-        }
+                Ok(())
+            },
+        )
+        .await?;
     }
     tools.sort_by(|left, right| {
         left.server
@@ -219,6 +181,161 @@ pub(super) async fn discover_mcp_tools(
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(tools)
+}
+
+async fn visit_mcp_server_tools(
+    gateway: &EffectGateway,
+    executor: &McpExecutor,
+    effect_executor: &dyn EffectExecutor,
+    actor: &Actor,
+    context: &ExecutionContext,
+    server: &str,
+    mut visit: impl FnMut(McpToolSummary) -> Result<(), RuntimeError>,
+) -> Result<(), RuntimeError> {
+    let mut cursor = None;
+    let mut cursors = BTreeSet::new();
+    let mut server_names = BTreeSet::new();
+    let mut completed = false;
+    for _ in 0..MAX_MCP_PAGES {
+        let request = executor.request(
+            actor.clone(),
+            context.clone(),
+            McpOperation::ListTools {
+                server: server.to_owned(),
+                cursor: cursor.clone(),
+            },
+        )?;
+        let released = gateway.execute(request, effect_executor).await?;
+        let page: McpToolsPage = serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(format!("invalid MCP tools page: {error}")))?;
+        if page.server != server {
+            return Err(RuntimeError::Config(
+                "released MCP tools page names another server".into(),
+            ));
+        }
+        for tool in page.tools {
+            if !server_names.insert(tool.name.clone()) {
+                return Err(RuntimeError::Config(format!(
+                    "MCP server {server} returned duplicate tool {} across pages",
+                    tool.name
+                )));
+            }
+            if server_names.len() > MAX_MCP_TOOLS {
+                return Err(RuntimeError::Config(format!(
+                    "MCP server {server} exceeded {MAX_MCP_TOOLS} discovered tools"
+                )));
+            }
+            visit(tool)?;
+        }
+        let Some(next) = page.next_cursor else {
+            completed = true;
+            break;
+        };
+        if next.is_empty() || !cursors.insert(next.clone()) {
+            return Err(RuntimeError::Config(format!(
+                "MCP server {server} returned an empty or cyclic pagination cursor"
+            )));
+        }
+        cursor = Some(next);
+    }
+    if !completed {
+        return Err(RuntimeError::Config(format!(
+            "MCP server {server} exceeded {MAX_MCP_PAGES} discovery pages"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn push_bounded_mcp_discovery_tool(
+    tools: &mut Vec<McpToolSummary>,
+    serialized_output_bytes: &mut usize,
+    tool: McpToolSummary,
+) -> Result<(), RuntimeError> {
+    let tool_bytes = serde_json::to_vec(&tool)
+        .map_err(|error| RuntimeError::Config(format!("invalid MCP tool summary: {error}")))?
+        .len();
+    let delimiter_bytes = usize::from(!tools.is_empty());
+    let next_output_bytes = serialized_output_bytes
+        .checked_add(delimiter_bytes)
+        .and_then(|bytes| bytes.checked_add(tool_bytes))
+        .ok_or_else(mcp_discovery_output_limit_error)?;
+    if next_output_bytes > MCP_TOOLS_MAX_OUTPUT_BYTES {
+        return Err(mcp_discovery_output_limit_error());
+    }
+    *serialized_output_bytes = next_output_bytes;
+    tools.push(tool);
+    Ok(())
+}
+
+pub(super) fn mcp_discovery_output_limit_error() -> RuntimeError {
+    RuntimeError::Config(format!(
+        "MCP discovery exceeded the mcp.tools {MCP_TOOLS_MAX_OUTPUT_BYTES}-byte output bound"
+    ))
+}
+
+const MAX_RELATED_MCP_TOOLS: usize = 8;
+
+pub(super) struct McpToolLookup {
+    server: String,
+    requested_tool: String,
+    exact: Option<McpToolSummary>,
+    related: Vec<String>,
+}
+
+impl McpToolLookup {
+    pub(super) fn new(server: &str, requested_tool: &str) -> Self {
+        Self {
+            server: server.to_owned(),
+            requested_tool: requested_tool.to_owned(),
+            exact: None,
+            related: Vec::new(),
+        }
+    }
+
+    pub(super) fn visit(&mut self, tool: McpToolSummary) {
+        if tool.name == self.requested_tool {
+            self.exact = Some(tool);
+        } else if self.related.len() < MAX_RELATED_MCP_TOOLS
+            && (tool.name.contains(&self.requested_tool)
+                || self.requested_tool.contains(&tool.name))
+        {
+            self.related.push(tool.name);
+        }
+    }
+
+    pub(super) fn finish(self) -> Result<McpToolSummary, RuntimeError> {
+        self.exact.ok_or_else(|| {
+            unadvertised_mcp_tool_error(&self.server, &self.requested_tool, &self.related).into()
+        })
+    }
+}
+
+async fn discover_exact_mcp_tool(
+    gateway: &EffectGateway,
+    executor: &McpExecutor,
+    effect_executor: &dyn EffectExecutor,
+    actor: &Actor,
+    context: &ExecutionContext,
+    server: &str,
+    tool: &str,
+) -> Result<McpToolSummary, RuntimeError> {
+    // Calls retain only the exact schema and bounded name guidance. The mcp.tools
+    // presentation ceiling must not make an otherwise bounded catalog uncallable.
+    let mut lookup = McpToolLookup::new(server, tool);
+    visit_mcp_server_tools(
+        gateway,
+        executor,
+        effect_executor,
+        actor,
+        context,
+        server,
+        |candidate| {
+            lookup.visit(candidate);
+            Ok(())
+        },
+    )
+    .await?;
+    lookup.finish()
 }
 
 // Keep the typed request builder and the separately identity-bound effect adapter
@@ -235,20 +352,20 @@ pub(super) async fn invoke_mcp_tool(
     tool: &str,
     arguments: Value,
 ) -> Result<McpCallOutput, RuntimeError> {
-    let discovered = discover_mcp_tools(
+    if !executor.allows_tool(server, tool)? {
+        return Err(McpError::ToolDenied(format!("{server}:{tool}")).into());
+    }
+    let tool_spec = discover_exact_mcp_tool(
         gateway,
         executor,
         effect_executor,
-        actor.clone(),
-        context.clone(),
-        Some(server),
+        &actor,
+        &context,
+        server,
+        tool,
     )
     .await?;
-    let tool_spec = discovered
-        .iter()
-        .find(|candidate| candidate.name == tool)
-        .ok_or_else(|| McpError::ToolDenied(format!("{server}:{tool}")))?;
-    validate_tool_arguments(tool_spec, &arguments)?;
+    validate_tool_arguments(&tool_spec, &arguments)?;
     let request = executor.request(
         actor,
         context,
@@ -271,4 +388,19 @@ pub(super) async fn invoke_mcp_tool(
         ));
     }
     Ok(output)
+}
+
+pub(super) fn unadvertised_mcp_tool_error(
+    server: &str,
+    tool: &str,
+    related: &[String],
+) -> McpError {
+    let guidance = if related.is_empty() {
+        "call mcp.tools for the exact available names".into()
+    } else {
+        format!("related available tools: {}", related.join(", "))
+    };
+    McpError::InvalidArguments(format!(
+        "server {server} did not advertise tool {tool}; {guidance}"
+    ))
 }

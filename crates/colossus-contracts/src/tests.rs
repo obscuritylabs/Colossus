@@ -1,8 +1,9 @@
 use super::{
-    Actor, ActorType, AgentRunMode, ExecutionContext, ModelCapabilities, ModelContent,
-    ModelContentPart, ModelImageDetail, ModelImageReference, ModelMessage, ModelMessageRole,
-    ModelToolCall, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PolicyDecision, RunEvent,
-    ThemeName, ThemeSpinner, validate_assistant_tool_call_turn, validate_model_message_content,
+    Actor, ActorType, AgentRunMode, ExecutionContext, MAX_MODEL_TOOL_CALL_ID_BYTES,
+    MAX_MODEL_TOOL_CALLS_PER_TURN, ModelCapabilities, ModelContent, ModelContentPart,
+    ModelImageDetail, ModelImageReference, ModelMessage, ModelMessageRole, ModelToolCall,
+    PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PolicyDecision, RunEvent, ThemeName,
+    ThemeSpinner, validate_assistant_tool_call_turn, validate_model_message_content,
     validate_model_transcript,
 };
 
@@ -368,5 +369,41 @@ fn assistant_tool_call_turn_rejects_reused_ids_before_execution() {
             .expect_err("empty call id")
             .detail
             .contains("without a call id")
+    );
+    let oversized = "x".repeat(MAX_MODEL_TOOL_CALL_ID_BYTES + 1);
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&[&oversized]))
+            .expect_err("oversized call id")
+            .detail
+            .contains("exceeding")
+    );
+    assert!(
+        validate_model_transcript(&[assistant(&[&oversized]), result(&oversized)])
+            .expect_err("legacy transcript with oversized call id")
+            .detail
+            .contains("exceeding")
+    );
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&["call\ninvalid"]))
+            .expect_err("control-bearing call id")
+            .detail
+            .contains("non-printable")
+    );
+
+    let excessive = (0..=MAX_MODEL_TOOL_CALLS_PER_TURN)
+        .map(|index| format!("call-{index}"))
+        .collect::<Vec<_>>();
+    let excessive_refs = excessive.iter().map(String::as_str).collect::<Vec<_>>();
+    assert!(
+        validate_assistant_tool_call_turn(&settled, &assistant(&excessive_refs))
+            .expect_err("excessive call count before execution")
+            .detail
+            .contains("per-turn limit")
+    );
+    assert!(
+        validate_model_transcript(&[assistant(&excessive_refs)])
+            .expect_err("legacy transcript with excessive call count")
+            .detail
+            .contains("per-turn limit")
     );
 }

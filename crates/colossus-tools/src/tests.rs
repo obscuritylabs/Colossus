@@ -1,4 +1,8 @@
 use super::*;
+use colossus_contracts::{
+    MAX_MODEL_TOOL_CALL_ID_BYTES, ModelContent, ModelContentPart, ModelMessage, ModelMessageRole,
+    ToolResult,
+};
 
 #[test]
 fn configured_catalog_is_sorted_strict_and_rejects_unknown_tools() {
@@ -781,4 +785,279 @@ fn subagent_tools_inject_lineage_and_keep_strict_bounded_arguments() {
             })
             .is_ok()
     );
+}
+
+fn result(name: &str, call_id: &str, output: String) -> ToolResult {
+    ToolResult {
+        call_id: call_id.into(),
+        name: name.into(),
+        output,
+        exit_code: 0,
+    }
+}
+
+#[test]
+fn small_tool_observation_is_unchanged() {
+    let results = vec![result(
+        "mcp.call",
+        "call-small",
+        json!({"key": "PAY-119", "summary": "Shipping-label alarm"}).to_string(),
+    )];
+
+    let messages = tool_result_observation_messages(&results);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].content, results[0].output);
+    assert_eq!(messages[0].tool_call_id.as_deref(), Some("call-small"));
+}
+
+#[test]
+fn oversized_json_observation_is_parseable_salient_and_bounded() {
+    let output = json!({
+        "id": "10222",
+        "key": "PAY-119",
+        "summary": "Shipping-label rendering alarm",
+        "status": {"name": "Open"},
+        "description": "x".repeat(300_000),
+        "comments": (0..2_000)
+            .map(|index| json!({"id": index, "message": format!("comment-{index}-{}", "y".repeat(200))}))
+            .collect::<Vec<_>>(),
+    })
+    .to_string();
+    let messages =
+        tool_result_observation_messages(&[result("mcp.call", "call-jira", output.clone())]);
+
+    assert!(
+        serde_json::to_vec(&messages[0]).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES
+    );
+    let observation: Value = serde_json::from_str(
+        messages[0]
+            .content
+            .as_text()
+            .expect("tool observation text"),
+    )
+    .expect("valid observation JSON");
+    assert_eq!(observation["_colossusToolObservation"]["truncated"], true);
+    assert_eq!(
+        observation["_colossusToolObservation"]["originalBytes"],
+        output.len()
+    );
+    assert_eq!(
+        observation["_colossusToolObservation"]["toolName"],
+        "mcp.call"
+    );
+    assert_eq!(observation["data"]["key"], "PAY-119");
+    assert_eq!(
+        observation["data"]["summary"],
+        "Shipping-label rendering alarm"
+    );
+    assert_eq!(
+        observation["_colossusToolObservation"]["sha256"]
+            .as_str()
+            .expect("digest")
+            .len(),
+        64
+    );
+}
+
+#[test]
+fn oversized_text_observation_preserves_unicode_head_and_tail() {
+    let output = format!("begin-😀-{}-終わり-end", "\\\"é".repeat(80_000));
+    let messages = tool_result_observation_messages(&[result("process.run", "call-text", output)]);
+    let text = messages[0].content.as_text().expect("text observation");
+    let observation: Value = serde_json::from_str(text).expect("valid envelope");
+
+    assert!(
+        serde_json::to_vec(&messages[0]).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES
+    );
+    assert_eq!(observation["_colossusToolObservation"]["format"], "text");
+    let preview = observation["preview"].as_str().expect("preview");
+    assert!(preview.starts_with("begin-😀"));
+    assert!(preview.ends_with("終わり-end"));
+    assert!(preview.contains("bytes omitted"));
+}
+
+#[test]
+fn oversized_mcp_observation_prefers_structured_content_and_omits_binary() {
+    let structured = json!({
+        "id": "10222",
+        "key": "PAY-119",
+        "description": "z".repeat(25_000),
+    });
+    let output = json!({
+        "server": "jira",
+        "tool": "jira_get_issue",
+        "result": {
+            "content": [
+                {"type": "text", "text": structured.to_string()},
+                {"type": "image", "mediaType": "image/png", "data": "a".repeat(20_000)},
+                {"type": "resource_link", "uri": "jira://issue/PAY-119", "name": "PAY-119"}
+            ],
+            "structuredContent": structured,
+            "isError": false,
+            "_meta": {"requestId": "request-1"}
+        }
+    })
+    .to_string();
+    let messages = tool_result_observation_messages(&[result("mcp.call", "call-mcp", output)]);
+    let text = messages[0].content.as_text().expect("observation");
+    let observation: Value = serde_json::from_str(text).expect("valid envelope");
+
+    assert_eq!(observation["data"]["server"], "jira");
+    assert_eq!(observation["data"]["tool"], "jira_get_issue");
+    assert_eq!(
+        observation["data"]["result"]["structuredContent"]["key"],
+        "PAY-119"
+    );
+    assert!(!text.contains(&"a".repeat(4_096)));
+    assert!(text.contains("_colossusBinaryOmitted"));
+    assert!(
+        observation["data"]["result"]["content"]
+            .as_array()
+            .expect("MCP content")
+            .iter()
+            .all(|block| block["type"] != "text")
+    );
+}
+
+#[test]
+fn parallel_tool_observations_share_one_turn_budget_and_preserve_small_results() {
+    let mut results = vec![result("echo", "small", "small result".into())];
+    results.extend((0..8).map(|index| {
+        result(
+            "web.search",
+            &format!("large-{index}"),
+            json!({
+                "id": index,
+                "results": (0..1_000)
+                    .map(|item| json!({"title": format!("result-{item}"), "body": "x".repeat(200)}))
+                    .collect::<Vec<_>>()
+            })
+            .to_string(),
+        )
+    }));
+
+    let messages = tool_result_observation_messages(&results);
+    let combined = messages
+        .iter()
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .sum::<usize>();
+
+    assert!(combined <= MAX_MODEL_TOOL_TURN_BYTES);
+    assert_eq!(messages[0].content, "small result");
+    assert!(messages.iter().skip(1).all(|message| {
+        serde_json::to_vec(message).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES
+            && serde_json::from_str::<Value>(message.content.as_text().expect("observation text"))
+                .is_ok()
+    }));
+}
+
+#[test]
+fn maximum_valid_call_ids_cannot_bypass_tool_observation_bounds() {
+    let results = (0..128)
+        .map(|index| {
+            let call_id = format!("{index:03}-{}", "x".repeat(124));
+            assert_eq!(call_id.len(), MAX_MODEL_TOOL_CALL_ID_BYTES);
+            result("mcp.call", &call_id, "y".repeat(100_000))
+        })
+        .collect::<Vec<_>>();
+
+    let messages = tool_result_observation_messages(&results);
+    let serialized = messages
+        .iter()
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .collect::<Vec<_>>();
+
+    assert!(
+        serialized
+            .iter()
+            .all(|bytes| *bytes <= MAX_MODEL_TOOL_MESSAGE_BYTES)
+    );
+    assert!(serialized.iter().sum::<usize>() <= MAX_MODEL_TOOL_TURN_BYTES);
+}
+
+#[test]
+fn excessive_parallel_results_reduce_below_the_preferred_minimum_budget() {
+    let results = (0..513)
+        .map(|index| result("mcp.call", &format!("call-{index}"), "y".repeat(4_096)))
+        .collect::<Vec<_>>();
+
+    let messages = tool_result_observation_messages(&results);
+    let serialized = messages
+        .iter()
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .collect::<Vec<_>>();
+
+    assert_eq!(messages.len(), results.len());
+    assert!(serialized.iter().sum::<usize>() <= MAX_MODEL_TOOL_TURN_BYTES);
+    assert!(messages.iter().all(|message| {
+        serde_json::from_str::<Value>(message.content.as_text().expect("observation text")).is_ok()
+    }));
+}
+
+#[test]
+fn oversized_provider_tool_name_cannot_bypass_tool_observation_bounds() {
+    let tool_name = format!("unknown-{}-tool", "🛠".repeat(40_000));
+    let output = json!({
+        "error": {
+            "type": "unknown",
+            "tool": tool_name,
+            "recoverable": true,
+        },
+        "detail": "y".repeat(100_000),
+    })
+    .to_string();
+    let messages =
+        tool_result_observation_messages(&[result(&tool_name, "call-unknown-tool", output)]);
+
+    assert!(
+        serde_json::to_vec(&messages[0]).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES
+    );
+    let observation: Value = serde_json::from_str(
+        messages[0]
+            .content
+            .as_text()
+            .expect("tool observation text"),
+    )
+    .expect("valid observation JSON");
+    let projected_name = observation["_colossusToolObservation"]["toolName"]
+        .as_str()
+        .expect("projected tool name");
+    assert!(projected_name.len() <= MAX_OBSERVATION_METADATA_TEXT_BYTES);
+    assert!(projected_name.contains("bytes omitted"));
+}
+
+#[test]
+fn legacy_projection_is_derived_and_does_not_mutate_source_messages() {
+    let source = vec![
+        ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: ModelContent::default(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+        ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: ModelContent::Parts(vec![
+                ModelContentPart::Text {
+                    text: "x".repeat(450_000),
+                },
+                ModelContentPart::Text {
+                    text: "y".repeat(450_000),
+                },
+            ]),
+            tool_call_id: Some("legacy-call".into()),
+            tool_calls: Vec::new(),
+        },
+    ];
+    let canonical = source.clone();
+
+    let projected = project_model_tool_observations(&source);
+
+    assert_eq!(source, canonical);
+    assert_eq!(projected[0], source[0]);
+    assert!(
+        serde_json::to_vec(&projected[1]).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES
+    );
+    assert_eq!(projected[1].tool_call_id.as_deref(), Some("legacy-call"));
 }

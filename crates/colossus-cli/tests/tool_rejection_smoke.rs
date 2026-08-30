@@ -78,6 +78,7 @@ fn tool_server(
         .set_nonblocking(true)
         .expect("nonblocking listener");
     let address = listener.local_addr().expect("provider address");
+    let provider_tool = tool.replace('.', "_");
     let tool_call = format!(
         "data: {}\n\ndata: [DONE]\n\n",
         json!({
@@ -90,7 +91,7 @@ fn tool_server(
                         "id": "rejection-call",
                         "type": "function",
                         "function": {
-                            "name": tool,
+                            "name": provider_tool,
                             "arguments": arguments.to_string()
                         }
                     }]

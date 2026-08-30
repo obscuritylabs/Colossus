@@ -2,7 +2,8 @@ use super::*;
 use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
-    ServiceExt as _,
+    ServiceError, ServiceExt as _,
+    model::{ContentBlock, ErrorData},
     transport::{
         auth::{
             AuthClient, AuthError, AuthorizationManager, AuthorizationSession,
@@ -342,6 +343,15 @@ impl McpExecutor {
     /// Deterministic configured server names.
     pub fn server_names(&self) -> Vec<String> {
         self.servers.keys().cloned().collect()
+    }
+
+    /// Return whether one configured server permits an exact tool name.
+    pub fn allows_tool(&self, server: &str, tool: &str) -> Result<bool, McpError> {
+        let server = self
+            .servers
+            .get(server)
+            .ok_or_else(|| McpError::UnknownServer(server.into()))?;
+        Ok(server.allowed_tools.allows(tool))
     }
 
     /// Build research call templates with recursive `{query}` substitution.
@@ -1001,6 +1011,20 @@ fn response_result(bytes: &[u8], id: i64) -> Result<Value, String> {
         .ok_or_else(|| "MCP response has neither result nor error".into())
 }
 
+fn call_response_result(bytes: &[u8], id: i64) -> Result<CallToolResult, String> {
+    let value = response_value(bytes, id)?;
+    if let Some(error) = value.get("error") {
+        let error: ErrorData = serde_json::from_value(error.clone())
+            .map_err(|error| format!("invalid MCP JSON-RPC error: {error}"))?;
+        return Ok(confirmed_protocol_error_result(error));
+    }
+    let result = value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "MCP response has neither result nor error".to_owned())?;
+    serde_json::from_value(result).map_err(|error| format!("invalid MCP tool result: {error}"))
+}
+
 fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
     let result: InitializeResult =
         serde_json::from_value(response_result(stdout, INITIALIZE_REQUEST_ID)?)
@@ -1098,15 +1122,14 @@ pub(super) fn parse_tools_result(
     })
 }
 
-fn parse_call(
+pub(super) fn parse_call(
     stdout: &[u8],
     server: &ConfiguredServer,
     tool: &str,
     secrets: &[String],
 ) -> Result<McpCallOutput, String> {
     validate_initialize(stdout)?;
-    let result: CallToolResult = serde_json::from_value(response_result(stdout, MCP_REQUEST_ID)?)
-        .map_err(|error| format!("invalid MCP tool result: {error}"))?;
+    let result = call_response_result(stdout, MCP_REQUEST_ID)?;
     parse_call_result(result, server, tool, secrets)
 }
 
@@ -1129,6 +1152,43 @@ fn parse_call_result(
 pub(super) enum RemoteOperationResult {
     Tools(ListToolsResult),
     Call(CallToolResult),
+}
+
+fn confirmed_protocol_error_result(error: ErrorData) -> CallToolResult {
+    const MAX_ERROR_MESSAGE_CHARS: usize = 32 * 1024;
+
+    let message_chars = error.message.chars().count();
+    let message = bounded_string(&error.message, MAX_ERROR_MESSAGE_CHARS);
+    CallToolResult::error(vec![ContentBlock::text(
+        json!({
+            "error": {
+                "type": "mcp_json_rpc_error",
+                "code": error.code.0,
+                "message": message,
+                "message_truncated": message_chars > MAX_ERROR_MESSAGE_CHARS,
+            }
+        })
+        .to_string(),
+    )])
+}
+
+pub(super) fn remote_call_failure(
+    error: ServiceError,
+    operation: &McpOperation,
+) -> Result<RemoteOperationResult, ExecutionError> {
+    match error {
+        // A complete JSON-RPC error frame confirms that the server answered this
+        // request. Normalize it into the MCP tool-error channel so the released,
+        // redacted result can guide a later turn. Transport loss and timeouts still
+        // have unknown outcomes and must terminate the run.
+        ServiceError::McpError(error) => Ok(RemoteOperationResult::Call(
+            confirmed_protocol_error_result(error),
+        )),
+        _ => Err(operation_error(
+            operation,
+            "MCP Streamable HTTP operation failed",
+        )),
+    }
 }
 
 pub(super) async fn execute_remote_operation<C>(
@@ -1188,7 +1248,7 @@ where
                 .call_tool(CallToolRequestParams::new(tool.clone()).with_arguments(arguments))
                 .await
                 .map(RemoteOperationResult::Call)
-                .map_err(|_| operation_error(operation, "MCP Streamable HTTP operation failed"))
+                .or_else(|error| remote_call_failure(error, operation))
         }
     };
     let _ = service.close_with_timeout(Duration::from_millis(500)).await;
@@ -1292,6 +1352,73 @@ fn bounded_result(
     })
 }
 
+pub(super) fn bounded_call_result(
+    output: &McpCallOutput,
+    max_output_bytes: u64,
+) -> Result<QuarantinedEffectResult, ExecutionError> {
+    let bytes = serde_json::to_vec(output).map_err(failed)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= max_output_bytes {
+        return Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes,
+            effect_succeeded: true,
+        });
+    }
+    if output.result.is_error != Some(true) {
+        return Err(failed("MCP adapter result exceeds its policy output bound"));
+    }
+
+    // A complete MCP error is a confirmed outcome, even when its released result is
+    // larger than a server-specific output cap. Preserve that certainty in a compact,
+    // valid CallToolResult rather than reclassifying the call as outcome-unknown.
+    let original_bytes = bytes.len();
+    let original_sha256 = hex_sha256(&bytes);
+    let original = String::from_utf8(bytes).map_err(failed)?;
+    let original_error_type = if original.contains("mcp_json_rpc_error") {
+        "mcp_json_rpc_error"
+    } else {
+        "mcp_tool_error"
+    };
+    let original_chars = original.chars().count();
+    let mut preview_chars = original_chars.min(32 * 1024);
+    loop {
+        let compact = McpCallOutput {
+            server: output.server.clone(),
+            tool: output.tool.clone(),
+            result: CallToolResult::error(vec![ContentBlock::text(
+                json!({
+                    "error": {
+                        "type": "mcp_confirmed_error",
+                        "original_error_type": original_error_type,
+                        "preview": bounded_string(&original, preview_chars),
+                        "preview_truncated": preview_chars < original_chars,
+                        "original_bytes": original_bytes,
+                        "original_sha256": original_sha256,
+                    }
+                })
+                .to_string(),
+            )]),
+        };
+        let compact_bytes = serde_json::to_vec(&compact).map_err(failed)?;
+        let compact_len = u64::try_from(compact_bytes.len()).unwrap_or(u64::MAX);
+        if compact_len <= max_output_bytes {
+            return Ok(QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: compact_bytes,
+                effect_succeeded: true,
+            });
+        }
+        if preview_chars == 0 {
+            return Err(failed(
+                "MCP confirmed-error envelope exceeds its policy output bound",
+            ));
+        }
+        let excess = compact_len.saturating_sub(max_output_bytes);
+        preview_chars =
+            preview_chars.saturating_sub(usize::try_from(excess).unwrap_or(usize::MAX).max(1));
+    }
+}
+
 #[async_trait]
 impl EffectExecutor for McpExecutor {
     async fn execute(
@@ -1378,7 +1505,7 @@ impl EffectExecutor for McpExecutor {
                 (McpOperation::CallTool { tool, .. }, RemoteOperationResult::Call(result)) => {
                     let output = parse_call_result(result, &server, tool, &secrets)
                         .map_err(|error| operation_error(&input.operation, error))?;
-                    bounded_result(&output, max_output_bytes)
+                    bounded_call_result(&output, max_output_bytes)
                         .map_err(|error| operation_error(&input.operation, error))
                 }
                 _ => Err(operation_error(
@@ -1433,7 +1560,7 @@ impl EffectExecutor for McpExecutor {
                 let output = parse_call(&stdout, &server, tool, &secrets).map_err(|error| {
                     operation_error(&input.operation, redact_text(error, &secrets))
                 })?;
-                bounded_result(&output, max_output_bytes)
+                bounded_call_result(&output, max_output_bytes)
                     .map_err(|error| operation_error(&input.operation, error))
             }
         }

@@ -13,6 +13,7 @@ use colossus_ports::{
     ContextError, ContextPreparationRequest, ContextPreparer, ContextRepository, EventJournal,
     MemoryRetriever, ModelProvider, SessionRepository, StoreError, WorkRepository,
 };
+use colossus_tools::project_model_tool_observations;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;

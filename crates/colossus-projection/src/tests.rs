@@ -3,11 +3,12 @@ use super::{
     ProjectionHandler, ProjectionWorker, default_handlers, pending_effects,
 };
 use colossus_contracts::{
-    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, ProjectionBatch,
-    ProjectionMutation,
+    Actor, ActorType, EventClassification, EventEnvelope, ExecutionContext, NewEvent,
+    ProjectionBatch, ProjectionMutation, ProjectionWorkItem, SignedCheckpoint,
 };
 use colossus_ports::{
     AggregateRepository, EventJournal, ExternalWorkQueue, ProjectionStore, StoreError,
+    VerificationReport,
 };
 use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
 use serde_json::{Value, json};
@@ -22,6 +23,102 @@ struct RecordingProjectionStore {
     inner: InMemoryProjectionStore,
     direct_applies: AtomicUsize,
     grouped_applies: Mutex<Vec<Vec<ProjectionBatch>>>,
+}
+
+struct ReadCountingJournal {
+    inner: InMemoryEventJournal,
+    global_reads: AtomicUsize,
+    projection_reads: AtomicUsize,
+}
+
+impl Default for ReadCountingJournal {
+    fn default() -> Self {
+        Self {
+            inner: InMemoryEventJournal::default(),
+            global_reads: AtomicUsize::new(0),
+            projection_reads: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl EventJournal for ReadCountingJournal {
+    fn append(&self, event: NewEvent) -> Result<EventEnvelope, StoreError> {
+        self.inner.append(event)
+    }
+
+    fn append_batch(&self, events: Vec<NewEvent>) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.inner.append_batch(events)
+    }
+
+    fn read_stream(&self, stream_id: &str) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.inner.read_stream(stream_id)
+    }
+
+    fn read_stream_from(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.inner.read_stream_from(stream_id, after_version, limit)
+    }
+
+    fn read_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.inner
+            .read_stream_backwards(stream_id, before_version, limit)
+    }
+
+    fn list_stream_ids(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        self.inner.list_stream_ids(prefix, after, limit)
+    }
+
+    fn read_global(
+        &self,
+        from_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.global_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner.read_global(from_sequence, limit)
+    }
+
+    fn read_projection_work(
+        &self,
+        from_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<ProjectionWorkItem>, StoreError> {
+        self.projection_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner.read_projection_work(from_sequence, limit)
+    }
+
+    fn head(&self) -> Result<(u64, String), StoreError> {
+        self.inner.head()
+    }
+
+    fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError> {
+        self.inner.decrypt_payload(event)
+    }
+
+    fn verify(&self) -> Result<VerificationReport, StoreError> {
+        self.inner.verify()
+    }
+
+    fn is_recovery_mode(&self) -> bool {
+        self.inner.is_recovery_mode()
+    }
+
+    fn checkpoint(&self) -> Result<Option<SignedCheckpoint>, StoreError> {
+        self.inner.checkpoint()
+    }
 }
 
 impl ProjectionStore for RecordingProjectionStore {
@@ -139,6 +236,91 @@ fn passive_projection_checkpoints_are_grouped() {
             "session-activity-v5"
         ]
     );
+}
+
+#[test]
+fn aligned_projections_share_one_verified_journal_page() {
+    let journal = Arc::new(ReadCountingJournal::default());
+    for index in 0..8 {
+        journal
+            .append(event(
+                &format!("session:{index}"),
+                0,
+                "session.created.v1",
+                json!({"title": format!("Session {index}")}),
+            ))
+            .expect("append");
+    }
+    let store = Arc::new(InMemoryProjectionStore::default());
+    let journal_port: Arc<dyn EventJournal> = journal.clone();
+    let store_port: Arc<dyn ProjectionStore> = store;
+    let worker =
+        ProjectionWorker::new(journal_port, store_port, default_handlers()).expect("worker");
+
+    let report = worker.run_once(8).expect("projection run");
+
+    assert_eq!(report.applied, 48);
+    assert_eq!(journal.projection_reads.load(Ordering::Relaxed), 1);
+    assert_eq!(journal.global_reads.load(Ordering::Relaxed), 1);
+}
+
+struct SelectiveProjection;
+
+impl ProjectionHandler for SelectiveProjection {
+    fn name(&self) -> &'static str {
+        "selective-v1"
+    }
+
+    fn applies_to(&self, event: &EventEnvelope) -> bool {
+        event.event_type == "selected.v1"
+    }
+
+    fn requires_payload(&self) -> bool {
+        false
+    }
+
+    fn project(
+        &self,
+        _store: &dyn ProjectionStore,
+        _event: &EventEnvelope,
+        _payload: &Value,
+    ) -> Result<Vec<ProjectionMutation>, StoreError> {
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn mixed_projection_pages_coalesce_passive_spans() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    for (index, event_type) in [
+        "ignored.v1",
+        "ignored.v1",
+        "selected.v1",
+        "ignored.v1",
+        "ignored.v1",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        journal
+            .append(event(&format!("stream:{index}"), 0, event_type, json!({})))
+            .expect("append");
+    }
+    let store = Arc::new(RecordingProjectionStore::default());
+    let journal_port: Arc<dyn EventJournal> = journal;
+    let store_port: Arc<dyn ProjectionStore> = store.clone();
+    let worker = ProjectionWorker::new(
+        journal_port,
+        store_port,
+        vec![Arc::new(SelectiveProjection)],
+    )
+    .expect("worker");
+
+    let report = worker.run_once(8).expect("projection run");
+
+    assert_eq!(report.applied, 5);
+    assert_eq!(store.direct_applies.load(Ordering::Relaxed), 3);
+    assert_eq!(report.projections[0].position, 5);
 }
 
 #[test]

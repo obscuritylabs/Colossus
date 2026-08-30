@@ -1,6 +1,11 @@
 import { createRoot } from "react-dom/client";
 
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import {
+  AppearanceProvider,
+  initializeAppearance,
+} from "./theme/AppearanceProvider";
+import "./theme/theme.css";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -11,21 +16,26 @@ if (root === null) {
 
 const terminalSurface =
   new URLSearchParams(window.location.search).get("surface") === "terminal";
+const initialAppearance = initializeAppearance();
 
 if (terminalSurface) {
   void import("./TerminalWindow").then(({ default: TerminalWindow }) => {
     createRoot(root).render(
-      <AppErrorBoundary>
-        <TerminalWindow />
-      </AppErrorBoundary>,
+      <AppearanceProvider initialPreference={initialAppearance}>
+        <AppErrorBoundary>
+          <TerminalWindow />
+        </AppErrorBoundary>
+      </AppearanceProvider>,
     );
   });
 } else {
   void import("./App").then(({ default: App }) => {
     createRoot(root).render(
-      <AppErrorBoundary>
-        <App />
-      </AppErrorBoundary>,
+      <AppearanceProvider initialPreference={initialAppearance}>
+        <AppErrorBoundary>
+          <App />
+        </AppErrorBoundary>
+      </AppearanceProvider>,
     );
   });
 }

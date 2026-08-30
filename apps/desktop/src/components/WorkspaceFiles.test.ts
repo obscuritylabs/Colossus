@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceSummary } from "../types";
+import { AppearanceProvider } from "../theme/AppearanceProvider";
 import { WorkspaceFiles } from "./WorkspaceFiles";
 
 const workspace: WorkspaceSummary = {
@@ -13,14 +14,23 @@ const workspace: WorkspaceSummary = {
 
 function renderFiles(available: boolean): string {
   return renderToStaticMarkup(
-    createElement(WorkspaceFiles, {
-      workspace,
-      available,
-      listDirectory: vi.fn(),
-      readFile: vi.fn(),
-      onOpenSettings: vi.fn(),
-      openRequest: null,
-    }),
+    createElement(
+      AppearanceProvider,
+      {
+        initialPreference: {
+          colorTheme: "light",
+          textSize: "comfortable",
+        },
+      },
+      createElement(WorkspaceFiles, {
+        workspace,
+        available,
+        listDirectory: vi.fn(),
+        readFile: vi.fn(),
+        onOpenSettings: vi.fn(),
+        openRequest: null,
+      }),
+    ),
   );
 }
 
@@ -35,6 +45,14 @@ describe("WorkspaceFiles", () => {
     expect(markup).toContain("Read-only");
     expect(markup).toContain("Select a file to preview");
     expect(markup).toContain("existing policy and approval path");
+    expect(markup).toContain(
+      '<nav class="file-tree" aria-label="Workspace tree">',
+    );
+    expect(markup).toContain(
+      '<nav class="file-tabs" aria-label="Open files"></nav>',
+    );
+    expect(markup).not.toContain('role="tree"');
+    expect(markup).not.toContain('role="tablist"');
     expect(markup).not.toContain('id="primary-workspace"');
   });
 

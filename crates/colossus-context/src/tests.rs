@@ -323,7 +323,7 @@ async fn bounded_recent_tool_result_allows_automatic_compaction() {
     });
     let tool_result = ModelMessage {
         role: ModelMessageRole::Tool,
-        content: "x".repeat(64 * 1024).into(),
+        content: "x".repeat(60 * 1024).into(),
         tool_call_id: Some("call-summary".into()),
         tool_calls: Vec::new(),
     };
@@ -356,6 +356,98 @@ async fn bounded_recent_tool_result_allows_automatic_compaction() {
     assert!(prepared.snapshot_created);
     assert!(prepared.token_estimate <= prepared.input_budget_tokens);
     assert_eq!(prepared.messages.last(), Some(&tool_result));
+    assert_eq!(snapshots.list("session-1").expect("snapshots").len(), 1);
+}
+
+#[tokio::test]
+async fn oversized_legacy_tool_result_is_projected_without_rewriting_canonical_history() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_journal, sessions, snapshots, service) = fixture(ContextConfig::default(), provider);
+    let mut assistant = message(ModelMessageRole::Assistant, "");
+    assistant.tool_calls.push(ModelToolCall {
+        call_id: "call-legacy-mcp".into(),
+        name: "mcp.call".into(),
+        arguments: json!({"server": "jira", "tool": "jira_get_issue", "arguments": {}}),
+    });
+    let legacy_tool = ModelMessage {
+        role: ModelMessageRole::Tool,
+        content: "x".repeat(900_000).into(),
+        tool_call_id: Some("call-legacy-mcp".into()),
+        tool_calls: Vec::new(),
+    };
+    let messages = vec![
+        message(ModelMessageRole::User, "load PAY-119"),
+        assistant,
+        legacy_tool.clone(),
+    ];
+    for value in &messages {
+        sessions
+            .append_message("session-1", "legacy-run", value.clone(), user_actor())
+            .expect("canonical message");
+    }
+    let mut request = preparation_request(messages, false);
+    request.route.limits = ModelLimits {
+        context_window_tokens: 128_000,
+        max_output_tokens: 16_000,
+        safety_margin_tokens: 12_800,
+        input_budget_tokens: 99_200,
+    };
+
+    let prepared = service
+        .prepare(request)
+        .await
+        .expect("prepared legacy turn");
+
+    assert!(!prepared.snapshot_created);
+    assert!(
+        model_request_bytes("test", &prepared.messages, &[]) <= MAX_PREPARED_MODEL_REQUEST_BYTES
+    );
+    let prepared_tool = prepared.messages.last().expect("prepared tool message");
+    assert_eq!(prepared_tool.tool_call_id, legacy_tool.tool_call_id);
+    assert!(
+        serde_json::from_str::<Value>(
+            prepared_tool
+                .content
+                .as_text()
+                .expect("scalar tool observation"),
+        )
+        .expect("valid observation")["_colossusToolObservation"]["truncated"]
+            == true
+    );
+    let canonical = sessions
+        .list_messages("session-1")
+        .expect("canonical history");
+    assert_eq!(canonical.len(), 3);
+    assert_eq!(canonical[2].message, legacy_tool);
+    assert!(snapshots.list("session-1").expect("snapshots").is_empty());
+}
+
+#[tokio::test]
+async fn zero_preserved_messages_compacts_the_complete_history_without_indexing_past_it() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        preserve_recent_messages: 0,
+        ..ContextConfig::default()
+    };
+    let (_journal, _sessions, snapshots, service) = fixture(config, provider);
+    let messages = vec![
+        message(ModelMessageRole::User, "old request"),
+        message(ModelMessageRole::Assistant, "old response"),
+    ];
+
+    let prepared = service
+        .prepare(preparation_request(messages, true))
+        .await
+        .expect("forced complete compaction");
+
+    assert!(prepared.snapshot_created);
+    assert_eq!(prepared.messages.len(), 1);
     assert_eq!(snapshots.list("session-1").expect("snapshots").len(), 1);
 }
 

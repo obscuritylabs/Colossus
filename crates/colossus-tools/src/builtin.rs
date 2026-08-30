@@ -1,5 +1,8 @@
 use super::*;
 
+/// Maximum serialized output released by the built-in `mcp.tools` operation.
+pub const MCP_TOOLS_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
 /// Return every supported built-in tool specification.
 pub fn builtin_specs() -> Vec<ToolSpec> {
     vec![
@@ -806,7 +809,8 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
             ),
             effect_action: Some("mcp.tools".into()),
             capability: Some("mcp.invoke".into()),
-            max_output_bytes: 1024 * 1024,
+            max_output_bytes: u64::try_from(MCP_TOOLS_MAX_OUTPUT_BYTES)
+                .expect("mcp.tools output bound fits u64"),
         },
         ToolSpec {
             name: "mcp.call".into(),

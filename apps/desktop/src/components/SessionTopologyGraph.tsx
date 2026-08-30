@@ -70,7 +70,7 @@ const RECORD_GAP = 7;
 
 const FIT_VIEW_OPTIONS = {
   padding: 0.08,
-  minZoom: 0.55,
+  minZoom: 0.35,
   maxZoom: 1,
 } as const;
 
@@ -79,7 +79,7 @@ const DEFAULT_EDGE_OPTIONS = {
   focusable: false,
   selectable: false,
   deletable: false,
-  style: { stroke: "#3a5777", strokeWidth: 1 },
+  style: { stroke: "var(--border-strong)", strokeWidth: 1 },
 } as const;
 
 function PrimaryNodeCard({ data }: { data: PrimaryNodeData }) {
@@ -387,7 +387,7 @@ export function SessionTopologyGraph({
         onNodeClick={allowNodePointerEvents}
         fitView
         fitViewOptions={FIT_VIEW_OPTIONS}
-        minZoom={0.55}
+        minZoom={FIT_VIEW_OPTIONS.minZoom}
         maxZoom={1.4}
         nodesDraggable={false}
         nodesConnectable={false}
@@ -399,7 +399,10 @@ export function SessionTopologyGraph({
         zoomOnScroll={false}
         zoomOnDoubleClick={false}
         preventScrolling={false}
-        onlyRenderVisibleElements
+        // Keep bounded canonical controls mounted while fitView settles after
+        // a family expands. This preserves focus and accessible names instead
+        // of temporarily removing the control that initiated the update.
+        onlyRenderVisibleElements={false}
       />
     </div>
   );

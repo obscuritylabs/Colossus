@@ -12,5 +12,8 @@ pub use builtin::*;
 mod registry;
 pub use registry::*;
 
+mod observation;
+pub use observation::*;
+
 #[cfg(test)]
 mod tests;

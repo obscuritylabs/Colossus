@@ -287,9 +287,44 @@ impl Runtime {
         if self.journal.is_recovery_mode() {
             return Ok(());
         }
-        self.drain_projections()?;
-        self.journal.checkpoint()?;
-        Ok(())
+        let span = tracing::info_span!(
+            "colossus.runtime.checkpoint",
+            colossus.checkpoint.projection_applied = tracing::field::Empty,
+            colossus.checkpoint.projection_duration_ms = tracing::field::Empty,
+            colossus.checkpoint.journal_duration_ms = tracing::field::Empty,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        );
+        let _entered = span.enter();
+        let outcome: Result<(), RuntimeError> = (|| {
+            let projection_started = Instant::now();
+            let projections = self.drain_projections()?;
+            span.record(
+                "colossus.checkpoint.projection_applied",
+                projections.applied,
+            );
+            span.record(
+                "colossus.checkpoint.projection_duration_ms",
+                u64::try_from(projection_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+            let journal_started = Instant::now();
+            self.journal.checkpoint()?;
+            span.record(
+                "colossus.checkpoint.journal_duration_ms",
+                u64::try_from(journal_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+            Ok(())
+        })();
+        match &outcome {
+            Ok(()) => {
+                span.record("otel.status_code", "OK");
+            }
+            Err(error) => {
+                span.record("otel.status_code", "ERROR");
+                span.record("error.type", error.to_string());
+            }
+        }
+        outcome
     }
 
     /// Append metadata-only evidence for an accepted or rejected local worker request.

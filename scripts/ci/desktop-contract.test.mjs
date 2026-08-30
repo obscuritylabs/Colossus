@@ -64,6 +64,52 @@ test("Desktop dropdowns use the app-owned accessible select control", () => {
   assert.match(dropdown, /createPortal/u);
 });
 
+test("Desktop surfaces use the shared theme and readable typography contracts", () => {
+  const styles = read("apps/desktop/src/styles.css");
+  const theme = read("apps/desktop/src/theme/theme.css");
+
+  for (const token of [
+    "--surface-selected",
+    "--surface-overlay",
+    "--focus-ring",
+    "--scroll-thumb",
+    "--code-surface",
+    "--code-text",
+    "--code-add-surface",
+    "--code-delete-surface",
+    "--purple-soft",
+  ]) {
+    assert.equal(
+      theme.match(new RegExp(`${token}:`, "gu"))?.length,
+      2,
+      `${token} must define dark and light values`,
+    );
+  }
+
+  assert.doesNotMatch(
+    styles,
+    /background(?:-color)?:\s*#[\da-f]{3,8}\b/iu,
+    "component backgrounds must use semantic theme tokens",
+  );
+  assert.doesNotMatch(
+    styles,
+    /font-size:\s*0\.[0-6]\d*rem/iu,
+    "visible Desktop copy must not be smaller than the caption token",
+  );
+  assert.match(
+    styles,
+    /\.artifact-workspace\s*\{[^}]*background:\s*var\(--main\);/su,
+  );
+  assert.match(
+    styles,
+    /\.artifact-preview\s*\{[^}]*background:\s*var\(--code-surface\);/su,
+  );
+  assert.match(
+    styles,
+    /\.file-code-scroll\s*\{[^}]*background:\s*var\(--code-surface\);/su,
+  );
+});
+
 test("Tauri bundles only the two native-owned executables", () => {
   const config = json("apps/desktop/src-tauri/tauri.conf.json");
   assert.equal(config.build.removeUnusedCommands, true);
@@ -477,6 +523,17 @@ test("session map inspection is selected-Space scoped and releases bounded canon
     renderer,
     /requestSessionMap\(run\.runId, run\.sessionId, false\)/u,
   );
+
+  const workSurface = read("apps/desktop/src/components/WorkSurface.tsx");
+  const detailsNavigation = workSurface.match(
+    /function openSessionViewFromDetails[\s\S]*?\n  \}/u,
+  )?.[0];
+  assert.ok(
+    detailsNavigation,
+    "thread-details navigation helper must remain explicit",
+  );
+  assert.match(detailsNavigation, /changeSessionWorkspaceView\(view\)/u);
+  assert.doesNotMatch(detailsNavigation, /setSessionWorkspaceView\(view\)/u);
 });
 
 test("Aside context stays canonical, selected-Space scoped, and out of metadata search", () => {

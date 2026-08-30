@@ -1,6 +1,11 @@
 use super::*;
 use std::{borrow::Cow, collections::BTreeSet, error::Error, fmt};
 
+/// Maximum UTF-8 size of one provider-issued tool-call identifier.
+pub const MAX_MODEL_TOOL_CALL_ID_BYTES: usize = 128;
+/// Maximum provider-issued tool calls that may execute in one assistant turn.
+pub const MAX_MODEL_TOOL_CALLS_PER_TURN: usize = 128;
+
 /// Provider-neutral message role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -351,7 +356,9 @@ pub fn validate_model_transcript(
                 if !pending.is_empty() {
                     return Err(unsettled_error(message_index, &pending));
                 }
+                validate_model_tool_call_count(message_index, message.tool_calls.len())?;
                 for call in &message.tool_calls {
+                    validate_model_tool_call_id(message_index, &call.call_id)?;
                     if !seen.insert(call.call_id.clone()) {
                         return Err(transcript_error(
                             message_index,
@@ -394,13 +401,9 @@ pub fn validate_assistant_tool_call_turn(
         }
     }
 
+    validate_model_tool_call_count(message_index, assistant.tool_calls.len())?;
     for call in &assistant.tool_calls {
-        if call.call_id.is_empty() {
-            return Err(transcript_error(
-                message_index,
-                "assistant emitted a tool call without a call id",
-            ));
-        }
+        validate_model_tool_call_id(message_index, &call.call_id)?;
         if !seen.insert(call.call_id.clone()) {
             return Err(transcript_error(
                 message_index,
@@ -409,6 +412,48 @@ pub fn validate_assistant_tool_call_turn(
         }
     }
 
+    Ok(())
+}
+
+fn validate_model_tool_call_count(
+    message_index: usize,
+    count: usize,
+) -> Result<(), ModelTranscriptIntegrityError> {
+    if count > MAX_MODEL_TOOL_CALLS_PER_TURN {
+        return Err(transcript_error(
+            message_index,
+            format!(
+                "assistant emitted {count} tool calls, exceeding the per-turn limit of {MAX_MODEL_TOOL_CALLS_PER_TURN}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_model_tool_call_id(
+    message_index: usize,
+    call_id: &str,
+) -> Result<(), ModelTranscriptIntegrityError> {
+    if call_id.is_empty() {
+        return Err(transcript_error(
+            message_index,
+            "assistant emitted a tool call without a call id",
+        ));
+    }
+    if call_id.len() > MAX_MODEL_TOOL_CALL_ID_BYTES {
+        return Err(transcript_error(
+            message_index,
+            format!(
+                "assistant emitted a tool call id exceeding {MAX_MODEL_TOOL_CALL_ID_BYTES} bytes"
+            ),
+        ));
+    }
+    if !call_id.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(transcript_error(
+            message_index,
+            "assistant emitted a tool call id containing non-printable or non-ASCII bytes",
+        ));
+    }
     Ok(())
 }
 

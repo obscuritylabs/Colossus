@@ -75,6 +75,122 @@ fn remote_call_timeout_certainty_follows_dispatch_stage() {
 }
 
 #[test]
+fn complete_json_rpc_tool_errors_are_confirmed_results() {
+    let call = McpOperation::CallTool {
+        server: "fixture".into(),
+        tool: "lookup".into(),
+        description: None,
+        annotations: None,
+        arguments: json!({}),
+        input_schema: Box::new(json!({"type": "object"})),
+        schema_sha256: "unused-by-error-classification".into(),
+    };
+    let result = remote_call_failure(
+        rmcp::ServiceError::McpError(rmcp::ErrorData::internal_error(
+            "project not found",
+            Some(json!({"private": "omitted"})),
+        )),
+        &call,
+    )
+    .expect("confirmed protocol error");
+
+    let RemoteOperationResult::Call(result) = result else {
+        panic!("tool result");
+    };
+    assert_eq!(result.is_error, Some(true));
+    let rendered = serde_json::to_string(&result).expect("rendered result");
+    assert!(rendered.contains("mcp_json_rpc_error"));
+    assert!(rendered.contains("project not found"));
+    assert!(!rendered.contains("private"));
+
+    let error = match remote_call_failure(rmcp::ServiceError::TransportClosed, &call) {
+        Err(error) => error,
+        Ok(_) => panic!("transport loss must remain uncertain"),
+    };
+    assert!(matches!(error, ExecutionError::OutcomeUnknown(_)));
+}
+
+#[test]
+fn confirmed_json_rpc_errors_fit_custom_output_caps() {
+    let call = McpOperation::CallTool {
+        server: "fixture".into(),
+        tool: "lookup".into(),
+        description: None,
+        annotations: None,
+        arguments: json!({}),
+        input_schema: Box::new(json!({"type": "object"})),
+        schema_sha256: "unused-by-error-compaction".into(),
+    };
+    let result = remote_call_failure(
+        rmcp::ServiceError::McpError(rmcp::ErrorData::internal_error(
+            format!("project not found: {}", "x".repeat(32 * 1024)),
+            Some(json!({"private": "private-value"})),
+        )),
+        &call,
+    )
+    .expect("confirmed protocol error");
+    let RemoteOperationResult::Call(result) = result else {
+        panic!("tool result");
+    };
+    let output = McpCallOutput {
+        server: "s".repeat(128),
+        tool: "t".repeat(128),
+        result,
+    };
+
+    let bounded = bounded_call_result(&output, 1024).expect("bounded confirmed result");
+    assert!(bounded.bytes.len() <= 1024);
+    let compact: McpCallOutput =
+        serde_json::from_slice(&bounded.bytes).expect("valid compact result");
+    assert_eq!(compact.result.is_error, Some(true));
+    let rendered = serde_json::to_string(&compact).expect("rendered compact result");
+    assert!(rendered.contains("mcp_confirmed_error"));
+    assert!(rendered.contains("mcp_json_rpc_error"));
+    assert!(rendered.contains("original_sha256"));
+    assert!(rendered.contains("preview_truncated"));
+    assert!(!rendered.contains("private-value"));
+}
+
+#[test]
+fn stdio_json_rpc_tool_errors_are_confirmed_and_redacted() {
+    let frames = [
+        json!({
+            "jsonrpc": "2.0",
+            "id": INITIALIZE_REQUEST_ID,
+            "result": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "stdio-fixture", "version": "1.0.0"}
+            }
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": MCP_REQUEST_ID,
+            "error": {
+                "code": -32603,
+                "message": "credential-value project not found",
+                "data": {"private": "credential-value"}
+            }
+        }),
+    ];
+    let mut stdout = Vec::new();
+    for frame in frames {
+        serde_json::to_writer(&mut stdout, &frame).expect("protocol frame");
+        stdout.push(b'\n');
+    }
+
+    let server = configured_http_server("https://mcp.example.test".into());
+    let output = parse_call(&stdout, &server, "lookup", &["credential-value".into()])
+        .expect("confirmed stdio protocol error");
+    assert_eq!(output.result.is_error, Some(true));
+    let rendered = serde_json::to_string(&output).expect("rendered result");
+    assert!(rendered.contains("mcp_json_rpc_error"));
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("credential-value"));
+    assert!(!rendered.contains("private"));
+}
+
+#[test]
 fn discovered_schema_is_enforced_before_call() {
     let input_schema = json!({
         "type": "object",

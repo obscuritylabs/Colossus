@@ -1,5 +1,62 @@
 use super::*;
 
+#[derive(Debug)]
+struct DeferredRunResponse {
+    value: Value,
+    response: String,
+}
+
+impl DeferredRunResponse {
+    fn new(value: &impl serde::Serialize, response: &str) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            value: serde_json::to_value(value)?,
+            response: response.into(),
+        })
+    }
+
+    fn render(self) -> Result<(), Box<dyn Error>> {
+        print_run_response(&self.value, &self.response)
+    }
+}
+
+#[derive(Debug)]
+struct CommandFinalizationError {
+    command: Box<dyn Error>,
+    checkpoint: colossus_runtime::RuntimeError,
+}
+
+impl std::fmt::Display for CommandFinalizationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "command failed: {}; runtime checkpoint also failed: {}",
+            self.command, self.checkpoint
+        )
+    }
+}
+
+impl Error for CommandFinalizationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.command.as_ref())
+    }
+}
+
+pub(super) fn finalize_runtime_command<T>(
+    command: Result<T, Box<dyn Error>>,
+    checkpoint: impl FnOnce() -> Result<(), colossus_runtime::RuntimeError>,
+    render: impl FnOnce(T) -> Result<(), Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
+    match (command, checkpoint()) {
+        (Ok(output), Ok(())) => render(output),
+        (Err(command), Ok(())) => Err(command),
+        (Ok(_), Err(checkpoint)) => Err(Box::new(checkpoint)),
+        (Err(command), Err(checkpoint)) => Err(Box::new(CommandFinalizationError {
+            command,
+            checkpoint,
+        })),
+    }
+}
+
 #[tokio::main]
 pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     let cli = match Cli::try_parse() {
@@ -326,7 +383,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Runtime::open_with_options(&config, approvals, user_prompts, runtime_options)
             .map_err(runtime_open_error)?,
     );
-    match cli.command {
+    let command_result = runtime
+        .run_with_background_projection_maintenance(async {
+            let mut deferred_run_response = None;
+            match cli.command {
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
@@ -1186,15 +1246,16 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                         .last()
                         .map(|iteration| iteration.output.as_str())
                         .unwrap_or(result.goal.summary.as_str());
-                    print_run_response(&result, response)?;
+                    deferred_run_response = Some(DeferredRunResponse::new(&result, response)?);
                 } else {
                     let result = runtime
                         .run_approved_plan(&role, &plan_id, max_turns)
                         .await?;
                     runtime.drain_subagents().await?;
-                    print_run_response(&result, &result.output)?;
+                    deferred_run_response =
+                        Some(DeferredRunResponse::new(&result, &result.output)?);
                 }
-                return Ok(());
+                return Ok(deferred_run_response);
             }
             let prompt = prompt
                 .as_deref()
@@ -1258,7 +1319,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 }
             };
             runtime.drain_subagents().await?;
-            print_run_response(&result, &result.output)?;
+            deferred_run_response = Some(DeferredRunResponse::new(&result, &result.output)?);
         }
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;
@@ -1323,9 +1384,20 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             unreachable!("handled before runtime construction")
         }
         Command::SandboxHelper => unreachable!("handled before runtime construction"),
-    }
-    runtime.checkpoint()?;
-    Ok(())
+            }
+            Ok::<_, Box<dyn Error>>(deferred_run_response)
+        })
+        .await;
+    finalize_runtime_command(
+        command_result,
+        || runtime.checkpoint(),
+        |output| {
+            if let Some(output) = output {
+                output.render()?;
+            }
+            Ok(())
+        },
+    )
 }
 
 fn runtime_open_error(error: colossus_runtime::RuntimeError) -> Box<dyn Error> {

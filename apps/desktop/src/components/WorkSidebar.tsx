@@ -1397,6 +1397,7 @@ export function WorkSidebar({
           <button
             type="button"
             key={id}
+            aria-label={label}
             aria-current={surface === id ? "page" : undefined}
             onClick={() => onSelectSurface(id)}
           >

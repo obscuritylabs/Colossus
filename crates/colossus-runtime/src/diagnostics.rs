@@ -6,6 +6,9 @@ enum ProviderModelsProbe {
 }
 
 const MAX_PROVIDER_DIAGNOSTIC_DISPLAY_CHARS: usize = 64 * 1024;
+const BACKGROUND_PROJECTION_BATCH_LIMIT: usize = 32;
+const BACKGROUND_PROJECTION_MAX_ROUNDS: usize = 1;
+const BACKGROUND_PROJECTION_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Render explicitly released provider evidence for a trusted local diagnostic surface.
 ///
@@ -120,6 +123,41 @@ impl Runtime {
         self.projections
             .drain(batch_limit, max_rounds)
             .map_err(Into::into)
+    }
+
+    /// Poll one host operation while keeping disposable projections close to the
+    /// authoritative journal head.
+    ///
+    /// Projection maintenance is deliberately bounded and never cancels the host
+    /// operation. A maintenance failure disables further background attempts for that
+    /// operation; the mandatory final checkpoint remains responsible for surfacing it.
+    pub async fn run_with_background_projection_maintenance<F, T>(&self, operation: F) -> T
+    where
+        F: Future<Output = T>,
+    {
+        let mut interval = tokio::time::interval(BACKGROUND_PROJECTION_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        tokio::pin!(operation);
+        let mut maintenance_available = true;
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut operation => return result,
+                _ = interval.tick(), if maintenance_available => {
+                    if let Err(error) = self.drain_projections_bounded(
+                        BACKGROUND_PROJECTION_BATCH_LIMIT,
+                        BACKGROUND_PROJECTION_MAX_ROUNDS,
+                    ) {
+                        maintenance_available = false;
+                        tracing::warn!(
+                            error = %error,
+                            "background projection maintenance failed; final checkpoint will retry"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Delete and replay one projection, or every projection when omitted.

@@ -10,6 +10,7 @@ license.workspace = true
 async-trait.workspace = true
 colossus-contracts.workspace = true
 colossus-ports.workspace = true
+colossus-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

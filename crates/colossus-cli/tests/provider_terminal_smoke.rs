@@ -493,7 +493,7 @@ fn subagent_server() -> (String, thread::JoinHandle<Vec<String>>) {
                     "id": "call-delegate",
                     "type": "function",
                     "function": {
-                        "name": "agent.delegate",
+                        "name": "agent_delegate",
                         "arguments": "{\"task\":\"Say hi to Alex and confirm the ping.\"}"
                     }
                 }]},
@@ -539,7 +539,7 @@ data: [DONE]
                     "id": "call-result",
                     "type": "function",
                     "function": {
-                        "name": "agent.result",
+                        "name": "agent_result",
                         "arguments": result_arguments
                     }
                 }]},
@@ -637,12 +637,12 @@ data: [DONE]
 }
 
 fn malformed_arguments_server() -> (String, thread::JoinHandle<Vec<String>>) {
-    let first_invalid = r#"data: {"id":"invalid-tool-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invalid-call-1","type":"function","function":{"name":"filesystem.write","arguments":"{\"path\":\"must-not-exist.txt\",\"content\":\"first\",\"mode\":\"create\""}}]},"finish_reason":"tool_calls"}]}
+    let first_invalid = r#"data: {"id":"invalid-tool-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invalid-call-1","type":"function","function":{"name":"filesystem_write","arguments":"{\"path\":\"must-not-exist.txt\",\"content\":\"first\",\"mode\":\"create\""}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
 "#;
-    let second_invalid = r#"data: {"id":"invalid-tool-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invalid-call-2","type":"function","function":{"name":"filesystem.write","arguments":"[\"must-not-exist.txt\"]"}}]},"finish_reason":"tool_calls"}]}
+    let second_invalid = r#"data: {"id":"invalid-tool-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invalid-call-2","type":"function","function":{"name":"filesystem_write","arguments":"[\"must-not-exist.txt\"]"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
@@ -679,17 +679,17 @@ data: [DONE]
 }
 
 fn malformed_exhaustion_server() -> (String, thread::JoinHandle<Vec<String>>) {
-    let first = r#"data: {"id":"malformed-exhaust-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-1","type":"function","function":{"name":"filesystem.write","arguments":"{\"path\":\"exhausted-must-not-exist.txt\""}}]},"finish_reason":"tool_calls"}]}
+    let first = r#"data: {"id":"malformed-exhaust-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-1","type":"function","function":{"name":"filesystem_write","arguments":"{\"path\":\"exhausted-must-not-exist.txt\""}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
 "#;
-    let second = r#"data: {"id":"malformed-exhaust-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-2","type":"function","function":{"name":"filesystem.write","arguments":"[]"}}]},"finish_reason":"tool_calls"}]}
+    let second = r#"data: {"id":"malformed-exhaust-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-2","type":"function","function":{"name":"filesystem_write","arguments":"[]"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
 "#;
-    let third = r#"data: {"id":"malformed-exhaust-3","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-3","type":"function","function":{"name":"filesystem.write","arguments":"not-json"}}]},"finish_reason":"tool_calls"}]}
+    let third = r#"data: {"id":"malformed-exhaust-3","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-3","type":"function","function":{"name":"filesystem_write","arguments":"not-json"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 

@@ -133,6 +133,7 @@ describe("OperationsSurface runtime targets", () => {
 
     expect(markup).toContain('aria-label="Open Workspace navigation"');
     expect(markup).toContain('aria-controls="work-navigation"');
+    expect(markup).toContain('class="overview-scroll" tabindex="0"');
   });
 
   it("shows and marks the selected external target in fleet view", () => {
@@ -176,6 +177,9 @@ describe("OperationsSurface runtime targets", () => {
   it("labels the actually selected target instead of assuming Managed Local", () => {
     const markup = renderSurface("settings");
 
+    expect(markup).toContain(
+      'class="overview-scroll settings-scroll" tabindex="0"',
+    );
     expect(markup).toContain("<h3>Lab fleet</h3>");
     expect(markup).not.toContain("<h3>Connected</h3>");
   });

@@ -275,7 +275,7 @@ impl ResponsesStreamState {
                     call_id,
                     name: self
                         .tool_names
-                        .canonical_name(&required_string(item, "name")?)
+                        .canonical_name(&required_string(item, "name")?)?
                         .to_owned(),
                     arguments: json!({
                         "input": item.get("input").and_then(Value::as_str).unwrap_or_default()
@@ -498,7 +498,7 @@ impl ChatStreamState {
                 let provider_name = partial.name.as_deref().ok_or_else(|| {
                     ProviderError::Malformed("streamed tool call name is absent".into())
                 })?;
-                let name = self.tool_names.canonical_name(provider_name).to_owned();
+                let name = self.tool_names.canonical_name(provider_name)?.to_owned();
                 let arguments_text = if partial.arguments.is_empty() {
                     "{}"
                 } else {

@@ -33,6 +33,9 @@ describe("ArtifactWorkspace", () => {
     expect(markup).toMatch(
       /aria-selected="true"[^>]*data-artifact-id="artifact-7"/,
     );
+    expect(markup).toMatch(
+      /id="artifact-preview"[^>]*role="tabpanel"[^>]*tabindex="0"/,
+    );
   });
 
   it("reports authorized preview loading and failures without implying a path leak", () => {

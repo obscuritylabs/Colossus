@@ -120,7 +120,7 @@ fn tool_server(
                         "id": "approval-call",
                         "type": "function",
                         "function": {
-                            "name": "filesystem.write",
+                            "name": "filesystem_write",
                             "arguments": arguments
                         }
                     }]
@@ -190,7 +190,7 @@ fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHa
                         "id": "network-call",
                         "type": "function",
                         "function": {
-                            "name": "web.fetch",
+                            "name": "web_fetch",
                             "arguments": arguments
                         }
                     }]

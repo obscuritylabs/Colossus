@@ -54,7 +54,9 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
-/// One bounded tool result suitable for provider continuation.
+/// One complete policy-released tool execution result.
+///
+/// Model-facing continuation state may store a separate lossy observation of this result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolResult {
@@ -62,7 +64,7 @@ pub struct ToolResult {
     pub call_id: String,
     /// Registered tool name.
     pub name: String,
-    /// Bounded UTF-8 or JSON output.
+    /// Complete released UTF-8 or JSON output within the tool's execution bound.
     pub output: String,
     /// Conventional zero-success exit code.
     pub exit_code: i32,
@@ -119,7 +121,7 @@ pub enum RunEvent {
     ToolCompleted {
         /// One-based model turn.
         turn: u16,
-        /// Bounded result suitable for provider continuation.
+        /// Complete released result; provider continuation may use a bounded observation.
         result: ToolResult,
         /// Wall time spent executing this tool call.
         duration_seconds: f64,

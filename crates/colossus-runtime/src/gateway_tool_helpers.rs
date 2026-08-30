@@ -1,5 +1,19 @@
 use super::*;
 
+pub(super) struct McpAgentToolResult {
+    pub(super) output: String,
+    pub(super) exit_code: i32,
+}
+
+pub(super) fn mcp_agent_tool_result(
+    output: colossus_mcp::McpCallOutput,
+) -> Result<McpAgentToolResult, ToolError> {
+    let exit_code = i32::from(output.result.is_error == Some(true));
+    let output =
+        serde_json::to_string(&output).map_err(|error| ToolError::Failed(error.to_string()))?;
+    Ok(McpAgentToolResult { output, exit_code })
+}
+
 pub(super) struct GatewayBoundEffects {
     pub(super) identity: workspace_lease::WorkspaceIdentity,
     pub(super) pack_process: Arc<dyn EffectExecutor>,
@@ -348,9 +362,12 @@ impl GatewayToolExecutor {
         )
         .await
         .map_err(mcp_runtime_tool_error)?;
-        serde_json::to_string(&tools)
-            .map(|output| bounded_tool_text(&output, 1024 * 1024))
-            .map_err(|error| ToolError::Failed(error.to_string()))
+        let output =
+            serde_json::to_string(&tools).map_err(|error| ToolError::Failed(error.to_string()))?;
+        if output.len() > MCP_TOOLS_MAX_OUTPUT_BYTES {
+            return Err(mcp_runtime_tool_error(mcp_discovery_output_limit_error()));
+        }
+        Ok(output)
     }
 
     pub(super) async fn execute_mcp_tool(
@@ -360,7 +377,7 @@ impl GatewayToolExecutor {
         server: &str,
         tool: &str,
         arguments: Value,
-    ) -> Result<String, ToolError> {
+    ) -> Result<McpAgentToolResult, ToolError> {
         let executor = self
             .mcp
             .as_deref()
@@ -383,9 +400,7 @@ impl GatewayToolExecutor {
         )
         .await
         .map_err(mcp_runtime_tool_error)?;
-        serde_json::to_string(&output)
-            .map(|output| bounded_tool_text(&output, 1024 * 1024))
-            .map_err(|error| ToolError::Failed(error.to_string()))
+        mcp_agent_tool_result(output)
     }
 
     pub(super) async fn execute_repository_tool(

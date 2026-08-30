@@ -136,6 +136,55 @@ fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
 }
 
 #[test]
+fn runtime_command_finalization_checkpoints_before_deferred_output() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let checkpoint_order = Arc::clone(&order);
+    let render_order = Arc::clone(&order);
+
+    finalize_runtime_command(
+        Ok("deferred output"),
+        move || {
+            checkpoint_order.lock().expect("order").push("checkpoint");
+            Ok(())
+        },
+        move |output| {
+            assert_eq!(output, "deferred output");
+            render_order.lock().expect("order").push("render");
+            Ok(())
+        },
+    )
+    .expect("finalization");
+
+    assert_eq!(
+        order.lock().expect("order").as_slice(),
+        ["checkpoint", "render"]
+    );
+}
+
+#[test]
+fn runtime_command_finalization_checkpoints_after_command_failure() {
+    let checkpointed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let checkpointed_by_closure = Arc::clone(&checkpointed);
+    let command: Result<(), Box<dyn Error>> = Err(Box::new(cli_error("command failed")));
+
+    let error = finalize_runtime_command(
+        command,
+        move || {
+            checkpointed_by_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(colossus_runtime::RuntimeError::Config(
+                "checkpoint failed".into(),
+            ))
+        },
+        |_| panic!("failed command must not render deferred output"),
+    )
+    .expect_err("combined error");
+
+    assert!(checkpointed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(error.to_string().contains("command failed"));
+    assert!(error.to_string().contains("checkpoint also failed"));
+}
+
+#[test]
 fn codex_login_supports_browser_and_device_code_flows() {
     let browser = Cli::try_parse_from(["colossus", "codex", "login"]).expect("browser login");
     assert!(matches!(

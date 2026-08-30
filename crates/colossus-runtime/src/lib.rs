@@ -1,148 +1,16 @@
 //! Runtime composition root. Interfaces call this layer and own no product logic.
 
-use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use colossus_access::{
-    AccessConfig, AccessContext, AccessDecision, AccessProfile, AccessResolution, ActionClass,
-    ActionDescriptor, CapabilitySource, ToolDescriptor, builtin_action_descriptors,
-    builtin_tool_descriptor, resolve_access, validate_config as validate_access_config,
-};
-use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
-use colossus_audit::{
-    AuditExportReport, AuditExportService, AuditExportStatus, GatewayDirectoryAuditExporter,
-    GatewayWormAuditExporter, evidence,
-};
-use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
-use colossus_contracts::{
-    Actor, ActorType, AgentRunMode, AgentRunOutcome, AgentRunResult, AuditEvidence,
-    BundleInstallation, BundleMaterialization, BundleSigningKeyInfo, CollectionInstallation,
-    CollectionMaterialization, CollectionVerification, ContextSnapshot, ContextStatus,
-    ControlledAgentTerminal, CredentialReference, DecisionOutcome, DecisionPriority,
-    DecisionSource, DecisionStatus, EffectRequest, EventClassification, ExecutionContext,
-    FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunOutcome, GoalRunResult, GoalStatus,
-    IntegrationAuth, IntegrationConnection, IntegrationSummary, KeyDecision, MemoryRecord,
-    MemoryScope, MemoryStatus, ModelImageReference, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelRoute, ModelToolDefinition, NewEvent, PackInstallation, PackVerification, PlanDraftTarget,
-    PlanExecutionOutcome, PlanExecutionStrategy, PlanRecord, PlanStatus, PlanStep, PreparedContext,
-    ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck,
-    ProviderResponseDiagnostic, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
-    QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
-    ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority, RiskAssessment,
-    RunBranchContextMode, RunTelemetryDetail, RunTelemetrySummary, SandboxBoundaryMode,
-    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SecurityPostureFinding,
-    SecurityPostureReport, SecurityPostureSeverity, SessionMessage, SessionMessageAppend,
-    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
-    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
-    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
-    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
-    WorkflowWebhookDispatch, validate_model_transcript,
-};
-use colossus_home::ConfinedRoot;
-use colossus_integrations::{
-    EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
-};
-use colossus_journal_postgres::{PostgresEventJournal, PostgresJournalConfig};
-use colossus_journal_redb::{
-    DisabledCheckpointSigner, Ed25519CheckpointSigner, EnvironmentKeyProvider,
-    PlaintextKeyProvider, PlatformKeyProvider, RedbEventJournal, RedbWriterLease, platform_secret,
-};
-use colossus_mcp::{
-    MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor,
-    McpOAuthCredentialStoreKind, McpOAuthLogin, McpOAuthStatus, McpOperation, McpServerConfig,
-    McpServerSummary, McpToolSummary, McpToolsPage, McpValidationContext,
-    validate_config as validate_mcp_config, validate_tool_arguments,
-};
 pub use colossus_media::ValidatedImage;
-use colossus_media::{JournalRunInputMediaResolver, MAX_IMAGE_BYTES, validate_image_bytes};
-use colossus_memory::{
-    EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
-    TantivyMemoryIndex, UnavailableMemoryIndex,
-};
-use colossus_memory_chroma::{
-    ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,
-    LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile,
-};
-use colossus_network::AdditionalRootCertificates;
-use colossus_observability::ObservedEventJournal;
-use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
-use colossus_policy::{
-    BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
-    GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
-    MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectObserver,
-    ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, canonical_network_origin,
-    effect_request, network_destination_match, system_actor,
-};
-use colossus_ports::{
-    ApprovalProvider, AuditExporter, CheckpointSigner, ContextError, ContextPreparer,
-    ContextRepository, EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue,
-    KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
-    PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
-    ProviderTurnOptions, ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl,
-    RunEventObserver, RunInputMediaResolver, SearchError, SearchProvider, SessionRepository,
-    SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider,
-    WorkRepository, WorkflowRepository,
-};
 
 const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
 const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const RUN_INPUT_FILE_READ_ACTION: &str = "filesystem.read_run_input";
-use colossus_presentation::EventSourcedPresentationRepository;
-use colossus_projection::{
-    JournalExternalWorkQueue, ProjectedSessionActivityPage, ProjectedSessionActivityReader,
-    ProjectionRunReport, ProjectionWorker, default_handlers,
-};
 pub use colossus_provider::{
     ChatCompletionsOutputTokenParameter, CodexAuthStore, CredentialResolver,
     EnvironmentCredentialResolver, HostCredentialResolver,
 };
-use colossus_provider::{
-    ModelProfile, ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind,
-    ProviderProfile, ProviderRegistry,
-};
-use colossus_research::{
-    EventSourcedResearchRepository, ResearchCollection, ResearchCollector, ResearchLimits,
-    ResearchModel, ResearchService, ResearchSourceDraft,
-};
-use colossus_sandbox::{
-    FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
-    SandboxProcessExecutor, sandbox_doctor,
-};
-use colossus_search::{
-    SearchAdapterError, SearchEffectInput, SearchExecutor, SearchKind, SearchProfile,
-    SearchRegistry, default_search_limit,
-};
-use colossus_session::EventSourcedSessionRepository;
-use colossus_skills::{
-    FilesystemSkillRepository, SkillAuthoringService, SkillComposer, SkillResourceService,
-    SkillRoot,
-};
-use colossus_telemetry::TelemetryService;
-use colossus_tools::{StaticToolRegistry, ToolCatalogError, builtin_specs};
-use colossus_work::{EventSourcedWorkRepository, WorkService};
-use colossus_workflow::{
-    EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
-    WorkflowError, WorkflowService, validate_definition,
-};
-use ignore::WalkBuilder;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    future::Future,
-    path::{Path, PathBuf},
-    sync::{Arc, Weak},
-    time::{Duration, Instant},
-};
-use thiserror::Error;
-use tokio::sync::{Mutex as TokioMutex, Notify};
-use tokio::task::JoinSet;
-use tracing::Instrument as _;
-use url::Url;
-use uuid::Uuid;
-
+mod access_policy;
+mod adapter_composition;
 mod agent_runs;
 mod agent_tools;
 mod composition;
@@ -156,12 +24,15 @@ mod extensions;
 mod gateway_tool_dispatch;
 mod gateway_tool_helpers;
 mod generic_effects;
+mod goal_runs;
 mod instruction_snapshots;
 mod memory;
 mod memory_gateway;
 mod operations;
 mod pack_extensions;
 mod pack_process;
+mod plan_runs;
+mod prelude;
 mod presentation_work_effects;
 mod provider_gateway;
 mod repository_tools;
@@ -173,6 +44,7 @@ mod security_posture;
 mod services;
 mod session_activity;
 mod sessions_context;
+mod storage_composition;
 mod subagents;
 mod tool_arguments;
 mod trace_tools;
@@ -181,6 +53,11 @@ mod workflows_research;
 mod workspace;
 mod workspace_binding;
 mod workspace_lease;
+
+use prelude::*;
+
+use access_policy::*;
+use adapter_composition::*;
 
 #[cfg(test)]
 mod test_support;
@@ -204,6 +81,7 @@ pub use workflows_research::ResearchRunContext;
 pub use workspace::RuntimeOpenOptions;
 pub use workspace_lease::WorkspaceIdentityToken;
 
+use agent_runs::*;
 use agent_tools::*;
 use config::*;
 use context_tools::*;
@@ -222,6 +100,7 @@ use repository_tools::*;
 use research_gateway::*;
 use research_skill_effects::*;
 use runtime_helpers::*;
+use storage_composition::*;
 use tool_arguments::*;
 use trace_tools::*;
 use workspace_binding::*;

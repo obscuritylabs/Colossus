@@ -61,6 +61,7 @@ impl ContextService {
             .iter()
             .map(|record| record.message.clone())
             .collect::<Vec<_>>();
+        let messages = project_model_tool_observations(&messages);
         let binding = self.decision_message(session_id)?;
         let original_messages =
             prepend_bindings(binding.clone().into_iter().collect(), messages.clone());
@@ -372,7 +373,7 @@ impl ContextPreparer for ContextService {
             force,
         } = request;
         validate_newest_image_turn(&messages)?;
-        let messages = compact_excess_images(&messages);
+        let messages = project_model_tool_observations(&compact_excess_images(&messages));
         let bindings = self
             .binding_messages(&session_id, &messages, context.clone())
             .await?;
@@ -424,8 +425,10 @@ impl ContextPreparer for ContextService {
         }
         let preserve = self.config.preserve_recent_messages.min(messages.len());
         let mut source_end = messages.len().saturating_sub(preserve);
-        while source_end > 0 && messages[source_end].role != ModelMessageRole::User {
-            source_end = source_end.saturating_sub(1);
+        if preserve > 0 {
+            while source_end > 0 && messages[source_end].role != ModelMessageRole::User {
+                source_end = source_end.saturating_sub(1);
+            }
         }
         if force && source_end == 0 {
             source_end = messages.len();
