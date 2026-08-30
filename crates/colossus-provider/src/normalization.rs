@@ -649,7 +649,7 @@ pub(super) fn normalize_responses(
                 tool_calls = tool_calls.saturating_add(1);
                 let call_id = required_string(item, "call_id")?;
                 let name = tool_names
-                    .canonical_name(&required_string(item, "name")?)
+                    .canonical_name(&required_string(item, "name")?)?
                     .to_owned();
                 let input = item
                     .get("input")
@@ -897,7 +897,7 @@ pub(super) fn function_call_event(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ProviderError::Malformed("tool call name is absent".into()))?;
-    let name = tool_names.canonical_name(name).to_owned();
+    let name = tool_names.canonical_name(name)?.to_owned();
     let arguments_text = arguments.and_then(Value::as_str).unwrap_or("{}");
     let arguments: Value = serde_json::from_str(arguments_text).map_err(|error| {
         ProviderError::Malformed(format!(

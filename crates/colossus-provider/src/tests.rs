@@ -1038,6 +1038,38 @@ fn responses_output_normalizes_visible_text_and_strict_tool_calls() {
 }
 
 #[test]
+fn provider_responses_reject_nonportable_unknown_tool_names_before_release() {
+    let profile = ProviderProfile::new(
+        "openai",
+        ProviderKind::OpenAiResponses,
+        Some("https://api.openai.com/v1".into()),
+        Some("env:UNIT_PROVIDER_KEY".into()),
+        1_000,
+    )
+    .expect("profile");
+    let response = json!({
+        "id": "response-invalid-tool-name",
+        "output": [{
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "unknown/tool",
+            "arguments": "{}"
+        }]
+    });
+
+    let error = normalize_responses(
+        &profile,
+        "unit-profile",
+        "unit-model",
+        &serde_json::to_vec(&response).expect("JSON"),
+        &ProviderToolNames::default(),
+    )
+    .expect_err("nonportable provider tool names must not reach the agent");
+
+    assert!(matches!(error, ProviderError::Malformed(_)));
+}
+
+#[test]
 fn model_catalog_normalizes_openai_and_codex_manifest_shapes() {
     let openai = normalize_models(
         &serde_json::to_vec(&json!({
@@ -1126,9 +1158,21 @@ fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
         "workspace_inspect"
     );
     assert_eq!(
-        names.canonical_name("workspace_inspect"),
+        names
+            .canonical_name("workspace_inspect")
+            .expect("canonical name"),
         "workspace.inspect"
     );
+    assert_eq!(
+        names
+            .canonical_name("unoffered_but_portable")
+            .expect("portable unknown name"),
+        "unoffered_but_portable"
+    );
+    assert!(matches!(
+        names.canonical_name("unoffered/nonportable"),
+        Err(ProviderError::Malformed(_))
+    ));
 
     let collision = model_request_with_tools(&["workspace.inspect", "workspace_inspect"]);
     assert!(matches!(
@@ -1141,6 +1185,40 @@ fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
         ProviderToolNames::from_request(&nonportable),
         Err(ProviderError::Configuration(_))
     ));
+
+    let mut mode_transition = model_request_with_tools(&["filesystem.write"]);
+    mode_transition.messages = vec![
+        ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: String::new().into(),
+            tool_call_id: None,
+            tool_calls: vec![ModelToolCall {
+                call_id: "restricted-call".into(),
+                name: "filesystem_write".into(),
+                arguments: json!({}),
+            }],
+        },
+        ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: "not available in the previous run mode".into(),
+            tool_call_id: Some("restricted-call".into()),
+            tool_calls: Vec::new(),
+        },
+    ];
+    let names = ProviderToolNames::from_request(&mode_transition)
+        .expect("settled history may share an alias with a newly offered tool");
+    assert_eq!(
+        names
+            .provider_name("filesystem_write")
+            .expect("historical provider name"),
+        "filesystem_write"
+    );
+    assert_eq!(
+        names
+            .canonical_name("filesystem_write")
+            .expect("newly offered canonical name"),
+        "filesystem.write"
+    );
 }
 
 #[test]

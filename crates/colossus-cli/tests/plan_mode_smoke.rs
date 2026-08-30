@@ -98,12 +98,12 @@ fn parse(output: &std::process::Output, label: &str) -> Value {
 
 #[test]
 fn plan_mode_cannot_mutate_and_approved_plans_are_consumed_once() {
-    let denied_write = r#"data: {"id":"plan-denied","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"filesystem.write","arguments":"{\"path\":\"plan-mode-escape.txt\",\"content\":\"escaped\",\"mode\":\"create\"}"}}]},"finish_reason":"tool_calls"}]}
+    let denied_write = r#"data: {"id":"plan-denied","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"filesystem_write","arguments":"{\"path\":\"plan-mode-escape.txt\",\"content\":\"escaped\",\"mode\":\"create\"}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
 "#;
-    let denied_plan = r##"data: {"id":"plan-corrected","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"safe-plan-1","type":"function","function":{"name":"plan.create","arguments":"{\"prompt\":\"Attempt a mutation\",\"content\":\"# Safe alternative\",\"steps\":[{\"title\":\"Review\",\"detail\":\"Keep the requested mutation pending\",\"requires_mutation\":true}]}"}}]},"finish_reason":"tool_calls"}]}
+    let denied_plan = r##"data: {"id":"plan-corrected","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"safe-plan-1","type":"function","function":{"name":"plan_create","arguments":"{\"prompt\":\"Attempt a mutation\",\"content\":\"# Safe alternative\",\"steps\":[{\"title\":\"Review\",\"detail\":\"Keep the requested mutation pending\",\"requires_mutation\":true}]}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
@@ -113,7 +113,7 @@ data: [DONE]
 data: [DONE]
 
 "#;
-    let create_plan = r##"data: {"id":"plan-create","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"plan-1","type":"function","function":{"name":"plan.create","arguments":"{\"prompt\":\"Plan the Rust cutover\",\"content\":\"# Cutover\",\"steps\":[{\"title\":\"Implement\",\"detail\":\"Use the audited runtime\",\"requires_mutation\":true}]}"}}]},"finish_reason":"tool_calls"}]}
+    let create_plan = r##"data: {"id":"plan-create","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"plan-1","type":"function","function":{"name":"plan_create","arguments":"{\"prompt\":\"Plan the Rust cutover\",\"content\":\"# Cutover\",\"steps\":[{\"title\":\"Implement\",\"detail\":\"Use the audited runtime\",\"requires_mutation\":true}]}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
@@ -128,7 +128,7 @@ data: [DONE]
 data: [DONE]
 
 "#;
-    let goal_complete = r#"data: {"id":"goal-complete","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"goal-1","type":"function","function":{"name":"goal.update","arguments":"{\"status\":\"complete\",\"summary\":\"goal-executed\",\"blocked_reason\":\"\"}"}}]},"finish_reason":"tool_calls"}]}
+    let goal_complete = r#"data: {"id":"goal-complete","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"goal-1","type":"function","function":{"name":"goal_update","arguments":"{\"status\":\"complete\",\"summary\":\"goal-executed\",\"blocked_reason\":\"\"}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 

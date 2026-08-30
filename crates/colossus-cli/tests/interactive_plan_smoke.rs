@@ -389,7 +389,7 @@ fn workflow_responses() -> Vec<String> {
         stream_tool(
             "plan-create",
             "create-call",
-            "plan.create",
+            "plan_create",
             json!({
                 "prompt": "Plan the interactive rollout",
                 "content": "# Initial rollout",
@@ -404,7 +404,7 @@ fn workflow_responses() -> Vec<String> {
         stream_tool(
             "plan-update",
             "update-call",
-            "plan.update",
+            "plan_update",
             json!({
                 "content": "# Refined rollout",
                 "steps": [
@@ -557,7 +557,7 @@ fn worker_run_plan_uses_the_default_worker_thread_stack() {
         stream_tool(
             "worker-plan-create",
             "worker-plan-create-call",
-            "plan.create",
+            "plan_create",
             json!({
                 "prompt": "Plan the worker route",
                 "content": "# Worker route",
