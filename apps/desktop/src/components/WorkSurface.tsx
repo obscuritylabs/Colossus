@@ -656,7 +656,7 @@ export function WorkSurface({
   }
 
   function openSessionViewFromDetails(view: SessionWorkspaceView) {
-    setSessionWorkspaceView(view);
+    changeSessionWorkspaceView(view);
     closeDrawer();
   }
 

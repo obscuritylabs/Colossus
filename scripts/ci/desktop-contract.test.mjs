@@ -523,6 +523,17 @@ test("session map inspection is selected-Space scoped and releases bounded canon
     renderer,
     /requestSessionMap\(run\.runId, run\.sessionId, false\)/u,
   );
+
+  const workSurface = read("apps/desktop/src/components/WorkSurface.tsx");
+  const detailsNavigation = workSurface.match(
+    /function openSessionViewFromDetails[\s\S]*?\n  \}/u,
+  )?.[0];
+  assert.ok(
+    detailsNavigation,
+    "thread-details navigation helper must remain explicit",
+  );
+  assert.match(detailsNavigation, /changeSessionWorkspaceView\(view\)/u);
+  assert.doesNotMatch(detailsNavigation, /setSessionWorkspaceView\(view\)/u);
 });
 
 test("Aside context stays canonical, selected-Space scoped, and out of metadata search", () => {
