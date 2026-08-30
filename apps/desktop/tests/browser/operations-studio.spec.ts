@@ -659,10 +659,10 @@ test("managed settings expose complete catalog editors without horizontal overfl
     .getByRole("listitem")
     .filter({ hasText: "Documentation API key" });
   await expect(
-    githubCredential.getByText("Used by 1", { exact: true }),
+    githubCredential.getByText("Used by 2", { exact: true }),
   ).toBeVisible();
   await expect(
-    documentationCredential.getByText("Used by 2", { exact: true }),
+    documentationCredential.getByText("Used by 3", { exact: true }),
   ).toBeVisible();
   const credentialsAccessibility = await new AxeBuilder({ page })
     .include(".credentials-settings")
