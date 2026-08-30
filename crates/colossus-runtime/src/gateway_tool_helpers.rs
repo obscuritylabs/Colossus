@@ -362,7 +362,12 @@ impl GatewayToolExecutor {
         )
         .await
         .map_err(mcp_runtime_tool_error)?;
-        serde_json::to_string(&tools).map_err(|error| ToolError::Failed(error.to_string()))
+        let output =
+            serde_json::to_string(&tools).map_err(|error| ToolError::Failed(error.to_string()))?;
+        if output.len() > MCP_TOOLS_MAX_OUTPUT_BYTES {
+            return Err(mcp_runtime_tool_error(mcp_discovery_output_limit_error()));
+        }
+        Ok(output)
     }
 
     pub(super) async fn execute_mcp_tool(

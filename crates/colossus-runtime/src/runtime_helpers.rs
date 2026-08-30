@@ -153,6 +153,7 @@ pub(super) async fn discover_mcp_tools(
     let servers =
         selected_server.map_or_else(|| executor.server_names(), |server| vec![server.to_owned()]);
     let mut tools = Vec::new();
+    let mut serialized_output_bytes = 2_usize;
     for server in servers {
         let mut cursor = None;
         let mut cursors = BTreeSet::new();
@@ -188,7 +189,7 @@ pub(super) async fn discover_mcp_tools(
                         "MCP server {server} exceeded {MAX_MCP_TOOLS} discovered tools"
                     )));
                 }
-                tools.push(tool);
+                push_bounded_mcp_discovery_tool(&mut tools, &mut serialized_output_bytes, tool)?;
                 if tools.len() > MAX_MCP_TOOLS.saturating_mul(executor.server_names().len().max(1))
                 {
                     return Err(RuntimeError::Config(
@@ -219,6 +220,33 @@ pub(super) async fn discover_mcp_tools(
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(tools)
+}
+
+pub(super) fn push_bounded_mcp_discovery_tool(
+    tools: &mut Vec<McpToolSummary>,
+    serialized_output_bytes: &mut usize,
+    tool: McpToolSummary,
+) -> Result<(), RuntimeError> {
+    let tool_bytes = serde_json::to_vec(&tool)
+        .map_err(|error| RuntimeError::Config(format!("invalid MCP tool summary: {error}")))?
+        .len();
+    let delimiter_bytes = usize::from(!tools.is_empty());
+    let next_output_bytes = serialized_output_bytes
+        .checked_add(delimiter_bytes)
+        .and_then(|bytes| bytes.checked_add(tool_bytes))
+        .ok_or_else(mcp_discovery_output_limit_error)?;
+    if next_output_bytes > MCP_TOOLS_MAX_OUTPUT_BYTES {
+        return Err(mcp_discovery_output_limit_error());
+    }
+    *serialized_output_bytes = next_output_bytes;
+    tools.push(tool);
+    Ok(())
+}
+
+pub(super) fn mcp_discovery_output_limit_error() -> RuntimeError {
+    RuntimeError::Config(format!(
+        "MCP discovery exceeded the mcp.tools {MCP_TOOLS_MAX_OUTPUT_BYTES}-byte output bound"
+    ))
 }
 
 // Keep the typed request builder and the separately identity-bound effect adapter

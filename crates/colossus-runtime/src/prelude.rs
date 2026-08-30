@@ -111,7 +111,9 @@ pub(super) use colossus_skills::{
     SkillRoot,
 };
 pub(super) use colossus_telemetry::TelemetryService;
-pub(super) use colossus_tools::{StaticToolRegistry, ToolCatalogError, builtin_specs};
+pub(super) use colossus_tools::{
+    MCP_TOOLS_MAX_OUTPUT_BYTES, StaticToolRegistry, ToolCatalogError, builtin_specs,
+};
 pub(super) use colossus_work::{EventSourcedWorkRepository, WorkService};
 pub(super) use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,

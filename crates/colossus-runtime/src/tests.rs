@@ -12,9 +12,9 @@ use super::{
     SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
     TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
     goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
-    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
-    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
-    terminal_actor,
+    push_bounded_mcp_discovery_tool, recover_interrupted_subagents, recover_unknown_effects,
+    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
@@ -30,8 +30,8 @@ use colossus_contracts::{
 };
 use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
 use colossus_mcp::{
-    McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig, McpServerConfig,
-    McpTransportKind,
+    MAX_MCP_TOOLS, McpCredentialHeaderConfig, McpOAuthConfig, McpResearchToolConfig,
+    McpServerConfig, McpToolSummary, McpTransportKind,
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectGateway, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, SafetyKernel,
@@ -49,6 +49,7 @@ use colossus_skills::{
     FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
 };
 use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
+use colossus_tools::MCP_TOOLS_MAX_OUTPUT_BYTES;
 use colossus_workflow::{WorkflowEffect, WorkflowEffectRunner};
 use serde_json::{Value, json};
 use std::{
@@ -2202,6 +2203,45 @@ fn unadvertised_mcp_tools_include_bounded_related_name_guidance() {
     assert!(message.contains("get_merge_request_diffs"));
     assert!(message.contains("list_merge_request_diffs"));
     assert!(!message.contains("list_projects"));
+}
+
+#[test]
+fn paginated_mcp_discovery_rejects_before_its_aggregate_output_limit() {
+    let mut tools = Vec::new();
+    let mut serialized_output_bytes = 2_usize;
+    let mut rejected = None;
+
+    for index in 0..MAX_MCP_TOOLS {
+        let tool = McpToolSummary {
+            server: "fixture".into(),
+            name: format!("tool_{index:04}"),
+            title: None,
+            description: None,
+            annotations: None,
+            input_schema: json!({
+                "type": "object",
+                "description": "x".repeat(255 * 1024),
+            }),
+            schema_sha256: format!("digest-{index:04}"),
+        };
+        if let Err(error) =
+            push_bounded_mcp_discovery_tool(&mut tools, &mut serialized_output_bytes, tool)
+        {
+            rejected = Some(error);
+            break;
+        }
+    }
+
+    let error = rejected.expect("aggregate discovery must reject oversized pagination");
+    assert!(
+        error
+            .to_string()
+            .contains("mcp.tools 1048576-byte output bound")
+    );
+    let output = serde_json::to_vec(&tools).expect("bounded discovery JSON");
+    assert_eq!(serialized_output_bytes, output.len());
+    assert!(output.len() <= MCP_TOOLS_MAX_OUTPUT_BYTES);
+    assert!(tools.len() < MAX_MCP_TOOLS);
 }
 
 #[tokio::test]
