@@ -33,6 +33,7 @@ impl ProviderToolNames {
                 .canonical_to_provider
                 .insert(canonical.to_owned(), provider);
         }
+        let mut historical_provider_to_canonical = BTreeMap::new();
         for canonical in request
             .messages
             .iter()
@@ -40,10 +41,19 @@ impl ProviderToolNames {
             .map(|call| call.name.as_str())
             .collect::<BTreeSet<_>>()
         {
+            let provider = portable_provider_name(canonical)?;
+            if let Some(existing) =
+                historical_provider_to_canonical.insert(provider.clone(), canonical.to_owned())
+                && existing != canonical
+            {
+                return Err(ProviderError::Configuration(
+                    "continuation-history tool names collide after portable aliasing".into(),
+                ));
+            }
             names
                 .canonical_to_provider
                 .entry(canonical.to_owned())
-                .or_insert(portable_provider_name(canonical)?);
+                .or_insert(provider);
         }
         Ok(names)
     }

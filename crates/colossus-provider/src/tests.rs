@@ -1219,6 +1219,29 @@ fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
             .expect("newly offered canonical name"),
         "filesystem.write"
     );
+
+    let mut ambiguous_history = model_request_with_tools(&[]);
+    ambiguous_history.messages = vec![ModelMessage {
+        role: ModelMessageRole::Assistant,
+        content: String::new().into(),
+        tool_call_id: None,
+        tool_calls: vec![
+            ModelToolCall {
+                call_id: "dotted-call".into(),
+                name: "filesystem.write".into(),
+                arguments: json!({}),
+            },
+            ModelToolCall {
+                call_id: "underscored-call".into(),
+                name: "filesystem_write".into(),
+                arguments: json!({}),
+            },
+        ],
+    }];
+    assert!(matches!(
+        ProviderToolNames::from_request(&ambiguous_history),
+        Err(ProviderError::Configuration(_))
+    ));
 }
 
 #[test]
