@@ -6,7 +6,7 @@ use colossus_contracts::{
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
-use colossus_tools::{MAX_MODEL_TOOL_MESSAGE_BYTES, StaticToolRegistry};
+use colossus_tools::{MAX_MODEL_TOOL_MESSAGE_BYTES, MAX_MODEL_TOOL_TURN_BYTES, StaticToolRegistry};
 use std::{
     collections::VecDeque,
     sync::{
@@ -566,6 +566,45 @@ impl ContextPreparer for FixedContext {
             compacted: true,
             snapshot_created: true,
             strategy: Some("deterministic".into()),
+        })
+    }
+}
+
+struct LogicalTurnContext;
+
+#[async_trait]
+impl ContextPreparer for LogicalTurnContext {
+    async fn prepare(
+        &self,
+        request: ContextPreparationRequest,
+    ) -> Result<PreparedContext, ContextError> {
+        let ContextPreparationRequest {
+            messages,
+            route: budget,
+            ..
+        } = request;
+        let messages = project_model_tool_observations(&messages);
+        let tool_bytes = messages
+            .iter()
+            .filter(|message| message.role == ModelMessageRole::Tool)
+            .map(|message| serde_json::to_vec(message).expect("message").len())
+            .sum::<usize>();
+        assert!(tool_bytes <= MAX_MODEL_TOOL_TURN_BYTES);
+        Ok(PreparedContext {
+            messages,
+            token_estimate: 10,
+            original_token_estimate: 10,
+            model_profile: budget.model_profile,
+            context_window_tokens: budget.limits.context_window_tokens,
+            max_output_tokens: budget.limits.max_output_tokens,
+            safety_margin_tokens: budget.limits.safety_margin_tokens,
+            input_budget_tokens: budget.limits.input_budget_tokens,
+            threshold_tokens: 700,
+            target_tokens: 450,
+            snapshot_id: None,
+            compacted: false,
+            snapshot_created: false,
+            strategy: None,
         })
     }
 }
@@ -2345,6 +2384,70 @@ async fn oversized_tool_result_remains_complete_in_run_events_but_session_is_bou
         .find(|record| record.message.role == ModelMessageRole::Tool)
         .expect("stored observation");
     assert_eq!(stored_tool.message.content, observation_content);
+}
+
+#[tokio::test]
+async fn long_sequential_tool_run_reaches_final_output_with_bounded_provider_context() {
+    let mut turns = (0..27)
+        .map(|index| {
+            turn(vec![ProviderEvent::ToolCallRequested {
+                call_id: format!("knowledge-{index}"),
+                name: "web.search".into(),
+                arguments: json!({
+                    "query": format!("production incident {index}"),
+                    "limit": 10,
+                }),
+            }])
+        })
+        .collect::<Vec<_>>();
+    turns.push(turn(vec![ProviderEvent::FinalOutput {
+        text: "correlation complete".into(),
+    }]));
+    let provider = Arc::new(ScriptedProvider::new(turns));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["web.search".into()]).expect("catalog")),
+        Arc::new(LargeOutputTools {
+            output: json!({
+                "audit_id": "knowledge-audit",
+                "results": [{
+                    "title": "incident evidence",
+                    "content": "x".repeat(40_000),
+                }],
+            })
+            .to_string(),
+        }),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    )
+    .with_context_preparer(Arc::new(LogicalTurnContext));
+
+    let result = service
+        .run_in_session("primary", "test", "correlate incidents", 30, None)
+        .await
+        .expect("long sequential run");
+
+    assert_eq!(result.output, "correlation complete");
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 28);
+    let final_request = requests.last().expect("final request");
+    validate_model_transcript(&final_request.messages).expect("provider transcript");
+    assert_eq!(
+        final_request
+            .messages
+            .iter()
+            .filter(|message| message.role == ModelMessageRole::Tool)
+            .count(),
+        27
+    );
+    let tool_bytes = final_request
+        .messages
+        .iter()
+        .filter(|message| message.role == ModelMessageRole::Tool)
+        .map(|message| serde_json::to_vec(message).expect("message").len())
+        .sum::<usize>();
+    assert!(tool_bytes <= MAX_MODEL_TOOL_TURN_BYTES);
 }
 
 #[tokio::test]

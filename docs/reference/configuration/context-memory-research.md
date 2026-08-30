@@ -100,8 +100,10 @@ precedence. If the newest logical turn, instructions, tool definitions, decision
 preserved messages cannot fit in the effective input budget, Colossus fails explicitly
 instead of discarding them. This means compaction may have triggered even when the turn
 ends with a preservation error: the protected tail alone was too large to summarize.
-Built-in repository file summaries are byte-bounded as well as line-bounded so one
-generated or minified preview cannot create that condition by itself.
+Before this check, provider-visible tool results are projected to at most 64 KiB each and
+256 KiB across the complete user logical turn, including sequential assistant/tool
+cycles. Built-in repository file summaries are byte-bounded as well as line-bounded so
+one generated or minified preview cannot create that condition by itself.
 
 Setting `autoCompaction: false` disables threshold-triggered snapshots. Manual compaction
 remains available, and omitted context fields keep their defaults. The materialized

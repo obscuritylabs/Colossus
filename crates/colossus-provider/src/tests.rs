@@ -2451,16 +2451,17 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
         }
             if response_id.as_deref() == Some("chat-1")
     ));
-    assert!(matches!(
-        &released.0[0],
-        ProviderStreamItem::Event { event: ProviderEvent::ModelDelta { text } }
-            if text == "con"
-    ));
-    assert!(matches!(
-        &released.0[1],
-        ProviderStreamItem::Event { event: ProviderEvent::ModelDelta { text } }
-            if text == "nected"
-    ));
+    let deltas = released
+        .0
+        .iter()
+        .filter_map(|item| match item {
+            ProviderStreamItem::Event {
+                event: ProviderEvent::ModelDelta { text },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(deltas, ["connected"]);
     assert!(released.0.iter().any(|item| matches!(
         item,
         ProviderStreamItem::Event { event: ProviderEvent::Usage { usage } }
@@ -2486,6 +2487,159 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
             .iter()
             .any(|event| event.event_type == "effect.chunk_released.v1")
     );
+}
+
+#[tokio::test]
+async fn buffered_model_delta_is_released_before_stream_failure() {
+    let body = [
+        r#"data: {"id":"chat-partial","choices":[{"index":0,"delta":{"content":"accepted partial text"},"finish_reason":null}]}
+
+"#,
+        "data: {\"id\":\n\n",
+    ]
+    .concat();
+    let (base_url, server) = one_sse_server(body).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let gateway = EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [74_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+
+    gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect_err("malformed provider stream must fail");
+
+    assert!(released.0.iter().any(|item| matches!(
+        item,
+        ProviderStreamItem::Event {
+            event: ProviderEvent::ModelDelta { text }
+        } if text == "accepted partial text"
+    )));
+    assert!(
+        !released
+            .0
+            .iter()
+            .any(|item| matches!(item, ProviderStreamItem::Completed { .. }))
+    );
+    assert!(
+        journal
+            .read_global(1, 100)
+            .expect("audit events")
+            .iter()
+            .any(|event| event.event_type == "effect.chunk_released.v1")
+    );
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn dense_sse_deltas_are_coalesced_before_policy_release_and_audit() {
+    let mut body = String::new();
+    let oversized_delta = "🚀".repeat(2_048);
+    body.push_str(&format!(
+        "data: {}\n\n",
+        json!({
+            "id": "chat-dense",
+            "choices": [{
+                "index": 0,
+                "delta": {"content": oversized_delta},
+                "finish_reason": null
+            }]
+        })
+    ));
+    for index in 0..4_096 {
+        let finish_reason = if index == 4_095 { "\"stop\"" } else { "null" };
+        body.push_str(&format!(
+            "data: {{\"id\":\"chat-dense\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"x\"}},\"finish_reason\":{finish_reason}}}]}}\n\n"
+        ));
+    }
+    body.push_str("data: [DONE]\n\n");
+    let (base_url, server) = one_sse_server(body).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let gateway = EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [73_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+
+    gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect("dense streamed provider call");
+
+    let deltas = released
+        .0
+        .iter()
+        .filter_map(|item| match item {
+            ProviderStreamItem::Event {
+                event: ProviderEvent::ModelDelta { text },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        deltas.len() <= 64,
+        "released {} delta batches",
+        deltas.len()
+    );
+    assert!(
+        deltas.iter().all(|delta| delta.len() <= 4 * 1024),
+        "a released delta exceeded the byte ceiling"
+    );
+    assert_eq!(
+        deltas.concat(),
+        format!("{}{}", "🚀".repeat(2_048), "x".repeat(4_096))
+    );
+    let released_chunks = journal
+        .read_global(1, 1_000)
+        .expect("audit events")
+        .into_iter()
+        .filter(|event| event.event_type == "effect.chunk_released.v1")
+        .count();
+    assert_eq!(released_chunks, released.0.len());
+    assert!(released_chunks <= 68, "recorded {released_chunks} chunks");
+    server.await.expect("server task");
 }
 
 #[tokio::test]

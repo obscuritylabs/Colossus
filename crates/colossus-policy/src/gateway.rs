@@ -442,8 +442,11 @@ impl EffectGateway {
         payload: Value,
     ) -> Result<(), GatewayError> {
         let stream_id = format!("effect:{}", request.request_id);
-        let version = u64::try_from(self.journal.read_stream(&stream_id)?.len())
-            .map_err(|error| GatewayError::Contract(error.to_string()))?;
+        let version = self
+            .journal
+            .read_stream_backwards(&stream_id, None, 1)?
+            .first()
+            .map_or(0, |event| event.stream_version);
         self.journal.append(NewEvent {
             event_version: 1,
             stream_id,

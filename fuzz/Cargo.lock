@@ -168,7 +168,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "colossus-contracts"
-version = "0.10.10-preview.7"
+version = "0.10.10-preview.8"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-domain"
-version = "0.10.10-preview.7"
+version = "0.10.10-preview.8"
 
 [[package]]
 name = "colossus-fuzz"
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-fuzzing"
-version = "0.10.10-preview.7"
+version = "0.10.10-preview.8"
 dependencies = [
  "colossus-contracts",
  "colossus-workflow",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-observability"
-version = "0.10.10-preview.7"
+version = "0.10.10-preview.8"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.10.10-preview.7"
+version = "0.10.10-preview.8"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-workflow"
-version = "0.10.10-preview.7"
+version = "0.10.10-preview.8"
 dependencies = [
  "async-recursion",
  "async-trait",
