@@ -2180,22 +2180,12 @@ fn mcp_model_input_errors_are_recoverable_but_allowlist_denials_remain_terminal(
 
 #[test]
 fn unadvertised_mcp_tools_include_bounded_related_name_guidance() {
-    let tool = |name: &str| colossus_mcp::McpToolSummary {
-        server: "gitlab".into(),
-        name: name.into(),
-        title: None,
-        description: None,
-        annotations: None,
-        input_schema: json!({"type": "object"}),
-        schema_sha256: "fixture".into(),
-    };
     let error = crate::unadvertised_mcp_tool_error(
         "gitlab",
         "merge_request_diffs",
         &[
-            tool("get_merge_request_diffs"),
-            tool("list_merge_request_diffs"),
-            tool("list_projects"),
+            "get_merge_request_diffs".into(),
+            "list_merge_request_diffs".into(),
         ],
     );
     let message = error.to_string();
@@ -2203,6 +2193,59 @@ fn unadvertised_mcp_tools_include_bounded_related_name_guidance() {
     assert!(message.contains("get_merge_request_diffs"));
     assert!(message.contains("list_merge_request_diffs"));
     assert!(!message.contains("list_projects"));
+}
+
+#[test]
+fn exact_mcp_tool_lookup_is_independent_of_catalog_output_budget() {
+    let target = McpToolSummary {
+        server: "fixture".into(),
+        name: "target".into(),
+        title: None,
+        description: None,
+        annotations: None,
+        input_schema: json!({"type": "object"}),
+        schema_sha256: "target-digest".into(),
+    };
+    let mut lookup = crate::McpToolLookup::new("fixture", "target");
+    lookup.visit(target.clone());
+
+    let mut presentation = Vec::new();
+    let mut serialized_output_bytes = 2_usize;
+    let mut presentation_rejected = false;
+    for index in 0..16 {
+        let tool = McpToolSummary {
+            server: "fixture".into(),
+            name: format!("later_tool_{index:02}"),
+            title: None,
+            description: None,
+            annotations: None,
+            input_schema: json!({
+                "type": "object",
+                "description": "x".repeat(128 * 1024),
+            }),
+            schema_sha256: format!("digest-{index:02}"),
+        };
+        lookup.visit(tool.clone());
+        if !presentation_rejected
+            && push_bounded_mcp_discovery_tool(
+                &mut presentation,
+                &mut serialized_output_bytes,
+                tool,
+            )
+            .is_err()
+        {
+            presentation_rejected = true;
+        }
+    }
+
+    assert!(
+        presentation_rejected,
+        "fixture must exceed mcp.tools budget"
+    );
+    assert_eq!(
+        lookup.finish().expect("exact tool remains callable"),
+        target
+    );
 }
 
 #[test]
