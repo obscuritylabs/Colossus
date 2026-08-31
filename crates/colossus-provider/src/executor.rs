@@ -387,7 +387,7 @@ impl EffectExecutor for ProviderExecutor {
             let mut collector =
                 CollectedProviderStream::new(permit.obligations().max_output_bytes)?;
             let terminal = self
-                .execute_stream_permitted(request, &permit, &mut collector)
+                .execute_stream_with_deadline(request, &permit, &mut collector)
                 .await?;
             return collector.finish(terminal, &permit);
         }
@@ -436,12 +436,34 @@ impl StreamingEffectExecutor for ProviderExecutor {
         permit: ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        self.execute_stream_permitted(effect, &permit, observer)
+        self.execute_stream_with_deadline(effect, &permit, observer)
             .await
     }
 }
 
 impl ProviderExecutor {
+    async fn execute_stream_with_deadline(
+        &self,
+        effect: &EffectRequest,
+        permit: &ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let timeout_ms = self
+            .profile
+            .generation_timeout_ms
+            .min(permit.obligations().timeout_ms);
+        tokio::time::timeout(
+            Duration::from_millis(timeout_ms),
+            self.execute_stream_permitted(effect, permit, observer),
+        )
+        .await
+        .map_err(|_| {
+            ExecutionError::OutcomeUnknown(
+                "provider generation exceeded its hard deadline after execution began".into(),
+            )
+        })?
+    }
+
     async fn execute_stream_permitted(
         &self,
         effect: &EffectRequest,
@@ -914,15 +936,15 @@ impl ProviderExecutor {
         permit: &ExecutionPermit,
     ) -> Result<(reqwest::Response, RequestSecrets), ProviderError> {
         let url = Url::parse(endpoint)?;
-        let client = self.client_for_url(&url, permit).await?;
+        let streaming = payload
+            .and_then(|value| value.get("stream"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        let client = self.client_for_url(&url, permit, streaming).await?;
         let mut builder = payload
             .as_ref()
             .map_or_else(|| client.get(url.clone()), |_| client.post(url.clone()));
-        if payload
-            .and_then(|value| value.get("stream"))
-            .and_then(Value::as_bool)
-            == Some(true)
-        {
+        if streaming {
             builder = builder.header(reqwest::header::ACCEPT, "text/event-stream");
         }
         let mut secrets = RequestSecrets::default();
@@ -971,6 +993,7 @@ impl ProviderExecutor {
         &self,
         url: &Url,
         permit: &ExecutionPermit,
+        streaming: bool,
     ) -> Result<Client, ProviderError> {
         let host = url
             .host_str()
@@ -991,14 +1014,22 @@ impl ProviderExecutor {
                     || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
         let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
-        self.tls_roots
+        let mut builder = self
+            .tls_roots
             .configure_reqwest(Client::builder())
             .no_proxy()
             .redirect(RedirectPolicy::none())
             .resolve_to_addrs(host, &addresses)
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(ProviderError::from)
+            .connect_timeout(Duration::from_millis(timeout_ms));
+        builder = if streaming {
+            // A streaming generation can legitimately outlive one inactivity interval.
+            // Reqwest's read timeout resets after every successful read, while the effect
+            // gateway independently enforces the configured hard generation ceiling.
+            builder.read_timeout(Duration::from_millis(timeout_ms))
+        } else {
+            builder.timeout(Duration::from_millis(timeout_ms))
+        };
+        builder.build().map_err(ProviderError::from)
     }
 
     async fn codex_authorization(
@@ -1021,7 +1052,7 @@ impl ProviderExecutor {
             return Ok(authorization);
         }
         let url = Url::parse(CODEX_TOKEN_ENDPOINT)?;
-        let client = self.client_for_url(&url, permit).await?;
+        let client = self.client_for_url(&url, permit, false).await?;
         let response = client
             .post(url)
             .json(&CodexRefreshRequest::new(&authorization))

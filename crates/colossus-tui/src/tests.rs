@@ -19,8 +19,8 @@ fn terminal_query_requires_a_real_emulator_hint() {
 use colossus_contracts::{
     AgentRunResult, CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall,
     SandboxBoundaryMode, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
-    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
-    ToolResult, TranscriptDensity,
+    SessionMessage, StreamDisplayMode, SubagentJob, SubagentStatus, ThemeColor, ThemeSpinner,
+    ThemeTextStyle, ToolCall, ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -2397,6 +2397,57 @@ fn tool_boundary_releases_intermediate_commentary_and_tool_result_to_native_hist
         }),
     );
     assert_eq!(committable_transcript_end(&state.transcript, 2), 3);
+}
+
+#[test]
+fn delegated_child_updates_are_visible_in_activity_and_history() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript.clear();
+    state.transcript_sources.clear();
+    let envelope = |status, output: &str| RunEventEnvelope {
+        schema_version: 1,
+        run_id: "run-parent".into(),
+        session_id: "019f-test".into(),
+        event: RunEvent::SubagentUpdated {
+            job: Box::new(SubagentJob {
+                id: "agent-visible".into(),
+                session_id: "019f-test".into(),
+                parent_run_id: "run-parent".into(),
+                parent_call_id: "call-delegate".into(),
+                task: "Inspect the incident.".into(),
+                role: "subagent_default".into(),
+                allowed_tools: Some(vec!["logs.query".into()]),
+                status,
+                child_session_id: "session-child".into(),
+                child_run_id: (status == SubagentStatus::Completed).then(|| "run-child".into()),
+                final_output: output.into(),
+                error: String::new(),
+                created_at: "2026-08-31T12:00:00Z".into(),
+                updated_at: "2026-08-31T12:00:01Z".into(),
+                started_at: Some("2026-08-31T12:00:00Z".into()),
+                completed_at: (status == SubagentStatus::Completed)
+                    .then(|| "2026-08-31T12:00:01Z".into()),
+            }),
+        },
+    };
+
+    handle_run_event(&mut state, envelope(SubagentStatus::Running, ""));
+    assert_eq!(
+        state.activity.as_deref(),
+        Some("child agent agent-visible running")
+    );
+    handle_run_event(
+        &mut state,
+        envelope(SubagentStatus::Completed, "Root cause isolated."),
+    );
+    let rendered = transcript_lines(&state, 100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Child agent running"), "{rendered}");
+    assert!(rendered.contains("Child agent completed"), "{rendered}");
+    assert!(rendered.contains("Root cause isolated."), "{rendered}");
 }
 
 #[test]

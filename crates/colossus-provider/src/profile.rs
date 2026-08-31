@@ -62,6 +62,8 @@ pub struct ProviderProfile {
     pub credential_reference: Option<String>,
     /// Adapter transport timeout.
     pub timeout_ms: u64,
+    /// Hard wall-clock ceiling for one streaming generation request.
+    pub generation_timeout_ms: u64,
     /// Output-token wire parameter for OpenAI-compatible Chat Completions requests.
     pub chat_completions_output_token_parameter: ChatCompletionsOutputTokenParameter,
 }
@@ -141,8 +143,24 @@ impl ProviderProfile {
             base_url,
             credential_reference,
             timeout_ms,
+            generation_timeout_ms: timeout_ms,
             chat_completions_output_token_parameter: ChatCompletionsOutputTokenParameter::default(),
         })
+    }
+
+    /// Select a hard streaming-generation ceiling without changing the inactivity timeout.
+    pub fn with_generation_timeout_ms(
+        mut self,
+        generation_timeout_ms: u64,
+    ) -> Result<Self, ProviderError> {
+        if generation_timeout_ms < self.timeout_ms {
+            return Err(ProviderError::Configuration(
+                "provider generation timeout must be at least the transport inactivity timeout"
+                    .into(),
+            ));
+        }
+        self.generation_timeout_ms = generation_timeout_ms;
+        Ok(self)
     }
 
     /// Select the exact Chat Completions output-token wire parameter.

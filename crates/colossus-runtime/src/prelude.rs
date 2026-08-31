@@ -28,15 +28,15 @@ pub(super) use colossus_contracts::{
     ProviderResponseDiagnostic, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
     QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
     ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority, RiskAssessment,
-    RunBranchContextMode, RunTelemetryDetail, RunTelemetrySummary, SandboxBoundaryMode,
-    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SecurityPostureFinding,
-    SecurityPostureReport, SecurityPostureSeverity, SessionMessage, SessionMessageAppend,
-    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
-    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, StartupVerificationMode,
-    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
-    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
-    WorkflowWebhookDispatch, validate_model_transcript,
+    RunBranchContextMode, RunEvent, RunEventEnvelope, RunTelemetryDetail, RunTelemetrySummary,
+    SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
+    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
+    SessionMessageAppend, SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate,
+    SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry,
+    SkillResourceRead, SkillScaffoldResult, SkillValidationResult, SkillWriteResult,
+    StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord,
+    TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
+    UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch, validate_model_transcript,
 };
 pub(super) use colossus_home::ConfinedRoot;
 pub(super) use colossus_integrations::{
@@ -124,15 +124,15 @@ pub(super) use serde::{Deserialize, Serialize};
 pub(super) use serde_json::{Value, json};
 pub(super) use sha2::{Digest, Sha256};
 pub(super) use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     future::Future,
     path::{Path, PathBuf},
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex as StdMutex, Weak},
     time::{Duration, Instant},
 };
 pub(super) use thiserror::Error;
-pub(super) use tokio::sync::{Mutex as TokioMutex, Notify};
+pub(super) use tokio::sync::{Mutex as TokioMutex, Notify, mpsc};
 pub(super) use tokio::task::JoinSet;
 pub(super) use tracing::Instrument as _;
 pub(super) use url::Url;

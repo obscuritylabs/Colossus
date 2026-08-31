@@ -348,6 +348,8 @@ impl Runtime {
                         });
                     }
                 };
+                let (events, receiver) = mpsc::channel(64);
+                let mut buffered_observer = self.buffered_run_observer(events.clone());
                 let run = Box::pin(self.agent.run_approved_plan_stream_controlled(
                     role,
                     &prepared.text,
@@ -358,39 +360,25 @@ impl Runtime {
                     &run_id,
                     end_user_id,
                     remote_trace_context,
-                    observer,
+                    &mut buffered_observer,
                     control,
                 ));
                 let run = scope_instruction_snapshot(prepared.snapshot, run);
-                tokio::pin!(run);
-                let terminal = loop {
-                    tokio::select! {
-                        biased;
-                        _ = self.subagent_notify.notified() => {
-                            if let Err(error) = self.drain_subagents().await {
-                                break ControlledAgentTerminal::Failed {
-                                    run_id: run_id.clone(),
-                                    message: bounded_execution_error(&error.to_string()),
-                                    outcome_unknown: error.outcome_unknown(),
-                                };
-                            }
-                        }
-                        result = &mut run => {
-                            break match result {
-                                Ok(AgentRunOutcome::Completed { result }) => {
-                                    ControlledAgentTerminal::Completed { result }
-                                }
-                                Ok(AgentRunOutcome::Cancelled { result }) => {
-                                    ControlledAgentTerminal::Cancelled { result }
-                                }
-                                Err(error) => ControlledAgentTerminal::Failed {
-                                    run_id: run_id.clone(),
-                                    message: bounded_execution_error(&error.to_string()),
-                                    outcome_unknown: error.outcome_unknown(),
-                                },
-                            };
-                        }
+                let terminal = match self
+                    .forward_run_with_subagent_scheduling(run, events, receiver, observer)
+                    .await
+                {
+                    Ok(AgentRunOutcome::Completed { result }) => {
+                        ControlledAgentTerminal::Completed { result }
                     }
+                    Ok(AgentRunOutcome::Cancelled { result }) => {
+                        ControlledAgentTerminal::Cancelled { result }
+                    }
+                    Err(error) => ControlledAgentTerminal::Failed {
+                        run_id: run_id.clone(),
+                        message: bounded_execution_error(&error.to_string()),
+                        outcome_unknown: error.outcome_unknown(),
+                    },
                 };
                 Ok(PlanExecutionOutcome::Direct {
                     plan: consumed.clone(),

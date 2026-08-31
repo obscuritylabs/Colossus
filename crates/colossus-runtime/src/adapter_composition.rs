@@ -178,6 +178,8 @@ pub(super) fn provider_profile_with_authority(
         config.effective_timeout_ms(),
         resource_authority,
     )
+    .map_err(RuntimeError::from)?
+    .with_generation_timeout_ms(config.effective_generation_timeout_ms())
     .map_err(RuntimeError::from)?;
     match config.chat_completions_output_token_parameter {
         Some(parameter) => profile

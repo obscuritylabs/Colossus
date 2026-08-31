@@ -138,6 +138,11 @@ infrastructure adapters implement ports and are assembled only by the runtime.
   instructions before provider execution. Goal iterations and delegated subagents
   carry that immutable snapshot and provenance; internal risk, summarization, and
   diagnostic model roles do not consume it.
+- Delegated child jobs remain durable work records, while their scheduler runs alongside the
+  parent provider/tool loop instead of suspending it. The scheduler continuously fills newly
+  available `subagents.maxConcurrent` slots as later delegates arrive. Streaming parent runs
+  receive bounded durable child lifecycle updates, including the released terminal result, over
+  the same ordered run-event boundary used by CLI, TUI, worker, and public application adapters.
 - External applications enter through the authenticated public worker API or a
   caller-bound embedded SDK backend; they never depend on agent internals.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in

@@ -191,6 +191,28 @@ impl SemanticRenderer {
             } => {
                 self.render_tool_completed(*turn, result, *duration_seconds, *elapsed_seconds, None)
             }
+            RunEvent::SubagentUpdated { job } => Ok(Some(
+                if self.preferences.transcript_density == TranscriptDensity::Comfortable {
+                    self.render_document(subagent_document(job))
+                } else {
+                    let detail = match job.status {
+                        SubagentStatus::Completed => Some(job.final_output.as_str()),
+                        SubagentStatus::Failed
+                        | SubagentStatus::Cancelled
+                        | SubagentStatus::Interrupted => Some(job.error.as_str()),
+                        SubagentStatus::Queued | SubagentStatus::Running => Some(job.task.as_str()),
+                    };
+                    self.with_detail(
+                        format!(
+                            "{} {} status={}",
+                            self.label("agent"),
+                            job.id,
+                            subagent_status_name(job.status)
+                        ),
+                        detail.map(|value| bounded_text(value, COMPACT_PREVIEW_CHARS)),
+                    )
+                },
+            )),
             RunEvent::PlanWritten { plan } => Ok(Some(format!(
                 "{} {} revision={} status={:?}",
                 self.label("plan"),
@@ -314,6 +336,7 @@ impl SemanticRenderer {
                     ),
                 ])],
             })),
+            RunEvent::SubagentUpdated { job } => Some(subagent_document(job)),
             RunEvent::Error {
                 code,
                 message,
@@ -623,6 +646,61 @@ impl SemanticRenderer {
             body: vec![output],
         })
     }
+}
+
+fn subagent_status_name(status: SubagentStatus) -> &'static str {
+    match status {
+        SubagentStatus::Queued => "queued",
+        SubagentStatus::Running => "running",
+        SubagentStatus::Completed => "completed",
+        SubagentStatus::Failed => "failed",
+        SubagentStatus::Cancelled => "cancelled",
+        SubagentStatus::Interrupted => "interrupted",
+    }
+}
+
+fn subagent_document(job: &SubagentJob) -> PresentationDocument {
+    let (title, tone, detail) = match job.status {
+        SubagentStatus::Queued => ("Child agent queued", PresentationTone::Tool, None),
+        SubagentStatus::Running => ("Child agent running", PresentationTone::Tool, None),
+        SubagentStatus::Completed => (
+            "Child agent completed",
+            PresentationTone::Success,
+            (!job.final_output.is_empty()).then(|| job.final_output.clone()),
+        ),
+        SubagentStatus::Failed => (
+            "Child agent failed",
+            PresentationTone::Error,
+            (!job.error.is_empty()).then(|| job.error.clone()),
+        ),
+        SubagentStatus::Cancelled => (
+            "Child agent cancelled",
+            PresentationTone::Warning,
+            (!job.error.is_empty()).then(|| job.error.clone()),
+        ),
+        SubagentStatus::Interrupted => (
+            "Child agent interrupted",
+            PresentationTone::Warning,
+            (!job.error.is_empty()).then(|| job.error.clone()),
+        ),
+    };
+    let mut body = vec![PresentationBlock::KeyValue(vec![
+        ("Job".into(), job.id.clone()),
+        ("Role".into(), job.role.clone()),
+        ("Status".into(), subagent_status_name(job.status).into()),
+        (
+            "Task".into(),
+            bounded_text(&job.task, COMPACT_PREVIEW_CHARS),
+        ),
+    ])];
+    if let Some(detail) = detail {
+        body.push(PresentationBlock::Markdown(detail));
+    }
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: title.into(),
+        tone,
+        body,
+    })
 }
 
 /// Build the canonical semantic card for one released tool result.

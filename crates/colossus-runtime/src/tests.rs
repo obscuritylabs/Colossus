@@ -4,11 +4,12 @@ use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
     InstructionSnapshotStore, InteractiveToolExecutor, JournalExternalWorkQueue,
-    LOOPBACK_PROVIDER_TIMEOUT_MS, MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor,
-    MemoryEmbeddingConfig, MemoryOperation, ModelCapabilities, ModelProfileConfig,
-    PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor,
-    PresentationOperation, ProviderProfileConfig, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort,
-    Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig,
+    LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS, LOOPBACK_PROVIDER_TIMEOUT_MS,
+    MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation,
+    ModelCapabilities, ModelProfileConfig, PackProcessDeclaration, PackProcessExecutor,
+    PackToolEffectInput, PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
+    REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, Runtime,
+    RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig,
     SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
     TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
     goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
@@ -283,6 +284,7 @@ async fn provider_diagnostic_roles_exclude_automatic_agent_instructions() {
             base_url: Some("https://diagnostics.invalid/v1".into()),
             credential_reference: None,
             timeout_ms: Some(1_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -1936,6 +1938,7 @@ fn runtime_host_can_keep_provider_network_without_offering_general_fetch_tools()
             base_url: Some("https://provider.example/v1".into()),
             credential_reference: None,
             timeout_ms: Some(30_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -2604,6 +2607,7 @@ fn public_wildcard_config_allows_public_origins_but_not_loopback_routes() {
             base_url: Some("https://api.example.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(30_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -2647,6 +2651,7 @@ fn selected_danger_backend_accepts_private_plaintext_profiles_before_acknowledge
             base_url: Some("http://10.0.0.8:8080/v1".into()),
             credential_reference: None,
             timeout_ms: Some(30_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -3194,6 +3199,7 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
             base_url: Some("http://127.0.0.1:12434/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -3229,6 +3235,7 @@ fn provider_timeout_defaults_are_host_aware_and_explicit_values_win() {
         base_url: Some("https://models.example.test/v1".into()),
         credential_reference: None,
         timeout_ms: None,
+        generation_timeout_ms: None,
         chat_completions_output_token_parameter: None,
     };
     let loopback = ProviderProfileConfig {
@@ -3246,6 +3253,26 @@ fn provider_timeout_defaults_are_host_aware_and_explicit_values_win() {
         LOOPBACK_PROVIDER_TIMEOUT_MS
     );
     assert_eq!(explicit.effective_timeout_ms(), 42_000);
+    assert_eq!(
+        remote.effective_generation_timeout_ms(),
+        REMOTE_PROVIDER_GENERATION_TIMEOUT_MS
+    );
+    assert_eq!(
+        loopback.effective_generation_timeout_ms(),
+        LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS
+    );
+    assert_eq!(
+        explicit.effective_generation_timeout_ms(),
+        LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS
+    );
+    let explicit_generation = ProviderProfileConfig {
+        generation_timeout_ms: Some(84_000),
+        ..explicit.clone()
+    };
+    assert_eq!(
+        explicit_generation.effective_generation_timeout_ms(),
+        84_000
+    );
     assert!(
         !serde_json::to_string(&remote)
             .expect("provider YAML")
@@ -3255,12 +3282,30 @@ fn provider_timeout_defaults_are_host_aware_and_explicit_values_win() {
 }
 
 #[test]
+fn provider_generation_timeout_cannot_be_below_inactivity_timeout() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.providers.profiles.insert(
+        "invalid".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: Some("https://models.example.test/v1".into()),
+            credential_reference: None,
+            timeout_ms: Some(5_000),
+            generation_timeout_ms: Some(4_999),
+            chat_completions_output_token_parameter: None,
+        },
+    );
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
 fn chat_completions_output_token_parameter_is_explicit_and_kind_scoped() {
     let legacy = ProviderProfileConfig {
         kind: ProviderKind::OpenAiCompatible,
         base_url: Some("https://models.example.test/v1".into()),
         credential_reference: None,
         timeout_ms: None,
+        generation_timeout_ms: None,
         chat_completions_output_token_parameter: None,
     };
     assert_eq!(
@@ -3315,6 +3360,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: Some("http://example.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -3335,6 +3381,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -3352,6 +3399,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: None,
             credential_reference: Some("codex:default".into()),
             timeout_ms: Some(5_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );
@@ -3377,6 +3425,7 @@ fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
             timeout_ms: Some(5_000),
+            generation_timeout_ms: None,
             chat_completions_output_token_parameter: None,
         },
     );

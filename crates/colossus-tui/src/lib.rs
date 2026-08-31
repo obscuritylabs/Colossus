@@ -8,7 +8,8 @@ use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelContent, ModelContentPart, ModelImageReference,
     ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PlanStatus,
     ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode, SecurityPostureReport,
-    SessionMessage, SessionMessagePage, SessionSummary, TerminalPreferences, ThemeTextStyle,
+    SessionMessage, SessionMessagePage, SessionSummary, SubagentStatus, TerminalPreferences,
+    ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{

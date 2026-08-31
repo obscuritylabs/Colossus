@@ -29,7 +29,7 @@ use colossus_contracts::{
     ControlledAgentTerminal, GoalRunOutcome, GoalRunResult, ModelContent, ModelContentPart,
     PlanDraftTarget, PlanExecutionOutcome, PlanExecutionStrategy, PlanRecord, PlanStatus,
     ProviderEvent, ResearchDepth, ResearchSourceKind, RunEvent, RunEventEnvelope, RunPhase,
-    ToolCall, ToolResult,
+    SubagentStatus, ToolCall, ToolResult,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
 use colossus_projection::ProjectedSessionActivity;
@@ -1848,6 +1848,39 @@ fn public_event(event: RunEvent) -> RunUpdateKind {
                 preview: None,
             },
         },
+        RunEvent::SubagentUpdated { job } => {
+            let (state, preview) = match job.status {
+                SubagentStatus::Queued | SubagentStatus::Running => {
+                    (ToolActivityState::Started, None)
+                }
+                SubagentStatus::Completed => (
+                    ToolActivityState::Completed,
+                    bounded_tool_activity_text(&job.final_output),
+                ),
+                SubagentStatus::Cancelled => (
+                    ToolActivityState::Cancelled,
+                    bounded_tool_activity_text(&job.error),
+                ),
+                SubagentStatus::Failed | SubagentStatus::Interrupted => (
+                    ToolActivityState::Failed,
+                    bounded_tool_activity_text(&job.error),
+                ),
+            };
+            RunUpdateKind::ToolActivity {
+                activity: ToolActivity {
+                    call_id: job.parent_call_id,
+                    tool_name: "agent.delegate".into(),
+                    state,
+                    summary: format!(
+                        "child agent {} is {}",
+                        job.id,
+                        format!("{:?}", job.status).to_ascii_lowercase()
+                    ),
+                    input: None,
+                    preview,
+                },
+            }
+        }
         RunEvent::PlanWritten { plan } => RunUpdateKind::Notice {
             notice: colossus_api::RunNotice {
                 reason: "plan.written".into(),

@@ -15,10 +15,10 @@ impl ToolExecutor for SubagentSchedulingToolExecutor {
         let delegated = call.name == "agent.delegate";
         let result = self.inner.execute(call, context).await?;
         if delegated && result.exit_code == 0 {
-            self.notify.notify_one();
-            // Give the owning runtime turn a scheduling point before the parent asks for
-            // the child result or emits a final answer based only on the queued snapshot.
-            tokio::task::yield_now().await;
+            // Every active parent loop participates in one globally locked scheduler. Wake all
+            // waiters so the owning run also waits for durable child settlement even when a
+            // different run acquires the drain lock first.
+            self.notify.notify_waiters();
         }
         Ok(result)
     }

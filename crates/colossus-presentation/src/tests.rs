@@ -7,7 +7,8 @@ use super::{
 };
 use colossus_contracts::{
     Actor, ActorType, ProviderEvent, ProviderUsage, RiskReviewFailure, RiskReviewFallbackNotice,
-    RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult, WorkStateSnapshot,
+    RunEvent, RunEventEnvelope, RunPhase, SubagentJob, SubagentStatus, ToolCall, ToolResult,
+    WorkStateSnapshot,
 };
 use colossus_ports::{EventJournal, PresentationRepository, ToolRegistry};
 use colossus_testkit::{InMemoryEventJournal, assert_presentation_repository_conformance};
@@ -556,6 +557,53 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .expect("visible error");
     assert!(error.contains("Run error"));
     assert!(error.contains("Try another profile."));
+}
+
+#[test]
+fn delegated_child_lifecycle_renders_released_output() {
+    let renderer = SemanticRenderer::new(TerminalPreferences::default());
+    let event = |status, final_output: &str| RunEvent::SubagentUpdated {
+        job: Box::new(SubagentJob {
+            id: "agent-visible".into(),
+            session_id: "session-parent".into(),
+            parent_run_id: "run-parent".into(),
+            parent_call_id: "call-delegate".into(),
+            task: "Inspect two independent services.".into(),
+            role: "subagent_default".into(),
+            allowed_tools: Some(vec!["logs.query".into()]),
+            status,
+            child_session_id: "session-child".into(),
+            child_run_id: (status == SubagentStatus::Completed).then(|| "run-child".into()),
+            final_output: final_output.into(),
+            error: String::new(),
+            created_at: "2026-08-31T12:00:00Z".into(),
+            updated_at: "2026-08-31T12:00:01Z".into(),
+            started_at: Some("2026-08-31T12:00:00Z".into()),
+            completed_at: (status == SubagentStatus::Completed)
+                .then(|| "2026-08-31T12:00:01Z".into()),
+        }),
+    };
+    let running = renderer
+        .run_event(&event(SubagentStatus::Running, ""))
+        .expect("render running")
+        .expect("visible running");
+    assert!(running.contains("Child agent running"), "{running}");
+    assert!(
+        running.contains("Inspect two independent services"),
+        "{running}"
+    );
+    let completed = renderer
+        .run_event(&event(
+            SubagentStatus::Completed,
+            "Both services are healthy.",
+        ))
+        .expect("render completed")
+        .expect("visible completed");
+    assert!(completed.contains("Child agent completed"), "{completed}");
+    assert!(
+        completed.contains("Both services are healthy."),
+        "{completed}"
+    );
 }
 
 #[test]

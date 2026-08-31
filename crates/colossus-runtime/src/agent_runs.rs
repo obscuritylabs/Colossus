@@ -273,22 +273,79 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) async fn run_with_subagent_scheduling<F>(
-        &self,
-        run: F,
-    ) -> Result<AgentRunResult, RuntimeError>
+    pub(super) async fn run_with_subagent_scheduling<F, T>(&self, run: F) -> Result<T, RuntimeError>
     where
-        F: Future<Output = Result<AgentRunResult, AgentError>>,
+        F: Future<Output = Result<T, AgentError>>,
     {
         tokio::pin!(run);
         loop {
             tokio::select! {
                 biased;
                 _ = self.subagent_notify.notified() => {
-                    self.drain_subagents().await?;
+                    let drain = self.drain_subagents_with_events();
+                    tokio::pin!(drain);
+                    tokio::select! {
+                        result = &mut run => {
+                            let result = result.map_err(RuntimeError::from);
+                            drain.await?;
+                            return result;
+                        }
+                        result = &mut drain => {
+                            result?;
+                        }
+                    }
                 }
                 result = &mut run => return result.map_err(Into::into),
             }
+        }
+    }
+
+    pub(super) async fn forward_run_with_subagent_scheduling<F, T>(
+        &self,
+        run: F,
+        events: mpsc::Sender<RunEventEnvelope>,
+        mut receiver: mpsc::Receiver<RunEventEnvelope>,
+        observer: &mut dyn RunEventObserver,
+    ) -> Result<T, RuntimeError>
+    where
+        F: Future<Output = Result<T, AgentError>>,
+    {
+        let registration = RunEventRegistration {
+            sinks: Arc::clone(&self.subagent_event_sinks),
+            sender: events.clone(),
+        };
+        let scheduled = self.run_with_subagent_scheduling(run);
+        tokio::pin!(scheduled);
+        let _registration = registration;
+        loop {
+            tokio::select! {
+                biased;
+                event = receiver.recv() => {
+                    let Some(event) = event else {
+                        return Err(RuntimeError::Agent(AgentError::Provider(
+                            ModelProviderError::Failed("runtime event channel disconnected".into())
+                        )));
+                    };
+                    observer.observe(event).await.map_err(AgentError::Provider)?;
+                }
+                result = &mut scheduled => {
+                    while let Ok(event) = receiver.try_recv() {
+                        observer.observe(event).await.map_err(AgentError::Provider)?;
+                    }
+                    return result;
+                }
+            }
+        }
+    }
+
+    pub(super) fn buffered_run_observer(
+        &self,
+        sender: mpsc::Sender<RunEventEnvelope>,
+    ) -> BufferedRunObserver {
+        BufferedRunObserver {
+            sender,
+            sinks: Arc::clone(&self.subagent_event_sinks),
+            run_id: None,
         }
     }
 
@@ -407,9 +464,11 @@ impl Runtime {
             .map(|skill| skill.name.clone())
             .collect::<Vec<_>>();
         let instructions = prepared.complete_composed_base(&composition.instructions);
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
         scope_instruction_snapshot(
             prepared.snapshot,
-            Box::pin(self.run_with_subagent_scheduling(
+            Box::pin(self.forward_run_with_subagent_scheduling(
                 self.agent.run_in_session_with_skills_stream(
                     role,
                     &instructions,
@@ -417,8 +476,11 @@ impl Runtime {
                     max_turns.unwrap_or(self.agent_max_turns),
                     session_id,
                     &active,
-                    observer,
+                    &mut buffered_observer,
                 ),
+                events,
+                receiver,
+                observer,
             )),
         )
         .await
@@ -529,7 +591,9 @@ impl Runtime {
         // one stable allocation before adding the instruction-snapshot task-local scope;
         // embedding it in that additional generic wrapper can exceed Tokio's normal worker
         // thread stack while polling interactive worker runs.
-        let mut run = Box::pin(
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
+        let run = Box::pin(
             self.agent
                 .run_in_session_with_mode_stream_controlled_content(
                     mode,
@@ -540,21 +604,14 @@ impl Runtime {
                     session_id,
                     &active,
                     include_provider_response_diagnostics,
-                    observer,
+                    &mut buffered_observer,
                     control,
                 ),
         );
-        scope_instruction_snapshot(prepared.snapshot, async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        self.drain_subagents().await?;
-                    }
-                    result = run.as_mut() => return result.map_err(Into::into),
-                }
-            }
-        })
+        scope_instruction_snapshot(
+            prepared.snapshot,
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
+        )
         .await
     }
 
@@ -625,7 +682,9 @@ impl Runtime {
             .collect::<Vec<_>>();
         let instructions = prepared.complete_composed_base(&composition.instructions);
 
-        let mut run = Box::pin(self.agent.run_in_session_with_skills_stream_controlled_as(
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
+        let run = Box::pin(self.agent.run_in_session_with_skills_stream_controlled_as(
             role,
             &instructions,
             prompt,
@@ -633,20 +692,13 @@ impl Runtime {
             session_id,
             &active,
             initiator,
-            observer,
+            &mut buffered_observer,
             control,
         ));
-        scope_instruction_snapshot(prepared.snapshot, async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        self.drain_subagents().await?;
-                    }
-                    result = run.as_mut() => return result.map_err(Into::into),
-                }
-            }
-        })
+        scope_instruction_snapshot(
+            prepared.snapshot,
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
+        )
         .await
     }
 
@@ -771,7 +823,9 @@ impl Runtime {
         };
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
         let instructions = prepared.text.clone();
-        let mut run = Box::pin(
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
+        let run = Box::pin(
             self.agent
                 .run_public_with_mode_and_skills_stream_controlled_content(
                     role,
@@ -787,22 +841,67 @@ impl Runtime {
                     end_user_id,
                     remote_trace_context,
                     initiator,
-                    observer,
+                    &mut buffered_observer,
                     control,
                 ),
         );
-        scope_instruction_snapshot(prepared.snapshot, async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        self.drain_subagents().await?;
-                    }
-                    result = run.as_mut() => return result.map_err(Into::into),
-                }
-            }
-        })
+        scope_instruction_snapshot(
+            prepared.snapshot,
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
+        )
         .await
+    }
+}
+
+pub(super) struct BufferedRunObserver {
+    sender: mpsc::Sender<RunEventEnvelope>,
+    sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<RunEventEnvelope>>>>,
+    run_id: Option<String>,
+}
+
+#[async_trait]
+impl RunEventObserver for BufferedRunObserver {
+    async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        if let Some(run_id) = &self.run_id {
+            if run_id != &event.run_id {
+                return Err(ModelProviderError::Failed(
+                    "runtime event stream changed run identity".into(),
+                ));
+            }
+        } else {
+            let mut sinks = self
+                .sinks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if sinks
+                .get(&event.run_id)
+                .is_some_and(|registered| !registered.same_channel(&self.sender))
+            {
+                return Err(ModelProviderError::Failed(
+                    "runtime event stream duplicated an active run identity".into(),
+                ));
+            }
+            sinks.insert(event.run_id.clone(), self.sender.clone());
+            self.run_id = Some(event.run_id.clone());
+        }
+        self.sender
+            .send(event)
+            .await
+            .map_err(|_| ModelProviderError::Failed("runtime event channel disconnected".into()))
+    }
+}
+
+struct RunEventRegistration {
+    sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<RunEventEnvelope>>>>,
+    sender: mpsc::Sender<RunEventEnvelope>,
+}
+
+impl Drop for RunEventRegistration {
+    fn drop(&mut self) {
+        self.sinks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, registered| !registered.same_channel(&self.sender));
     }
 }
 

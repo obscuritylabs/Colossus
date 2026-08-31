@@ -404,6 +404,7 @@ impl Default for ProvidersConfig {
                     base_url: None,
                     credential_reference: None,
                     timeout_ms: None,
+                    generation_timeout_ms: None,
                     chat_completions_output_token_parameter: None,
                 },
             )]),
@@ -426,6 +427,12 @@ pub struct ProviderProfileConfig {
     /// Optional provider transport timeout override. Omission selects a host-aware default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Optional hard wall-clock ceiling for one streaming generation request.
+    ///
+    /// `timeout_ms` remains the connection/read inactivity ceiling. Omission selects a
+    /// host-aware hard ceiling that is always at least that inactivity timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_timeout_ms: Option<u64>,
     /// Optional Chat Completions output-token wire parameter. Omission uses `max_tokens`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_completions_output_token_parameter: Option<ChatCompletionsOutputTokenParameter>,
@@ -485,25 +492,39 @@ pub struct ModelProfileConfig {
 
 pub(super) const REMOTE_PROVIDER_TIMEOUT_MS: u64 = 300_000;
 pub(super) const LOOPBACK_PROVIDER_TIMEOUT_MS: u64 = 900_000;
+pub(super) const REMOTE_PROVIDER_GENERATION_TIMEOUT_MS: u64 = 1_200_000;
+pub(super) const LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS: u64 = 3_600_000;
 
 impl ProviderProfileConfig {
+    fn is_loopback(&self) -> bool {
+        self.base_url
+            .as_deref()
+            .and_then(|value| Url::parse(value).ok())
+            .and_then(|url| url.host().map(|host| host.to_owned()))
+            .is_some_and(|host| match host {
+                url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                url::Host::Ipv4(address) => address.is_loopback(),
+                url::Host::Ipv6(address) => address.is_loopback(),
+            })
+    }
+
     pub(super) fn effective_timeout_ms(&self) -> u64 {
         self.timeout_ms.unwrap_or_else(|| {
-            if self
-                .base_url
-                .as_deref()
-                .and_then(|value| Url::parse(value).ok())
-                .and_then(|url| url.host().map(|host| host.to_owned()))
-                .is_some_and(|host| match host {
-                    url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
-                    url::Host::Ipv4(address) => address.is_loopback(),
-                    url::Host::Ipv6(address) => address.is_loopback(),
-                })
-            {
+            if self.is_loopback() {
                 LOOPBACK_PROVIDER_TIMEOUT_MS
             } else {
                 REMOTE_PROVIDER_TIMEOUT_MS
             }
+        })
+    }
+
+    pub(super) fn effective_generation_timeout_ms(&self) -> u64 {
+        self.generation_timeout_ms.unwrap_or_else(|| {
+            self.effective_timeout_ms().max(if self.is_loopback() {
+                LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS
+            } else {
+                REMOTE_PROVIDER_GENERATION_TIMEOUT_MS
+            })
         })
     }
 }
@@ -952,6 +973,15 @@ impl RuntimeConfig {
             .observability
             .validate()
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        for (name, profile) in &config.providers.profiles {
+            let timeout_ms = profile.effective_timeout_ms();
+            let generation_timeout_ms = profile.effective_generation_timeout_ms();
+            if timeout_ms == 0 || generation_timeout_ms < timeout_ms {
+                return Err(RuntimeError::Config(format!(
+                    "provider profile {name} requires positive timeoutMs and generationTimeoutMs at least timeoutMs"
+                )));
+            }
+        }
         if config
             .network
             .ca_bundle_path

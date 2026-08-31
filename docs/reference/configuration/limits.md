@@ -280,7 +280,8 @@ Common timeout fields apply at different boundaries:
 
 | Field | Scope | Default / constraint |
 | --- | --- | --- |
-| `providers.profiles.*.timeoutMs` | One provider catalog or generation request | Optional positive override; defaults to `300000` remotely and `900000` on loopback |
+| `providers.profiles.*.timeoutMs` | One catalog request, or connection/read inactivity during streaming generation | Optional positive override; defaults to `300000` remotely and `900000` on loopback |
+| `providers.profiles.*.generationTimeoutMs` | Hard wall time for one streaming generation | At least `timeoutMs`; defaults to the larger of `timeoutMs` and `1200000` remotely or `3600000` on loopback |
 | `sandbox.timeoutMs` | One permit-bearing effect and cleanup | `30000`; backend minimums apply |
 | `mcp.servers.*.timeoutMs` | One MCP operation | When present, positive and no greater than sandbox timeout |
 | Search or semantic-memory `timeoutMs` | One adapter request | Positive; see the owning page |

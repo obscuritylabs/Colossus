@@ -108,6 +108,8 @@ impl Runtime {
                     started.elapsed().as_secs_f64(),
                 );
             }
+            let (events, receiver) = mpsc::channel(64);
+            let mut buffered_observer = self.buffered_run_observer(events.clone());
             let run = self.agent.run_goal_iteration_stream_controlled(
                 &run_id,
                 role,
@@ -119,24 +121,13 @@ impl Runtime {
                 current.source_plan_id.as_deref(),
                 end_user_id,
                 remote_trace_context,
-                observer,
+                &mut buffered_observer,
                 control,
             );
             let run = scope_instruction_snapshot(prepared.snapshot.clone(), run);
-            tokio::pin!(run);
-            let outcome = loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        if let Err(error) = self.drain_subagents().await {
-                            break Err(AgentError::Configuration(
-                                bounded_execution_error(&error.to_string())
-                            ));
-                        }
-                    }
-                    result = &mut run => break result,
-                }
-            };
+            let outcome = self
+                .forward_run_with_subagent_scheduling(run, events, receiver, observer)
+                .await;
             let result = match outcome {
                 Ok(AgentRunOutcome::Completed { result }) => result,
                 Ok(AgentRunOutcome::Cancelled { result }) => {
