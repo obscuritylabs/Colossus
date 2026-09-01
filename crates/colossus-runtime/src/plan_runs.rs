@@ -365,7 +365,7 @@ impl Runtime {
                 ));
                 let run = scope_instruction_snapshot(prepared.snapshot, run);
                 let terminal = match self
-                    .forward_run_with_subagent_scheduling(run, events, receiver, observer)
+                    .forward_run_with_subagent_scheduling(run, events, receiver, observer, control)
                     .await
                 {
                     Ok(AgentRunOutcome::Completed { result }) => {

@@ -5,6 +5,9 @@ use std::fmt;
 const MAX_HOST_CREDENTIALS: usize = 64;
 const MAX_STREAMED_MODEL_DELTA_BATCH_BYTES: usize = 4 * 1024;
 const STREAMED_MODEL_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+const PROVIDER_STREAM_CLEANUP_RESERVE_MS: u64 = 1_000;
+const GENERATION_DEADLINE_MESSAGE: &str =
+    "provider generation exceeded its hard deadline after execution began";
 
 /// Strict content placed inside a provider effect request.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,6 +87,7 @@ struct ProviderStreamMetadata<'a> {
     model_profile: &'a str,
     model: &'a str,
     include_response_diagnostics: bool,
+    generation_deadline: tokio::time::Instant,
 }
 
 enum CollectedProviderOutput {
@@ -448,20 +452,13 @@ impl ProviderExecutor {
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        let timeout_ms = self
-            .profile
-            .generation_timeout_ms
-            .min(permit.obligations().timeout_ms);
-        tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            self.execute_stream_permitted(effect, permit, observer),
-        )
-        .await
-        .map_err(|_| {
-            ExecutionError::OutcomeUnknown(
-                "provider generation exceeded its hard deadline after execution began".into(),
-            )
-        })?
+        let timeout_ms = provider_generation_budget_ms(
+            self.profile.generation_timeout_ms,
+            permit.obligations().timeout_ms,
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        self.execute_stream_permitted(effect, permit, observer, deadline)
+            .await
     }
 
     async fn execute_stream_permitted(
@@ -469,6 +466,7 @@ impl ProviderExecutor {
         effect: &EffectRequest,
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
+        deadline: tokio::time::Instant,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let input: ProviderEffectInput =
             serde_json::from_value(effect.content.clone()).map_err(|error| {
@@ -496,10 +494,11 @@ impl ProviderExecutor {
         })?;
         validate_model_request(&model_request, max_output_tokens)
             .map_err(provider_execution_error)?;
-        let resolved_images = self
-            .resolve_images(&model_request)
-            .await
-            .map_err(provider_execution_error)?;
+        let resolved_images =
+            tokio::time::timeout_at(deadline, self.resolve_images(&model_request))
+                .await
+                .map_err(|_| generation_deadline_error())?
+                .map_err(provider_execution_error)?;
         let endpoint = self
             .profile
             .generation_endpoint()
@@ -519,35 +518,39 @@ impl ProviderExecutor {
                         "echo request has no message".into(),
                     ))
                 })?;
-            emit_stream_item(
-                ProviderStreamItem::Event {
-                    event: ProviderEvent::ModelDelta { text: text.clone() },
-                },
-                permit,
-                observer,
-            )
-            .await?;
-            emit_stream_item(
-                ProviderStreamItem::Event {
-                    event: ProviderEvent::FinalOutput { text },
-                },
-                permit,
-                observer,
-            )
-            .await?;
-            return emit_stream_item(
-                ProviderStreamItem::Completed {
-                    profile: model_profile.clone(),
-                    model_profile,
-                    provider_profile: self.profile.name.clone(),
-                    provider: self.profile.kind.as_str().into(),
-                    model,
-                    response_id: None,
-                },
-                permit,
-                observer,
-            )
-            .await;
+            return tokio::time::timeout_at(deadline, async {
+                emit_stream_item(
+                    ProviderStreamItem::Event {
+                        event: ProviderEvent::ModelDelta { text: text.clone() },
+                    },
+                    permit,
+                    observer,
+                )
+                .await?;
+                emit_stream_item(
+                    ProviderStreamItem::Event {
+                        event: ProviderEvent::FinalOutput { text },
+                    },
+                    permit,
+                    observer,
+                )
+                .await?;
+                emit_stream_item(
+                    ProviderStreamItem::Completed {
+                        profile: model_profile.clone(),
+                        model_profile,
+                        provider_profile: self.profile.name.clone(),
+                        provider: self.profile.kind.as_str().into(),
+                        model,
+                        response_id: None,
+                    },
+                    permit,
+                    observer,
+                )
+                .await
+            })
+            .await
+            .map_err(|_| generation_deadline_error())?;
         }
         self.validate_resource(effect, &endpoint, permit)
             .map_err(provider_execution_error)?;
@@ -584,6 +587,7 @@ impl ProviderExecutor {
                 model_profile: &model_profile,
                 model: &model,
                 include_response_diagnostics,
+                generation_deadline: deadline,
             },
             tool_names,
             permit,
@@ -591,6 +595,21 @@ impl ProviderExecutor {
         )
         .await
     }
+}
+
+fn generation_deadline_error() -> ExecutionError {
+    ExecutionError::OutcomeUnknown(GENERATION_DEADLINE_MESSAGE.into())
+}
+
+pub(super) fn provider_generation_budget_ms(
+    generation_timeout_ms: u64,
+    effect_timeout_ms: u64,
+) -> u64 {
+    generation_timeout_ms.min(
+        effect_timeout_ms
+            .saturating_sub(PROVIDER_STREAM_CLEANUP_RESERVE_MS)
+            .max(1),
+    )
 }
 
 async fn emit_stream_item(
@@ -1141,16 +1160,23 @@ impl ProviderExecutor {
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        let (response, secret) = self
-            .send_request(endpoint, Some(&payload), permit)
-            .await
-            .map_err(provider_execution_error)?;
+        let generation_deadline = metadata.generation_deadline;
+        let (response, secret) = tokio::time::timeout_at(
+            generation_deadline,
+            self.send_request(endpoint, Some(&payload), permit),
+        )
+        .await
+        .map_err(|_| generation_deadline_error())?
+        .map_err(provider_execution_error)?;
         if !response.status().is_success() {
             if metadata.include_response_diagnostics {
-                let diagnostic = self
-                    .capture_http_error(endpoint, Some(payload), response, secret)
-                    .await
-                    .map_err(provider_execution_error)?;
+                let diagnostic = tokio::time::timeout_at(
+                    generation_deadline,
+                    self.capture_http_error(endpoint, Some(payload), response, secret),
+                )
+                .await
+                .map_err(|_| generation_deadline_error())?
+                .map_err(provider_execution_error)?;
                 return emit_stream_item(
                     ProviderStreamItem::Diagnostic { diagnostic },
                     permit,
@@ -1169,10 +1195,13 @@ impl ProviderExecutor {
             self.profile.kind == ProviderKind::OpenAiCodex && content_type_header.is_none();
         if !is_event_stream && !is_untyped_codex_stream {
             if metadata.include_response_diagnostics {
-                let diagnostic = self
-                    .capture_http_error(endpoint, Some(payload), response, secret)
-                    .await
-                    .map_err(provider_execution_error)?;
+                let diagnostic = tokio::time::timeout_at(
+                    generation_deadline,
+                    self.capture_http_error(endpoint, Some(payload), response, secret),
+                )
+                .await
+                .map_err(|_| generation_deadline_error())?
+                .map_err(provider_execution_error)?;
                 return emit_stream_item(
                     ProviderStreamItem::Diagnostic { diagnostic },
                     permit,
@@ -1194,9 +1223,15 @@ impl ProviderExecutor {
         let mut flush_interval = tokio::time::interval(STREAMED_MODEL_DELTA_FLUSH_INTERVAL);
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         flush_interval.tick().await;
+        let generation_timeout = tokio::time::sleep_until(generation_deadline);
+        tokio::pin!(generation_timeout);
         let stream_result = async {
             loop {
                 let chunk = tokio::select! {
+                    biased;
+                    _ = &mut generation_timeout => {
+                        return Err(generation_deadline_error());
+                    }
                     chunk = stream.next() => chunk,
                     _ = flush_interval.tick(), if emitter.has_pending_model_delta() => {
                         emitter.flush().await?;
@@ -1245,21 +1280,28 @@ impl ProviderExecutor {
             return Err(error);
         }
         emitter.flush().await?;
+        if tokio::time::Instant::now() >= generation_deadline {
+            return Err(generation_deadline_error());
+        }
         drop(emitter);
         let response_id = state.response_id().map(str::to_owned);
-        emit_stream_item(
-            ProviderStreamItem::Completed {
-                profile: metadata.model_profile.into(),
-                model_profile: metadata.model_profile.into(),
-                provider_profile: self.profile.name.clone(),
-                provider: self.profile.kind.as_str().into(),
-                model: metadata.model.into(),
-                response_id,
-            },
-            permit,
-            observer,
+        tokio::time::timeout_at(
+            generation_deadline,
+            emit_stream_item(
+                ProviderStreamItem::Completed {
+                    profile: metadata.model_profile.into(),
+                    model_profile: metadata.model_profile.into(),
+                    provider_profile: self.profile.name.clone(),
+                    provider: self.profile.kind.as_str().into(),
+                    model: metadata.model.into(),
+                    response_id,
+                },
+                permit,
+                observer,
+            ),
         )
         .await
+        .map_err(|_| generation_deadline_error())?
     }
 }
 

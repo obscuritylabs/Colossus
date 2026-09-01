@@ -33,6 +33,8 @@ include breaking changes while the public API is still settling.
   with retained placeholders for large submissions instead of flattening their content.
 - Kept runtime-authored delegated-agent lifecycle metadata distinct from child-controlled
   output while preserving bounded, parseable progress and result previews.
+- Cancelled parent runs when their public event observer fails while still settling delegated
+  children, and flushed already-accepted provider text before hard-deadline errors.
 - Cleared transient inline composer and footer rows during terminal shutdown without
   removing committed transcript output.
 - Made the first `Ctrl-C` clear a non-empty terminal draft; a subsequent press with an

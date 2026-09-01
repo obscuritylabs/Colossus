@@ -2622,16 +2622,37 @@ async fn paced_stream_resets_inactivity_timeout_but_retains_hard_deadline() {
         SafetyKernel::new(["provider.call".into()]),
         [32_u8; 32],
     );
+    let mut released = ReleasedItems::default();
     let error = gateway
-        .execute_stream(
-            provider_request(&profile),
-            &executor,
-            &mut ReleasedItems::default(),
-        )
+        .execute_stream(provider_request(&profile), &executor, &mut released)
         .await
         .expect_err("hard generation deadline");
     assert!(matches!(error, GatewayError::OutcomeUnknown(_)));
+    let released_text = released
+        .0
+        .iter()
+        .filter_map(|item| match item {
+            ProviderStreamItem::Event {
+                event: ProviderEvent::ModelDelta { text },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(released_text, "progress-ready");
+    assert!(
+        !released
+            .0
+            .iter()
+            .any(|item| matches!(item, ProviderStreamItem::Completed { .. }))
+    );
     server.await.expect("hard deadline server");
+}
+
+#[test]
+fn provider_generation_budget_reserves_stream_cleanup_before_effect_timeout() {
+    assert_eq!(provider_generation_budget_ms(20_000, 30_000), 20_000);
+    assert_eq!(provider_generation_budget_ms(30_000, 20_000), 19_000);
+    assert_eq!(provider_generation_budget_ms(30_000, 500), 1);
 }
 
 #[tokio::test]

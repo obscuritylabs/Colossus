@@ -84,6 +84,9 @@ each interval without response bytes; a successful read resets that inactivity t
 `generationTimeoutMs` independently limits total wall time through the effect gateway, so a
 provider cannot keep a generation alive indefinitely by dripping bytes. Catalog and other
 non-streaming provider requests continue to use `timeoutMs` as their total transport ceiling.
+The streaming adapter reserves one second inside a stricter outer policy deadline so an
+already-accepted text batch can still cross post-effect authorization and observation before
+the adapter returns an outcome-unknown deadline error.
 
 Tool execution and model observation have separate output bounds. After post-effect
 release, the complete released `ToolResult` remains available to the terminal run event

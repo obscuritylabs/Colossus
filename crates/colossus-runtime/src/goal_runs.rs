@@ -126,7 +126,7 @@ impl Runtime {
             );
             let run = scope_instruction_snapshot(prepared.snapshot.clone(), run);
             let outcome = self
-                .forward_run_with_subagent_scheduling(run, events, receiver, observer)
+                .forward_run_with_subagent_scheduling(run, events, receiver, observer, control)
                 .await;
             let result = match outcome {
                 Ok(AgentRunOutcome::Completed { result }) => result,

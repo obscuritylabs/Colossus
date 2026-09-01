@@ -310,6 +310,7 @@ impl Runtime {
         events: mpsc::Sender<RunEventEnvelope>,
         mut receiver: mpsc::Receiver<RunEventEnvelope>,
         observer: &mut dyn RunEventObserver,
+        control: &RunControl,
     ) -> Result<T, RuntimeError>
     where
         F: Future<Output = Result<T, AgentError>>,
@@ -329,6 +330,7 @@ impl Runtime {
                         return finish_scheduled_before_observer_error(
                             scheduled.as_mut(),
                             &mut receiver,
+                            control,
                             ModelProviderError::Failed(
                                 "runtime event channel disconnected".into()
                             ),
@@ -338,6 +340,7 @@ impl Runtime {
                         return finish_scheduled_before_observer_error(
                             scheduled.as_mut(),
                             &mut receiver,
+                            control,
                             error,
                         ).await;
                     }
@@ -463,41 +466,28 @@ impl Runtime {
         sticky_skills: &[String],
         observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, RuntimeError> {
-        let prepared = self.prepare_agent_instructions(instructions, "")?;
-        let composition = self.skill_composer.compose(
-            &prepared.base_text,
-            prompt,
-            explicit_skills,
-            sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
-        )?;
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.name.clone())
-            .collect::<Vec<_>>();
-        let instructions = prepared.complete_composed_base(&composition.instructions);
-        let (events, receiver) = mpsc::channel(64);
-        let mut buffered_observer = self.buffered_run_observer(events.clone());
-        scope_instruction_snapshot(
-            prepared.snapshot,
-            Box::pin(self.forward_run_with_subagent_scheduling(
-                self.agent.run_in_session_with_skills_stream(
-                    role,
-                    &instructions,
-                    prompt,
-                    max_turns.unwrap_or(self.agent_max_turns),
-                    session_id,
-                    &active,
-                    &mut buffered_observer,
-                ),
-                events,
-                receiver,
+        let control = RunControl::default();
+        match self
+            .run_model_with_skills_stream_controlled(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                session_id,
+                explicit_skills,
+                sticky_skills,
                 observer,
-            )),
-        )
-        .await
+                &control,
+            )
+            .await?
+        {
+            AgentRunOutcome::Completed { result } => Ok(result),
+            AgentRunOutcome::Cancelled { result } => {
+                Err(RuntimeError::Agent(AgentError::Cancelled {
+                    result: Box::new(result),
+                }))
+            }
+        }
     }
 
     /// Execute a normal run with ordered events and cooperative cancellation.
@@ -624,7 +614,7 @@ impl Runtime {
         );
         scope_instruction_snapshot(
             prepared.snapshot,
-            self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
         )
         .await
     }
@@ -711,7 +701,7 @@ impl Runtime {
         ));
         scope_instruction_snapshot(
             prepared.snapshot,
-            self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
         )
         .await
     }
@@ -861,7 +851,7 @@ impl Runtime {
         );
         scope_instruction_snapshot(
             prepared.snapshot,
-            self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
         )
         .await
     }
@@ -870,14 +860,18 @@ impl Runtime {
 async fn finish_scheduled_before_observer_error<F, T, E>(
     mut scheduled: std::pin::Pin<&mut F>,
     receiver: &mut mpsc::Receiver<E>,
+    control: &RunControl,
     observer_error: ModelProviderError,
 ) -> Result<T, RuntimeError>
 where
     F: Future<Output = Result<T, RuntimeError>>,
 {
-    // Dropping the scheduler future aborts its JoinSet and can strand durable child jobs in the
-    // Running state. Keep draining the now-undeliverable public events so the bounded channel
-    // cannot deadlock the scheduler while it settles, then preserve the original observer error.
+    // Stop the parent at its next safe boundary before settling delegated children. Dropping the
+    // scheduler future would abort its JoinSet and can strand durable child jobs in the Running
+    // state, while leaving the parent uncancelled could dispatch more effects whose events no
+    // longer have a public observer. Keep draining the now-undeliverable events so backpressure
+    // cannot deadlock cancellation and child settlement, then preserve the observer failure.
+    control.cancel();
     if receiver.is_closed() && receiver.is_empty() {
         let _ = scheduled.await;
     } else {
@@ -908,8 +902,14 @@ mod subagent_observer_tests {
     async fn observer_failure_waits_for_scheduled_work_to_settle() {
         let settled = Arc::new(AtomicBool::new(false));
         let settled_by_run = Arc::clone(&settled);
+        let control = RunControl::default();
+        let control_by_run = control.clone();
         let (sender, mut receiver) = mpsc::channel(1);
         let scheduled = async move {
+            assert!(
+                control_by_run.is_cancelled(),
+                "observer failure must cancel the parent before it can continue"
+            );
             for event in 0..3 {
                 sender.send(event).await.expect("event drain remains open");
             }
@@ -923,6 +923,7 @@ mod subagent_observer_tests {
             finish_scheduled_before_observer_error(
                 scheduled.as_mut(),
                 &mut receiver,
+                &control,
                 ModelProviderError::Failed("observer failure".into()),
             ),
         )
