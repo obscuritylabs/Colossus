@@ -215,12 +215,15 @@ pub(super) fn compose_access_policy(
                 policy.with_action_max_output_bytes(RUN_INPUT_FILE_READ_ACTION, MAX_IMAGE_BYTES);
             let mut provider_action_timeouts = BTreeMap::<&str, u64>::new();
             for profile in config.providers.profiles.values() {
+                let generation_effect_timeout_ms = profile
+                    .effective_generation_timeout_ms()
+                    .saturating_add(PROVIDER_STREAM_CLEANUP_RESERVE_MS);
                 provider_action_timeouts
                     .entry(profile.kind.generation_action())
                     .and_modify(|timeout| {
-                        *timeout = (*timeout).max(profile.effective_generation_timeout_ms());
+                        *timeout = (*timeout).max(generation_effect_timeout_ms);
                     })
-                    .or_insert_with(|| profile.effective_generation_timeout_ms());
+                    .or_insert(generation_effect_timeout_ms);
                 provider_action_timeouts
                     .entry("provider.models")
                     .and_modify(|timeout| {

@@ -35,6 +35,8 @@ include breaking changes while the public API is still settling.
   output while preserving bounded, parseable progress and result previews.
 - Cancelled parent runs when their public event observer fails while still settling delegated
   children, and flushed already-accepted provider text before hard-deadline errors.
+- Preserved the complete configured provider generation budget while retaining a separate
+  cleanup allowance, and published delegated-agent cancellation at its durable transition.
 - Cleared transient inline composer and footer rows during terminal shutdown without
   removing committed transcript output.
 - Made the first `Ctrl-C` clear a non-empty terminal draft; a subsequent press with an

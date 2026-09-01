@@ -350,7 +350,11 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     config
 }
 
-fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::PathBuf {
+fn write_provider_timeout_config(
+    directory: &Path,
+    origin: &str,
+    generation_timeout_ms: u64,
+) -> std::path::PathBuf {
     let workflows = directory.join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
@@ -384,7 +388,7 @@ fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::P
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
                     "timeoutMs": 500,
-                    "generationTimeoutMs": 2000
+                    "generationTimeoutMs": generation_timeout_ms
                 }
             }
         },
@@ -1195,7 +1199,7 @@ fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_suc
 }
 
 #[test]
-fn provider_profile_timeout_is_not_silently_capped_by_the_sandbox_timeout() {
+fn configured_generation_timeout_is_not_consumed_by_the_cleanup_reserve() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let delayed = r#"data: {"id":"chat-delayed","choices":[{"index":0,"delta":{"content":"delayed-ready"},"finish_reason":"stop"}]}
@@ -1204,7 +1208,7 @@ data: [DONE]
 
 "#;
     let (origin, server) = delayed_sse_server(Duration::from_millis(75), delayed);
-    let config = write_provider_timeout_config(directory.path(), &origin);
+    let config = write_provider_timeout_config(directory.path(), &origin, 500);
 
     let output = run(
         binary,
@@ -1240,7 +1244,7 @@ fn active_provider_stream_can_outlive_its_inactivity_timeout() {
         "data: [DONE]\n\n",
     ];
     let (origin, server) = paced_sse_server(Duration::from_millis(200), chunks);
-    let config = write_provider_timeout_config(directory.path(), &origin);
+    let config = write_provider_timeout_config(directory.path(), &origin, 2_000);
     let started = Instant::now();
 
     let output = run(

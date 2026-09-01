@@ -71,7 +71,7 @@ impl Runtime {
 
     /// Cancel one queued or running child job. Late child output is never committed.
     pub async fn cancel_subagent(&self, id: &str) -> Result<SubagentJob, RuntimeError> {
-        serde_json::from_value(
+        let cancelled = serde_json::from_value(
             self.execute_work_operation(WorkOperation::SubagentStop {
                 id: id.into(),
                 status: SubagentStatus::Cancelled,
@@ -79,7 +79,9 @@ impl Runtime {
             })
             .await?,
         )
-        .map_err(|error| RuntimeError::Config(error.to_string()))
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        self.emit_subagent_update(&cancelled).await;
+        Ok(cancelled)
     }
 
     /// Requeue one failed, cancelled, or interrupted child job.
@@ -182,7 +184,6 @@ impl Runtime {
                 .get_subagent(&id)?
                 .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?;
             if current.status == SubagentStatus::Cancelled {
-                self.emit_subagent_update(&current).await;
                 continue;
             }
             let transition = match result {
@@ -214,9 +215,7 @@ impl Runtime {
                         .work
                         .get_subagent(&id)?
                         .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?;
-                    if latest.status == SubagentStatus::Cancelled {
-                        self.emit_subagent_update(&latest).await;
-                    } else {
+                    if latest.status != SubagentStatus::Cancelled {
                         return Err(error);
                     }
                 }

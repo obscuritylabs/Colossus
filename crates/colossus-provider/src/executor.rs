@@ -5,7 +5,9 @@ use std::fmt;
 const MAX_HOST_CREDENTIALS: usize = 64;
 const MAX_STREAMED_MODEL_DELTA_BATCH_BYTES: usize = 4 * 1024;
 const STREAMED_MODEL_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-const PROVIDER_STREAM_CLEANUP_RESERVE_MS: u64 = 1_000;
+/// Extra time an outer effect deadline should allow after a configured generation
+/// deadline so the streaming adapter can settle the permit and transport cleanly.
+pub const PROVIDER_STREAM_CLEANUP_RESERVE_MS: u64 = 1_000;
 const GENERATION_DEADLINE_MESSAGE: &str =
     "provider generation exceeded its hard deadline after execution began";
 

@@ -11,11 +11,12 @@ use super::{
     REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, Runtime,
     RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig,
     SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
-    TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, derive_development_sandbox,
-    goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
-    push_bounded_mcp_discovery_tool, recover_interrupted_subagents, recover_unknown_effects,
-    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
-    shell_command_arguments, terminal_actor,
+    TraceToolExecutor, WorkEffectExecutor, WorkOperation, configure_shell_environment,
+    derive_development_sandbox, goal_objective_from_plan, model_resource_path,
+    model_workspace_path, provider_profile, push_bounded_mcp_discovery_tool,
+    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
+    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
+    terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
@@ -25,9 +26,9 @@ use colossus_contracts::{
     ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
     ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
-    ResourceAuthority, RiskLevel, RiskRecommendation, RunBranchContextMode, SandboxBoundaryMode,
-    SessionMessageAppend, StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences,
-    ToolCall,
+    ResourceAuthority, RiskLevel, RiskRecommendation, RunBranchContextMode, RunEvent,
+    SandboxBoundaryMode, SessionMessageAppend, StartupVerificationMode, SubagentStatus, TaskStatus,
+    TerminalPreferences, ToolCall,
 };
 use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
 use colossus_mcp::{
@@ -2092,6 +2093,61 @@ fn ephemeral_runtime_uses_fresh_process_local_state_without_storage_files() {
     .expect("fresh ephemeral runtime");
     assert_eq!(reopened.journal().head().expect("fresh head").0, 0);
     assert!(!workspace.path().join("absent").exists());
+}
+
+#[tokio::test]
+async fn queued_and_running_subagent_cancellation_is_published_immediately() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime");
+    let session = runtime
+        .create_session(Some("subagent cancellation"))
+        .expect("session");
+
+    for should_start in [false, true] {
+        let queued = runtime
+            .queue_subagent(&session.id, "Wait for cancellation.", "subagent_default")
+            .await
+            .expect("queue subagent");
+        if should_start {
+            runtime
+                .execute_work_operation(WorkOperation::SubagentStart {
+                    id: queued.id.clone(),
+                })
+                .await
+                .expect("start subagent");
+        }
+        let (events, mut receiver) = tokio::sync::mpsc::channel(1);
+        runtime
+            .subagent_event_sinks
+            .lock()
+            .expect("event sinks")
+            .insert(queued.parent_run_id.clone(), events);
+
+        let cancelled = runtime
+            .cancel_subagent(&queued.id)
+            .await
+            .expect("cancel subagent");
+        assert_eq!(cancelled.status, SubagentStatus::Cancelled);
+        let update = tokio::time::timeout(std::time::Duration::from_millis(100), receiver.recv())
+            .await
+            .expect("cancellation update deadline")
+            .expect("cancellation update");
+        match update.event {
+            RunEvent::SubagentUpdated { job } => {
+                assert_eq!(job.id, queued.id);
+                assert_eq!(job.status, SubagentStatus::Cancelled);
+            }
+            event => panic!("unexpected cancellation event: {event:?}"),
+        }
+    }
 }
 
 #[tokio::test]

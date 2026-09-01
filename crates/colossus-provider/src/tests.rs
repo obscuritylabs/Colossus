@@ -2651,6 +2651,7 @@ async fn paced_stream_resets_inactivity_timeout_but_retains_hard_deadline() {
 #[test]
 fn provider_generation_budget_reserves_stream_cleanup_before_effect_timeout() {
     assert_eq!(provider_generation_budget_ms(20_000, 30_000), 20_000);
+    assert_eq!(provider_generation_budget_ms(500, 1_500), 500);
     assert_eq!(provider_generation_budget_ms(30_000, 20_000), 19_000);
     assert_eq!(provider_generation_budget_ms(30_000, 500), 1);
 }
