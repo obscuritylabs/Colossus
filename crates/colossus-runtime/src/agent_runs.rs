@@ -277,11 +277,15 @@ impl Runtime {
     where
         F: Future<Output = Result<T, AgentError>>,
     {
+        let mut subagent_notifications = self.subagent_notify.subscribe();
         tokio::pin!(run);
         loop {
             tokio::select! {
                 biased;
-                _ = self.subagent_notify.notified() => {
+                notification = subagent_notifications.changed() => {
+                    notification.map_err(|_| RuntimeError::Config(
+                        "subagent scheduling notification channel disconnected".into()
+                    ))?;
                     let drain = self.drain_subagents_with_events();
                     tokio::pin!(drain);
                     tokio::select! {
@@ -322,11 +326,19 @@ impl Runtime {
                 biased;
                 event = receiver.recv() => {
                     let Some(event) = event else {
-                        return Err(RuntimeError::Agent(AgentError::Provider(
-                            ModelProviderError::Failed("runtime event channel disconnected".into())
-                        )));
+                        return finish_scheduled_before_observer_error(
+                            scheduled.as_mut(),
+                            ModelProviderError::Failed(
+                                "runtime event channel disconnected".into()
+                            ),
+                        ).await;
                     };
-                    observer.observe(event).await.map_err(AgentError::Provider)?;
+                    if let Err(error) = observer.observe(event).await {
+                        return finish_scheduled_before_observer_error(
+                            scheduled.as_mut(),
+                            error,
+                        ).await;
+                    }
                 }
                 result = &mut scheduled => {
                     while let Ok(event) = receiver.try_recv() {
@@ -850,6 +862,51 @@ impl Runtime {
             self.forward_run_with_subagent_scheduling(run, events, receiver, observer),
         )
         .await
+    }
+}
+
+async fn finish_scheduled_before_observer_error<F, T>(
+    scheduled: std::pin::Pin<&mut F>,
+    observer_error: ModelProviderError,
+) -> Result<T, RuntimeError>
+where
+    F: Future<Output = Result<T, RuntimeError>>,
+{
+    // Dropping the scheduler future aborts its JoinSet and can strand durable child jobs in the
+    // Running state. Preserve the observer failure, but only after all scheduled work settles.
+    let _ = scheduled.await;
+    Err(RuntimeError::Agent(AgentError::Provider(observer_error)))
+}
+
+#[cfg(test)]
+mod subagent_observer_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn observer_failure_waits_for_scheduled_work_to_settle() {
+        let settled = Arc::new(AtomicBool::new(false));
+        let settled_by_run = Arc::clone(&settled);
+        let scheduled = async move {
+            tokio::task::yield_now().await;
+            settled_by_run.store(true, Ordering::SeqCst);
+            Err::<(), _>(RuntimeError::Config("scheduled failure".into()))
+        };
+        tokio::pin!(scheduled);
+
+        let result = finish_scheduled_before_observer_error(
+            scheduled.as_mut(),
+            ModelProviderError::Failed("observer failure".into()),
+        )
+        .await;
+
+        assert!(settled.load(Ordering::SeqCst));
+        assert!(matches!(
+            result,
+            Err(RuntimeError::Agent(AgentError::Provider(
+                ModelProviderError::Failed(message)
+            ))) if message == "observer failure"
+        ));
     }
 }
 

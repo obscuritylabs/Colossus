@@ -100,6 +100,7 @@ impl Runtime {
         &self,
     ) -> Result<SubagentQueueStatus, RuntimeError> {
         let _drain_guard = self.subagent_drain_lock.lock().await;
+        let mut subagent_notifications = self.subagent_notify.subscribe();
         let mut set = JoinSet::new();
         loop {
             let available = self.subagent_max_concurrent.saturating_sub(set.len());
@@ -160,7 +161,12 @@ impl Runtime {
             let joined = if set.len() < self.subagent_max_concurrent {
                 tokio::select! {
                     joined = set.join_next() => joined,
-                    _ = self.subagent_notify.notified() => continue,
+                    notification = subagent_notifications.changed() => {
+                        notification.map_err(|_| RuntimeError::Config(
+                            "subagent scheduling notification channel disconnected".into()
+                        ))?;
+                        continue;
+                    },
                 }
             } else {
                 set.join_next().await

@@ -132,7 +132,7 @@ pub(super) use std::{
     time::{Duration, Instant},
 };
 pub(super) use thiserror::Error;
-pub(super) use tokio::sync::{Mutex as TokioMutex, Notify, mpsc};
+pub(super) use tokio::sync::{Mutex as TokioMutex, mpsc, watch};
 pub(super) use tokio::task::JoinSet;
 pub(super) use tracing::Instrument as _;
 pub(super) use url::Url;

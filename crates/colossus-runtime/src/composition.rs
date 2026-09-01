@@ -123,7 +123,7 @@ pub struct Runtime {
     pub(super) agent: Arc<AgentService>,
     pub(super) agent_max_turns: u16,
     pub(super) subagent_max_concurrent: usize,
-    pub(super) subagent_notify: Arc<Notify>,
+    pub(super) subagent_notify: watch::Sender<u64>,
     pub(super) subagent_drain_lock: TokioMutex<()>,
     pub(super) subagent_event_sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<RunEventEnvelope>>>>,
     pub(super) tools: Arc<dyn ToolRegistry>,
@@ -886,10 +886,10 @@ impl Runtime {
                 registry: Arc::clone(&tool_registry),
                 inner: interface_tool_executor,
             });
-        let subagent_notify = Arc::new(Notify::new());
+        let (subagent_notify, _) = watch::channel(0_u64);
         let scheduled_tool_executor: Arc<dyn ToolExecutor> =
             Arc::new(SubagentSchedulingToolExecutor {
-                notify: Arc::clone(&subagent_notify),
+                notify: subagent_notify.clone(),
                 inner: discoverable_tool_executor,
             });
         let tool_executor: Arc<dyn ToolExecutor> = Arc::new(WorkspaceBoundToolExecutor {

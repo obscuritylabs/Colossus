@@ -6,6 +6,8 @@ pub(super) const LARGE_PASTE_CHAR_THRESHOLD: usize = 1_000;
 struct PendingPaste {
     placeholder: String,
     text: String,
+    start: usize,
+    end: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -28,8 +30,21 @@ pub(super) struct Composer {
 
 impl Composer {
     pub(super) fn insert(&mut self, text: &str) {
+        let inserted_at = self.cursor;
+        let inserted_bytes = text.len();
+        if inserted_bytes > 0 {
+            self.pending_pastes.retain_mut(|pending| {
+                if inserted_at <= pending.start {
+                    pending.start += inserted_bytes;
+                    pending.end += inserted_bytes;
+                    true
+                } else {
+                    inserted_at >= pending.end
+                }
+            });
+        }
         self.draft.insert_str(self.cursor, text);
-        self.cursor += text.len();
+        self.cursor += inserted_bytes;
         self.prune_edited_pastes();
         self.reset_navigation();
     }
@@ -42,8 +57,15 @@ impl Composer {
         }
 
         let placeholder = self.next_large_paste_placeholder(char_count);
+        let start = self.cursor;
         self.insert(&placeholder);
-        self.pending_pastes.push(PendingPaste { placeholder, text });
+        let end = start + placeholder.len();
+        self.pending_pastes.push(PendingPaste {
+            placeholder,
+            text,
+            start,
+            end,
+        });
     }
 
     pub(super) fn backspace(&mut self) {
@@ -51,6 +73,7 @@ impl Composer {
             return;
         }
         let previous = previous_boundary(&self.draft, self.cursor);
+        self.adjust_pending_pastes_for_removal(previous, self.cursor);
         self.draft.drain(previous..self.cursor);
         self.cursor = previous;
         self.prune_edited_pastes();
@@ -62,6 +85,7 @@ impl Composer {
             return;
         }
         let next = next_boundary(&self.draft, self.cursor);
+        self.adjust_pending_pastes_for_removal(self.cursor, next);
         self.draft.drain(self.cursor..next);
         self.prune_edited_pastes();
         self.reset_navigation();
@@ -169,34 +193,46 @@ impl Composer {
     }
 
     fn prune_edited_pastes(&mut self) {
-        self.pending_pastes
-            .retain(|pending| self.draft.contains(&pending.placeholder));
+        self.pending_pastes.retain(|pending| {
+            self.draft.get(pending.start..pending.end) == Some(pending.placeholder.as_str())
+        });
+    }
+
+    fn adjust_pending_pastes_for_removal(&mut self, start: usize, end: usize) {
+        let removed_bytes = end.saturating_sub(start);
+        self.pending_pastes.retain_mut(|pending| {
+            if end <= pending.start {
+                pending.start -= removed_bytes;
+                pending.end -= removed_bytes;
+                true
+            } else {
+                start >= pending.end
+            }
+        });
     }
 
     fn expand_pending_pastes(draft: &str, pending_pastes: Vec<PendingPaste>) -> String {
         let mut replacements = pending_pastes
             .into_iter()
-            .filter_map(|pending| {
-                draft
-                    .find(&pending.placeholder)
-                    .map(|start| (start, pending))
+            .filter(|pending| {
+                draft.get(pending.start..pending.end) == Some(pending.placeholder.as_str())
             })
             .collect::<Vec<_>>();
-        replacements.sort_by_key(|(start, _)| *start);
+        replacements.sort_by_key(|pending| pending.start);
 
         let additional_bytes = replacements
             .iter()
-            .map(|(_, pending)| pending.text.len().saturating_sub(pending.placeholder.len()))
+            .map(|pending| pending.text.len().saturating_sub(pending.placeholder.len()))
             .sum::<usize>();
         let mut expanded = String::with_capacity(draft.len().saturating_add(additional_bytes));
         let mut copied_until = 0;
-        for (start, pending) in replacements {
-            if start < copied_until {
+        for pending in replacements {
+            if pending.start < copied_until {
                 continue;
             }
-            expanded.push_str(&draft[copied_until..start]);
+            expanded.push_str(&draft[copied_until..pending.start]);
             expanded.push_str(&pending.text);
-            copied_until = start + pending.placeholder.len();
+            copied_until = pending.end;
         }
         expanded.push_str(&draft[copied_until..]);
         expanded

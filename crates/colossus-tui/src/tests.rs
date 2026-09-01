@@ -1601,6 +1601,19 @@ fn large_pastes_use_unique_placeholders_and_expand_in_visual_order() {
 }
 
 #[test]
+fn literal_placeholder_text_does_not_capture_the_hidden_paste_payload() {
+    let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+    let literal = format!("[Pasted Content {} chars]", LARGE_PASTE_CHAR_THRESHOLD + 1);
+    let mut composer = Composer::default();
+
+    composer.insert(&literal);
+    composer.insert(" before ");
+    composer.insert_paste(large.clone());
+
+    assert_eq!(composer.take(), format!("{literal} before {large}"));
+}
+
+#[test]
 fn edited_large_paste_placeholder_never_submits_hidden_payload() {
     let large = "secret payload ".repeat(100);
     let mut composer = Composer::default();
@@ -3563,6 +3576,15 @@ fn hostile_controls_are_removed_and_minimum_size_preserves_state() {
     assert!(rendered.contains("Resize terminal"));
     assert_eq!(state.draft(), "preserved draft");
     assert_eq!(state.transcript.len(), 1);
+}
+
+#[test]
+fn sanitized_input_is_bounded_while_normalizing_crlf_without_full_copies() {
+    let oversized = "\r\n".repeat(1024 * 1024 + 1);
+    let sanitized = sanitize_input(&oversized);
+
+    assert_eq!(sanitized.len(), 1024 * 1024);
+    assert!(sanitized.chars().all(|character| character == '\n'));
 }
 
 #[test]
