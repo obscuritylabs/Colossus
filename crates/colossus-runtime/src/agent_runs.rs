@@ -328,6 +328,7 @@ impl Runtime {
                     let Some(event) = event else {
                         return finish_scheduled_before_observer_error(
                             scheduled.as_mut(),
+                            &mut receiver,
                             ModelProviderError::Failed(
                                 "runtime event channel disconnected".into()
                             ),
@@ -336,6 +337,7 @@ impl Runtime {
                     if let Err(error) = observer.observe(event).await {
                         return finish_scheduled_before_observer_error(
                             scheduled.as_mut(),
+                            &mut receiver,
                             error,
                         ).await;
                     }
@@ -865,16 +867,35 @@ impl Runtime {
     }
 }
 
-async fn finish_scheduled_before_observer_error<F, T>(
-    scheduled: std::pin::Pin<&mut F>,
+async fn finish_scheduled_before_observer_error<F, T, E>(
+    mut scheduled: std::pin::Pin<&mut F>,
+    receiver: &mut mpsc::Receiver<E>,
     observer_error: ModelProviderError,
 ) -> Result<T, RuntimeError>
 where
     F: Future<Output = Result<T, RuntimeError>>,
 {
     // Dropping the scheduler future aborts its JoinSet and can strand durable child jobs in the
-    // Running state. Preserve the observer failure, but only after all scheduled work settles.
-    let _ = scheduled.await;
+    // Running state. Keep draining the now-undeliverable public events so the bounded channel
+    // cannot deadlock the scheduler while it settles, then preserve the original observer error.
+    if receiver.is_closed() && receiver.is_empty() {
+        let _ = scheduled.await;
+    } else {
+        loop {
+            tokio::select! {
+                result = scheduled.as_mut() => {
+                    let _ = result;
+                    break;
+                }
+                event = receiver.recv() => {
+                    if event.is_none() {
+                        let _ = scheduled.await;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     Err(RuntimeError::Agent(AgentError::Provider(observer_error)))
 }
 
@@ -887,18 +908,26 @@ mod subagent_observer_tests {
     async fn observer_failure_waits_for_scheduled_work_to_settle() {
         let settled = Arc::new(AtomicBool::new(false));
         let settled_by_run = Arc::clone(&settled);
+        let (sender, mut receiver) = mpsc::channel(1);
         let scheduled = async move {
-            tokio::task::yield_now().await;
+            for event in 0..3 {
+                sender.send(event).await.expect("event drain remains open");
+            }
             settled_by_run.store(true, Ordering::SeqCst);
             Err::<(), _>(RuntimeError::Config("scheduled failure".into()))
         };
         tokio::pin!(scheduled);
 
-        let result = finish_scheduled_before_observer_error(
-            scheduled.as_mut(),
-            ModelProviderError::Failed("observer failure".into()),
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            finish_scheduled_before_observer_error(
+                scheduled.as_mut(),
+                &mut receiver,
+                ModelProviderError::Failed("observer failure".into()),
+            ),
         )
-        .await;
+        .await
+        .expect("bounded event backpressure must not deadlock settlement");
 
         assert!(settled.load(Ordering::SeqCst));
         assert!(matches!(

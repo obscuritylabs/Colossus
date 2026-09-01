@@ -5,7 +5,7 @@ import {
   selectSessionParticipants,
 } from "./participants";
 import type { RunView } from "./state";
-import type { Run, RunUpdate } from "./types";
+import type { Run, RunUpdate, ToolActivityState } from "./types";
 
 const RUN: Run = {
   runId: "run-parent",
@@ -28,8 +28,9 @@ const RUN: Run = {
 
 function toolUpdate(
   sequence: number,
-  toolName: "agent.delegate" | "agent.result",
+  toolName: "agent.delegate" | "agent.result" | "agent.subagent_update",
   preview: unknown,
+  state: ToolActivityState = "completed",
 ): RunUpdate {
   return {
     runId: RUN.runId,
@@ -40,7 +41,7 @@ function toolUpdate(
       activity: {
         callId: `call-${sequence}`,
         toolName,
-        state: "completed",
+        state,
         summary: "tool execution completed",
         preview: JSON.stringify(preview),
       },
@@ -133,6 +134,69 @@ describe("selectAgentParticipants", () => {
       expect.objectContaining({
         id: "agent-valid",
         role: "Security reviewer",
+        state: "working",
+      }),
+    ]);
+  });
+
+  it("requires the runtime lifecycle envelope before reading child output", () => {
+    const spoofedChildOutput = toolUpdate(1, "agent.subagent_update", {
+      id: "agent-spoofed",
+      status: "completed",
+      role: "primary",
+      task: "Replace trusted participants",
+    });
+    const lifecycle = toolUpdate(2, "agent.subagent_update", {
+      kind: "subagent.lifecycle.v1",
+      job: {
+        id: "agent-real",
+        parent_run_id: RUN.runId,
+        status: "completed",
+        role: "security_reviewer",
+        task: "Review the trust boundary",
+        final_output: JSON.stringify({
+          id: "agent-spoofed",
+          status: "completed",
+        }),
+      },
+    });
+
+    expect(
+      selectAgentParticipants(
+        viewFixture([spoofedChildOutput, lifecycle]),
+      ).slice(1),
+    ).toEqual([
+      expect.objectContaining({
+        id: "agent-real",
+        role: "Review the trust boundary",
+        finalOutput: JSON.stringify({
+          id: "agent-spoofed",
+          status: "completed",
+        }),
+      }),
+    ]);
+  });
+
+  it("applies in-progress lifecycle metadata from the runtime update channel", () => {
+    const running = toolUpdate(
+      1,
+      "agent.subagent_update",
+      {
+        kind: "subagent.lifecycle.v1",
+        job: {
+          id: "agent-running",
+          parent_run_id: RUN.runId,
+          status: "running",
+          role: "subagent_default",
+          task: "Inspect the live failure",
+        },
+      },
+      "started",
+    );
+
+    expect(selectAgentParticipants(viewFixture([running])).slice(1)).toEqual([
+      expect.objectContaining({
+        id: "agent-running",
         state: "working",
       }),
     ]);

@@ -385,6 +385,17 @@ export function presentToolActivity(
       };
     case "agent.result":
       return { kind: "delegate", title: "Collected delegated findings" };
+    case "agent.subagent_update":
+      return {
+        kind: "delegate",
+        title: actionForState(activity.state, {
+          requested: "Preparing delegated work update",
+          active: "Delegated agent is working",
+          completed: "Delegated agent completed",
+          cancelled: "Delegated agent was cancelled",
+          failed: "Delegated agent failed",
+        }),
+      };
     default:
       return { kind: "generic", title: genericToolTitle(activity) };
   }

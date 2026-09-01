@@ -8,7 +8,7 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
-## [0.10.10-preview.9] - 2026-08-31
+## [0.10.10-preview.9] - 2026-09-01
 
 ### Added
 
@@ -31,6 +31,8 @@ include breaking changes while the public API is still settling.
   bounding stalled streams and the total generation duration with separate deadlines.
 - Preserved Markdown structure, spacing, line endings, and Unicode in terminal pastes,
   with retained placeholders for large submissions instead of flattening their content.
+- Kept runtime-authored delegated-agent lifecycle metadata distinct from child-controlled
+  output while preserving bounded, parseable progress and result previews.
 - Cleared transient inline composer and footer rows during terminal shutdown without
   removing committed transcript output.
 - Made the first `Ctrl-C` clear a non-empty terminal draft; a subsequent press with an
