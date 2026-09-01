@@ -79,6 +79,17 @@ policy, journal, projection, and shutdown work. If a later transport or decoding
 terminates the stream, already accepted buffered text is flushed through the same
 release boundary before the error is returned.
 
+Provider streaming uses two distinct bounded deadlines. `timeoutMs` limits connection setup and
+each interval without response bytes; a successful read resets that inactivity timer.
+`generationTimeoutMs` independently limits total wall time through the effect gateway, so a
+provider cannot keep a generation alive indefinitely by dripping bytes. Catalog and other
+non-streaming provider requests continue to use `timeoutMs` as their total transport ceiling.
+The built-in policy adds a one-second cleanup allowance outside the configured generation
+deadline. When an external policy supplies a stricter outer deadline, the streaming adapter
+reserves that allowance inside the policy deadline so an already-accepted text batch can still
+cross post-effect authorization and observation before the adapter returns an outcome-unknown
+deadline error.
+
 Tool execution and model observation have separate output bounds. After post-effect
 release, the complete released `ToolResult` remains available to the terminal run event
 and canonical run evidence. Before provider continuation or session persistence, the
@@ -533,6 +544,10 @@ unstarted, and outcome-unknown tools do not release an output preview.
 Once permit-bound execution starts, its lifecycle update may also include at most 64 KiB
 of the validated structured tool input so an operator can see what actually ran.
 Requested, denied, and cancelled-before-start calls do not release that execution input.
+Delegated child lifecycle updates follow the same release discipline. They contain the already
+bounded durable child job, and a terminal update includes only the released child output or
+bounded redacted error. Child provider deltas, hidden reasoning, and private transcript history
+are never copied into the parent interface event stream.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
 
 Desktop Workspaces are native-owned folder bindings, persisted as neutral

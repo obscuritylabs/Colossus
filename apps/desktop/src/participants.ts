@@ -5,7 +5,12 @@ import type { RunStatus, ToolActivity } from "./types";
 
 const MAX_DELEGATED_PARTICIPANTS = 8;
 const MAX_SESSION_DELEGATED_PARTICIPANTS = 32;
-const SUBAGENT_TOOLS = new Set(["agent.delegate", "agent.result"]);
+const SUBAGENT_LIFECYCLE_TOOL = "agent.subagent_update";
+const SUBAGENT_TOOLS = new Set([
+  "agent.delegate",
+  "agent.result",
+  SUBAGENT_LIFECYCLE_TOOL,
+]);
 const SUBAGENT_STATUSES = new Set([
   "queued",
   "running",
@@ -87,7 +92,8 @@ function stringField(
 function releasedSubagent(activity: ToolActivity): ReleasedSubagent | null {
   if (
     !SUBAGENT_TOOLS.has(activity.toolName) ||
-    activity.state !== "completed" ||
+    (activity.toolName !== SUBAGENT_LIFECYCLE_TOOL &&
+      activity.state !== "completed") ||
     activity.preview == null
   ) {
     return null;
@@ -103,16 +109,33 @@ function releasedSubagent(activity: ToolActivity): ReleasedSubagent | null {
     return null;
   }
 
-  const record = parsed as Record<string, unknown>;
+  let record = parsed as Record<string, unknown>;
+  if (activity.toolName === SUBAGENT_LIFECYCLE_TOOL) {
+    const job = record.job;
+    if (
+      record.kind !== "subagent.lifecycle.v1" ||
+      job == null ||
+      typeof job !== "object" ||
+      Array.isArray(job)
+    ) {
+      return null;
+    }
+    record = job as Record<string, unknown>;
+  }
   const id = stringField(record, "id", 128);
   const status = stringField(record, "status", 32);
   if (id == null || status == null || !SUBAGENT_STATUSES.has(status)) {
     return null;
   }
 
+  const parentRunId = stringField(record, "parent_run_id", 128);
+  if (activity.toolName === SUBAGENT_LIFECYCLE_TOOL && parentRunId == null) {
+    return null;
+  }
+
   return {
     id,
-    parentRunId: stringField(record, "parent_run_id", 128),
+    parentRunId,
     childSessionId: stringField(record, "child_session_id", 128),
     childRunId: stringField(record, "child_run_id", 128),
     role: stringField(record, "role", 128) ?? "subagent_default",

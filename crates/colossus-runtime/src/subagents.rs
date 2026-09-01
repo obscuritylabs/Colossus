@@ -71,7 +71,7 @@ impl Runtime {
 
     /// Cancel one queued or running child job. Late child output is never committed.
     pub async fn cancel_subagent(&self, id: &str) -> Result<SubagentJob, RuntimeError> {
-        serde_json::from_value(
+        let cancelled = serde_json::from_value(
             self.execute_work_operation(WorkOperation::SubagentStop {
                 id: id.into(),
                 status: SubagentStatus::Cancelled,
@@ -79,7 +79,9 @@ impl Runtime {
             })
             .await?,
         )
-        .map_err(|error| RuntimeError::Config(error.to_string()))
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        self.emit_subagent_update(&cancelled).await;
+        Ok(cancelled)
     }
 
     /// Requeue one failed, cancelled, or interrupted child job.
@@ -93,29 +95,34 @@ impl Runtime {
 
     /// Drain queued jobs with bounded local concurrency using normal child agent runs.
     pub async fn drain_subagents(&self) -> Result<SubagentQueueStatus, RuntimeError> {
+        self.drain_subagents_with_events().await
+    }
+
+    pub(super) async fn drain_subagents_with_events(
+        &self,
+    ) -> Result<SubagentQueueStatus, RuntimeError> {
         let _drain_guard = self.subagent_drain_lock.lock().await;
+        let mut subagent_notifications = self.subagent_notify.subscribe();
+        let mut set = JoinSet::new();
         loop {
-            let queued = self
-                .work
-                .list_subagents(None, Some(SubagentStatus::Queued), 1_000)?;
-            if queued.is_empty() {
-                break;
-            }
-            let batch = queued
-                .into_iter()
-                .take(self.subagent_max_concurrent)
-                .collect::<Vec<_>>();
-            let mut running = Vec::with_capacity(batch.len());
-            for job in batch {
+            let available = self.subagent_max_concurrent.saturating_sub(set.len());
+            let queued = if available == 0 {
+                Vec::new()
+            } else {
+                self.work
+                    .list_subagents(None, Some(SubagentStatus::Queued), 1_000)?
+                    .into_iter()
+                    .take(available)
+                    .collect::<Vec<_>>()
+            };
+            for job in queued {
                 let started: SubagentJob = serde_json::from_value(
                     self.execute_work_operation(WorkOperation::SubagentStart { id: job.id })
                         .await?,
                 )
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
-                running.push(started);
-            }
-            let mut set = JoinSet::new();
-            for job in running {
+                self.emit_subagent_update(&started).await;
+                let job = started;
                 let agent = Arc::clone(&self.agent);
                 let max_turns = self.agent_max_turns;
                 let inherited_instructions =
@@ -150,57 +157,91 @@ impl Runtime {
                     .instrument(tracing::Span::current()),
                 );
             }
-            while let Some(joined) = set.join_next().await {
-                let (id, result) = joined.map_err(|error| {
-                    RuntimeError::Config(format!("subagent scheduler join failed: {error}"))
-                })?;
-                let current = self
-                    .work
-                    .get_subagent(&id)?
-                    .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?;
-                if current.status == SubagentStatus::Cancelled {
-                    continue;
+            if set.is_empty() {
+                break;
+            }
+            let joined = if set.len() < self.subagent_max_concurrent {
+                tokio::select! {
+                    joined = set.join_next() => joined,
+                    notification = subagent_notifications.changed() => {
+                        notification.map_err(|_| RuntimeError::Config(
+                            "subagent scheduling notification channel disconnected".into()
+                        ))?;
+                        continue;
+                    },
                 }
-                match result {
-                    Ok(result) => {
-                        let completion = self
-                            .execute_work_operation(WorkOperation::SubagentComplete {
-                                id: id.clone(),
-                                child_run_id: result.run_id,
-                                output: bounded_tool_text(&result.output, 64 * 1024),
-                            })
-                            .await;
-                        if let Err(error) = completion {
-                            let cancelled = self
-                                .work
-                                .get_subagent(&id)?
-                                .is_some_and(|job| job.status == SubagentStatus::Cancelled);
-                            if !cancelled {
-                                return Err(error);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        let failure = self
-                            .execute_work_operation(WorkOperation::SubagentStop {
-                                id: id.clone(),
-                                status: SubagentStatus::Failed,
-                                error: bounded_tool_text(&error.to_string(), 64 * 1024),
-                            })
-                            .await;
-                        if let Err(error) = failure {
-                            let cancelled = self
-                                .work
-                                .get_subagent(&id)?
-                                .is_some_and(|job| job.status == SubagentStatus::Cancelled);
-                            if !cancelled {
-                                return Err(error);
-                            }
-                        }
+            } else {
+                set.join_next().await
+            };
+            let Some(joined) = joined else {
+                continue;
+            };
+            let (id, result) = joined.map_err(|error| {
+                RuntimeError::Config(format!("subagent scheduler join failed: {error}"))
+            })?;
+            let current = self
+                .work
+                .get_subagent(&id)?
+                .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?;
+            if current.status == SubagentStatus::Cancelled {
+                continue;
+            }
+            let transition = match result {
+                Ok(result) => {
+                    self.execute_work_operation(WorkOperation::SubagentComplete {
+                        id: id.clone(),
+                        child_run_id: result.run_id,
+                        output: bounded_tool_text(&result.output, 64 * 1024),
+                    })
+                    .await
+                }
+                Err(error) => {
+                    self.execute_work_operation(WorkOperation::SubagentStop {
+                        id: id.clone(),
+                        status: SubagentStatus::Failed,
+                        error: bounded_tool_text(&error.to_string(), 64 * 1024),
+                    })
+                    .await
+                }
+            };
+            match transition {
+                Ok(value) => {
+                    let terminal: SubagentJob = serde_json::from_value(value)
+                        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                    self.emit_subagent_update(&terminal).await;
+                }
+                Err(error) => {
+                    let latest = self
+                        .work
+                        .get_subagent(&id)?
+                        .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?;
+                    if latest.status != SubagentStatus::Cancelled {
+                        return Err(error);
                     }
                 }
             }
         }
         self.subagent_queue_status(None)
+    }
+
+    async fn emit_subagent_update(&self, job: &SubagentJob) {
+        let events = self
+            .subagent_event_sinks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&job.parent_run_id)
+            .cloned();
+        if let Some(events) = events {
+            let _ = events
+                .send(RunEventEnvelope {
+                    schema_version: 1,
+                    run_id: job.parent_run_id.clone(),
+                    session_id: job.session_id.clone(),
+                    event: RunEvent::SubagentUpdated {
+                        job: Box::new(job.clone()),
+                    },
+                })
+                .await;
+        }
     }
 }

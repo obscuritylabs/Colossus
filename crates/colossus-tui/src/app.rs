@@ -82,6 +82,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             }
         }
     }
+    terminal.finish()?;
     Ok(())
 }
 
@@ -891,7 +892,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             | Overlay::QueuePaused => {}
         }
     } else {
-        state.composer.insert(&text);
+        state.composer.insert_paste(text);
     }
     if let Some(preview) = theme_preview {
         state.preferences = preview;
@@ -1778,6 +1779,9 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
                 .insert(call.call_id.clone(), call.clone());
             return;
         }
+        RunEvent::SubagentUpdated { job } if job.status == SubagentStatus::Running => {
+            state.activity = Some(format!("child agent {} running", job.id));
+        }
         RunEvent::PlanWritten { plan } => {
             apply_plan_selection(state, PlanSelectionUpdate::Set(Box::new(plan.clone())));
         }
@@ -1797,6 +1801,7 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
             state.active_calls.remove(&call.call_id);
             (TranscriptKind::Tool, None)
         }
+        RunEvent::SubagentUpdated { .. } => (TranscriptKind::Tool, None),
         RunEvent::Error { .. } => (TranscriptKind::Error, None),
         RunEvent::PlanWritten { .. } => (TranscriptKind::Command, None),
         RunEvent::Provider {

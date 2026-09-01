@@ -11,6 +11,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::Path,
     process::{Child, Command, Stdio},
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -349,7 +350,11 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     config
 }
 
-fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::PathBuf {
+fn write_provider_timeout_config(
+    directory: &Path,
+    origin: &str,
+    generation_timeout_ms: u64,
+) -> std::path::PathBuf {
     let workflows = directory.join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
@@ -382,7 +387,8 @@ fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::P
                     "kind": "open_ai_compatible",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
-                    "timeoutMs": 500
+                    "timeoutMs": 500,
+                    "generationTimeoutMs": generation_timeout_ms
                 }
             }
         },
@@ -469,6 +475,32 @@ fn delayed_sse_server(delay: Duration, body: &'static str) -> (String, thread::J
     (format!("http://{address}"), task)
 }
 
+fn paced_sse_server(
+    delay: Duration,
+    chunks: Vec<&'static str>,
+) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let address = listener.local_addr().expect("provider address");
+    let task = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("provider accept");
+        let request = read_request(&mut stream);
+        let content_length = chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {content_length}\r\nconnection: close\r\n\r\n"
+        );
+        stream.write_all(headers.as_bytes()).expect("headers");
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            if index > 0 {
+                thread::sleep(delay);
+            }
+            stream.write_all(chunk.as_bytes()).expect("SSE chunk");
+            stream.flush().expect("flush SSE chunk");
+        }
+        request
+    });
+    (format!("http://{address}"), task)
+}
+
 fn request_body(request: &str) -> Value {
     let (_, body) = request
         .split_once("\r\n\r\n")
@@ -505,19 +537,31 @@ fn subagent_server() -> (String, thread::JoinHandle<Vec<String>>) {
             &format!("data: {delegate}\n\ndata: [DONE]\n\n"),
         );
 
-        let (mut child, _) = listener.accept().expect("child accept");
-        let child_request = read_request(&mut child);
+        // The parent provider loop remains live while the child runs, so its next request
+        // may reach the server before the child's request. Accept both before responding.
+        let (mut first, _) = listener.accept().expect("first concurrent accept");
+        let first_request = read_request(&mut first);
+        let (mut second, _) = listener.accept().expect("second concurrent accept");
+        let second_request = read_request(&mut second);
+        let (mut child, child_request, mut parent_result, parent_result_request) =
+            if first_request.contains("durable Colossus child agent") {
+                (first, first_request, second, second_request)
+            } else {
+                (second, second_request, first, first_request)
+            };
         assert!(child_request.contains("durable Colossus child agent"));
         requests.push(child_request);
         let child_answer = r#"data: {"id":"chat-child-final","choices":[{"index":0,"delta":{"content":"Hi, Alex! Ping received."},"finish_reason":"stop"}]}
 
-data: [DONE]
+        data: [DONE]
 
 "#;
         respond_sse(&mut child, child_answer);
+        // The child transport completing precedes durable child-run settlement. Hold the
+        // parent model response briefly so its explicit agent.result call observes terminal
+        // state rather than the valid intermediate `running` snapshot.
+        thread::sleep(Duration::from_millis(250));
 
-        let (mut parent_result, _) = listener.accept().expect("parent result accept");
-        let parent_result_request = read_request(&mut parent_result);
         let body = request_body(&parent_result_request);
         let child_id = body["messages"]
             .as_array()
@@ -565,6 +609,203 @@ data: [DONE]
         requests
     });
     (format!("http://{address}"), task)
+}
+
+fn parallel_subagent_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    #[derive(Default)]
+    struct ChildState {
+        started: usize,
+        finished: usize,
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let address = listener.local_addr().expect("provider address");
+    let task = thread::spawn(move || {
+        let mut requests = Vec::new();
+        let (mut parent_delegate, _) = listener.accept().expect("parent delegate accept");
+        requests.push(read_request(&mut parent_delegate));
+        let delegate = json!({
+            "id": "chat-parent-parallel-delegate",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call-delegate-one",
+                        "type": "function",
+                        "function": {
+                            "name": "agent_delegate",
+                            "arguments": "{\"task\":\"Return child-one.\"}"
+                        }
+                    },
+                    {
+                        "index": 1,
+                        "id": "call-delegate-two",
+                        "type": "function",
+                        "function": {
+                            "name": "agent_delegate",
+                            "arguments": "{\"task\":\"Return child-two.\"}"
+                        }
+                    }
+                ]},
+                "finish_reason": "tool_calls"
+            }]
+        });
+        respond_sse(
+            &mut parent_delegate,
+            &format!("data: {delegate}\n\ndata: [DONE]\n\n"),
+        );
+
+        let state = Arc::new((Mutex::new(ChildState::default()), Condvar::new()));
+        let mut handlers = Vec::new();
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().expect("parallel request accept");
+            let state = Arc::clone(&state);
+            handlers.push(thread::spawn(move || {
+                let request = read_request(&mut stream);
+                if request.contains("durable Colossus child agent") {
+                    let answer = if request.contains("child-one") {
+                        "child-one"
+                    } else {
+                        "child-two"
+                    };
+                    let (lock, ready) = &*state;
+                    let mut child_state = lock.lock().expect("child state");
+                    child_state.started += 1;
+                    ready.notify_all();
+                    let (mut child_state, timeout) = ready
+                        .wait_timeout_while(
+                            child_state,
+                            Duration::from_secs(5),
+                            |state| state.started < 2,
+                        )
+                        .expect("child wait");
+                    assert!(!timeout.timed_out(), "delegated children did not overlap");
+                    drop(child_state);
+                    let body = format!(
+                        "data: {{\"id\":\"chat-{answer}\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{answer}\"}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n"
+                    );
+                    respond_sse(&mut stream, &body);
+                    child_state = lock.lock().expect("child state");
+                    child_state.finished += 1;
+                    ready.notify_all();
+                } else {
+                    let (lock, ready) = &*state;
+                    let child_state = lock.lock().expect("child state");
+                    let (_child_state, timeout) = ready
+                        .wait_timeout_while(
+                            child_state,
+                            Duration::from_secs(5),
+                            |state| state.finished < 2,
+                        )
+                        .expect("parent wait");
+                    assert!(!timeout.timed_out(), "parent did not observe both children");
+                    let final_answer = r#"data: {"id":"chat-parent-parallel-final","choices":[{"index":0,"delta":{"content":"Both children completed."},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+                    respond_sse(&mut stream, final_answer);
+                }
+                request
+            }));
+        }
+        requests.extend(
+            handlers
+                .into_iter()
+                .map(|handler| handler.join().expect("parallel handler")),
+        );
+        requests
+    });
+    (format!("http://{address}"), task)
+}
+
+fn write_subagent_config(
+    directory: &Path,
+    origin: &str,
+    max_concurrent: usize,
+) -> std::path::PathBuf {
+    let state = directory.join("state.redb");
+    let anchor = directory.join("anchor.json");
+    let workflows = directory.join("workflows");
+    fs::create_dir(&workflows).expect("workflows");
+    let config = directory.join("config.yaml");
+    fs::write(
+        &config,
+        format!(
+            r#"schemaVersion: 2
+storage:
+  path: {state}
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY
+    journal_key_id: provider-subagent-journal-v1
+    signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
+    anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [agent.delegate, agent.result, agent.list]
+    exclude: []
+  actions:
+    allow: [provider.openai.chat, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue]
+    requireApproval: []
+    deny: []
+policy:
+  kind: built_in
+  require_post_effect: true
+workflows:
+  repository: {workflows}
+  user: {workflows}
+providers:
+  profiles:
+    delegated:
+      kind: open_ai_compatible
+      baseUrl: {origin}/v1
+      credentialReference: null
+      timeoutMs: 10000
+models:
+  profiles:
+    delegated:
+      providerProfile: delegated
+      model: delegated-model
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
+  roles:
+    primary: delegated
+    subagent_default: delegated
+agent:
+  maxTurns: 4
+subagents:
+  maxConcurrent: {max_concurrent}
+sandbox:
+  backend: native
+  profile: provider-subagent-v1
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: [{origin}]
+  timeoutMs: 10000
+  maxOutputBytes: 1048576
+  maxProcesses: 2
+  maxMemoryBytes: 67108864
+  maxConcurrency: 1
+"#,
+            state = state.display(),
+            anchor = anchor.display(),
+            workflows = workflows.display(),
+        ),
+    )
+    .expect("config");
+    config
 }
 
 fn live_server() -> (String, thread::JoinHandle<Vec<String>>) {
@@ -958,7 +1199,7 @@ fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_suc
 }
 
 #[test]
-fn provider_profile_timeout_is_not_silently_capped_by_the_sandbox_timeout() {
+fn configured_generation_timeout_is_not_consumed_by_the_cleanup_reserve() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let delayed = r#"data: {"id":"chat-delayed","choices":[{"index":0,"delta":{"content":"delayed-ready"},"finish_reason":"stop"}]}
@@ -967,7 +1208,7 @@ data: [DONE]
 
 "#;
     let (origin, server) = delayed_sse_server(Duration::from_millis(75), delayed);
-    let config = write_provider_timeout_config(directory.path(), &origin);
+    let config = write_provider_timeout_config(directory.path(), &origin, 500);
 
     let output = run(
         binary,
@@ -990,6 +1231,37 @@ data: [DONE]
 
     let request = server.join().expect("provider server");
     assert!(request.starts_with("POST /v1/chat/completions "));
+}
+
+#[test]
+fn active_provider_stream_can_outlive_its_inactivity_timeout() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let chunks = vec![
+        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"progress\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"-\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ready\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ];
+    let (origin, server) = paced_sse_server(Duration::from_millis(200), chunks);
+    let config = write_provider_timeout_config(directory.path(), &origin, 2_000);
+    let started = Instant::now();
+
+    let output = run(
+        binary,
+        &config,
+        &["run", "Exercise a paced provider stream.", "--stream"],
+    );
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started.elapsed() >= Duration::from_millis(600));
+    let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
+    assert_eq!(result["output"], "progress-ready");
+    server.join().expect("paced provider server");
 }
 
 #[test]
@@ -1343,6 +1615,8 @@ sandbox:
     assert_eq!(result["output"], "The subagent said hi.");
     let terminal = String::from_utf8_lossy(&output.stderr);
     assert!(terminal.contains("Completed agent.delegate"), "{terminal}");
+    assert!(terminal.contains("Child agent running"), "{terminal}");
+    assert!(terminal.contains("Child agent completed"), "{terminal}");
     assert!(terminal.contains("Completed agent.result"), "{terminal}");
     assert!(!terminal.contains("Failed agent.result"), "{terminal}");
     assert!(terminal.contains("Hi, Alex! Ping received."), "{terminal}");
@@ -1360,6 +1634,61 @@ sandbox:
     assert_eq!(agents.as_array().map(Vec::len), Some(1));
     assert_eq!(agents[0]["status"], "completed");
     assert_eq!(agents[0]["final_output"], "Hi, Alex! Ping received.");
+}
+
+#[test]
+fn delegated_children_run_concurrently_and_release_lifecycle_output() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = parallel_subagent_server();
+    let config = write_subagent_config(directory.path(), &origin, 2);
+
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "run",
+            "Delegate two independent checks and report when both finish.",
+            "--stream",
+            "--max-turns",
+            "4",
+        ])
+        .output()
+        .expect("parallel delegated run");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
+    assert_eq!(result["output"], "Both children completed.");
+    let terminal = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        terminal.find("Completed agent.delegate") < terminal.find("Child agent running"),
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal.matches("Child agent running").count(),
+        2,
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal.matches("Child agent completed").count(),
+        2,
+        "{terminal}"
+    );
+    assert!(terminal.contains("child-one"), "{terminal}");
+    assert!(terminal.contains("child-two"), "{terminal}");
+
+    let requests = server.join().expect("parallel subagent server");
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.contains("durable Colossus child agent"))
+            .count(),
+        2
+    );
 }
 
 #[test]

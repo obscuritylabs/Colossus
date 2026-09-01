@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::{
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -906,6 +907,57 @@ async fn one_sse_server_with_options(
             tokio::task::yield_now().await;
         }
         request_text
+    });
+    (format!("http://{address}/v1"), task)
+}
+
+async fn one_paced_sse_server(
+    chunks: Vec<&'static str>,
+    delay: Duration,
+) -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut scratch).await.expect("read request");
+            assert_ne!(read, 0, "client closed before completing request");
+            request.extend_from_slice(&scratch[..read]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let content_length = chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {content_length}\r\nconnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(delay).await;
+            }
+            if stream.write_all(chunk.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
     });
     (format!("http://{address}/v1"), task)
 }
@@ -2487,6 +2539,121 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
             .iter()
             .any(|event| event.event_type == "effect.chunk_released.v1")
     );
+}
+
+#[tokio::test]
+async fn paced_stream_resets_inactivity_timeout_but_retains_hard_deadline() {
+    let chunks = vec![
+        r#"data: {"id":"chat-paced","choices":[{"index":0,"delta":{"content":"pro"},"finish_reason":null}]}
+
+"#,
+        r#"data: {"id":"chat-paced","choices":[{"index":0,"delta":{"content":"gress"},"finish_reason":null}]}
+
+"#,
+        r#"data: {"id":"chat-paced","choices":[{"index":0,"delta":{"content":"-ready"},"finish_reason":"stop"}]}
+
+"#,
+        "data: [DONE]\n\n",
+    ];
+    let (base_url, server) = one_paced_sse_server(chunks.clone(), Duration::from_millis(70)).await;
+    let profile = ProviderProfile::new(
+        "paced",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        100,
+    )
+    .expect("profile")
+    .with_generation_timeout_ms(500)
+    .expect("generation timeout");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [31_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+    gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect("active stream outlives inactivity interval");
+    assert!(released.0.iter().any(|item| matches!(
+        item,
+        ProviderStreamItem::Event {
+            event: ProviderEvent::FinalOutput { text }
+        } if text == "progress-ready"
+    )));
+    server.await.expect("paced server");
+
+    let (base_url, server) = one_paced_sse_server(chunks, Duration::from_millis(70)).await;
+    let profile = ProviderProfile::new(
+        "paced-hard",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        100,
+    )
+    .expect("profile")
+    .with_generation_timeout_ms(170)
+    .expect("generation timeout");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [32_u8; 32],
+    );
+    let mut released = ReleasedItems::default();
+    let error = gateway
+        .execute_stream(provider_request(&profile), &executor, &mut released)
+        .await
+        .expect_err("hard generation deadline");
+    assert!(matches!(error, GatewayError::OutcomeUnknown(_)));
+    let released_text = released
+        .0
+        .iter()
+        .filter_map(|item| match item {
+            ProviderStreamItem::Event {
+                event: ProviderEvent::ModelDelta { text },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(released_text, "progress-ready");
+    assert!(
+        !released
+            .0
+            .iter()
+            .any(|item| matches!(item, ProviderStreamItem::Completed { .. }))
+    );
+    server.await.expect("hard deadline server");
+}
+
+#[test]
+fn provider_generation_budget_reserves_stream_cleanup_before_effect_timeout() {
+    assert_eq!(provider_generation_budget_ms(20_000, 30_000), 20_000);
+    assert_eq!(provider_generation_budget_ms(500, 1_500), 500);
+    assert_eq!(provider_generation_budget_ms(30_000, 20_000), 19_000);
+    assert_eq!(provider_generation_budget_ms(30_000, 500), 1);
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ pub(super) struct OwnedTerminal {
     committed_entries: usize,
     committed_epoch: u64,
     has_native_history: bool,
+    finished: bool,
     _guard: TerminalGuard,
 }
 
@@ -40,6 +41,7 @@ impl OwnedTerminal {
             committed_entries: 0,
             committed_epoch: u64::MAX,
             has_native_history: false,
+            finished: false,
             _guard: guard,
         })
     }
@@ -78,6 +80,30 @@ impl OwnedTerminal {
         self.commit_native_history(state, transcript_start)?;
         self.terminal
             .draw(|frame| render(frame, state, transcript_start, ScreenMode::Inline))?;
+        Ok(())
+    }
+
+    /// Remove transient interface rows while preserving committed native scrollback.
+    pub(super) fn finish(&mut self) -> Result<(), io::Error> {
+        if self.finished {
+            return Ok(());
+        }
+        if self.mode == ScreenMode::Inline {
+            self.leave_inline_transient_screen()?;
+            let screen_size = self.terminal.backend().size()?;
+            if screen_size.height > 0 {
+                let area = self.inline_area.expect("inline viewport area");
+                let top = area.top().min(screen_size.height - 1);
+                self.terminal
+                    .backend_mut()
+                    .set_cursor_position(Position::new(0, top))?;
+                self.terminal
+                    .backend_mut()
+                    .clear_region(ClearType::AfterCursor)?;
+                Backend::flush(self.terminal.backend_mut())?;
+            }
+        }
+        self.finished = true;
         Ok(())
     }
 
@@ -197,6 +223,12 @@ impl OwnedTerminal {
         self.committed_entries = end;
         self.has_native_history |= !lines.is_empty();
         Ok(())
+    }
+}
+
+impl Drop for OwnedTerminal {
+    fn drop(&mut self) {
+        let _ = self.finish();
     }
 }
 

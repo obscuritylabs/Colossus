@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) struct SubagentSchedulingToolExecutor {
-    pub(super) notify: Arc<Notify>,
+    pub(super) notify: watch::Sender<u64>,
     pub(super) inner: Arc<dyn ToolExecutor>,
 }
 
@@ -15,10 +15,11 @@ impl ToolExecutor for SubagentSchedulingToolExecutor {
         let delegated = call.name == "agent.delegate";
         let result = self.inner.execute(call, context).await?;
         if delegated && result.exit_code == 0 {
-            self.notify.notify_one();
-            // Give the owning runtime turn a scheduling point before the parent asks for
-            // the child result or emits a final answer based only on the queued snapshot.
-            tokio::task::yield_now().await;
+            // Advance a retained generation instead of sending an edge-triggered notification.
+            // Every active parent observes the change, including one that subscribes before the
+            // delegation but does not begin waiting until after the tool call completes.
+            self.notify
+                .send_modify(|generation| *generation = generation.wrapping_add(1));
         }
         Ok(result)
     }
@@ -156,5 +157,58 @@ impl ToolExecutor for InteractiveToolExecutor {
             output: bounded_tool_text(&output, 64 * 1024),
             exit_code: 0,
         })
+    }
+}
+
+#[cfg(test)]
+mod subagent_scheduling_tests {
+    use super::*;
+
+    struct SuccessfulToolExecutor;
+
+    #[async_trait]
+    impl ToolExecutor for SuccessfulToolExecutor {
+        async fn execute(
+            &self,
+            call: ToolCall,
+            _context: ExecutionContext,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult {
+                call_id: call.call_id,
+                name: call.name,
+                output: "queued".into(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_delegation_retains_a_wakeup_for_every_parent() {
+        let (notify, _) = watch::channel(0_u64);
+        let mut first_parent = notify.subscribe();
+        let mut second_parent = notify.subscribe();
+        let executor = SubagentSchedulingToolExecutor {
+            notify,
+            inner: Arc::new(SuccessfulToolExecutor),
+        };
+
+        executor
+            .execute(
+                ToolCall {
+                    call_id: "delegate-1".into(),
+                    name: "agent.delegate".into(),
+                    arguments: json!({"task": "inspect"}),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("delegation");
+
+        // Registering each wait after the tool has returned reproduces the lost-notification
+        // window that an edge-triggered Notify cannot cover.
+        first_parent.changed().await.expect("first parent wakeup");
+        second_parent.changed().await.expect("second parent wakeup");
+        assert_eq!(*first_parent.borrow(), 1);
+        assert_eq!(*second_parent.borrow(), 1);
     }
 }

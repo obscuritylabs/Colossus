@@ -3,8 +3,8 @@
 use colossus_contracts::{
     Actor, AutomaticApprovalNotice, ContextStatus, CustomTheme, EventClassification,
     ExecutionContext, ModelImageReference, NewEvent, ProviderEvent, RiskLevel, RiskReviewFailure,
-    RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, RunPhase, ThemeColor, ThemeSpinner,
-    ThemeTextStyle, ToolCall, ToolResult, WorkStateSnapshot,
+    RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, RunPhase, SubagentJob, SubagentStatus,
+    ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult, WorkStateSnapshot,
 };
 pub use colossus_contracts::{
     EventDisplayMode, StreamDisplayMode, TerminalPreferences, ThemeName, TranscriptDensity,

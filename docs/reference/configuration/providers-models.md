@@ -13,7 +13,7 @@ different providers without duplicating connection settings.
 
 | Layer | Answers | Examples |
 | --- | --- | --- |
-| Provider profile | Where and how does Colossus connect? | Adapter kind, base URL, credential reference, Chat Completions token parameter, timeout |
+| Provider profile | Where and how does Colossus connect? | Adapter kind, base URL, credential reference, Chat Completions token parameter, inactivity timeout, hard generation timeout |
 | Model profile | Which model is used and what may Colossus send? | Model ID, token limits, reasoning effort, tool calls, streaming |
 | Model role | Which model profile handles this job? | Primary agent, summarizer, subagent, research worker |
 
@@ -222,14 +222,23 @@ models:
 
 ### `timeoutMs`
 
-`timeoutMs` is an optional positive transport ceiling in milliseconds. When omitted,
+`timeoutMs` is an optional positive transport-inactivity ceiling in milliseconds. When omitted,
 Colossus uses `300000` (5 minutes) for remote hosts and `900000` (15 minutes) for exact
 loopback hosts: `localhost`, IPv4 loopback, or IPv6 loopback. Private and LAN addresses
 that are not loopback use the remote default. An explicit positive value always wins.
-The resolved timeout independently bounds model-catalog and generation requests made
-through that provider profile.
+The resolved timeout bounds an entire model-catalog request. For streaming generation it bounds
+connection setup and every interval without response bytes; each successful read resets the
+inactivity timer.
 
-With the built-in policy, this provider timeout is not silently reduced to
+### `generationTimeoutMs`
+
+`generationTimeoutMs` is an optional hard wall-clock ceiling for one streaming generation and
+must be at least `timeoutMs`. When omitted, Colossus uses the larger of `timeoutMs` and a
+host-aware default: `1200000` (20 minutes) remotely or `3600000` (60 minutes) on exact loopback.
+This hard effect deadline remains active even while the provider is making progress, preventing
+an endless byte-drip stream. Set it explicitly when a deployment needs a tighter total budget.
+
+With the built-in policy, these provider timeouts are not silently reduced to
 `sandbox.timeoutMs`; the sandbox limit continues to govern ordinary sandbox effects. An
 OPA decision may impose a stricter provider obligation. Colossus does not automatically
 retry an ambiguous failed generation request.

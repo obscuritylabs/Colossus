@@ -19,8 +19,8 @@ fn terminal_query_requires_a_real_emulator_hint() {
 use colossus_contracts::{
     AgentRunResult, CustomTheme, EventDisplayMode, ModelMessage, ModelToolCall,
     SandboxBoundaryMode, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
-    SessionMessage, StreamDisplayMode, ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall,
-    ToolResult, TranscriptDensity,
+    SessionMessage, StreamDisplayMode, SubagentJob, SubagentStatus, ThemeColor, ThemeSpinner,
+    ThemeTextStyle, ToolCall, ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -1565,6 +1565,84 @@ fn unicode_editing_never_splits_a_grapheme() {
 }
 
 #[test]
+fn pasted_text_preserves_markdown_spacing_unicode_and_all_line_endings() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    insert_active_text(
+        &mut state,
+        "# Heading\r\r  - **nested**\r\n\tcode 👩‍💻 界 e\u{301}\nlast",
+    );
+    assert_eq!(
+        state.draft(),
+        "# Heading\n\n  - **nested**\n\tcode 👩‍💻 界 e\u{301}\nlast"
+    );
+}
+
+#[test]
+fn large_pastes_use_unique_placeholders_and_expand_in_visual_order() {
+    let first = format!("{}界", "a".repeat(LARGE_PASTE_CHAR_THRESHOLD));
+    let second = "b".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+    let char_count = LARGE_PASTE_CHAR_THRESHOLD + 1;
+    let mut composer = Composer::default();
+
+    composer.insert_paste(first.clone());
+    assert_eq!(
+        composer.draft,
+        format!("[Pasted Content {char_count} chars]")
+    );
+    composer.cursor = 0;
+    composer.insert_paste(second.clone());
+    assert_eq!(
+        composer.draft,
+        format!("[Pasted Content {char_count} chars #2][Pasted Content {char_count} chars]")
+    );
+
+    assert_eq!(composer.take(), format!("{second}{first}"));
+    assert!(composer.draft.is_empty());
+}
+
+#[test]
+fn literal_placeholder_text_does_not_capture_the_hidden_paste_payload() {
+    let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+    let literal = format!("[Pasted Content {} chars]", LARGE_PASTE_CHAR_THRESHOLD + 1);
+    let mut composer = Composer::default();
+
+    composer.insert(&literal);
+    composer.insert(" before ");
+    composer.insert_paste(large.clone());
+
+    assert_eq!(composer.take(), format!("{literal} before {large}"));
+}
+
+#[test]
+fn edited_large_paste_placeholder_never_submits_hidden_payload() {
+    let large = "secret payload ".repeat(100);
+    let mut composer = Composer::default();
+    composer.insert_paste(large.clone());
+    assert_ne!(composer.draft, large);
+
+    composer.move_left();
+    composer.backspace();
+    let edited_placeholder = composer.draft.clone();
+    assert_eq!(composer.take(), edited_placeholder);
+}
+
+#[test]
+fn history_navigation_restores_pending_large_paste_payloads() {
+    let large = "payload\r\n".repeat(150);
+    let normalized = large.replace("\r\n", "\n");
+    let mut state = TuiState::from_snapshot(snapshot());
+    insert_active_text(&mut state, &large);
+    let placeholder = state.draft().to_owned();
+    assert!(placeholder.starts_with("[Pasted Content "));
+
+    state.previous_history();
+    assert_eq!(state.draft(), "older prompt");
+    state.next_history();
+    assert_eq!(state.draft(), placeholder);
+    assert_eq!(state.composer.take(), normalized);
+}
+
+#[test]
 fn repeated_history_navigation_restores_the_original_draft_and_resets_after_editing() {
     let mut source = snapshot();
     source.history = vec![
@@ -2397,6 +2475,57 @@ fn tool_boundary_releases_intermediate_commentary_and_tool_result_to_native_hist
         }),
     );
     assert_eq!(committable_transcript_end(&state.transcript, 2), 3);
+}
+
+#[test]
+fn delegated_child_updates_are_visible_in_activity_and_history() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript.clear();
+    state.transcript_sources.clear();
+    let envelope = |status, output: &str| RunEventEnvelope {
+        schema_version: 1,
+        run_id: "run-parent".into(),
+        session_id: "019f-test".into(),
+        event: RunEvent::SubagentUpdated {
+            job: Box::new(SubagentJob {
+                id: "agent-visible".into(),
+                session_id: "019f-test".into(),
+                parent_run_id: "run-parent".into(),
+                parent_call_id: "call-delegate".into(),
+                task: "Inspect the incident.".into(),
+                role: "subagent_default".into(),
+                allowed_tools: Some(vec!["logs.query".into()]),
+                status,
+                child_session_id: "session-child".into(),
+                child_run_id: (status == SubagentStatus::Completed).then(|| "run-child".into()),
+                final_output: output.into(),
+                error: String::new(),
+                created_at: "2026-08-31T12:00:00Z".into(),
+                updated_at: "2026-08-31T12:00:01Z".into(),
+                started_at: Some("2026-08-31T12:00:00Z".into()),
+                completed_at: (status == SubagentStatus::Completed)
+                    .then(|| "2026-08-31T12:00:01Z".into()),
+            }),
+        },
+    };
+
+    handle_run_event(&mut state, envelope(SubagentStatus::Running, ""));
+    assert_eq!(
+        state.activity.as_deref(),
+        Some("child agent agent-visible running")
+    );
+    handle_run_event(
+        &mut state,
+        envelope(SubagentStatus::Completed, "Root cause isolated."),
+    );
+    let rendered = transcript_lines(&state, 100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Child agent running"), "{rendered}");
+    assert!(rendered.contains("Child agent completed"), "{rendered}");
+    assert!(rendered.contains("Root cause isolated."), "{rendered}");
 }
 
 #[test]
@@ -3398,9 +3527,13 @@ fn failed_or_cancelled_runs_pause_the_queue_and_cancellation_is_cooperative() {
 }
 
 #[test]
-fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
+fn ctrl_c_clears_a_draft_before_exiting_or_cancelling() {
     let mut idle = TuiState::from_snapshot(snapshot());
     idle.composer.insert("discarded draft");
+    idle.interrupt_or_exit();
+    assert!(idle.composer.draft.is_empty());
+    assert!(!idle.should_exit);
+
     idle.interrupt_or_exit();
     assert!(idle.should_exit);
 
@@ -3408,6 +3541,12 @@ fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
     let control = RunControl::default();
     active.operation = Some(OperationKind::Run);
     active.control = Some(control.clone());
+    active.composer.insert("discarded while running");
+    active.interrupt_or_exit();
+    assert!(active.composer.draft.is_empty());
+    assert!(!control.is_cancelled());
+    assert!(!active.should_exit);
+
     active.interrupt_or_exit();
     assert!(control.is_cancelled());
     assert!(!active.should_exit);
@@ -3423,8 +3562,8 @@ fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
 #[test]
 fn hostile_controls_are_removed_and_minimum_size_preserves_state() {
     assert_eq!(
-        sanitize_input("safe\u{1b}]8;;evil\u{7}text\r\n"),
-        "safe]8;;eviltext\n"
+        sanitize_input("safe\u{1b}]8;;evil\u{7}text\r\nnext\rthird\n"),
+        "safe]8;;eviltext\nnext\nthird\n"
     );
     let backend = TestBackend::new(39, 11);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -3437,6 +3576,15 @@ fn hostile_controls_are_removed_and_minimum_size_preserves_state() {
     assert!(rendered.contains("Resize terminal"));
     assert_eq!(state.draft(), "preserved draft");
     assert_eq!(state.transcript.len(), 1);
+}
+
+#[test]
+fn sanitized_input_is_bounded_while_normalizing_crlf_without_full_copies() {
+    let oversized = "\r\n".repeat(1024 * 1024 + 1);
+    let sanitized = sanitize_input(&oversized);
+
+    assert_eq!(sanitized.len(), 1024 * 1024);
+    assert!(sanitized.chars().all(|character| character == '\n'));
 }
 
 #[test]

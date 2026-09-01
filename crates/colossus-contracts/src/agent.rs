@@ -128,6 +128,11 @@ pub enum RunEvent {
         /// Wall time since the run began.
         elapsed_seconds: f64,
     },
+    /// Durable delegated child-agent lifecycle update released to the parent interface.
+    SubagentUpdated {
+        /// Canonical bounded child job after its durable state transition.
+        job: Box<SubagentJob>,
+    },
     /// One canonical draft plan was created or updated during Plan Mode.
     PlanWritten {
         /// Canonical plan after the durable write.

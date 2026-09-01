@@ -273,22 +273,96 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) async fn run_with_subagent_scheduling<F>(
-        &self,
-        run: F,
-    ) -> Result<AgentRunResult, RuntimeError>
+    pub(super) async fn run_with_subagent_scheduling<F, T>(&self, run: F) -> Result<T, RuntimeError>
     where
-        F: Future<Output = Result<AgentRunResult, AgentError>>,
+        F: Future<Output = Result<T, AgentError>>,
     {
+        let mut subagent_notifications = self.subagent_notify.subscribe();
         tokio::pin!(run);
         loop {
             tokio::select! {
                 biased;
-                _ = self.subagent_notify.notified() => {
-                    self.drain_subagents().await?;
+                notification = subagent_notifications.changed() => {
+                    notification.map_err(|_| RuntimeError::Config(
+                        "subagent scheduling notification channel disconnected".into()
+                    ))?;
+                    let drain = self.drain_subagents_with_events();
+                    tokio::pin!(drain);
+                    tokio::select! {
+                        result = &mut run => {
+                            let result = result.map_err(RuntimeError::from);
+                            drain.await?;
+                            return result;
+                        }
+                        result = &mut drain => {
+                            result?;
+                        }
+                    }
                 }
                 result = &mut run => return result.map_err(Into::into),
             }
+        }
+    }
+
+    pub(super) async fn forward_run_with_subagent_scheduling<F, T>(
+        &self,
+        run: F,
+        events: mpsc::Sender<RunEventEnvelope>,
+        mut receiver: mpsc::Receiver<RunEventEnvelope>,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<T, RuntimeError>
+    where
+        F: Future<Output = Result<T, AgentError>>,
+    {
+        let registration = RunEventRegistration {
+            sinks: Arc::clone(&self.subagent_event_sinks),
+            sender: events.clone(),
+        };
+        let scheduled = self.run_with_subagent_scheduling(run);
+        tokio::pin!(scheduled);
+        let _registration = registration;
+        loop {
+            tokio::select! {
+                biased;
+                event = receiver.recv() => {
+                    let Some(event) = event else {
+                        return finish_scheduled_before_observer_error(
+                            scheduled.as_mut(),
+                            &mut receiver,
+                            control,
+                            ModelProviderError::Failed(
+                                "runtime event channel disconnected".into()
+                            ),
+                        ).await;
+                    };
+                    if let Err(error) = observer.observe(event).await {
+                        return finish_scheduled_before_observer_error(
+                            scheduled.as_mut(),
+                            &mut receiver,
+                            control,
+                            error,
+                        ).await;
+                    }
+                }
+                result = &mut scheduled => {
+                    while let Ok(event) = receiver.try_recv() {
+                        observer.observe(event).await.map_err(AgentError::Provider)?;
+                    }
+                    return result;
+                }
+            }
+        }
+    }
+
+    pub(super) fn buffered_run_observer(
+        &self,
+        sender: mpsc::Sender<RunEventEnvelope>,
+    ) -> BufferedRunObserver {
+        BufferedRunObserver {
+            sender,
+            sinks: Arc::clone(&self.subagent_event_sinks),
+            run_id: None,
         }
     }
 
@@ -392,36 +466,28 @@ impl Runtime {
         sticky_skills: &[String],
         observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, RuntimeError> {
-        let prepared = self.prepare_agent_instructions(instructions, "")?;
-        let composition = self.skill_composer.compose(
-            &prepared.base_text,
-            prompt,
-            explicit_skills,
-            sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
-        )?;
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.name.clone())
-            .collect::<Vec<_>>();
-        let instructions = prepared.complete_composed_base(&composition.instructions);
-        scope_instruction_snapshot(
-            prepared.snapshot,
-            Box::pin(self.run_with_subagent_scheduling(
-                self.agent.run_in_session_with_skills_stream(
-                    role,
-                    &instructions,
-                    prompt,
-                    max_turns.unwrap_or(self.agent_max_turns),
-                    session_id,
-                    &active,
-                    observer,
-                ),
-            )),
-        )
-        .await
+        let control = RunControl::default();
+        match self
+            .run_model_with_skills_stream_controlled(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                session_id,
+                explicit_skills,
+                sticky_skills,
+                observer,
+                &control,
+            )
+            .await?
+        {
+            AgentRunOutcome::Completed { result } => Ok(result),
+            AgentRunOutcome::Cancelled { result } => {
+                Err(RuntimeError::Agent(AgentError::Cancelled {
+                    result: Box::new(result),
+                }))
+            }
+        }
     }
 
     /// Execute a normal run with ordered events and cooperative cancellation.
@@ -529,7 +595,9 @@ impl Runtime {
         // one stable allocation before adding the instruction-snapshot task-local scope;
         // embedding it in that additional generic wrapper can exceed Tokio's normal worker
         // thread stack while polling interactive worker runs.
-        let mut run = Box::pin(
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
+        let run = Box::pin(
             self.agent
                 .run_in_session_with_mode_stream_controlled_content(
                     mode,
@@ -540,21 +608,14 @@ impl Runtime {
                     session_id,
                     &active,
                     include_provider_response_diagnostics,
-                    observer,
+                    &mut buffered_observer,
                     control,
                 ),
         );
-        scope_instruction_snapshot(prepared.snapshot, async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        self.drain_subagents().await?;
-                    }
-                    result = run.as_mut() => return result.map_err(Into::into),
-                }
-            }
-        })
+        scope_instruction_snapshot(
+            prepared.snapshot,
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
+        )
         .await
     }
 
@@ -625,7 +686,9 @@ impl Runtime {
             .collect::<Vec<_>>();
         let instructions = prepared.complete_composed_base(&composition.instructions);
 
-        let mut run = Box::pin(self.agent.run_in_session_with_skills_stream_controlled_as(
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
+        let run = Box::pin(self.agent.run_in_session_with_skills_stream_controlled_as(
             role,
             &instructions,
             prompt,
@@ -633,20 +696,13 @@ impl Runtime {
             session_id,
             &active,
             initiator,
-            observer,
+            &mut buffered_observer,
             control,
         ));
-        scope_instruction_snapshot(prepared.snapshot, async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        self.drain_subagents().await?;
-                    }
-                    result = run.as_mut() => return result.map_err(Into::into),
-                }
-            }
-        })
+        scope_instruction_snapshot(
+            prepared.snapshot,
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
+        )
         .await
     }
 
@@ -771,7 +827,9 @@ impl Runtime {
         };
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
         let instructions = prepared.text.clone();
-        let mut run = Box::pin(
+        let (events, receiver) = mpsc::channel(64);
+        let mut buffered_observer = self.buffered_run_observer(events.clone());
+        let run = Box::pin(
             self.agent
                 .run_public_with_mode_and_skills_stream_controlled_content(
                     role,
@@ -787,22 +845,150 @@ impl Runtime {
                     end_user_id,
                     remote_trace_context,
                     initiator,
-                    observer,
+                    &mut buffered_observer,
                     control,
                 ),
         );
-        scope_instruction_snapshot(prepared.snapshot, async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.subagent_notify.notified() => {
-                        self.drain_subagents().await?;
+        scope_instruction_snapshot(
+            prepared.snapshot,
+            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
+        )
+        .await
+    }
+}
+
+async fn finish_scheduled_before_observer_error<F, T, E>(
+    mut scheduled: std::pin::Pin<&mut F>,
+    receiver: &mut mpsc::Receiver<E>,
+    control: &RunControl,
+    observer_error: ModelProviderError,
+) -> Result<T, RuntimeError>
+where
+    F: Future<Output = Result<T, RuntimeError>>,
+{
+    // Stop the parent at its next safe boundary before settling delegated children. Dropping the
+    // scheduler future would abort its JoinSet and can strand durable child jobs in the Running
+    // state, while leaving the parent uncancelled could dispatch more effects whose events no
+    // longer have a public observer. Keep draining the now-undeliverable events so backpressure
+    // cannot deadlock cancellation and child settlement, then preserve the observer failure.
+    control.cancel();
+    if receiver.is_closed() && receiver.is_empty() {
+        let _ = scheduled.await;
+    } else {
+        loop {
+            tokio::select! {
+                result = scheduled.as_mut() => {
+                    let _ = result;
+                    break;
+                }
+                event = receiver.recv() => {
+                    if event.is_none() {
+                        let _ = scheduled.await;
+                        break;
                     }
-                    result = run.as_mut() => return result.map_err(Into::into),
                 }
             }
-        })
+        }
+    }
+    Err(RuntimeError::Agent(AgentError::Provider(observer_error)))
+}
+
+#[cfg(test)]
+mod subagent_observer_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn observer_failure_waits_for_scheduled_work_to_settle() {
+        let settled = Arc::new(AtomicBool::new(false));
+        let settled_by_run = Arc::clone(&settled);
+        let control = RunControl::default();
+        let control_by_run = control.clone();
+        let (sender, mut receiver) = mpsc::channel(1);
+        let scheduled = async move {
+            assert!(
+                control_by_run.is_cancelled(),
+                "observer failure must cancel the parent before it can continue"
+            );
+            for event in 0..3 {
+                sender.send(event).await.expect("event drain remains open");
+            }
+            settled_by_run.store(true, Ordering::SeqCst);
+            Err::<(), _>(RuntimeError::Config("scheduled failure".into()))
+        };
+        tokio::pin!(scheduled);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            finish_scheduled_before_observer_error(
+                scheduled.as_mut(),
+                &mut receiver,
+                &control,
+                ModelProviderError::Failed("observer failure".into()),
+            ),
+        )
         .await
+        .expect("bounded event backpressure must not deadlock settlement");
+
+        assert!(settled.load(Ordering::SeqCst));
+        assert!(matches!(
+            result,
+            Err(RuntimeError::Agent(AgentError::Provider(
+                ModelProviderError::Failed(message)
+            ))) if message == "observer failure"
+        ));
+    }
+}
+
+pub(super) struct BufferedRunObserver {
+    sender: mpsc::Sender<RunEventEnvelope>,
+    sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<RunEventEnvelope>>>>,
+    run_id: Option<String>,
+}
+
+#[async_trait]
+impl RunEventObserver for BufferedRunObserver {
+    async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        if let Some(run_id) = &self.run_id {
+            if run_id != &event.run_id {
+                return Err(ModelProviderError::Failed(
+                    "runtime event stream changed run identity".into(),
+                ));
+            }
+        } else {
+            let mut sinks = self
+                .sinks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if sinks
+                .get(&event.run_id)
+                .is_some_and(|registered| !registered.same_channel(&self.sender))
+            {
+                return Err(ModelProviderError::Failed(
+                    "runtime event stream duplicated an active run identity".into(),
+                ));
+            }
+            sinks.insert(event.run_id.clone(), self.sender.clone());
+            self.run_id = Some(event.run_id.clone());
+        }
+        self.sender
+            .send(event)
+            .await
+            .map_err(|_| ModelProviderError::Failed("runtime event channel disconnected".into()))
+    }
+}
+
+struct RunEventRegistration {
+    sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<RunEventEnvelope>>>>,
+    sender: mpsc::Sender<RunEventEnvelope>,
+}
+
+impl Drop for RunEventRegistration {
+    fn drop(&mut self) {
+        self.sinks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, registered| !registered.same_channel(&self.sender));
     }
 }
 

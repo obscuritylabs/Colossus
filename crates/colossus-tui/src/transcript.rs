@@ -268,7 +268,8 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "Cancel".into(),
-                    "Ctrl-C cancels an active run; press again to exit".into(),
+                    "Ctrl-C clears a draft; when empty, it cancels an active run or exits"
+                        .into(),
                 ),
             ]),
             PresentationBlock::Markdown("## Command families".into()),
@@ -647,11 +648,28 @@ pub(super) fn next_boundary(value: &str, cursor: usize) -> usize {
 }
 
 pub(super) fn sanitize_input(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| *character == '\n' || *character == '\t' || !character.is_control())
-        .take(1024 * 1024)
-        .collect()
+    const MAX_INPUT_CHARS: usize = 1024 * 1024;
+
+    let mut sanitized = String::with_capacity(value.len().min(MAX_INPUT_CHARS));
+    let mut characters = value.chars().peekable();
+    let mut retained = 0;
+    while retained < MAX_INPUT_CHARS
+        && let Some(character) = characters.next()
+    {
+        let character = if character == '\r' {
+            if characters.peek() == Some(&'\n') {
+                characters.next();
+            }
+            '\n'
+        } else {
+            character
+        };
+        if character == '\n' || character == '\t' || !character.is_control() {
+            sanitized.push(character);
+            retained += 1;
+        }
+    }
+    sanitized
 }
 
 pub(super) fn truncate_width(value: &str, maximum: usize) -> String {
