@@ -1,11 +1,27 @@
 use super::*;
 
+pub(super) const LARGE_PASTE_CHAR_THRESHOLD: usize = 1_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingPaste {
+    placeholder: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SavedComposerDraft {
+    draft: String,
+    cursor: usize,
+    pending_pastes: Vec<PendingPaste>,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct Composer {
     pub(super) draft: String,
     pub(super) cursor: usize,
     pub(super) history_index: Option<usize>,
-    history_draft: Option<(String, usize)>,
+    history_draft: Option<SavedComposerDraft>,
+    pending_pastes: Vec<PendingPaste>,
     pub(super) completion_index: Option<usize>,
     pub(super) completion_hidden: bool,
 }
@@ -14,7 +30,20 @@ impl Composer {
     pub(super) fn insert(&mut self, text: &str) {
         self.draft.insert_str(self.cursor, text);
         self.cursor += text.len();
+        self.prune_edited_pastes();
         self.reset_navigation();
+    }
+
+    pub(super) fn insert_paste(&mut self, text: String) {
+        let char_count = text.chars().count();
+        if char_count <= LARGE_PASTE_CHAR_THRESHOLD {
+            self.insert(&text);
+            return;
+        }
+
+        let placeholder = self.next_large_paste_placeholder(char_count);
+        self.insert(&placeholder);
+        self.pending_pastes.push(PendingPaste { placeholder, text });
     }
 
     pub(super) fn backspace(&mut self) {
@@ -24,6 +53,7 @@ impl Composer {
         let previous = previous_boundary(&self.draft, self.cursor);
         self.draft.drain(previous..self.cursor);
         self.cursor = previous;
+        self.prune_edited_pastes();
         self.reset_navigation();
     }
 
@@ -33,6 +63,7 @@ impl Composer {
         }
         let next = next_boundary(&self.draft, self.cursor);
         self.draft.drain(self.cursor..next);
+        self.prune_edited_pastes();
         self.reset_navigation();
     }
 
@@ -47,16 +78,19 @@ impl Composer {
     }
 
     pub(super) fn take(&mut self) -> String {
+        let draft = std::mem::take(&mut self.draft);
+        let pending_pastes = std::mem::take(&mut self.pending_pastes);
         self.cursor = 0;
         self.history_index = None;
         self.history_draft = None;
         self.completion_index = None;
         self.completion_hidden = false;
-        std::mem::take(&mut self.draft)
+        Self::expand_pending_pastes(&draft, pending_pastes)
     }
 
     pub(super) fn clear(&mut self) {
         self.draft.clear();
+        self.pending_pastes.clear();
         self.cursor = 0;
         self.reset_navigation();
     }
@@ -64,6 +98,7 @@ impl Composer {
     pub(super) fn set(&mut self, value: String) {
         self.cursor = value.len();
         self.draft = value;
+        self.pending_pastes.clear();
         self.history_index = None;
         self.history_draft = None;
         self.completion_index = None;
@@ -84,9 +119,87 @@ impl Composer {
     fn show_history(&mut self, value: String, index: usize) {
         self.cursor = value.len();
         self.draft = value;
+        self.pending_pastes.clear();
         self.history_index = Some(index);
         self.completion_index = None;
         self.completion_hidden = true;
+    }
+
+    fn save_history_draft(&mut self) {
+        self.history_draft = Some(SavedComposerDraft {
+            draft: std::mem::take(&mut self.draft),
+            cursor: self.cursor,
+            pending_pastes: std::mem::take(&mut self.pending_pastes),
+        });
+    }
+
+    fn restore_history_draft(&mut self) {
+        let saved = self.history_draft.take().unwrap_or_default();
+        self.draft = saved.draft;
+        self.cursor = saved.cursor;
+        self.pending_pastes = saved.pending_pastes;
+        self.history_index = None;
+        self.completion_index = None;
+        self.completion_hidden = false;
+    }
+
+    fn next_large_paste_placeholder(&self, char_count: usize) -> String {
+        let base = format!("[Pasted Content {char_count} chars]");
+        let prefix = format!("[Pasted Content {char_count} chars #");
+        let mut max_suffix = 0;
+
+        for pending in &self.pending_pastes {
+            if pending.placeholder == base {
+                max_suffix = max_suffix.max(1);
+            } else if let Some(suffix) = pending
+                .placeholder
+                .strip_prefix(&prefix)
+                .and_then(|suffix| suffix.strip_suffix(']'))
+                && let Ok(value) = suffix.parse::<usize>()
+            {
+                max_suffix = max_suffix.max(value);
+            }
+        }
+
+        if max_suffix == 0 {
+            base
+        } else {
+            format!("[Pasted Content {char_count} chars #{}]", max_suffix + 1)
+        }
+    }
+
+    fn prune_edited_pastes(&mut self) {
+        self.pending_pastes
+            .retain(|pending| self.draft.contains(&pending.placeholder));
+    }
+
+    fn expand_pending_pastes(draft: &str, pending_pastes: Vec<PendingPaste>) -> String {
+        let mut replacements = pending_pastes
+            .into_iter()
+            .filter_map(|pending| {
+                draft
+                    .find(&pending.placeholder)
+                    .map(|start| (start, pending))
+            })
+            .collect::<Vec<_>>();
+        replacements.sort_by_key(|(start, _)| *start);
+
+        let additional_bytes = replacements
+            .iter()
+            .map(|(_, pending)| pending.text.len().saturating_sub(pending.placeholder.len()))
+            .sum::<usize>();
+        let mut expanded = String::with_capacity(draft.len().saturating_add(additional_bytes));
+        let mut copied_until = 0;
+        for (start, pending) in replacements {
+            if start < copied_until {
+                continue;
+            }
+            expanded.push_str(&draft[copied_until..start]);
+            expanded.push_str(&pending.text);
+            copied_until = start + pending.placeholder.len();
+        }
+        expanded.push_str(&draft[copied_until..]);
+        expanded
     }
 }
 
@@ -718,14 +831,12 @@ impl TuiState {
         {
             return;
         }
-        let index = self.composer.history_index.map_or_else(
-            || {
-                self.composer.history_draft =
-                    Some((self.composer.draft.clone(), self.composer.cursor));
-                self.history.len() - 1
-            },
-            |index| index.saturating_sub(1),
-        );
+        let index = if let Some(index) = self.composer.history_index {
+            index.saturating_sub(1)
+        } else {
+            self.composer.save_history_draft();
+            self.history.len() - 1
+        };
         self.composer
             .show_history(self.history[index].clone(), index);
     }
@@ -738,12 +849,7 @@ impl TuiState {
             self.composer
                 .show_history(self.history[index + 1].clone(), index + 1);
         } else {
-            let (draft, cursor) = self.composer.history_draft.take().unwrap_or_default();
-            self.composer.draft = draft;
-            self.composer.cursor = cursor;
-            self.composer.history_index = None;
-            self.composer.completion_index = None;
-            self.composer.completion_hidden = false;
+            self.composer.restore_history_draft();
         }
     }
 
@@ -775,6 +881,10 @@ impl TuiState {
     }
 
     pub(super) fn interrupt_or_exit(&mut self) {
+        if !self.composer.draft.is_empty() {
+            self.composer.clear();
+            return;
+        }
         if self.is_busy()
             && self
                 .control

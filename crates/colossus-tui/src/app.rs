@@ -82,6 +82,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             }
         }
     }
+    terminal.finish()?;
     Ok(())
 }
 
@@ -891,7 +892,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             | Overlay::QueuePaused => {}
         }
     } else {
-        state.composer.insert(&text);
+        state.composer.insert_paste(text);
     }
     if let Some(preview) = theme_preview {
         state.preferences = preview;

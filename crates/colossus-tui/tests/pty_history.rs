@@ -623,7 +623,47 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         latest_row + 1,
         "newest output should end directly above the composer: {rows:?}"
     );
-    writer.write_all(&[4]).expect("exit");
+    writer
+        .write_all(b"\x1b[200~# Heading\r\r  - **nested**\r\nunicode ")
+        .expect("start multiline paste");
+    writer
+        .write_all("👩‍💻 界 e\u{301}".as_bytes())
+        .expect("paste Unicode text");
+    writer
+        .write_all(b"\x1b[201~")
+        .expect("finish multiline paste");
+    writer.flush().expect("flush multiline paste");
+    wait_for_screen(&output, 24, 80, "- **nested**");
+    wait_for_screen(&output, 24, 80, "unicode");
+    let pasted_rows = screen_rows(&output, 24, 80);
+    let heading_row = pasted_rows
+        .iter()
+        .position(|row| row.contains("# Heading"))
+        .expect("pasted heading row");
+    let nested_row = pasted_rows
+        .iter()
+        .position(|row| row.contains("- **nested**"))
+        .expect("pasted nested Markdown row");
+    let unicode_row = pasted_rows
+        .iter()
+        .position(|row| row.contains("unicode") && row.contains('界'))
+        .expect("pasted Unicode row");
+    assert_eq!(nested_row, heading_row + 2, "blank line was not preserved");
+    assert_eq!(unicode_row, nested_row + 1, "CRLF created extra rows");
+
+    writer.write_all(&[3]).expect("Ctrl-C clear draft");
+    writer.flush().expect("flush draft clear");
+    thread::sleep(Duration::from_millis(50));
+    let cleared_screen = screen_contents(&output, 24, 80);
+    assert!(
+        cleared_screen.contains("Message · Enter sends"),
+        "first Ctrl-C should keep the TUI open: {cleared_screen}"
+    );
+    assert!(
+        !cleared_screen.contains("# Heading"),
+        "first Ctrl-C should clear the draft: {cleared_screen}"
+    );
+    writer.write_all(&[3]).expect("second Ctrl-C exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(
@@ -635,6 +675,16 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
     reader_thread.join().expect("reader thread");
 
     let raw = output.lock().expect("output");
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    parser.process(raw.as_slice());
+    let final_screen = parser.screen().contents();
+    assert!(final_screen.contains("durable-row-05"), "{final_screen}");
+    assert!(
+        !final_screen.contains("Message · Enter sends"),
+        "{final_screen}"
+    );
+    assert!(!final_screen.contains("fixture@local"), "{final_screen}");
+    assert!(!final_screen.contains("# Heading"), "{final_screen}");
     assert_eq!(
         raw.windows(b"\x1b[6n".len())
             .filter(|window| *window == b"\x1b[6n")
@@ -760,7 +810,14 @@ fn submitted_input_history_traverses_repeatedly_and_completion_keeps_key_precede
     writer.flush().expect("flush restored draft");
     wait_for_screen(&output, 24, 80, "unsent draft");
 
-    writer.write_all(&[3]).expect("Ctrl-C exit");
+    writer.write_all(&[3]).expect("Ctrl-C clear draft");
+    writer.flush().expect("flush draft clear");
+    thread::sleep(Duration::from_millis(50));
+    assert!(
+        !screen_contents(&output, 24, 80).contains("unsent draft"),
+        "first Ctrl-C should clear the restored draft"
+    );
+    writer.write_all(&[3]).expect("second Ctrl-C exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(
@@ -1078,6 +1135,8 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
         );
     }
 
+    writer.write_all(&[3]).expect("clear completion draft");
+    writer.flush().expect("flush completion draft clear");
     writer.write_all(&[3]).expect("exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
@@ -1394,6 +1453,8 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
         "completion did not restore the main screen"
     );
 
+    writer.write_all(&[3]).expect("clear completion draft");
+    writer.flush().expect("flush completion draft clear");
     writer.write_all(&[3]).expect("exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
@@ -1477,7 +1538,14 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
         "{after_resize}"
     );
 
-    writer.write_all(&[3]).expect("Ctrl-C exit");
+    writer.write_all(&[3]).expect("Ctrl-C clear draft");
+    writer.flush().expect("flush draft clear");
+    thread::sleep(Duration::from_millis(50));
+    assert!(
+        !screen_contents(&output, 30, 100).contains("typing-preserves-history"),
+        "first Ctrl-C should clear the draft"
+    );
+    writer.write_all(&[3]).expect("second Ctrl-C exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(status.success());

@@ -268,7 +268,8 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "Cancel".into(),
-                    "Ctrl-C cancels an active run; press again to exit".into(),
+                    "Ctrl-C clears a draft; when empty, it cancels an active run or exits"
+                        .into(),
                 ),
             ]),
             PresentationBlock::Markdown("## Command families".into()),
@@ -648,6 +649,8 @@ pub(super) fn next_boundary(value: &str, cursor: usize) -> usize {
 
 pub(super) fn sanitize_input(value: &str) -> String {
     value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
         .chars()
         .filter(|character| *character == '\n' || *character == '\t' || !character.is_control())
         .take(1024 * 1024)

@@ -1565,6 +1565,71 @@ fn unicode_editing_never_splits_a_grapheme() {
 }
 
 #[test]
+fn pasted_text_preserves_markdown_spacing_unicode_and_all_line_endings() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    insert_active_text(
+        &mut state,
+        "# Heading\r\r  - **nested**\r\n\tcode 👩‍💻 界 e\u{301}\nlast",
+    );
+    assert_eq!(
+        state.draft(),
+        "# Heading\n\n  - **nested**\n\tcode 👩‍💻 界 e\u{301}\nlast"
+    );
+}
+
+#[test]
+fn large_pastes_use_unique_placeholders_and_expand_in_visual_order() {
+    let first = format!("{}界", "a".repeat(LARGE_PASTE_CHAR_THRESHOLD));
+    let second = "b".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+    let char_count = LARGE_PASTE_CHAR_THRESHOLD + 1;
+    let mut composer = Composer::default();
+
+    composer.insert_paste(first.clone());
+    assert_eq!(
+        composer.draft,
+        format!("[Pasted Content {char_count} chars]")
+    );
+    composer.cursor = 0;
+    composer.insert_paste(second.clone());
+    assert_eq!(
+        composer.draft,
+        format!("[Pasted Content {char_count} chars #2][Pasted Content {char_count} chars]")
+    );
+
+    assert_eq!(composer.take(), format!("{second}{first}"));
+    assert!(composer.draft.is_empty());
+}
+
+#[test]
+fn edited_large_paste_placeholder_never_submits_hidden_payload() {
+    let large = "secret payload ".repeat(100);
+    let mut composer = Composer::default();
+    composer.insert_paste(large.clone());
+    assert_ne!(composer.draft, large);
+
+    composer.move_left();
+    composer.backspace();
+    let edited_placeholder = composer.draft.clone();
+    assert_eq!(composer.take(), edited_placeholder);
+}
+
+#[test]
+fn history_navigation_restores_pending_large_paste_payloads() {
+    let large = "payload\r\n".repeat(150);
+    let normalized = large.replace("\r\n", "\n");
+    let mut state = TuiState::from_snapshot(snapshot());
+    insert_active_text(&mut state, &large);
+    let placeholder = state.draft().to_owned();
+    assert!(placeholder.starts_with("[Pasted Content "));
+
+    state.previous_history();
+    assert_eq!(state.draft(), "older prompt");
+    state.next_history();
+    assert_eq!(state.draft(), placeholder);
+    assert_eq!(state.composer.take(), normalized);
+}
+
+#[test]
 fn repeated_history_navigation_restores_the_original_draft_and_resets_after_editing() {
     let mut source = snapshot();
     source.history = vec![
@@ -3449,9 +3514,13 @@ fn failed_or_cancelled_runs_pause_the_queue_and_cancellation_is_cooperative() {
 }
 
 #[test]
-fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
+fn ctrl_c_clears_a_draft_before_exiting_or_cancelling() {
     let mut idle = TuiState::from_snapshot(snapshot());
     idle.composer.insert("discarded draft");
+    idle.interrupt_or_exit();
+    assert!(idle.composer.draft.is_empty());
+    assert!(!idle.should_exit);
+
     idle.interrupt_or_exit();
     assert!(idle.should_exit);
 
@@ -3459,6 +3528,12 @@ fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
     let control = RunControl::default();
     active.operation = Some(OperationKind::Run);
     active.control = Some(control.clone());
+    active.composer.insert("discarded while running");
+    active.interrupt_or_exit();
+    assert!(active.composer.draft.is_empty());
+    assert!(!control.is_cancelled());
+    assert!(!active.should_exit);
+
     active.interrupt_or_exit();
     assert!(control.is_cancelled());
     assert!(!active.should_exit);
@@ -3474,8 +3549,8 @@ fn ctrl_c_exits_when_idle_and_cancels_once_before_exiting_an_active_run() {
 #[test]
 fn hostile_controls_are_removed_and_minimum_size_preserves_state() {
     assert_eq!(
-        sanitize_input("safe\u{1b}]8;;evil\u{7}text\r\n"),
-        "safe]8;;eviltext\n"
+        sanitize_input("safe\u{1b}]8;;evil\u{7}text\r\nnext\rthird\n"),
+        "safe]8;;eviltext\nnext\nthird\n"
     );
     let backend = TestBackend::new(39, 11);
     let mut terminal = Terminal::new(backend).expect("test terminal");
