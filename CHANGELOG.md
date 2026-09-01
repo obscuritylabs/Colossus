@@ -8,6 +8,34 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.9] - 2026-08-31
+
+### Added
+
+- Added first-class delegated-agent lifecycle updates to parent run streams and terminal
+  presentation, including queued, running, completed, failed, cancelled, and interrupted
+  states with bounded task and result details.
+- Added an independent `generationTimeoutMs` hard ceiling for streaming provider calls
+  while retaining `timeoutMs` as the resettable connection and read-inactivity limit.
+
+### Changed
+
+- Refilled delegated-agent concurrency slots as child runs finish so queued work no longer
+  waits for an entire scheduler batch to settle.
+- Bumped the Rust workspace, internal dependency pins, Desktop native dependencies, fuzz
+  dependency, and all corresponding lockfiles to `0.10.10-preview.9`.
+
+### Fixed
+
+- Allowed healthy provider streams to continue while bytes are arriving, while still
+  bounding stalled streams and the total generation duration with separate deadlines.
+- Preserved Markdown structure, spacing, line endings, and Unicode in terminal pastes,
+  with retained placeholders for large submissions instead of flattening their content.
+- Cleared transient inline composer and footer rows during terminal shutdown without
+  removing committed transcript output.
+- Made the first `Ctrl-C` clear a non-empty terminal draft; a subsequent press with an
+  empty composer cancels an active run or exits when idle.
+
 ## [0.10.10-preview.8] - 2026-08-30
 
 ### Changed
