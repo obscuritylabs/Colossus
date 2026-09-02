@@ -1437,7 +1437,7 @@ mod tests {
                     "credentialHeaders": {},
                     "allowStateless": true,
                     "oauth": null,
-                    "allowedTools": ["search_docs"],
+                    "allowedTools": ["*"],
                     "researchTools": [],
                     "timeoutMs": 5000,
                     "maxOutputBytes": 1_048_576

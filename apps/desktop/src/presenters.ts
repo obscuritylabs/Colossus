@@ -1,7 +1,6 @@
 import type { RunView } from "./state";
 import type {
   ArtifactReference,
-  MessageRole,
   Run,
   RunMode,
   RunStatus,
@@ -11,9 +10,9 @@ import type {
 
 export const MAX_PRESENTED_WORK_ITEMS = 200;
 export const MAX_PRESENTED_ARTIFACTS = 64;
-export const MAX_PRESENTED_ACTIVITY_ITEMS = 200;
 
 const MAX_PRESENTED_VIEWS = 12;
+const MAX_PRESENTED_UPDATES_PER_VIEW = 200;
 const MAX_LABEL_CHARACTERS = 72;
 const MAX_DETAIL_CHARACTERS = 280;
 const MAX_FILE_NAME_CHARACTERS = 120;
@@ -82,33 +81,6 @@ export interface PresentedArtifact {
   createdLabel: string;
   /** Opaque routing value. It is never used as display copy. */
   runId: string;
-}
-
-export type ActivityKind =
-  | "state"
-  | "reasoning"
-  | "tool"
-  | "interaction"
-  | "message"
-  | "notice"
-  | "usage"
-  | "result"
-  | "failure"
-  | "cancellation";
-
-export interface OperationalActivityItem {
-  key: string;
-  /** Opaque routing value. It is never used as display copy. */
-  runId: string;
-  sequence: number;
-  createdAt: string;
-  createdLabel: string;
-  agentLabel: string;
-  kind: ActivityKind;
-  title: string;
-  detail: string | null;
-  stateLabel: string | null;
-  tone: PresentationTone;
 }
 
 type RunViewSource = RunView | Iterable<RunView> | null | undefined;
@@ -489,7 +461,7 @@ function presentedUpdates(source: RunViewSource): PresentedUpdate[] {
   return collectViews(source)
     .flatMap((view) =>
       view.updates
-        .slice(-MAX_PRESENTED_ACTIVITY_ITEMS)
+        .slice(-MAX_PRESENTED_UPDATES_PER_VIEW)
         .map((update, sourceIndex) => ({
           view,
           update,
@@ -645,211 +617,4 @@ export function selectReleasedArtifacts(
   }
 
   return artifacts;
-}
-
-function messageTitle(role: MessageRole): string {
-  switch (role) {
-    case "user":
-      return "You sent a message";
-    case "assistant":
-      return "Colossus responded";
-    case "tool":
-      return "Tool shared an update";
-    case "system":
-      return "System update";
-  }
-}
-
-function messageDetail(
-  update: Extract<RunUpdate["update"], { type: "message" }>,
-): string | null {
-  const parts = update.message.content.map((part) =>
-    part.type === "text" ? part.text : `Artifact: ${part.artifact.fileName}`,
-  );
-  const value = safeDisplayLabel(parts.join(" · "), "", MAX_DETAIL_CHARACTERS);
-  return value || null;
-}
-
-function toActivityItem(
-  view: RunView,
-  update: RunUpdate,
-): OperationalActivityItem | null {
-  const common = {
-    key: `${view.run.runId}:${update.sequence}`,
-    runId: view.run.runId,
-    sequence: update.sequence,
-    createdAt: update.createdAt,
-    createdLabel: shortDateLabel(update.createdAt),
-    agentLabel: agentRoleLabel(view.run.role),
-  };
-
-  switch (update.update.type) {
-    case "output_delta":
-      // Streaming output belongs in the conversation surface, not operational copy.
-      return null;
-    case "state": {
-      const status = presentRunStatus(update.update.status);
-      return {
-        ...common,
-        kind: "state",
-        title: status.copy,
-        detail: null,
-        stateLabel: status.label,
-        tone: status.tone,
-      };
-    }
-    case "reasoning_summary":
-      return {
-        ...common,
-        kind: "reasoning",
-        title: "Reasoning summary",
-        detail: safeDisplayLabel(
-          update.update.summary,
-          "Summary available",
-          MAX_DETAIL_CHARACTERS,
-        ),
-        stateLabel: null,
-        tone: "neutral",
-      };
-    case "tool_activity": {
-      const toolState = presentToolState(update.update.activity.state);
-      return {
-        ...common,
-        kind: "tool",
-        title: safeDisplayLabel(
-          update.update.activity.toolName,
-          "Tool activity",
-        ),
-        detail: safeDisplayLabel(
-          update.update.activity.summary,
-          toolState.copy,
-          MAX_DETAIL_CHARACTERS,
-        ),
-        stateLabel: toolState.label,
-        tone: toolState.tone,
-      };
-    }
-    case "usage":
-      return {
-        ...common,
-        kind: "usage",
-        title: "Usage updated",
-        detail: `${Math.max(0, update.update.usage.totalTokens).toLocaleString()} tokens`,
-        stateLabel: null,
-        tone: "neutral",
-      };
-    case "interaction": {
-      const interaction = update.update.interaction;
-      const content = interaction.content;
-      const isApproval = content.type === "approval";
-      const detail =
-        content.type === "approval" ? content.reason : content.question;
-      return {
-        ...common,
-        kind: "interaction",
-        title: isApproval ? "Approval requested" : "Input requested",
-        detail: safeDisplayLabel(
-          detail,
-          "Your attention is needed",
-          MAX_DETAIL_CHARACTERS,
-        ),
-        stateLabel:
-          interaction.status === "pending"
-            ? "Needs attention"
-            : humanizeIdentifier(interaction.status, "Resolved"),
-        tone: interaction.status === "pending" ? "attention" : "neutral",
-      };
-    }
-    case "message":
-      return {
-        ...common,
-        kind: "message",
-        title: messageTitle(update.update.message.role),
-        detail: messageDetail(update.update),
-        stateLabel: null,
-        tone: "neutral",
-      };
-    case "notice":
-      return {
-        ...common,
-        kind: "notice",
-        title: humanizeIdentifier(update.update.reason, "Run update"),
-        detail: safeDisplayLabel(
-          update.update.message,
-          "Run update",
-          MAX_DETAIL_CHARACTERS,
-        ),
-        stateLabel: null,
-        tone: "neutral",
-      };
-    case "result": {
-      const elapsed = Number.isFinite(update.update.result.elapsedSeconds)
-        ? `${Math.max(0, update.update.result.elapsedSeconds).toFixed(1)} seconds`
-        : null;
-      return {
-        ...common,
-        kind: "result",
-        title: "Work completed",
-        detail: elapsed,
-        stateLabel: "Completed",
-        tone: "success",
-      };
-    }
-    case "failure":
-      return {
-        ...common,
-        kind: "failure",
-        title: "Work failed",
-        detail: safeDisplayLabel(
-          update.update.failure.message,
-          "The run failed",
-          MAX_DETAIL_CHARACTERS,
-        ),
-        stateLabel:
-          update.update.failure.outcomeCertainty === "unknown"
-            ? "Outcome unknown"
-            : "Failed",
-        tone: "danger",
-      };
-    case "cancellation":
-      return {
-        ...common,
-        kind: "cancellation",
-        title: "Work cancelled",
-        detail: safeDisplayLabel(
-          update.update.cancellation.message,
-          "The run was cancelled",
-          MAX_DETAIL_CHARACTERS,
-        ),
-        stateLabel: "Cancelled",
-        tone: "neutral",
-      };
-  }
-}
-
-/**
- * Flattens bounded released updates across one or more cached run views. Results
- * are newest-first and never include output deltas, raw tool arguments, hashes,
- * hidden reasoning, or terminal result output.
- */
-export function selectOperationalActivity(
-  source: RunViewSource,
-  requestedLimit = MAX_PRESENTED_ACTIVITY_ITEMS,
-): OperationalActivityItem[] {
-  const limit = boundedLimit(
-    requestedLimit,
-    MAX_PRESENTED_ACTIVITY_ITEMS,
-    MAX_PRESENTED_ACTIVITY_ITEMS,
-  );
-  const items: OperationalActivityItem[] = [];
-  for (const { view, update } of presentedUpdates(source)) {
-    if (items.length >= limit) {
-      break;
-    }
-    const item = toActivityItem(view, update);
-    if (item !== null) {
-      items.push(item);
-    }
-  }
-  return items;
 }

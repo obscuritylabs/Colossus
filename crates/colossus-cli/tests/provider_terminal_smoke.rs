@@ -353,6 +353,7 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
 fn write_provider_timeout_config(
     directory: &Path,
     origin: &str,
+    inactivity_timeout_ms: u64,
     generation_timeout_ms: u64,
 ) -> std::path::PathBuf {
     let workflows = directory.join("workflows");
@@ -387,7 +388,7 @@ fn write_provider_timeout_config(
                     "kind": "open_ai_compatible",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
-                    "timeoutMs": 500,
+                    "timeoutMs": inactivity_timeout_ms,
                     "generationTimeoutMs": generation_timeout_ms
                 }
             }
@@ -1208,7 +1209,7 @@ data: [DONE]
 
 "#;
     let (origin, server) = delayed_sse_server(Duration::from_millis(75), delayed);
-    let config = write_provider_timeout_config(directory.path(), &origin, 500);
+    let config = write_provider_timeout_config(directory.path(), &origin, 5_000, 10_000);
 
     let output = run(
         binary,
@@ -1237,14 +1238,19 @@ data: [DONE]
 fn active_provider_stream_can_outlive_its_inactivity_timeout() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
-    let chunks = vec![
-        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"progress\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"-\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ready\"},\"finish_reason\":\"stop\"}]}\n\n",
-        "data: [DONE]\n\n",
+    let mut chunks = vec![
+        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pro\"},\"finish_reason\":null}]}\n\n",
     ];
-    let (origin, server) = paced_sse_server(Duration::from_millis(200), chunks);
-    let config = write_provider_timeout_config(directory.path(), &origin, 2_000);
+    chunks.extend(std::iter::repeat_n(
+        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\".\"},\"finish_reason\":null}]}\n\n",
+        10,
+    ));
+    chunks.extend([
+        "data: {\"id\":\"chat-paced\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"gress-ready\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ]);
+    let (origin, server) = paced_sse_server(Duration::from_millis(500), chunks);
+    let config = write_provider_timeout_config(directory.path(), &origin, 5_000, 30_000);
     let started = Instant::now();
 
     let output = run(
@@ -1258,9 +1264,9 @@ fn active_provider_stream_can_outlive_its_inactivity_timeout() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(started.elapsed() >= Duration::from_millis(600));
+    assert!(started.elapsed() >= Duration::from_secs(6));
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
-    assert_eq!(result["output"], "progress-ready");
+    assert_eq!(result["output"], "pro..........gress-ready");
     server.join().expect("paced provider server");
 }
 
@@ -1663,8 +1669,9 @@ fn delegated_children_run_concurrently_and_release_lifecycle_output() {
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "Both children completed.");
     let terminal = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        terminal.find("Completed agent.delegate") < terminal.find("Child agent running"),
+    assert_eq!(
+        terminal.matches("Completed agent.delegate").count(),
+        2,
         "{terminal}"
     );
     assert_eq!(

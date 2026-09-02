@@ -155,6 +155,32 @@ describe("WorkComposer capabilities", () => {
     expect(markup).toContain("Cancel revision");
     expect(markup.match(/disabled=""/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
+
+  it("shows bounded Desktop slash-command completion without queueing a model turn", () => {
+    const markup = renderComposer(false, {
+      mode: "research",
+      researchSources: [],
+      prompt: "/plan ",
+      promptBytes: 6,
+      queueing: true,
+      activeWorkRunning: true,
+    });
+
+    expect(markup).toContain('role="listbox"');
+    expect(markup).toContain('aria-label="Slash commands"');
+    expect(markup).toContain("Run a local Desktop action");
+    expect(markup).toContain("Local to Desktop");
+    expect(markup).toContain("/plan new");
+    expect(markup).toContain("/plan status");
+    expect(markup).not.toContain("/permissions ask");
+    expect(markup).toContain('aria-selected="true"');
+    expect(markup).toContain('aria-activedescendant="desktop-slash-command-0"');
+    expect(markup).toContain('aria-label="Run command"');
+    expect(markup).not.toContain('aria-label="Redirect current response"');
+    expect(markup).toContain(
+      "Slash commands run locally in Desktop and are never sent to the model.",
+    );
+  });
 });
 
 describe("WorkComposer permission mode", () => {

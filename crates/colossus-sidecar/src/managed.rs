@@ -62,6 +62,18 @@ const MANAGED_CONFIG_FILENAME: &str = "managed-config.yaml";
 const MANAGED_CA_BUNDLE_FILENAME: &str = "additional-ca-bundle.pem";
 const MANAGED_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.managed-runtime";
 const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+// The composed agent and effect-gateway futures exceed Tokio's default 2 MiB
+// worker stack in debug Desktop builds. Keep the managed runtime's worker
+// stack explicit and bounded so ordinary repository effects cannot abort the
+// sidecar while their deeply nested futures are polled.
+const MANAGED_RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn build_managed_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(MANAGED_RUNTIME_THREAD_STACK_BYTES)
+        .build()
+}
 
 pub(crate) fn main_entry() -> ExitCode {
     let argument = std::env::args_os().nth(1);
@@ -112,10 +124,7 @@ pub(crate) fn main_entry() -> ExitCode {
         }
     };
     let exchange_id = request.exchange_id.clone();
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match build_managed_runtime() {
         Ok(runtime) => runtime,
         Err(_) => {
             send_failure(Some(exchange_id), FailureCode::RuntimeFailed);
@@ -1531,6 +1540,30 @@ mod tests {
     use super::*;
     use colossus_sidecar_protocol::{ManagedMcpServerConfig, ManagedProviderConfig};
 
+    #[inline(never)]
+    fn managed_runtime_stack_probe(depth: usize) -> usize {
+        let block = [depth as u8; 16 * 1024];
+        let _ = std::hint::black_box(&block);
+        if depth == 0 {
+            usize::from(block[0])
+        } else {
+            let nested = managed_runtime_stack_probe(depth - 1);
+            let _ = std::hint::black_box(&block);
+            nested.wrapping_add(usize::from(block[depth % block.len()]))
+        }
+    }
+
+    #[test]
+    fn managed_runtime_workers_have_stack_for_composed_effect_futures() {
+        let runtime = build_managed_runtime().expect("managed runtime");
+        let result = runtime.block_on(async {
+            tokio::spawn(async { managed_runtime_stack_probe(160) })
+                .await
+                .expect("stack probe worker")
+        });
+        assert!(result > 0);
+    }
+
     fn test_managed_runtime() -> ManagedRuntimeConfig {
         ManagedRuntimeConfig {
             access_profile: ManagedAccessProfile::Development,
@@ -1708,13 +1741,122 @@ mod tests {
             credential_headers: BTreeMap::new(),
             allow_stateless: true,
             oauth: None,
-            allowed_tools: vec!["search_docs".into()],
+            allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),
             timeout_ms: Some(5_000),
             max_output_bytes: Some(1_048_576),
         });
         managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None, false)
             .expect("managed MCP configuration");
+    }
+
+    #[test]
+    fn full_access_desktop_runtime_opens_loopback_wildcard_mcp_servers() {
+        let temporary_root = std::env::current_dir().expect("current directory");
+        let instance = tempfile::tempdir_in(&temporary_root).expect("instance");
+        let workspace = tempfile::tempdir_in(&temporary_root).expect("workspace");
+        #[cfg(unix)]
+        std::fs::set_permissions(
+            instance.path(),
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .expect("private instance permissions");
+        let mut managed = test_managed_runtime();
+        managed.access_profile = ManagedAccessProfile::AllowAll;
+        managed.execution_boundary = ManagedExecutionBoundary::FullAccess;
+        managed.providers[0] = ManagedProviderConfig {
+            profile: "primary-provider".into(),
+            kind: ManagedProviderKind::OpenAiCodex,
+            base_url: None,
+            credential_id: None,
+            timeout_ms: 300_000,
+            chat_completions_output_token_parameter: None,
+        };
+        managed.models[0].provider_profile = "primary-provider".into();
+        managed.models[0].model = "gpt-5.6-sol".into();
+        managed.models[0].context_window_tokens = 128_000;
+        managed.models[0].max_output_tokens = 16_000;
+        let instance_id = Uuid::now_v7();
+        let baseline_config =
+            managed_runtime_config(&managed, instance_id, instance.path(), None, true)
+                .expect("baseline managed configuration")
+                .resolve_storage_paths(workspace.path(), instance.path())
+                .expect("baseline managed storage paths");
+        let home = ColossusHome::ensure_at(instance.path().join("home")).expect("Colossus home");
+        {
+            let options = RuntimeOpenOptions::for_workspace(workspace.path())
+                .expect("baseline runtime options")
+                .with_colossus_home(home.root())
+                .expect("baseline Colossus home binding");
+            let credentials = Arc::new(
+                HostCredentialResolver::new(std::iter::empty::<(String, String)>())
+                    .expect("empty baseline host credentials"),
+            );
+            WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
+                &baseline_config,
+                WorkerApprovalMode::Ask,
+                options,
+                credentials,
+                None,
+                WorkerAuthenticationKey::new([0x4a; 32]),
+            )
+            .expect("baseline managed worker");
+        }
+        managed.mcp_servers = [("jira", 19_001), ("confluence", 19_002)]
+            .into_iter()
+            .map(|(name, port)| ManagedMcpServerConfig {
+                name: name.into(),
+                transport: ManagedMcpTransport::StreamableHttp,
+                command: None,
+                args: Vec::new(),
+                working_directory: None,
+                environment_credentials: BTreeMap::new(),
+                url: Some(format!("http://127.0.0.1:{port}/mcp")),
+                headers: BTreeMap::new(),
+                credential_headers: BTreeMap::new(),
+                allow_stateless: true,
+                oauth: None,
+                allowed_tools: vec!["*".into()],
+                research_tools: Vec::new(),
+                timeout_ms: None,
+                max_output_bytes: None,
+            })
+            .collect();
+
+        let config = managed_runtime_config(&managed, instance_id, instance.path(), None, true)
+            .expect("managed loopback wildcard MCP configuration");
+
+        assert_eq!(config.mcp.servers.len(), 2);
+        assert_eq!(
+            config.sandbox.network_destinations,
+            [
+                "http://127.0.0.1:19001".to_owned(),
+                "http://127.0.0.1:19002".to_owned(),
+                "https://auth.openai.com".to_owned(),
+                "https://chatgpt.com".to_owned()
+            ]
+        );
+
+        let config = config
+            .resolve_storage_paths(workspace.path(), instance.path())
+            .expect("resolved managed storage paths");
+        let options = RuntimeOpenOptions::for_workspace(workspace.path())
+            .expect("runtime options")
+            .with_colossus_home(home.root())
+            .expect("Colossus home binding");
+        let credentials = Arc::new(
+            HostCredentialResolver::new(std::iter::empty::<(String, String)>())
+                .expect("empty host credentials"),
+        );
+        WorkerServer::open_with_mode_at_workspace_provider_credentials_codex_auth_and_authentication(
+            &config,
+            WorkerApprovalMode::Ask,
+            options,
+            credentials,
+            None,
+            WorkerAuthenticationKey::new([0x5a; 32]),
+        )
+        .expect("managed loopback wildcard MCP worker");
     }
 
     #[test]

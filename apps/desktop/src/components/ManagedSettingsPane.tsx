@@ -82,6 +82,7 @@ import type {
 } from "../types";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { DropdownSelect } from "./DropdownSelect";
+import { ToastRegion, useToastQueue } from "./ToastRegion";
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
@@ -1517,8 +1518,8 @@ export function ManagedSettingsPane({
   );
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
   const [failure, setFailure] = useState("");
+  const { dismissToast, pushToast, toasts } = useToastQueue();
   const [defaults, setDefaults] = useState(() => defaultsDraft(initial));
   const [space, setSpace] = useState<SpaceDraft>(() =>
     initial.spaces[0]
@@ -1654,11 +1655,10 @@ export function ManagedSettingsPane({
   ) {
     setBusy(true);
     setFailure("");
-    setNotice("");
     try {
       const next = isTauriRuntime() ? await action() : fixtureAction();
       setSnapshot(next);
-      setNotice(success);
+      pushToast(success);
     } catch (error: unknown) {
       setFailure(
         error instanceof Error ? error.message : "The settings change failed.",
@@ -1927,7 +1927,7 @@ export function ManagedSettingsPane({
         setSnapshot(draft);
       }
       setImportProposal(null);
-      setNotice("Repository configuration applied to this Workspace.");
+      pushToast("Repository configuration applied to this Workspace.");
     } catch (error: unknown) {
       setFailure(
         error instanceof Error
@@ -1957,8 +1957,11 @@ export function ManagedSettingsPane({
             ],
           };
       setMcpDiagnostics((current) => ({ ...current, [server]: diagnostic }));
-      setNotice(
-        `${server} is healthy; ${diagnostic.tools.length} tools discovered.`,
+      pushToast(
+        diagnostic.healthy
+          ? `${server} is healthy; ${diagnostic.tools.length} tools discovered.`
+          : `${server} diagnostic failed.`,
+        diagnostic.healthy ? "success" : "error",
       );
     });
   }
@@ -1984,7 +1987,7 @@ export function ManagedSettingsPane({
             callbackUrl: "http://127.0.0.1:8765/callback",
           };
       setMcpOauthLogins((current) => ({ ...current, [server]: login }));
-      setNotice("OAuth authorization is ready to open in your browser.");
+      pushToast("OAuth authorization is ready to open in your browser.");
     });
   }
 
@@ -2004,7 +2007,7 @@ export function ManagedSettingsPane({
         delete next[server];
         return next;
       });
-      setNotice(`${server} OAuth login completed.`);
+      pushToast(`${server} OAuth login completed.`);
     });
   }
 
@@ -2015,7 +2018,7 @@ export function ManagedSettingsPane({
         ? await logoutManagedMcpOAuth(selectedSpace.id, server)
         : { server, configured: true, authenticated: false };
       setMcpOauthStatuses((current) => ({ ...current, [server]: status }));
-      setNotice(`${server} OAuth credential removed.`);
+      pushToast(`${server} OAuth credential removed.`);
     });
   }
 
@@ -2051,8 +2054,9 @@ export function ManagedSettingsPane({
         ...current,
         [runtimeDiagnosticKey(spaceId, kind, profile)]: diagnostic,
       }));
-      setNotice(
+      pushToast(
         `${profile} ${kind} diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
+        diagnostic.ready ? "success" : "error",
       );
     });
   }
@@ -2068,7 +2072,10 @@ export function ManagedSettingsPane({
         ...current,
         [runtimeDiagnosticKey(spaceId, "search", role)]: diagnostic,
       }));
-      setNotice(`${role} search diagnostic passed.`);
+      pushToast(
+        `${role} search diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
+        diagnostic.ready ? "success" : "error",
+      );
     });
   }
 
@@ -2087,8 +2094,9 @@ export function ManagedSettingsPane({
         ...current,
         [runtimeDiagnosticKey(spaceId, "telemetry", resourceId)]: diagnostic,
       }));
-      setNotice(
+      pushToast(
         `${entry.label} telemetry diagnostic ${diagnostic.ready ? "passed" : "failed"}.`,
+        diagnostic.ready ? "success" : "error",
       );
     });
   }
@@ -2393,6 +2401,7 @@ export function ManagedSettingsPane({
 
   return (
     <div className="managed-settings-shell">
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       <header className="managed-settings-header">
         <div>
           <p className="surface-breadcrumb">
@@ -2469,12 +2478,6 @@ export function ManagedSettingsPane({
           {failure}
         </p>
       ) : null}
-      {notice ? (
-        <p className="managed-settings-message is-success" role="status">
-          {notice}
-        </p>
-      ) : null}
-
       {query ? (
         <SettingsSearchResults
           results={searchResults}
@@ -6762,8 +6765,7 @@ function ModelEditor({
         </div>
         <div className="model-capability-grid">
           <label className="compact-switch model-capability-toggle">
-            <input
-              type="checkbox"
+            <SwitchInput
               checked={draft.toolCalls}
               onChange={(event) =>
                 onChange({ ...draft, toolCalls: event.target.checked })
@@ -6775,8 +6777,7 @@ function ModelEditor({
             </span>
           </label>
           <label className="compact-switch model-capability-toggle">
-            <input
-              type="checkbox"
+            <SwitchInput
               checked={draft.streaming}
               onChange={(event) =>
                 onChange({ ...draft, streaming: event.target.checked })
@@ -6788,8 +6789,7 @@ function ModelEditor({
             </span>
           </label>
           <label className="compact-switch model-capability-toggle">
-            <input
-              type="checkbox"
+            <SwitchInput
               checked={draft.imageInputs}
               onChange={(event) =>
                 onChange({ ...draft, imageInputs: event.target.checked })
@@ -7001,8 +7001,7 @@ export function McpEditor({
                 </small>
               </label>
               <label className="compact-switch mcp-editor-wide">
-                <input
-                  type="checkbox"
+                <SwitchInput
                   checked={draft.allowStateless}
                   onChange={(event) =>
                     onChange({ ...draft, allowStateless: event.target.checked })
@@ -7068,8 +7067,7 @@ export function McpEditor({
                 }
               />
               <label className="compact-switch mcp-editor-wide">
-                <input
-                  type="checkbox"
+                <SwitchInput
                   checked={draft.oauthEnabled}
                   disabled={draft.credentialHeaders.length > 0}
                   onChange={(event) =>

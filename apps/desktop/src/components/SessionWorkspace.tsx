@@ -198,10 +198,7 @@ function recordTitle(record: SessionMapResource): string {
     case "memories":
       return record.value.text;
     case "snapshots":
-      return (
-        record.value.summary ||
-        `Messages ${record.value.sourceStartSequence}–${record.value.sourceEndSequence}`
-      );
+      return `Messages ${record.value.sourceStartSequence}–${record.value.sourceEndSequence}`;
     case "research":
       return record.value.question;
     case "sources":
@@ -694,7 +691,10 @@ export function SessionSnapshotsView({
                     <small>
                       {snapshot.strategy.replaceAll("_", " ")} · {snapshot.id}
                     </small>
-                    <p>{snapshot.summary || "No summary was recorded."}</p>
+                    <MarkdownContent
+                      className="session-snapshot-preview"
+                      content={snapshot.summary || "No summary was recorded."}
+                    />
                     <span className="session-snapshot-counts">
                       {snapshot.pinnedFacts.length} facts ·{" "}
                       {snapshot.openTasks.length} open tasks ·{" "}

@@ -45,6 +45,7 @@ describe("ProductRail terminal availability", () => {
     const markup = renderRail(true);
 
     expect(markup).not.toContain(">Files</span>");
+    expect(markup).not.toContain(">Activity</span>");
   });
 
   it("does not expose the global terminal action for an external target", () => {

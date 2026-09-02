@@ -44,6 +44,149 @@ test("minimum layout and capability-driven controls remain accessible", async ({
   expect(blockingViolations).toEqual([]);
 });
 
+test("slash commands complete and change Desktop modes without becoming prompts", async ({
+  page,
+}) => {
+  const prompt = page.getByRole("textbox", { name: "Prompt" });
+
+  await prompt.fill("/plan ");
+  const commands = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(commands).toBeVisible();
+  await expect(commands.getByRole("option")).toHaveCount(6);
+  await expect(commands.getByRole("option").first()).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(prompt).toHaveAttribute(
+    "aria-activedescendant",
+    "desktop-slash-command-0",
+  );
+  await expect(
+    commands.getByRole("option", { name: /\/plan new/u }),
+  ).toBeVisible();
+
+  await prompt.press("ArrowDown");
+  await expect(commands.getByRole("option").nth(1)).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await prompt.press("Escape");
+  await expect(commands).toBeHidden();
+
+  await prompt.fill("/plan");
+  await prompt.press("Enter");
+  await expect(page.getByRole("radio", { name: "Plan" })).toBeChecked();
+  await expect(prompt).toHaveValue("");
+  await expect(page.getByText("Plan mode enabled.")).toBeVisible();
+
+  await prompt.fill("/plan off");
+  await prompt.press("Enter");
+  await expect(page.getByRole("radio", { name: "Execute" })).toBeChecked();
+  await expect(prompt).toHaveValue("");
+
+  await prompt.fill("/plan execute direct");
+  await prompt.press("Enter");
+  await expect(
+    page.getByText(/That Plan command is not available in Desktop/u),
+  ).toBeVisible();
+  await expect(prompt).toHaveValue("/plan execute direct");
+
+  await prompt.fill("/research on");
+  await prompt.press("Enter");
+  await expect(page.getByRole("radio", { name: "Research" })).toBeChecked();
+  await expect(page.getByText("Research mode enabled.")).toBeVisible();
+
+  await prompt.fill("/execute");
+  await prompt.press("Enter");
+  await expect(page.getByRole("radio", { name: "Execute" })).toBeChecked();
+
+  await prompt.fill("/permissions");
+  await prompt.press("Enter");
+  await expect(page.getByText("Desktop permission mode is ask.")).toBeVisible();
+
+  await prompt.fill("/help");
+  await prompt.press("Enter");
+  await expect(prompt).toHaveValue("/");
+  await expect(commands.getByRole("option")).toHaveCount(29);
+
+  await prompt.fill("/plan list");
+  await prompt.press("Enter");
+  await expect(page.getByRole("button", { name: "Plans" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+
+  await prompt.fill("/work");
+  await prompt.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "Conversation" }),
+  ).toHaveAttribute("aria-current", "page");
+});
+
+test("slash-command palette remains contained, scrollable, and accessible at compact width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 520, height: 720 });
+  const prompt = page.getByRole("textbox", { name: "Prompt" });
+  await prompt.fill("/");
+
+  const menu = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(menu).toBeVisible();
+  const palette = page.locator(".slash-command-menu");
+  const geometry = await palette.evaluate((element) => {
+    const menuRect = element.getBoundingClientRect();
+    const tabsRect = document
+      .querySelector(".session-workspace-tabs")
+      ?.getBoundingClientRect();
+    const composerRect = document
+      .querySelector(".work-composer")
+      ?.getBoundingClientRect();
+    return {
+      menuTop: menuRect.top,
+      menuBottom: menuRect.bottom,
+      menuHeight: menuRect.height,
+      tabsBottom: tabsRect?.bottom ?? 0,
+      composerTop: composerRect?.top ?? window.innerHeight,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(geometry.menuTop).toBeGreaterThanOrEqual(geometry.tabsBottom - 1);
+  expect(geometry.menuBottom).toBeLessThanOrEqual(geometry.composerTop);
+  expect(geometry.menuBottom).toBeLessThanOrEqual(geometry.viewportHeight);
+  expect(geometry.menuHeight).toBeLessThanOrEqual(280);
+
+  for (let index = 0; index < 18; index += 1) {
+    await prompt.press("ArrowDown");
+  }
+  const activeDescendant = await prompt.getAttribute("aria-activedescendant");
+  expect(activeDescendant).not.toBeNull();
+  const activeRow = page.locator(`#${activeDescendant ?? "missing"}`);
+  await expect(activeRow).toHaveAttribute("aria-selected", "true");
+  const activeRowIsVisible = await activeRow.evaluate((element) => {
+    const rowRect = element.getBoundingClientRect();
+    const optionsRect = element.parentElement?.getBoundingClientRect();
+    return (
+      optionsRect !== undefined &&
+      rowRect.top >= optionsRect.top &&
+      rowRect.bottom <= optionsRect.bottom
+    );
+  });
+  expect(activeRowIsVisible).toBe(true);
+
+  const results = await new AxeBuilder({ page })
+    .include(".slash-command-menu")
+    .analyze();
+  const blockingViolations = results.violations.filter((violation) =>
+    ["critical", "serious"].includes(violation.impact ?? ""),
+  );
+  expect(blockingViolations).toEqual([]);
+
+  await page
+    .getByRole("heading", { name: "Harden desktop agent bootstrap" })
+    .click();
+  await expect(menu).toBeHidden();
+});
+
 test("settings dropdowns use styled app-owned menus with keyboard support", async ({
   page,
 }) => {
@@ -372,6 +515,16 @@ test("light theme keeps workspace shell surfaces readable", async ({
 
   await page.getByRole("button", { name: "Work", exact: true }).click();
   await expect(
+    page
+      .getByRole("navigation", { name: "Workspace destinations" })
+      .getByRole("button", { name: "Activity", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("navigation", { name: "Session views" })
+      .getByRole("button", { name: "Activity", exact: true }),
+  ).toBeVisible();
+  await expect(
     page.locator(".connection-badge.connection-connected"),
   ).toHaveCSS("background-color", "rgb(230, 245, 238)");
   await expect(page.locator(".markdown-content table")).toHaveCSS(
@@ -504,7 +657,6 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
 
   for (const [destination, selector, expectedBackground] of [
     ["Capabilities", ".overview-section", "rgb(255, 255, 255)"],
-    ["Activity", ".activity-list article", "rgb(255, 255, 255)"],
     ["Library", ".artifact-library-list article", "rgb(255, 255, 255)"],
     ["Connections", ".target-grid > button:nth-child(2)", "rgb(240, 244, 248)"],
   ] as const) {
@@ -586,7 +738,16 @@ test("managed settings expose complete catalog editors without horizontal overfl
   expect(Math.abs(modelLabelHeight - reasoningFieldHeight)).toBeLessThanOrEqual(
     1,
   );
-  await expect(page.getByText("Image inputs", { exact: true })).toBeVisible();
+  for (const label of ["Tool calls", "Streaming", "Image inputs"]) {
+    const capability = page.getByRole("switch", { name: new RegExp(label) });
+    await expect(capability).toBeVisible();
+    const dimensions = await capability.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      width: element.getBoundingClientRect().width,
+    }));
+    expect(dimensions.width).toBeLessThanOrEqual(36);
+    expect(dimensions.height).toBeLessThanOrEqual(20);
+  }
   const modelResults = await new AxeBuilder({ page })
     .include(".models-settings")
     .analyze();
@@ -1068,6 +1229,143 @@ test("search services stay complete, clear, and compact", async ({ page }) => {
   expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
 });
 
+test("every settings tab fills the viewport and keeps actions anchored", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const scrollPane = page.locator(".settings-scroll");
+  const sectionTabs = page.getByRole("navigation", {
+    name: "Settings sections",
+  });
+  const measureGaps = () =>
+    scrollPane.evaluate((element) => {
+      const operationsBounds = element
+        .closest(".operations-surface")
+        ?.getBoundingClientRect();
+      const actionBounds = element
+        .querySelector(".managed-settings-actions")
+        ?.getBoundingClientRect();
+      return {
+        actionGap:
+          operationsBounds && actionBounds
+            ? operationsBounds.bottom - actionBounds.bottom
+            : null,
+        viewportGap: operationsBounds
+          ? operationsBounds.bottom - element.getBoundingClientRect().bottom
+          : null,
+      };
+    });
+
+  const workspaceTabs = [
+    "Runtime",
+    "Providers",
+    "MCP",
+    "Access",
+    "Sandbox",
+    "Search",
+    "Telemetry",
+    "Research",
+    "Advanced",
+    "Effective YAML",
+  ];
+  for (const tab of workspaceTabs) {
+    await sectionTabs.getByRole("button", { name: tab, exact: true }).click();
+    const gaps = await measureGaps();
+    expect(
+      Math.abs(gaps.viewportGap ?? -1),
+      `${tab} viewport gap`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(gaps.actionGap ?? -1),
+      `${tab} action gap`,
+    ).toBeLessThanOrEqual(1);
+  }
+
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  for (const tab of [
+    "Providers",
+    "Models",
+    "Credentials",
+    "MCP",
+    "Search",
+    "Telemetry",
+    "Defaults",
+    "Desktop",
+  ]) {
+    await sectionTabs.getByRole("button", { name: tab, exact: true }).click();
+    const gaps = await measureGaps();
+    expect(
+      Math.abs(gaps.viewportGap ?? -1),
+      `${tab} viewport gap`,
+    ).toBeLessThanOrEqual(1);
+    if (tab === "Defaults") {
+      expect(
+        Math.abs(gaps.actionGap ?? -1),
+        "Defaults action gap",
+      ).toBeLessThanOrEqual(1);
+    } else {
+      expect(gaps.actionGap).toBeNull();
+    }
+  }
+
+  await page.setViewportSize({ width: 700, height: 640 });
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  for (const tab of workspaceTabs) {
+    await sectionTabs.getByRole("button", { name: tab, exact: true }).click();
+    const gaps = await measureGaps();
+    expect(
+      Math.abs(gaps.viewportGap ?? -1),
+      `${tab} compact viewport gap`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(gaps.actionGap ?? -1),
+      `${tab} compact action gap`,
+    ).toBeLessThanOrEqual(1);
+  }
+
+  await sectionTabs.getByRole("button", { name: "MCP", exact: true }).click();
+  const scrollMetrics = await scrollPane.evaluate((element) => {
+    element.scrollTop = Math.floor(element.scrollHeight / 2);
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    };
+  });
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(
+    scrollMetrics.clientHeight,
+  );
+  expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
+  const stickyGaps = await measureGaps();
+  expect(Math.abs(stickyGaps.actionGap ?? -1)).toBeLessThanOrEqual(1);
+});
+
+test("settings success feedback uses a dismissible toast", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Defaults", exact: true }).click();
+  await page.getByRole("combobox", { name: "Access profile" }).click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Pinned", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Save global changes", exact: true })
+    .click();
+
+  const toastRegion = page.locator(".toast-region");
+  await expect(toastRegion.getByText("Global changes saved.")).toBeVisible();
+  await expect(
+    page.locator(".managed-settings-message.is-success"),
+  ).toHaveCount(0);
+  await toastRegion
+    .getByRole("button", { name: "Dismiss notification" })
+    .click();
+  await expect(toastRegion.getByText("Global changes saved.")).toHaveCount(0);
+});
+
 test("model settings stay clear, complete, and compact", async ({ page }) => {
   await page.setViewportSize({ width: 700, height: 800 });
   await page.getByRole("button", { name: "Open work navigation" }).click();
@@ -1111,7 +1409,7 @@ test("model settings stay clear, complete, and compact", async ({ page }) => {
   await page
     .getByRole("spinbutton", { name: /^Maximum output \(tokens\)/u })
     .fill("32000");
-  await page.getByRole("checkbox", { name: /Image inputs/u }).check();
+  await page.getByRole("switch", { name: /Image inputs/u }).check();
   const reasoningEffort = page.getByRole("combobox", {
     name: /^Reasoning effort/u,
   });
@@ -1324,16 +1622,45 @@ test("session snapshots and every durable record family are listable and inspect
     page.getByRole("heading", { name: "Context snapshots" }),
   ).toBeVisible();
   await expect(page.getByText(/Messages 1–18/u)).toBeVisible();
+  const preview = page.locator(".session-snapshot-preview").first();
+  await expect(
+    preview.getByRole("heading", { name: "Session context" }),
+  ).toBeVisible();
+  const previewHeight = await preview.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(previewHeight.clientHeight).toBeLessThan(previewHeight.scrollHeight);
   await page.getByRole("button", { name: "View snapshot" }).first().click();
+  const details = page.getByLabel("Thread details", { exact: true });
   await expect(
-    page.getByText("Context snapshot", { exact: true }),
+    details.getByText("Context snapshot", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Pinned facts", exact: true }),
+    details.getByRole("heading", { name: "Messages 1–18" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Open tasks", exact: true }),
+    details.getByRole("heading", { name: "Session context" }),
   ).toBeVisible();
+  await expect(
+    details.getByRole("heading", { name: "Pinned facts", exact: true }),
+  ).toBeVisible();
+  await expect(
+    details.getByRole("heading", { name: "Open tasks", exact: true }),
+  ).toBeVisible();
+  const snapshotPanel = details.locator(".session-map-details");
+  const scrollState = await snapshotPanel.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return {
+      clientHeight: element.clientHeight,
+      overflowY: getComputedStyle(element).overflowY,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    };
+  });
+  expect(scrollState.overflowY).toBe("auto");
+  expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
+  expect(scrollState.scrollTop).toBeGreaterThan(0);
   await page.getByRole("button", { name: "Back to thread details" }).click();
 
   await page.getByRole("button", { name: "Resources", exact: true }).click();
@@ -2258,6 +2585,16 @@ test("terminal threads can be archived from the Workspace sidebar", async ({
     name: "Archive Audit ipc boundary",
   });
   await expect(archive).toBeEnabled();
+  await page
+    .getByRole("heading", { name: "Harden desktop agent bootstrap" })
+    .click();
+  await expect(archive).toBeHidden();
+
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
   await archive.click();
 
   await expect(archive).toHaveCount(0);

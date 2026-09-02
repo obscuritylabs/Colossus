@@ -75,6 +75,7 @@ import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
+import { ToastRegion, useToastQueue } from "./components/ToastRegion";
 import type {
   SpaceActionFeedback,
   SpaceSearchScope,
@@ -85,6 +86,10 @@ import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
 import { managedOnboardingRequired } from "./onboarding";
+import {
+  parseDesktopSlashCommand,
+  type DesktopSlashAction,
+} from "./slash-commands";
 import {
   enqueueMessage,
   messagesForThread,
@@ -101,7 +106,6 @@ import { selectSessionParticipants } from "./participants";
 import {
   agentRoleLabel,
   safeDisplayLabel,
-  selectOperationalActivity,
   selectReleasedArtifacts,
 } from "./presenters";
 import {
@@ -959,6 +963,7 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [approvalModeChanging, setApprovalModeChanging] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
+  const { dismissToast, pushToast, toasts } = useToastQueue();
   const [conversationFollowRequest, setConversationFollowRequest] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<
     readonly QueuedMessage[]
@@ -2024,12 +2029,165 @@ export default function App() {
     return message;
   }
 
+  function setSlashCommandError(message: string) {
+    setComposerError({
+      code: "invalid_slash_command",
+      message,
+      retryable: false,
+      outcomeUnknown: false,
+      violations: [],
+    });
+  }
+
+  async function handleDesktopSlashAction(
+    action: DesktopSlashAction,
+  ): Promise<"clear" | "preserve"> {
+    setComposerError(null);
+    switch (action.type) {
+      case "show_help":
+        setPrompt("/");
+        pushToast("Choose a supported Desktop command.", "info");
+        requestAnimationFrame(() => composerRef.current?.focus());
+        return "preserve";
+      case "new_work":
+        newWork();
+        pushToast("New work is ready.", "info");
+        return "clear";
+      case "open_work_navigation":
+        setSurface("work");
+        setWorkNavigationOpen(true);
+        return "clear";
+      case "set_mode":
+        if (action.mode === "research" && !desktop.capabilities.research) {
+          setSlashCommandError("Research is unavailable for this target.");
+          return "preserve";
+        }
+        if (action.resetPlanRevision) {
+          setPlanRevision(null);
+        }
+        setMode(action.mode);
+        pushToast(
+          `${action.mode === "plan" ? "Plan" : action.mode === "research" ? "Research" : "Execute"} mode enabled.`,
+          "info",
+        );
+        return "clear";
+      case "toggle_mode": {
+        const nextMode: RunMode =
+          mode === action.mode ? "execute" : action.mode;
+        if (nextMode === "research" && !desktop.capabilities.research) {
+          setSlashCommandError("Research is unavailable for this target.");
+          return "preserve";
+        }
+        if (nextMode !== "plan") {
+          setPlanRevision(null);
+        }
+        setMode(nextMode);
+        pushToast(
+          `${nextMode === "plan" ? "Plan" : nextMode === "research" ? "Research" : "Execute"} mode enabled.`,
+          "info",
+        );
+        return "clear";
+      }
+      case "show_mode_status":
+        pushToast(
+          action.mode === "plan"
+            ? mode === "plan"
+              ? planRevision === null
+                ? "Plan mode is active. The next prompt creates a new durable draft."
+                : `Plan mode is revising revision ${planRevision.revision}.`
+              : "Plan mode is off."
+            : mode === "research"
+              ? "Research mode is active."
+              : "Research mode is off.",
+          "info",
+        );
+        return "clear";
+      case "show_approval_mode":
+        pushToast(
+          `Desktop permission mode is ${desktop.approvalMode.replace("_", " ")}.`,
+          "info",
+        );
+        return "clear";
+      case "set_approval_mode": {
+        const selected = desktop.targets.find(
+          (target) => target.targetId === desktop.selectedTargetId,
+        );
+        if (selected?.kind !== "managed_local") {
+          setSlashCommandError(
+            "Desktop permission commands require a selected Managed Local target.",
+          );
+          return "preserve";
+        }
+        const changed = await handleSetApprovalMode(action.mode);
+        if (!changed) {
+          return "preserve";
+        }
+        pushToast(
+          `Desktop permission mode changed to ${action.mode.replace("_", " ")}.`,
+          "success",
+        );
+        return "clear";
+      }
+      case "select_surface":
+        if (
+          action.surface === "fleet" &&
+          !desktop.capabilities.delegation &&
+          !desktop.capabilities.agentWorkflows &&
+          !desktop.capabilities.skills
+        ) {
+          setSlashCommandError("Agents are unavailable for this target.");
+          return "preserve";
+        }
+        if (action.surface === "library" && !desktop.capabilities.artifacts) {
+          setSlashCommandError("Artifacts are unavailable for this target.");
+          return "preserve";
+        }
+        setWorkNavigationOpen(false);
+        setSurface(action.surface);
+        return "clear";
+      case "select_session_view":
+        setWorkNavigationOpen(false);
+        setSurface("work");
+        setActiveSessionWorkspaceView(action.view);
+        return "clear";
+      case "open_tui": {
+        const selected = desktop.targets.find(
+          (target) => target.targetId === desktop.selectedTargetId,
+        );
+        if (
+          !desktop.capabilities.tui ||
+          !desktop.terminalEnabled ||
+          selected?.terminalAvailable !== true
+        ) {
+          setSlashCommandError(
+            "Enable the authenticated local TUI for a ready Managed Local target in Settings.",
+          );
+          return "preserve";
+        }
+        await handleOpenTerminal("colossus_tui");
+        return "clear";
+      }
+    }
+  }
+
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const cleanPrompt = prompt.trim();
+    const slashCommand = parseDesktopSlashCommand(cleanPrompt);
+    if (slashCommand.type === "invalid") {
+      setSlashCommandError(slashCommand.message);
+      return;
+    }
+    if (slashCommand.type === "action") {
+      const disposition = await handleDesktopSlashAction(slashCommand.action);
+      if (disposition === "clear") {
+        setPrompt("");
+      }
+      return;
+    }
     if (submitInFlight.current || connectingRef.current) {
       return;
     }
-    const cleanPrompt = prompt.trim();
     const cleanRole = role.trim();
     if (
       cleanPrompt.length === 0 ||
@@ -3892,9 +4050,11 @@ export default function App() {
     }
   }
 
-  async function handleSetApprovalMode(approvalMode: ApprovalMode) {
+  async function handleSetApprovalMode(
+    approvalMode: ApprovalMode,
+  ): Promise<boolean> {
     if (approvalModeChanging || submitting || connectingRef.current) {
-      return;
+      return false;
     }
     setApprovalModeChanging(true);
     setActionError(null);
@@ -3904,9 +4064,11 @@ export default function App() {
         : await setApprovalMode(approvalMode);
       desktopRef.current = status;
       setDesktop(status);
+      return true;
     } catch (error: unknown) {
       setActionError(commandError(error));
       await resyncDesktopAfterFailedMutation();
+      return false;
     } finally {
       setApprovalModeChanging(false);
     }
@@ -4204,7 +4366,6 @@ export default function App() {
     [conversationViews],
   );
   const allArtifacts = useMemo(() => selectReleasedArtifacts(views), [views]);
-  const activity = useMemo(() => selectOperationalActivity(views), [views]);
   const artifactItems = useMemo<ArtifactViewItem[]>(
     () =>
       selectedArtifacts.map((artifact) => {
@@ -4474,6 +4635,7 @@ export default function App() {
         active={managedRuntimeBoundaryActive(desktop.managedState)}
         boundary={desktop.executionBoundary}
       />
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {!onboardingActive && workNavigationOpen ? (
         <button
           className="workspace-drawer-backdrop work-navigation-backdrop"
@@ -4623,11 +4785,7 @@ export default function App() {
           asideError={asideError}
           asideReadOnly={asideReadOnly}
           planContinuationAvailable={desktop.capabilities.planContinuation}
-          initialSessionWorkspaceView={
-            FIXTURE_QUERY.get("view") === "activity"
-              ? "activity"
-              : "conversation"
-          }
+          initialSessionWorkspaceView={activeSessionWorkspaceView}
           onSessionWorkspaceViewChange={setActiveSessionWorkspaceView}
           sessionActivityAvailable={
             desktop.capabilities.sessionActivity === true
@@ -4729,7 +4887,6 @@ export default function App() {
           updateMessage={updateMessage}
           runs={chat.recentRuns}
           artifacts={allArtifacts}
-          activity={activity}
           demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
           workNavigationOpen={workNavigationOpen}
           onOpenWorkNavigation={openWorkNavigation}

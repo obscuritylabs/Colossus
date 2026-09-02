@@ -2,7 +2,7 @@ use super::{
     AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, NetworkDestinationMatch, QuarantinedEffectObserver, ReleasedEffectObserver,
     ReleasedEffectResult, SafetyKernel, SandboxBoundaryGate, StreamingEffectExecutor,
-    effect_request, http_transport_authority_match, network_authority_match,
+    disclosure_summary, effect_request, http_transport_authority_match, network_authority_match,
     network_destination_match, system_actor, with_sandbox_boundary_acknowledgement,
 };
 use async_trait::async_trait;
@@ -27,6 +27,47 @@ use std::{
     thread,
     time::Duration,
 };
+
+#[tokio::test(flavor = "current_thread")]
+async fn disclosure_summary_preserves_the_bounded_audit_contract() {
+    let request = effect_request(
+        Actor {
+            actor_type: ActorType::Model,
+            id: "summary-test".into(),
+        },
+        "repo.map",
+        "workspace",
+        serde_json::json!({
+            "depth": 4,
+            "include": ["crates", "apps"],
+        }),
+    );
+
+    let summary = disclosure_summary(&request)
+        .await
+        .expect("disclosure summary");
+
+    assert_eq!(summary["request_id"], request.request_id);
+    assert_eq!(summary["action"], "repo.map");
+    assert_eq!(summary["resource"], "workspace");
+    assert_eq!(
+        summary["content_fields"],
+        serde_json::json!(["depth", "include"])
+    );
+    assert_eq!(
+        summary["content_size"],
+        serde_json::to_vec(&request.content)
+            .expect("encode request content")
+            .len()
+    );
+    assert_eq!(
+        summary["content_hash"],
+        super::sha256_hex(
+            &serde_json::to_vec(&request.content).expect("encode request content for hash")
+        )
+    );
+    assert!(summary.get("content").is_none());
+}
 
 struct CountingExecutor {
     calls: AtomicUsize,

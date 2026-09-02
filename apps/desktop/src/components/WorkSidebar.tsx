@@ -49,6 +49,7 @@ import type {
   SpaceSummary,
 } from "../types";
 import { isTerminalStatus } from "../types";
+import { ObscurityLabsMark } from "./ObscurityLabsMark";
 import type { WorkspaceSurface } from "./ProductRail";
 
 export type SpaceSearchScope = "space" | "all";
@@ -129,7 +130,6 @@ interface WorkSidebarProps {
 const DESTINATIONS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
   { id: "fleet", label: "Capabilities", Icon: IconTopologyStar3 },
-  { id: "activity", label: "Activity", Icon: IconActivity },
   { id: "library", label: "Library", Icon: IconLibrary },
   { id: "connections", label: "Connections", Icon: IconPlugConnected },
   { id: "settings", label: "Settings", Icon: IconSettings },
@@ -1060,13 +1060,13 @@ export function WorkSidebar({
                                   className="thread-actions-menu"
                                   onBlur={(event) => {
                                     const menu = event.currentTarget;
-                                    window.requestAnimationFrame(() => {
-                                      if (
-                                        !menu.contains(document.activeElement)
-                                      ) {
-                                        menu.removeAttribute("open");
-                                      }
-                                    });
+                                    const nextFocus = event.relatedTarget;
+                                    if (
+                                      !(nextFocus instanceof Node) ||
+                                      !menu.contains(nextFocus)
+                                    ) {
+                                      menu.removeAttribute("open");
+                                    }
                                   }}
                                   onKeyDown={(event) => {
                                     if (event.key === "Escape") {
@@ -1415,11 +1415,17 @@ export function WorkSidebar({
       </nav>
 
       <footer className="space-sidebar-footer">
-        <span
-          className={`connection-dot connection-${connectionState}`}
-          aria-hidden="true"
-        />
-        {connectionState === "connected" ? "Agent online" : "Agent offline"}
+        <span className="space-sidebar-runtime">
+          <span
+            className={`connection-dot connection-${connectionState}`}
+            aria-hidden="true"
+          />
+          {connectionState === "connected" ? "Agent online" : "Agent offline"}
+        </span>
+        <span className="lab-signature" title="Obscurity Labs">
+          <ObscurityLabsMark className="lab-signature-mark" />
+          <span>Obscurity Labs</span>
+        </span>
       </footer>
     </aside>
   );

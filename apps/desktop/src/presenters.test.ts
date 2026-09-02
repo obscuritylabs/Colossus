@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_PRESENTED_ACTIVITY_ITEMS,
   MAX_PRESENTED_ARTIFACTS,
   MAX_PRESENTED_WORK_ITEMS,
   agentRoleLabel,
   presentRunStatus,
   safeDisplayLabel,
-  selectOperationalActivity,
   selectRecentWork,
   selectReleasedArtifacts,
 } from "./presenters";
@@ -316,104 +314,5 @@ describe("selectReleasedArtifacts", () => {
     expect(selectReleasedArtifacts(viewFixture(updates))).toHaveLength(
       MAX_PRESENTED_ARTIFACTS,
     );
-  });
-});
-
-describe("selectOperationalActivity", () => {
-  it("flattens released updates without projecting output or approval secrets", () => {
-    const updates: RunUpdate[] = [
-      update(1, { type: "output_delta", delta: "private streamed output" }),
-      update(2, {
-        type: "tool_activity",
-        activity: {
-          callId: "private-call-id",
-          toolName: "docs.fetch",
-          state: "waiting_approval",
-          summary: "Review\nrequested",
-        },
-      }),
-      update(3, {
-        type: "interaction",
-        interaction: {
-          interactionId: "interaction-1",
-          runId: BASE_RUN.runId,
-          kind: "approval",
-          status: "pending",
-          createdAt: "2026-07-20T12:00:03Z",
-          expiresAt: "2026-07-20T12:05:03Z",
-          respondableByCaller: true,
-          etag: "private-interaction-etag",
-          content: {
-            type: "approval",
-            reason: "Publish the document",
-            action: "private-action",
-            resource: "private-resource",
-            risk: "medium",
-            requestHash: "private-request-hash",
-          },
-        },
-      }),
-      update(4, {
-        type: "result",
-        result: {
-          output: "private terminal output",
-          profile: "private-profile",
-          modelProfile: "private-profile",
-          providerProfile: "private-provider",
-          model: "private-model",
-          elapsedSeconds: 1.25,
-        },
-      }),
-    ];
-
-    const activity = selectOperationalActivity(viewFixture(updates));
-    const serialized = JSON.stringify(activity);
-    expect(activity.map(({ kind }) => kind)).toEqual([
-      "result",
-      "interaction",
-      "tool",
-    ]);
-    expect(activity[1]).toMatchObject({
-      title: "Approval requested",
-      detail: "Publish the document",
-      stateLabel: "Needs attention",
-    });
-    expect(activity[2]).toMatchObject({
-      title: "docs.fetch",
-      detail: "Review requested",
-      stateLabel: "Needs approval",
-    });
-    expect(serialized).not.toContain("private streamed output");
-    expect(serialized).not.toContain("private terminal output");
-    expect(serialized).not.toContain("private-request-hash");
-    expect(serialized).not.toContain("private-call-id");
-  });
-
-  it("merges cached views newest-first and keeps the activity bound", () => {
-    const firstView = viewFixture([
-      update(1, {
-        type: "notice",
-        reason: "checkpoint",
-        message: "First view",
-      }),
-    ]);
-    const secondRun = runFixture({ runId: "run-2", role: "research" });
-    const secondView = viewFixture(
-      Array.from({ length: MAX_PRESENTED_ACTIVITY_ITEMS + 10 }, (_, index) => ({
-        ...update(index + 1, {
-          type: "notice",
-          reason: "checkpoint",
-          message: `Checkpoint ${index}`,
-        }),
-        runId: secondRun.runId,
-        createdAt: `2026-07-21T12:${String(index % 60).padStart(2, "0")}:00Z`,
-      })),
-      secondRun,
-    );
-
-    const activity = selectOperationalActivity([firstView, secondView]);
-    expect(activity).toHaveLength(MAX_PRESENTED_ACTIVITY_ITEMS);
-    expect(activity[0]?.runId).toBe(secondRun.runId);
-    expect(activity[0]?.agentLabel).toBe("Research");
   });
 });

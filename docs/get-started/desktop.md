@@ -168,6 +168,17 @@ interface keeps a persistent warning visible. Choose **Workspace isolated** or
 **Offline isolated** to restore platform containment; choose **Development** or
 **Minimal** to narrow tool decisions independently.
 
+Typing `/` at the start of the Work composer opens Desktop's bounded command menu.
+Desktop intercepts these commands locally; neither supported nor unknown slash commands
+are submitted as model prompts. The core set includes `/plan`, `/plan new`, `/plan on`,
+`/plan off`, `/plan status`, `/plans`, `/execute`, `/research`, `/new`, `/resume`,
+`/permissions`, `/work`, `/agents`, `/artifacts`, `/connections`, `/settings`, and
+`/tui`. Use Up or Down to select a completion, Tab to accept it, Escape to close the
+menu, and Enter to run an exact command. Plan approval, revision, and execution remain
+authenticated Plan-card actions in Desktop; use the bundled TUI for its larger
+`/plan use`, `/plan approve`, and `/plan execute` workflow instead of treating those
+strings as Desktop authority.
+
 The Work surface keeps every released, listable session record available. **Snapshots**
 lists immutable context-compaction records and opens their summary, message range,
 pinned facts, open tasks, touched files, notable tool results, and strategy. **Resources**

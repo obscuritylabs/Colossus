@@ -524,12 +524,17 @@ pub(crate) fn initialize_catalog(
         }
         for provider in &space.providers {
             let key = format!("provider:{}", provider.profile);
-            if let std::collections::btree_map::Entry::Vacant(entry) =
-                space.configuration.catalog_revisions.entry(key)
-            {
+            let profile_is_selected = space
+                .configuration
+                .catalog_revisions
+                .iter()
+                .filter(|(key, _)| key.starts_with("provider:"))
+                .filter_map(|(_, reference)| catalog_revision_value(&global.providers, reference))
+                .any(|selected| selected.profile == provider.profile);
+            if !profile_is_selected && !space.configuration.catalog_revisions.contains_key(&key) {
                 let reference =
                     ensure_catalog_entry(&mut global.providers, &provider.profile, provider);
-                entry.insert(reference);
+                space.configuration.catalog_revisions.insert(key, reference);
             }
             if let Some(credential_id) = provider.credential_id.as_deref()
                 && global
@@ -548,11 +553,16 @@ pub(crate) fn initialize_catalog(
         }
         for model in &space.models {
             let key = format!("model:{}", model.profile);
-            if let std::collections::btree_map::Entry::Vacant(entry) =
-                space.configuration.catalog_revisions.entry(key)
-            {
+            let profile_is_selected = space
+                .configuration
+                .catalog_revisions
+                .iter()
+                .filter(|(key, _)| key.starts_with("model:"))
+                .filter_map(|(_, reference)| catalog_revision_value(&global.models, reference))
+                .any(|selected| selected.profile == model.profile);
+            if !profile_is_selected && !space.configuration.catalog_revisions.contains_key(&key) {
                 let reference = ensure_catalog_entry(&mut global.models, &model.profile, model);
-                entry.insert(reference);
+                space.configuration.catalog_revisions.insert(key, reference);
             }
         }
     }
@@ -1063,6 +1073,54 @@ mod tests {
             spaces[0].configuration.catalog_revisions["provider:primary-provider"],
             pinned
         );
+    }
+
+    #[test]
+    fn catalog_initialization_does_not_duplicate_canonical_resource_pins() {
+        let mut workspace = space("one", provider("https://example.test/v1"));
+        workspace.models = vec![model("gpt-test")];
+        workspace.model_roles = BTreeMap::from([("primary".into(), "primary".into())]);
+        let mut spaces = vec![workspace];
+        let mut global = GlobalConfigurationSetting::default();
+        initialize_catalog(&mut global, &mut spaces);
+        for prefix in ["provider:", "model:"] {
+            let legacy_key = spaces[0]
+                .configuration
+                .catalog_revisions
+                .keys()
+                .find(|key| key.starts_with(prefix))
+                .cloned()
+                .expect("legacy profile pin");
+            let reference = spaces[0]
+                .configuration
+                .catalog_revisions
+                .remove(&legacy_key)
+                .expect("legacy reference");
+            spaces[0]
+                .configuration
+                .catalog_revisions
+                .insert(format!("{prefix}{}", reference.resource_id), reference);
+        }
+
+        initialize_catalog(&mut global, &mut spaces);
+
+        assert_eq!(spaces[0].configuration.catalog_revisions.len(), 2);
+        assert!(
+            !spaces[0]
+                .configuration
+                .catalog_revisions
+                .contains_key("provider:primary-provider")
+        );
+        assert!(
+            !spaces[0]
+                .configuration
+                .catalog_revisions
+                .contains_key("model:primary")
+        );
+        let resolved =
+            resolve_space_configuration(&global, &spaces[0]).expect("canonical resource pins");
+        assert_eq!(resolved.providers.len(), 1);
+        assert_eq!(resolved.models.len(), 1);
     }
 
     #[test]

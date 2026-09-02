@@ -778,7 +778,7 @@ describe("ManagedSettingsPane", () => {
       }),
     );
     expect(markup).toContain("Allow stateless HTTP");
-    expect(markup).toContain('type="checkbox" checked=""');
+    expect(markup).toContain('type="checkbox" role="switch" checked=""');
   });
 
   it("uses the server name as the catalog label until a custom label is set", () => {

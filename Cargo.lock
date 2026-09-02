@@ -858,7 +858,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "colossus-access"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "serde",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-agent"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api-proto"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "prost",
  "prost-types",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api-runtime"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-audit"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-cli"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-codex-auth"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "base64",
  "colossus-windows-native",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-context"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-contracts"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -1070,18 +1070,18 @@ dependencies = [
 
 [[package]]
 name = "colossus-darwin-process"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "colossus-domain"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 
 [[package]]
 name = "colossus-fuzzing"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-workflow",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-grpc"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "base64",
  "colossus-api",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-home"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-windows-native",
  "directories",
@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-integrations"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-journal-postgres"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "chacha20poly1305",
  "colossus-contracts",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-journal-redb"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "base64",
  "chacha20poly1305",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-mcp"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-media"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-memory"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1291,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-memory-chroma"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-network"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "hex",
  "rcgen",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-observability"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1347,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-packs"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-policy"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-presentation"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-projection"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1445,7 +1445,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-provider"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-research"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-runtime"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sandbox"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sdk"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-api",
@@ -1621,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-search"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-session"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sidecar"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-access",
  "colossus-api",
@@ -1683,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sidecar-protocol"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-skills"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-policy",
@@ -1712,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-telemetry"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-testkit"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1736,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-tools"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-tui"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1770,7 +1770,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-update"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "colossus-network",
@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-windows-native"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "tempfile",
  "thiserror 2.0.18",
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-windows-process"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "thiserror 2.0.18",
  "windows-sys 0.61.2",
@@ -1807,7 +1807,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-work"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "colossus-contracts",
  "colossus-ports",
@@ -1821,7 +1821,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-worker"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1854,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-worker-protocol"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -1874,7 +1874,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-workflow"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -7901,7 +7901,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.10.10-preview.9"
+version = "0.10.10-preview.10"
 
 [[package]]
 name = "yasna"

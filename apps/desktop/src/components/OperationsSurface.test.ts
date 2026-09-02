@@ -96,7 +96,6 @@ function renderSurface(
       updateMessage: "",
       runs: [],
       artifacts: [],
-      activity: [],
       demoParticipants: null,
       workNavigationOpen: false,
       onOpenWorkNavigation: vi.fn(),

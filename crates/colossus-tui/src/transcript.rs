@@ -590,15 +590,13 @@ pub(super) fn composer_layout(
 
 pub(super) fn completion_menu_height(
     state: &TuiState,
+    total_width: u16,
     total_height: u16,
     composer_height: u16,
     activity_height: u16,
 ) -> u16 {
-    let candidate_rows = state
-        .completion_menu_candidates()
-        .len()
-        .min(MAX_COMPLETION_MENU_ROWS);
-    if candidate_rows == 0 {
+    let candidate_count = state.completion_menu_candidates().len();
+    if candidate_count == 0 {
         return 0;
     }
     let available = total_height
@@ -609,6 +607,13 @@ pub(super) fn completion_menu_height(
     if available < 3 {
         return 0;
     }
+    let roomy_height = u16::try_from(ROOMY_COMPLETION_MENU_ROWS + 2).unwrap_or(u16::MAX);
+    let row_limit = if total_width >= ROOMY_COMPLETION_MENU_WIDTH && available >= roomy_height {
+        ROOMY_COMPLETION_MENU_ROWS
+    } else {
+        MAX_COMPLETION_MENU_ROWS
+    };
+    let candidate_rows = candidate_count.min(row_limit);
     u16::try_from(candidate_rows + 2)
         .unwrap_or(u16::MAX)
         .min(available)

@@ -161,7 +161,7 @@ describe("SessionWorkspace", () => {
     expect(markup).not.toContain("### Simple repository orientation plan");
   });
 
-  it("lists context snapshots and exposes their complete bounded record", () => {
+  it("renders a compact snapshot preview and the complete record as Markdown", () => {
     const sessionMap = buildSessionMapFixture();
     const snapshot = sessionMap.contextSnapshots[0]!;
     const markup = renderToStaticMarkup(
@@ -177,7 +177,14 @@ describe("SessionWorkspace", () => {
     expect(markup).toContain(
       `Messages ${snapshot.sourceStartSequence}–${snapshot.sourceEndSequence}`,
     );
-    expect(markup).toContain(snapshot.summary);
+    expect(markup).toContain(
+      'class="markdown-content session-snapshot-preview"',
+    );
+    expect(markup).toContain("<h4>Session context</h4>");
+    expect(markup).toContain(
+      "<strong>hardening Desktop runtime recovery</strong>",
+    );
+    expect(markup).not.toContain("## Session context");
     expect(markup).toContain("View snapshot");
 
     const detail = renderToStaticMarkup(
@@ -188,6 +195,14 @@ describe("SessionWorkspace", () => {
       }),
     );
     expect(detail).toContain("Context snapshot");
+    expect(detail).toContain(
+      `<h3 id="session-map-detail-title">Messages ${snapshot.sourceStartSequence}–${snapshot.sourceEndSequence}</h3>`,
+    );
+    expect(detail).toContain(
+      'class="markdown-content session-snapshot-summary"',
+    );
+    expect(detail).toContain("<h4>Session context</h4>");
+    expect(detail).not.toContain("## Session context");
     expect(detail).toContain("Pinned facts");
     expect(detail).toContain("Open tasks");
     expect(detail).toContain("Files touched");

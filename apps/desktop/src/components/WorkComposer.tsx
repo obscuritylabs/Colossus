@@ -2,6 +2,8 @@ import {
   IconAdjustmentsHorizontal,
   IconAt,
   IconCheck,
+  IconCommand,
+  IconCornerDownLeft,
   IconFolder,
   IconPaperclip,
   IconPlaylistAdd,
@@ -12,8 +14,10 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
 
+import { desktopSlashCommandSuggestions } from "../slash-commands";
 import type {
   ApprovalMode,
   ArtifactReference,
@@ -151,7 +155,25 @@ export function WorkComposer({
   onRedirect,
   onSubmit,
 }: WorkComposerProps) {
+  const [selectedSlashCommand, setSelectedSlashCommand] = useState<
+    string | null
+  >(null);
+  const [dismissedSlashDraft, setDismissedSlashDraft] = useState<string | null>(
+    null,
+  );
   const roleMissing = role.trim().length === 0;
+  const slashCommandDraft = prompt.trimStart().startsWith("/");
+  const slashCommandSuggestions = desktopSlashCommandSuggestions(prompt);
+  const slashMenuOpen =
+    slashCommandSuggestions.length > 0 && dismissedSlashDraft !== prompt;
+  const selectedSlashIndex = slashCommandSuggestions.findIndex(
+    ({ command }) => command === selectedSlashCommand,
+  );
+  const activeSlashIndex =
+    slashMenuOpen && slashCommandSuggestions.length > 0
+      ? Math.max(0, selectedSlashIndex)
+      : -1;
+  const slashOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const researchSourceSummary = researchSources
     .map((source) =>
       source === "repo"
@@ -162,13 +184,66 @@ export function WorkComposer({
     )
     .join(", ");
 
+  useEffect(() => {
+    if (activeSlashIndex < 0) {
+      return;
+    }
+    slashOptionRefs.current[activeSlashIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [activeSlashIndex, prompt, slashMenuOpen]);
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (slashMenuOpen && event.key === "Escape") {
+      event.preventDefault();
+      setDismissedSlashDraft(prompt);
+      setSelectedSlashCommand(null);
+      return;
+    }
+    if (
+      slashMenuOpen &&
+      (event.key === "ArrowDown" || event.key === "ArrowUp")
+    ) {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex =
+        (activeSlashIndex + direction + slashCommandSuggestions.length) %
+        slashCommandSuggestions.length;
+      setSelectedSlashCommand(
+        slashCommandSuggestions[nextIndex]?.command ?? null,
+      );
+      return;
+    }
+    const completion =
+      slashCommandSuggestions[activeSlashIndex < 0 ? 0 : activeSlashIndex];
+    if (
+      slashMenuOpen &&
+      completion !== undefined &&
+      (event.key === "Tab" ||
+        (event.key === "ArrowRight" && selectedSlashIndex >= 0))
+    ) {
+      event.preventDefault();
+      setSelectedSlashCommand(completion.command);
+      setDismissedSlashDraft(null);
+      onPromptChange(completion.command);
+      return;
+    }
     if (
       event.key === "Enter" &&
       !event.shiftKey &&
       !event.nativeEvent.isComposing
     ) {
       event.preventDefault();
+      if (
+        slashMenuOpen &&
+        completion !== undefined &&
+        prompt.trim().toLowerCase() !== completion.command
+      ) {
+        setSelectedSlashCommand(completion.command);
+        setDismissedSlashDraft(null);
+        onPromptChange(completion.command);
+        return;
+      }
       formRef.current?.requestSubmit();
     }
   }
@@ -403,6 +478,89 @@ export function WorkComposer({
         onDelete={onDeleteQueuedMessage}
         onRetry={onRetryQueuedMessage}
       />
+      {slashMenuOpen ? (
+        <div className="slash-command-menu">
+          <header className="slash-command-header">
+            <span className="slash-command-title">
+              <span className="slash-command-icon" aria-hidden="true">
+                <IconCommand size={16} stroke={1.9} />
+              </span>
+              <span>
+                <strong>Commands</strong>
+                <small>Run a local Desktop action</small>
+              </span>
+            </span>
+            <span className="slash-command-count" aria-live="polite">
+              {slashCommandSuggestions.length}
+            </span>
+          </header>
+          <div
+            className="slash-command-options"
+            id="desktop-slash-command-menu"
+            role="listbox"
+            aria-label="Slash commands"
+          >
+            {slashCommandSuggestions.map((suggestion, index) => {
+              const selected = index === activeSlashIndex;
+              return (
+                <button
+                  ref={(node) => {
+                    slashOptionRefs.current[index] = node;
+                  }}
+                  id={`desktop-slash-command-${index}`}
+                  key={suggestion.command}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className={selected ? "is-selected" : undefined}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() =>
+                    setSelectedSlashCommand(suggestion.command)
+                  }
+                  onClick={() => {
+                    setSelectedSlashCommand(suggestion.command);
+                    setDismissedSlashDraft(null);
+                    onPromptChange(suggestion.command);
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <span className="slash-command-copy">
+                    <strong>{suggestion.command}</strong>
+                    <small>{suggestion.description}</small>
+                  </span>
+                  <span className="slash-command-trailing">
+                    <em>{suggestion.group}</em>
+                    <IconCornerDownLeft
+                      className="slash-command-enter"
+                      size={15}
+                      stroke={1.8}
+                      aria-hidden="true"
+                    />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <footer className="slash-command-footer">
+            <span className="slash-command-local">
+              <IconShieldCheck size={14} stroke={1.8} aria-hidden="true" />
+              Local to Desktop
+            </span>
+            <span className="slash-command-keys" aria-hidden="true">
+              <span>
+                <kbd>↑</kbd>
+                <kbd>↓</kbd> Navigate
+              </span>
+              <span>
+                <kbd>Tab</kbd> Complete
+              </span>
+              <span>
+                <kbd>Esc</kbd> Close
+              </span>
+            </span>
+          </footer>
+        </div>
+      ) : null}
       <textarea
         ref={textareaRef}
         value={prompt}
@@ -427,12 +585,36 @@ export function WorkComposer({
         }
         aria-label="Prompt"
         aria-invalid={promptOverLimit}
+        aria-autocomplete="list"
+        aria-controls={slashMenuOpen ? "desktop-slash-command-menu" : undefined}
+        aria-activedescendant={
+          slashMenuOpen && activeSlashIndex >= 0
+            ? `desktop-slash-command-${activeSlashIndex}`
+            : undefined
+        }
         aria-describedby={
           promptOverLimit ? "prompt-byte-limit-error" : undefined
         }
         disabled={!canCompose}
         onKeyDown={handleKeyDown}
-        onChange={(event) => onPromptChange(event.target.value)}
+        onBlur={(event) => {
+          const nextTarget = event.relatedTarget as Node | null;
+          if (
+            nextTarget === null ||
+            !event.currentTarget
+              .closest("form")
+              ?.querySelector(".slash-command-menu")
+              ?.contains(nextTarget)
+          ) {
+            setDismissedSlashDraft(prompt);
+            setSelectedSlashCommand(null);
+          }
+        }}
+        onChange={(event) => {
+          setSelectedSlashCommand(null);
+          setDismissedSlashDraft(null);
+          onPromptChange(event.target.value);
+        }}
       />
       {attachments.length > 0 ? (
         <div className="composer-attachments" aria-label="Run attachments">
@@ -522,7 +704,7 @@ export function WorkComposer({
             </span>
           </label>
         </fieldset>
-        {activeWorkRunning ? (
+        {activeWorkRunning && !slashCommandDraft ? (
           <button
             className="redirect-button"
             type="button"
@@ -542,26 +724,29 @@ export function WorkComposer({
           </button>
         ) : null}
         <button
-          className={`send-button${queueing ? " is-queue" : ""}`}
+          className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
           type="submit"
           aria-label={
             submitting
               ? "Sending prompt"
-              : queueing
-                ? "Add message to Next up"
-                : "Send prompt"
+              : slashCommandDraft
+                ? "Run command"
+                : queueing
+                  ? "Add message to Next up"
+                  : "Send prompt"
           }
           disabled={
             !canCompose ||
             prompt.trim().length === 0 ||
             promptOverLimit ||
-            roleMissing ||
-            (mode === "research" && researchSources.length === 0)
+            (!slashCommandDraft &&
+              (roleMissing ||
+                (mode === "research" && researchSources.length === 0)))
           }
         >
           {submitting ? (
             <span className="spinner" aria-hidden="true" />
-          ) : queueing ? (
+          ) : queueing && !slashCommandDraft ? (
             <>
               <IconPlaylistAdd size={18} stroke={1.9} aria-hidden="true" />
               <span>Queue</span>
@@ -573,29 +758,31 @@ export function WorkComposer({
       </div>
       <div className="composer-meta">
         <span>
-          {mode === "research" && researchSources.length === 0
-            ? "Select at least one evidence source before starting Research."
-            : activeWorkRunning
-              ? activeWorkNeedsInput
-                ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
-                : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
-              : queueing
-                ? "New messages join Next up. Resolve or remove a failed item to continue in order."
-                : mode === "plan"
-                  ? planRevision === null
-                    ? "Plan creates a new durable draft; implementation and external mutation are blocked."
-                    : "This prompt revises the selected draft; implementation and external mutation remain blocked."
-                  : mode === "research"
-                    ? "Research gathers released evidence from the selected sources and returns a citation-backed report."
-                    : !approvalModeVisible
-                      ? "Effects remain policy-bound and may require approval."
-                      : approvalMode === "deny"
-                        ? "Approval-required effects are denied. Policy and sandbox boundaries remain active."
-                        : approvalMode === "ask"
-                          ? "Approval-required effects pause and ask before continuing."
-                          : approvalMode === "risk_auto"
-                            ? "Eligible low-risk approvals may proceed automatically; other effects ask."
-                            : "Approval obligations proceed without asking; policy and sandbox boundaries remain active."}
+          {slashCommandDraft
+            ? "Slash commands run locally in Desktop and are never sent to the model."
+            : mode === "research" && researchSources.length === 0
+              ? "Select at least one evidence source before starting Research."
+              : activeWorkRunning
+                ? activeWorkNeedsInput
+                  ? "Queued messages wait until the required response is resolved. Redirect stops this response and sends your guidance next."
+                  : "Enter adds to Next up. Redirect stops this response and sends your guidance next."
+                : queueing
+                  ? "New messages join Next up. Resolve or remove a failed item to continue in order."
+                  : mode === "plan"
+                    ? planRevision === null
+                      ? "Plan creates a new durable draft; implementation and external mutation are blocked."
+                      : "This prompt revises the selected draft; implementation and external mutation remain blocked."
+                    : mode === "research"
+                      ? "Research gathers released evidence from the selected sources and returns a citation-backed report."
+                      : !approvalModeVisible
+                        ? "Effects remain policy-bound and may require approval."
+                        : approvalMode === "deny"
+                          ? "Approval-required effects are denied. Policy and sandbox boundaries remain active."
+                          : approvalMode === "ask"
+                            ? "Approval-required effects pause and ask before continuing."
+                            : approvalMode === "risk_auto"
+                              ? "Eligible low-risk approvals may proceed automatically; other effects ask."
+                              : "Approval obligations proceed without asking; policy and sandbox boundaries remain active."}
         </span>
         <span className={promptOverLimit ? "counter-over-limit" : undefined}>
           {promptBytes.toLocaleString()} / {promptByteLimit.toLocaleString()}{" "}

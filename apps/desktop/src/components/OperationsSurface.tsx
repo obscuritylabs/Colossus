@@ -1,11 +1,7 @@
 import {
-  IconActivity,
-  IconAlertTriangle,
   IconArchive,
   IconArrowUpRight,
-  IconCheck,
   IconChevronDown,
-  IconCircle,
   IconDownload,
   IconFileText,
   IconFolder,
@@ -21,7 +17,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useRef } from "react";
 
-import type { OperationalActivityItem, PresentedArtifact } from "../presenters";
+import type { PresentedArtifact } from "../presenters";
 import { agentRoleLabel, presentRunStatus } from "../presenters";
 import type {
   ConnectionStatus,
@@ -43,7 +39,6 @@ interface OperationsSurfaceProps {
   updateMessage: string;
   runs: readonly Run[];
   artifacts: readonly PresentedArtifact[];
-  activity: readonly OperationalActivityItem[];
   demoParticipants: readonly AgentParticipant[] | null;
   workNavigationOpen: boolean;
   onOpenWorkNavigation: () => void;
@@ -350,60 +345,6 @@ function LibraryView({ artifacts }: Pick<OperationsSurfaceProps, "artifacts">) {
                   </p>
                 </div>
               </div>
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </>
-  );
-}
-
-function ActivityView({ activity }: Pick<OperationsSurfaceProps, "activity">) {
-  return (
-    <>
-      <SurfaceHeader
-        eyebrow="Activity / Operational feed"
-        title="What the system is doing"
-        description="A bounded, newest-first feed of released operational events."
-      />
-      <div className="overview-scroll" tabIndex={0}>
-        <section className="overview-section activity-section">
-          <div className="activity-list">
-            {activity.map((item) => (
-              <article key={item.key}>
-                <span
-                  className={`activity-marker tone-${item.tone}`}
-                  aria-hidden="true"
-                >
-                  {item.tone === "success" ? (
-                    <IconCheck size={16} stroke={2} />
-                  ) : item.tone === "danger" || item.tone === "attention" ? (
-                    <IconAlertTriangle size={16} stroke={1.8} />
-                  ) : item.kind === "tool" ? (
-                    <IconActivity size={16} stroke={1.7} />
-                  ) : (
-                    <IconCircle size={13} stroke={1.7} />
-                  )}
-                </span>
-                <div>
-                  <header>
-                    <strong>{item.title}</strong>
-                    <time dateTime={item.createdAt}>{item.createdLabel}</time>
-                  </header>
-                  {item.detail !== null ? <p>{item.detail}</p> : null}
-                  <span>{item.agentLabel}</span>
-                </div>
-                {item.stateLabel !== null ? (
-                  <span className={`status-chip tone-${item.tone}`}>
-                    {item.stateLabel}
-                  </span>
-                ) : null}
-              </article>
-            ))}
-            {activity.length === 0 ? (
-              <p className="inline-empty">
-                No released activity is cached yet.
-              </p>
             ) : null}
           </div>
         </section>
@@ -1051,9 +992,6 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
       {props.surface === "library" ? (
         <LibraryView artifacts={props.artifacts} />
-      ) : null}
-      {props.surface === "activity" ? (
-        <ActivityView activity={props.activity} />
       ) : null}
       {props.surface === "connections" ? <ConnectionsView {...props} /> : null}
       {props.surface === "settings" ? (

@@ -15,9 +15,15 @@ that output completes without inserting cleared live rows between transcript ent
 Use `--alt-screen` for the application-owned full-screen
 transcript viewport; `--no-alt-screen` remains a compatibility alias for the default.
 
-Fresh empty sessions initially use that live viewport for the **Launch Rail**: a responsive,
+Fresh empty sessions initially use that live viewport for the **Lab Console**: a responsive,
 non-durable welcome surface with the selected workspace, provider route, sandbox profile,
-approval mode, and readiness state plus shortcuts for `/plan`, `/resume`, and `/tools`. It is
+approval mode, and readiness state plus shortcuts for `/plan`, `/resume`, and `/tools`. Its
+terminal-native `OL // COLOSSUS` lockup avoids protocol-dependent artwork; roomy terminals add
+the Obscurity Labs name and a restrained red left rail, while compact and monochrome layouts keep
+the same text identity. The start prompt asks **What do you want to work on?**. Runtime
+configuration occupies a `// RUNTIME` row, followed by a separate `// SESSION` section so
+persistence, readiness, and security warnings do not read as an unlabeled continuation of the
+model field. The console is
 never committed to native scrollback or canonical session history. The first submitted command
 or prompt dismisses it before normal output is rendered; restored sessions skip it entirely.
 Inline startup first moves the prior visible terminal into native scrollback, then draws from a
@@ -45,8 +51,9 @@ warning card and remain visible as a warning count in the footer. Each finding i
 risk line followed by a dim, concise recommendation. This includes an explicit
 `danger_full_access` sandbox backend even when its boundary acknowledgement is already
 configured. A quiet row separates startup guidance from the composer. The footer is a
-full-width contrasting status surface; an active security count is a distinct warning-colored
-lead segment.
+full-width contrasting status surface. `OL // COLOSSUS` leads the row, and an active security
+count remains a distinct warning-colored segment beside it. The color-free theme uses the same
+bold text lockup without depending on the Obscurity Labs red.
 
 Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
 current transcript visible and the composer draft preserved. **Summary** presents the
@@ -102,6 +109,10 @@ native scrollback byte-for-byte.
 Typing `/` at the beginning of a draft opens slash-command completion. Typing `@` at a
 skill-token boundary opens skill completion. Suggestions are bounded and dismiss until
 the draft changes after `Esc`.
+
+The completion surface shows up to six suggestions in compact terminals. When at least
+96 columns and enough vertical space are available, it expands to 96 columns and up to
+12 suggestions while retaining transcript, composer, and footer context.
 
 In inline mode, the session and theme browsers open on a temporary alternate screen.
 Closing either restores the inline viewport and native terminal history byte-for-byte,
