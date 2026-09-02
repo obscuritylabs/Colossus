@@ -2585,6 +2585,16 @@ test("terminal threads can be archived from the Workspace sidebar", async ({
     name: "Archive Audit ipc boundary",
   });
   await expect(archive).toBeEnabled();
+  await page
+    .getByRole("heading", { name: "Harden desktop agent bootstrap" })
+    .click();
+  await expect(archive).toBeHidden();
+
+  await page
+    .getByRole("button", {
+      name: "Thread actions for Audit ipc boundary",
+    })
+    .click();
   await archive.click();
 
   await expect(archive).toHaveCount(0);

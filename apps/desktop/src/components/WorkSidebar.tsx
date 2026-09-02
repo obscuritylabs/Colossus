@@ -1062,7 +1062,7 @@ export function WorkSidebar({
                                     const menu = event.currentTarget;
                                     const nextFocus = event.relatedTarget;
                                     if (
-                                      nextFocus instanceof Node &&
+                                      !(nextFocus instanceof Node) ||
                                       !menu.contains(nextFocus)
                                     ) {
                                       menu.removeAttribute("open");
