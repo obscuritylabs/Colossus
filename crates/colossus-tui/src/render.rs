@@ -1,5 +1,11 @@
 use super::*;
 
+const OBSCURITY_LABS_RED: Color = Color::Rgb(213, 16, 48);
+const OBSCURITY_LABS_SEGMENT: &str = "OL //  ";
+const OBSCURITY_LABS_FOOTER_SEGMENT: &str = " OL // COLOSSUS ";
+const WIDE_WELCOME_MIN_WIDTH: usize = 96;
+const WIDE_WELCOME_MIN_HEIGHT: usize = 22;
+
 pub(super) fn render(
     frame: &mut Frame<'_>,
     state: &mut TuiState,
@@ -35,7 +41,13 @@ pub(super) fn render(
     let completion_height = if state.docked_decision_active() {
         0
     } else {
-        completion_menu_height(state, area.height, composer_height, activity_height)
+        completion_menu_height(
+            state,
+            area.width,
+            area.height,
+            composer_height,
+            activity_height,
+        )
     };
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -58,7 +70,15 @@ pub(super) fn render(
             .saturating_sub(u16::from(state.new_items > 0)),
     );
     state.transcript_width = usize::from(rows[0].width).max(20);
-    render_transcript(frame, state, rows[0], transcript_start);
+    // Use the whole viewport for the welcome breakpoint. Inline sizing uses
+    // that same height, so transient completion cannot reflow the start screen.
+    render_transcript(
+        frame,
+        state,
+        rows[0],
+        transcript_start,
+        usize::from(area.height),
+    );
     if activity_height > 0 {
         render_activity(frame, state, rows[1]);
     }
@@ -113,6 +133,7 @@ pub(super) fn render_transcript(
     state: &mut TuiState,
     area: Rect,
     transcript_start: usize,
+    viewport_height: usize,
 ) {
     let (badge_area, transcript_area) = if state.new_items > 0 {
         let rows = Layout::default()
@@ -136,7 +157,7 @@ pub(super) fn render_transcript(
     }
     let width = usize::from(transcript_area.width).max(20);
     let mut lines = if state.welcome_visible {
-        welcome_lines(state, width, usize::from(transcript_area.height))
+        welcome_lines(state, width, viewport_height)
     } else {
         Vec::new()
     };
@@ -249,6 +270,7 @@ pub(super) fn desired_inline_viewport_height(
 
 pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Vec<Line<'static>> {
     let palette = TerminalPalette::for_preferences(&state.preferences);
+    let brand = obscurity_labs_brand_style(&state.preferences);
     let accent = ratatui_style(palette.assistant_style()).add_modifier(Modifier::BOLD);
     let primary = ratatui_style(palette.user_style()).add_modifier(Modifier::BOLD);
     let secondary = ratatui_style(palette.meta_style());
@@ -256,16 +278,16 @@ pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Ve
     let ready =
         ratatui_style(palette.tone_style(PresentationTone::Success)).add_modifier(Modifier::BOLD);
     let warning = ratatui_style(palette.warning_style()).add_modifier(Modifier::BOLD);
-    let status_style = if state.security_posture.is_hardened() {
+    let security_style = if state.security_posture.is_hardened() {
         ready
     } else {
         warning
     };
-    let status_text = if state.security_posture.is_hardened() {
-        "Durable session ready".to_owned()
+    let security_state = if state.security_posture.is_hardened() {
+        "hardened".to_owned()
     } else {
         format!(
-            "Durable session ready · {} security warning{}",
+            "{} warning{}",
             state.security_posture.finding_count(),
             if state.security_posture.finding_count() == 1 {
                 ""
@@ -284,21 +306,20 @@ pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Ve
     );
     let sandbox_profile = sanitize_approval_field(&state.sandbox_profile);
     let approval_mode = sanitize_approval_field(&state.footer.approval_mode);
-    let readiness = sanitize_approval_field(&state.footer.status).to_uppercase();
+    let readiness = sanitize_approval_field(&state.footer.status);
+    let session_state = format!("durable · {}", readiness.to_lowercase());
 
-    if width < 64 || height < 14 {
+    if !wide_welcome_layout(width, height) {
         return vec![
             Line::from(vec![
-                Span::styled(" C ", accent),
-                Span::styled("COLOSSUS", primary),
-                Span::styled("  ● ", status_style),
-                Span::styled(readiness.clone(), status_style),
+                Span::styled(OBSCURITY_LABS_SEGMENT, brand),
+                Span::styled("COLOSSUS", accent),
             ]),
             Line::from(Span::styled(
                 truncate_width("─".repeat(width).as_str(), width),
                 ratatui_style(palette.assistant_style()),
             )),
-            Line::from(Span::styled("What are we moving today?", primary)),
+            Line::from(Span::styled("What do you want to work on?", primary)),
             Line::from(Span::styled(truncate_width(&workspace, width), secondary)),
             Line::from(vec![
                 Span::styled("› ", accent),
@@ -315,103 +336,154 @@ pub(super) fn welcome_lines(state: &TuiState, width: usize, height: usize) -> Ve
                 ),
                 muted,
             )),
-            Line::from(Span::styled(
-                truncate_width(&status_text, width),
-                status_style,
-            )),
+            Line::from(vec![
+                Span::styled("SESSION  ", accent),
+                Span::styled(session_state, ready),
+                Span::styled(" · ", secondary),
+                Span::styled(security_state, security_style),
+            ]),
         ];
     }
 
-    let label_style = accent;
+    let label_style = muted;
     let value_style = ratatui_style(palette.user_style());
-    let divider_width = width.min(112);
-    let shortcut_gap = if width >= 96 {
-        "                         "
-    } else {
-        "     "
-    };
-    let operational = format!(
-        "MODEL  {route}   │   SANDBOX  {}   │   APPROVAL  {}",
-        sandbox_profile, approval_mode
-    );
+    let section_style = value_style.add_modifier(Modifier::BOLD);
     vec![
         Line::from(vec![
-            Span::styled(" C ", accent),
-            Span::styled("│  COLOSSUS", primary),
-            Span::styled("    ● ", status_style),
-            Span::styled(readiness, status_style),
-        ]),
-        Line::from(Span::styled(
-            "─".repeat(divider_width),
-            ratatui_style(palette.assistant_style()),
-        )),
-        Line::default(),
-        Line::from(Span::styled("  What are we moving today?", primary)),
-        Line::from(vec![
-            Span::styled("  ", secondary),
-            Span::styled(
-                truncate_width(&workspace, width.saturating_sub(2)),
-                secondary,
-            ),
+            Span::styled(OBSCURITY_LABS_SEGMENT, brand),
+            Span::styled("COLOSSUS", accent),
+            Span::styled("    OBSCURITY LABS", muted),
         ]),
         Line::default(),
-        Line::from(vec![
-            Span::styled("  ›  ", accent),
-            Span::styled("Build or change something", accent),
-        ]),
-        Line::from(vec![
-            Span::styled("     Plan it first", secondary),
-            Span::raw(shortcut_gap),
-            Span::styled("/plan", label_style),
-        ]),
-        Line::from(vec![
-            Span::styled("     Resume recent work", secondary),
-            Span::raw(if width >= 96 {
-                "                    "
-            } else {
-                " "
-            }),
-            Span::styled("/resume", label_style),
-        ]),
-        Line::from(vec![
-            Span::styled("     Inspect capabilities", secondary),
-            Span::raw(if width >= 96 {
-                "                  "
-            } else {
-                " "
-            }),
-            Span::styled("/tools", label_style),
-        ]),
+        Line::from(Span::styled("What do you want to work on?", primary)),
+        Line::from(Span::styled(truncate_width(&workspace, width), secondary)),
         Line::default(),
-        Line::from(Span::styled("─".repeat(divider_width), muted)),
-        operational_line(&operational, width, label_style, value_style),
-        Line::from(vec![
-            Span::styled("  ●  ", status_style),
-            Span::styled(
-                truncate_width(&status_text, width.saturating_sub(5)),
-                status_style,
-            ),
-        ]),
+        welcome_action_line(
+            ">   ",
+            "Build or change something",
+            None,
+            width,
+            section_style,
+            accent,
+            section_style,
+        ),
+        welcome_action_line(
+            "    ",
+            "Plan it first",
+            Some("/plan"),
+            width,
+            secondary,
+            secondary,
+            section_style,
+        ),
+        welcome_action_line(
+            "    ",
+            "Resume recent work",
+            Some("/resume"),
+            width,
+            secondary,
+            secondary,
+            section_style,
+        ),
+        welcome_action_line(
+            "    ",
+            "Inspect capabilities",
+            Some("/tools"),
+            width,
+            secondary,
+            secondary,
+            section_style,
+        ),
+        Line::default(),
+        welcome_status_row(
+            "RUNTIME",
+            &route,
+            value_style,
+            Some(("SANDBOX", &sandbox_profile, value_style)),
+            width,
+            label_style,
+        ),
+        welcome_status_row(
+            "APPROVAL",
+            &approval_mode,
+            value_style,
+            Some(("SESSION", &session_state, ready)),
+            width,
+            label_style,
+        ),
+        welcome_status_row(
+            "SECURITY",
+            &security_state,
+            security_style,
+            None,
+            width,
+            label_style,
+        ),
     ]
 }
 
-fn operational_line(
-    text: &str,
+fn wide_welcome_layout(width: usize, height: usize) -> bool {
+    width >= WIDE_WELCOME_MIN_WIDTH && height >= WIDE_WELCOME_MIN_HEIGHT
+}
+
+fn welcome_action_line(
+    prefix: &str,
+    label: &str,
+    shortcut: Option<&str>,
+    width: usize,
+    prefix_style: Style,
+    text_style: Style,
+    shortcut_style: Style,
+) -> Line<'static> {
+    let left = format!("{prefix}{label}");
+    let shortcut_column = width.min(48);
+    let gap = shortcut.map_or(0, |shortcut| {
+        shortcut_column
+            .saturating_sub(UnicodeWidthStr::width(left.as_str()))
+            .max(1)
+            .min(
+                width.saturating_sub(
+                    UnicodeWidthStr::width(left.as_str())
+                        .saturating_add(UnicodeWidthStr::width(shortcut)),
+                ),
+            )
+    });
+    let mut spans = vec![
+        Span::styled(prefix.to_owned(), prefix_style),
+        Span::styled(label.to_owned(), text_style),
+    ];
+    if let Some(shortcut) = shortcut {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(shortcut.to_owned(), shortcut_style));
+    }
+    Line::from(spans)
+}
+
+fn welcome_status_row(
+    left_label: &str,
+    left_value: &str,
+    left_value_style: Style,
+    right: Option<(&str, &str, Style)>,
     width: usize,
     label_style: Style,
-    value_style: Style,
 ) -> Line<'static> {
-    let text = truncate_width(text, width.saturating_sub(2));
-    let mut spans = vec![Span::raw("  ")];
-    for (index, segment) in text.split_inclusive("  ").enumerate() {
+    let label_width = 10;
+    let left_label = format!("// {left_label:<label_width$}");
+    let mut spans = vec![
+        Span::styled(left_label.clone(), label_style),
+        Span::styled(left_value.to_owned(), left_value_style),
+    ];
+    if let Some((right_label, right_value, right_value_style)) = right {
+        let left_width = UnicodeWidthStr::width(left_label.as_str())
+            .saturating_add(UnicodeWidthStr::width(left_value));
+        let right_column = width.min(48);
+        let gap = right_column.saturating_sub(left_width).max(3);
+        spans.push(Span::raw(" ".repeat(gap)));
         spans.push(Span::styled(
-            segment.to_owned(),
-            if index % 2 == 0 {
-                label_style
-            } else {
-                value_style
-            },
+            format!("// {right_label:<label_width$}"),
+            label_style,
         ));
+        spans.push(Span::styled(right_value.to_owned(), right_value_style));
     }
     Line::from(spans)
 }
@@ -729,9 +801,16 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
     let desired_width = (desired_content_width + 2)
         .max(UnicodeWidthStr::width(title.as_str()) + 2)
         .max(UnicodeWidthStr::width(controls) + 2);
+    let minimum_width = if area.width >= ROOMY_COMPLETION_MENU_WIDTH
+        && area.height >= u16::try_from(ROOMY_COMPLETION_MENU_ROWS + 2).unwrap_or(u16::MAX)
+    {
+        ROOMY_COMPLETION_MENU_WIDTH
+    } else {
+        MIN_COMPLETION_MENU_WIDTH
+    };
     let menu_width = u16::try_from(desired_width)
         .unwrap_or(u16::MAX)
-        .max(MIN_COMPLETION_MENU_WIDTH.min(area.width))
+        .max(minimum_width.min(area.width))
         .min(area.width);
     let menu_area = Rect::new(area.x, area.y, menu_width, area.height);
     let content_width = usize::from(menu_width.saturating_sub(2)).max(1);
@@ -956,12 +1035,12 @@ fn pending_thumbnail_lines(state: &TuiState) -> Vec<Line<'static>> {
 pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     let width = usize::from(area.width);
     let short_session = state.session_id.chars().take(8).collect::<String>();
-    let mut segments = vec![format!(" Colossus {short_session}")];
     if state.welcome_visible {
-        segments.push(state.mode.as_str().into());
-    } else {
-        segments.push(format!("mode={}", state.mode.as_str()));
+        render_branded_footer(frame, state, area, &welcome_workspace(&state.workspace));
+        return;
     }
+
+    let mut segments = vec![short_session, format!("mode={}", state.mode.as_str())];
     if width >= 72
         && let Some(plan) = state.selected_plan.as_ref()
     {
@@ -985,24 +1064,39 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
         segments.push(format!("approval={}", state.footer.approval_mode));
     }
     segments.push(format!("status={}", state.footer.status));
-    let mut footer = segments.join(" · ");
-    if UnicodeWidthStr::width(footer.as_str()) > width {
-        footer = truncate_width(&footer, width);
-    }
+    render_branded_footer(frame, state, area, &segments.join(" · "));
+}
+
+fn render_branded_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect, footer: &str) {
+    let width = usize::from(area.width);
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let surface = filled_approval_control_style(palette.meta_style(), false);
+    let brand_width = UnicodeWidthStr::width(OBSCURITY_LABS_FOOTER_SEGMENT);
     if state.security_posture.is_hardened() {
+        let footer = truncate_width(footer, width.saturating_sub(brand_width));
         frame.render_widget(
-            Paragraph::new(Span::styled(footer, ratatui_style(palette.meta_style())))
-                .style(surface),
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    OBSCURITY_LABS_FOOTER_SEGMENT,
+                    obscurity_labs_footer_style(&state.preferences),
+                ),
+                Span::styled(footer, ratatui_style(palette.meta_style())),
+            ]))
+            .style(surface),
             area,
         );
     } else {
-        let badge = format!(" ⚠ Security: {} · ", state.security_posture.finding_count());
-        let remaining = width.saturating_sub(UnicodeWidthStr::width(badge.as_str()));
-        let footer = truncate_width(&footer, remaining);
+        let badge = format!(" ⚠ Security: {} ", state.security_posture.finding_count());
+        let remaining = width
+            .saturating_sub(UnicodeWidthStr::width(badge.as_str()))
+            .saturating_sub(brand_width);
+        let footer = truncate_width(footer, remaining);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(
+                    OBSCURITY_LABS_FOOTER_SEGMENT,
+                    obscurity_labs_footer_style(&state.preferences),
+                ),
                 Span::styled(
                     badge,
                     filled_approval_control_style(palette.warning_style(), true),
@@ -1013,6 +1107,20 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
             area,
         );
     }
+}
+
+fn obscurity_labs_brand_style(preferences: &TerminalPreferences) -> Style {
+    let style = Style::default().add_modifier(Modifier::BOLD);
+    if preferences.theme == colossus_contracts::ThemeName::Mono {
+        style
+    } else {
+        style.fg(OBSCURITY_LABS_RED)
+    }
+}
+
+fn obscurity_labs_footer_style(preferences: &TerminalPreferences) -> Style {
+    ratatui_style(TerminalPalette::for_preferences(preferences).meta_style())
+        .add_modifier(Modifier::BOLD)
 }
 
 pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {

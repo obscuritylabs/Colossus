@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { selectOperationalActivity } from "./presenters";
 import {
   MAX_CACHED_IDEMPOTENCY_ATTEMPTS,
   MAX_CACHED_RUN_VIEWS,
@@ -310,61 +309,6 @@ describe("chatReducer", () => {
     view = state.views.get(baseRun.runId);
     expect(view?.pendingInteractions).toEqual([]);
     expect(view?.run.pendingInteractionCount).toBe(0);
-  });
-
-  it("retains bounded operational events for the Activity surface", () => {
-    let state = chatReducer(withRun(), {
-      type: "ingest_update",
-      update: update(1, { type: "state", status: "waiting" }),
-    });
-    state = chatReducer(state, {
-      type: "ingest_update",
-      update: update(2, {
-        type: "interaction",
-        interaction: pendingInteraction,
-      }),
-    });
-    state = chatReducer(state, {
-      type: "ingest_update",
-      update: update(3, {
-        type: "usage",
-        usage: {
-          inputTokens: 8,
-          outputTokens: 5,
-          totalTokens: 13,
-          cachedInputTokens: null,
-          reasoningTokens: null,
-        },
-      }),
-    });
-    state = chatReducer(state, {
-      type: "ingest_update",
-      update: update(4, {
-        type: "result",
-        result: {
-          output: "Sensitive streamed output stays out of Activity.",
-          profile: "default",
-          modelProfile: "default",
-          providerProfile: "default-provider",
-          model: "test-model",
-          elapsedSeconds: 1.5,
-        },
-      }),
-    });
-
-    const view = state.views.get(baseRun.runId);
-    expect(view?.updates.map(({ update: kind }) => kind.type)).toEqual([
-      "state",
-      "interaction",
-      "usage",
-      "result",
-    ]);
-    expect(selectOperationalActivity(view).map(({ kind }) => kind)).toEqual([
-      "result",
-      "usage",
-      "interaction",
-      "state",
-    ]);
   });
 
   it("does not let a stale snapshot regress feed state or pending interactions", () => {

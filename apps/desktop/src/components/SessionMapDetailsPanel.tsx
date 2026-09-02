@@ -12,6 +12,7 @@ import type { ComponentType, ReactNode } from "react";
 
 import { shortDateLabel } from "../presenters";
 import type { SessionMapResource } from "../types";
+import { MarkdownContent } from "./MarkdownContent";
 
 function readable(value: string): string {
   return value
@@ -34,10 +35,7 @@ function resourceTitle(resource: SessionMapResource): string {
     case "memories":
       return resource.value.text;
     case "snapshots":
-      return (
-        resource.value.summary ||
-        `Messages ${resource.value.sourceStartSequence}–${resource.value.sourceEndSequence}`
-      );
+      return `Messages ${resource.value.sourceStartSequence}–${resource.value.sourceEndSequence}`;
     case "research":
       return resource.value.question;
     case "sources":
@@ -264,7 +262,10 @@ export function SessionMapDetailsPanel({
         {resource.family === "snapshots" ? (
           <>
             <h4>Summary</h4>
-            <p>{resource.value.summary || "No summary was recorded."}</p>
+            <MarkdownContent
+              className="session-snapshot-summary"
+              content={resource.value.summary || "No summary was recorded."}
+            />
             <SnapshotList
               title="Pinned facts"
               items={resource.value.pinnedFacts}

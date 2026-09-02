@@ -8,6 +8,47 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.10] - 2026-09-02
+
+### Added
+
+- Added a keyboard-accessible Desktop slash-command menu for core modes, Plan and
+  Research controls, task navigation, permission modes, product destinations, and the
+  authenticated local TUI. Commands execute locally and are never submitted as model
+  prompts.
+- Added shared Desktop toast notifications for successful settings operations and local
+  command feedback.
+- Added subtle Obscurity Labs identity to the persistent Desktop sidebar and the TUI Lab
+  Console, including theme-aware use of the canonical OL mark and brand red.
+
+### Changed
+
+- Replaced oversized Desktop model and MCP checkboxes with compact switches, moved
+  settings feedback into transient notifications, and kept the Workspace apply bar at
+  the bottom of the settings layout without leaving unused page space.
+- Rendered context-snapshot summaries as bounded Markdown previews with a dedicated
+  scrollable details pane.
+- Removed the redundant global Activity destination while retaining task-scoped activity
+  in the canonical conversation workspace.
+- Expanded the TUI completion surface on roomy terminals and refined the responsive Lab
+  Console, runtime status rows, composer, and persistent footer.
+- Bumped the Rust workspace, internal dependency pins, Desktop native dependencies, fuzz
+  dependency, and all corresponding lockfiles to `0.10.10-preview.10`.
+
+### Fixed
+
+- Accepted a sole `*` MCP tool allowlist through the Desktop managed protocol, preserved
+  canonical provider and model catalog pins during reinitialization, and reported
+  generated runtime configuration failures without misclassifying them as enrollment
+  failures.
+- Opened full-access Managed Local runtimes with loopback wildcard MCP servers while
+  retaining exact network destinations and bounded managed configuration.
+- Prevented deeply composed debug-sidecar effect futures from exhausting Tokio worker
+  stacks, and moved disclosure-summary hashing onto a bounded blocking worker without
+  changing the audit contract.
+- Kept thread action menus stable through focus transitions so Archive can complete, and
+  kept context-snapshot details independently scrollable at compact window sizes.
+
 ## [0.10.10-preview.9] - 2026-09-01
 
 ### Added

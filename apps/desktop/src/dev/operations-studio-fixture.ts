@@ -213,7 +213,7 @@ export function buildSessionMapFixture(): SessionMap {
         sourceStartSequence: 1,
         sourceEndSequence: 18,
         summary:
-          "The session is hardening Desktop runtime recovery while preserving the existing authority boundary.",
+          "## Session context\n\nThe session is **hardening Desktop runtime recovery** while preserving the existing authority boundary.\n\n- Keep native credentials outside the webview.\n- Verify recovery through the managed runtime.",
         pinnedFacts: [
           "Use Rust 1.96 and edition 2024.",
           "Managed Local must fail closed on workspace identity drift.",

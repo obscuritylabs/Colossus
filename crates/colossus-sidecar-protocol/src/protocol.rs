@@ -697,7 +697,10 @@ impl ManagedMcpServerConfig {
             || self.research_tools.len() > 64
             || self.timeout_ms == Some(0)
             || self.max_output_bytes == Some(0)
-            || self.allowed_tools.iter().any(|tool| !valid_token(tool))
+            || self
+                .allowed_tools
+                .iter()
+                .any(|tool| tool != "*" && !valid_token(tool))
             || (self.allowed_tools.iter().any(|tool| tool == "*") && self.allowed_tools.len() != 1)
             || self
                 .environment_credentials
@@ -2272,6 +2275,8 @@ mod tests {
             .get_mut("Authorization")
             .expect("credential header")
             .credential_id = "mcp-token".into();
+        runtime.mcp_servers[0].allowed_tools = vec!["*".into()];
+        runtime.validate().expect("sole wildcard MCP allowlist");
         runtime.mcp_servers[0].allowed_tools = vec!["*".into(), "search".into()];
         assert!(runtime.validate().is_err());
     }

@@ -102,13 +102,31 @@ fn empty_session_opens_with_the_responsive_launch_rail() {
             rendered.contains("COLOSSUS"),
             "{width}x{height}: {rendered}"
         );
-        assert!(rendered.contains("READY"), "{width}x{height}: {rendered}");
         assert!(
-            rendered.contains("What are we moving today?"),
+            rendered.contains("durable · ready"),
+            "{width}x{height}: {rendered}"
+        );
+        let expected_lockup = "OL //  COLOSSUS";
+        assert!(
+            rendered.contains(expected_lockup),
+            "{width}x{height}: {rendered}"
+        );
+        assert_eq!(
+            rendered.contains("OBSCURITY LABS"),
+            width >= 96 && height >= 14,
+            "{width}x{height}: {rendered}"
+        );
+        assert!(
+            rendered.contains("What do you want to work on?"),
             "{width}x{height}: {rendered}"
         );
         assert!(
             rendered.contains("Build or change something"),
+            "{width}x{height}: {rendered}"
+        );
+        assert_eq!(
+            rendered.contains("// RUNTIME") && rendered.contains("// SESSION"),
+            width >= 96 && height >= 22,
             "{width}x{height}: {rendered}"
         );
         assert!(rendered.contains("/plan"), "{width}x{height}: {rendered}");
@@ -138,7 +156,7 @@ fn launch_rail_is_process_local_and_only_shown_for_an_empty_session() {
         .expect("draw restored session");
     let rendered = terminal.backend().to_string();
     assert!(
-        !rendered.contains("What are we moving today?"),
+        !rendered.contains("What do you want to work on?"),
         "{rendered}"
     );
     assert!(rendered.contains("durable row marker"), "{rendered}");
@@ -162,7 +180,7 @@ fn launch_rail_is_process_local_and_only_shown_for_an_empty_session() {
         .expect("draw dismissed launch rail");
     let rendered = terminal.backend().to_string();
     assert!(
-        !rendered.contains("What are we moving today?"),
+        !rendered.contains("What do you want to work on?"),
         "{rendered}"
     );
     assert!(!rendered.contains("Implement {feature}"), "{rendered}");
@@ -179,11 +197,58 @@ fn launch_rail_labels_the_sandbox_profile_field_as_the_sandbox_profile() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("SANDBOX  offline-default"), "{rendered}");
+    assert!(
+        rendered.contains("// SANDBOX   offline-default"),
+        "{rendered}"
+    );
     assert!(
         !rendered.contains("BOUNDARY"),
         "the sandbox profile is not the effective execution boundary: {rendered}"
     );
+}
+
+#[test]
+fn footer_uses_a_terminal_native_obscurity_labs_segment() {
+    let backend = TestBackend::new(80, 1);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let state = TuiState::from_snapshot(snapshot());
+    terminal
+        .draw(|frame| render_footer(frame, &state, frame.area()))
+        .expect("draw branded footer");
+    let rendered = (0..80)
+        .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(
+        rendered.starts_with(" OL // COLOSSUS 019f-tes"),
+        "{rendered}"
+    );
+    let brand = terminal
+        .backend()
+        .buffer()
+        .cell((1, 0))
+        .expect("brand cell");
+    assert_eq!(
+        brand.fg,
+        ratatui_style(TerminalPalette::for_preferences(&state.preferences).meta_style())
+            .fg
+            .unwrap_or(Color::Reset)
+    );
+    assert!(brand.modifier.contains(Modifier::BOLD));
+
+    let mut mono_source = snapshot();
+    mono_source.preferences.theme = colossus_contracts::ThemeName::Mono;
+    let mono = TuiState::from_snapshot(mono_source);
+    terminal
+        .draw(|frame| render_footer(frame, &mono, frame.area()))
+        .expect("draw monochrome branded footer");
+    let brand = terminal
+        .backend()
+        .buffer()
+        .cell((1, 0))
+        .expect("monochrome brand cell");
+    assert_eq!(brand.bg, Color::Reset);
+    assert!(brand.modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -203,7 +268,7 @@ fn launch_rail_sanitizes_runtime_supplied_context() {
     assert!(!rendered.contains('\u{7}'), "{rendered}");
     assert!(!rendered.contains('\u{200d}'), "{rendered}");
     assert!(rendered.contains("workspace write"), "{rendered}");
-    assert!(rendered.contains("READY NOW"), "{rendered}");
+    assert!(rendered.contains("durable · ready now"), "{rendered}");
 }
 
 #[test]
@@ -231,15 +296,23 @@ fn fresh_launch_rail_stays_live_after_security_posture_enters_inline_history() {
         .draw(|frame| render(frame, &mut state, committed, ScreenMode::Inline))
         .expect("draw fresh warning session");
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("What are we moving today?"), "{rendered}");
-    assert!(rendered.contains("1 security warning"), "{rendered}");
+    assert!(
+        rendered.contains("What do you want to work on?"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("// SESSION   durable · ready"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("SECURITY  1 warning"), "{rendered}");
+    assert!(!rendered.contains("Durable session ready"), "{rendered}");
     assert_eq!(
         rendered.matches("Execute · Enter sends").count(),
         1,
         "{rendered}"
     );
     let rail = rendered
-        .find("What are we moving today?")
+        .find("What do you want to work on?")
         .expect("launch rail");
     let warning = rendered
         .find("Danger full access is enabled.")
@@ -271,7 +344,9 @@ fn fresh_launch_rail_stays_live_after_security_posture_enters_inline_history() {
     assert!(
         rows[recommendation_row + 1..composer_row]
             .iter()
-            .all(|row| row.trim().is_empty()),
+            .all(|row| row
+                .trim_matches(|character: char| character.is_whitespace() || character == '│')
+                .is_empty()),
         "only quiet space should sit between startup guidance and the composer: {rows:?}"
     );
     state.dismiss_welcome();
@@ -357,6 +432,10 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(footer.contains("Security: 2"));
+    assert!(
+        footer.starts_with(" OL // COLOSSUS  ⚠ Security: 2"),
+        "the branded footer must retain the persistent security status: {footer}"
+    );
     assert_ne!(
         terminal
             .backend()
@@ -371,7 +450,7 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         terminal
             .backend()
             .buffer()
-            .cell((4, 0))
+            .cell((19, 0))
             .expect("security badge cell")
             .bg,
         terminal
@@ -1853,6 +1932,59 @@ fn command_completion_is_left_aligned_compact_and_described() {
         prefs_line.chars().position(|character| character == 'S'),
         "description columns should align: {rendered}"
     );
+}
+
+#[test]
+fn roomy_command_completion_doubles_visible_rows_and_expands_width() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.completions = vec![
+        "/help".into(),
+        "/tui prefs".into(),
+        "/tui save".into(),
+        "/tui reset".into(),
+        "/permissions".into(),
+        "/theme".into(),
+        "/theme list".into(),
+        "/stream on".into(),
+        "/events compact".into(),
+        "/reasoning on".into(),
+        "/transcript comfortable".into(),
+        "/multiline on".into(),
+        "/trace".into(),
+        "/resume".into(),
+    ];
+    state.composer.insert("/");
+
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .expect("draw roomy command completion");
+    let rendered = terminal.backend().to_string();
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let title_row = lines
+        .iter()
+        .position(|line| line.contains("Commands · 14"))
+        .expect("completion title");
+    let controls_row = lines
+        .iter()
+        .position(|line| line.contains("↑/↓ select · Tab accept"))
+        .expect("completion controls");
+    let width = lines[title_row]
+        .trim_start_matches('"')
+        .chars()
+        .position(|character| character == '┐')
+        .expect("completion right border")
+        + 1;
+
+    assert_eq!(
+        width,
+        usize::from(ROOMY_COMPLETION_MENU_WIDTH),
+        "{rendered}"
+    );
+    assert_eq!(controls_row - title_row + 1, ROOMY_COMPLETION_MENU_ROWS + 2);
+    assert!(rendered.contains("/multiline on"), "{rendered}");
+    assert!(!rendered.contains("/trace"), "{rendered}");
 }
 
 #[test]

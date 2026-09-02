@@ -1,5 +1,4 @@
 import {
-  IconActivity,
   IconBriefcase2,
   IconLibrary,
   IconSettings,
@@ -11,7 +10,7 @@ import colossusMark from "../assets/colossus-mark.svg";
 import type { ConnectionState, DesktopCapabilities } from "../types";
 
 export type WorkspaceSurface =
-  "work" | "fleet" | "library" | "activity" | "connections" | "settings";
+  "work" | "fleet" | "library" | "connections" | "settings";
 
 interface ProductRailProps {
   surface: WorkspaceSurface;
@@ -29,7 +28,6 @@ const MAIN_ITEMS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
   { id: "fleet", label: "Agents", Icon: IconTopologyStar3 },
   { id: "library", label: "Library", Icon: IconLibrary },
-  { id: "activity", label: "Activity", Icon: IconActivity },
 ] as const;
 
 export function ProductRail({

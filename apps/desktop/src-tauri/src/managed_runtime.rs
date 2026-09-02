@@ -1190,6 +1190,13 @@ fn classify_sdk(
             runtime_authentication_message(),
             false,
         ),
+        SdkError::InvalidConfiguration(_) | SdkError::PathNotAbsolute(_) => {
+            CommandErrorDto::local_sanitized(
+                "runtime_configuration",
+                "Managed Local rejected the generated runtime configuration. Review this Workspace’s settings and try again.",
+                false,
+            )
+        }
         SdkError::LaunchFailed | SdkError::SidecarFailed | SdkError::EmbeddedOpenFailed => {
             CommandErrorDto::local_sanitized(
                 "runtime_launch_failed",
@@ -1477,6 +1484,19 @@ mod tests {
                 .message
                 .contains("private local API credentials")
         );
+
+        let (configuration, failure_code) = classify_sdk(
+            SdkError::InvalidConfiguration("managed sidecar configuration was rejected"),
+            RuntimeFailureCodeDto::Internal,
+        );
+        assert_eq!(failure_code, RuntimeFailureCodeDto::Configuration);
+        assert_eq!(configuration.code, "runtime_configuration");
+        assert!(
+            configuration
+                .message
+                .contains("generated runtime configuration")
+        );
+        assert!(!configuration.message.contains("enrollment"));
     }
 
     #[test]

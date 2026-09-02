@@ -439,7 +439,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
         &output,
         32,
         120,
-        "What are we moving today?",
+        "What do you want to work on?",
         Duration::from_secs(10),
     );
     let welcome = screen_contents(&output, 32, 120);
@@ -472,9 +472,19 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     assert!(welcome.contains("Build or change something"), "{welcome}");
     assert!(welcome.contains("Implement {feature}"), "{welcome}");
     assert!(welcome.contains("workspace-development"), "{welcome}");
-    assert!(welcome.contains("2 security warnings"), "{welcome}");
+    assert!(
+        welcome.contains("// SESSION   durable · ready"),
+        "{welcome}"
+    );
+    assert!(welcome.contains("SECURITY  2 warnings"), "{welcome}");
+    assert!(welcome.contains("OL //  COLOSSUS"), "{welcome}");
+    assert!(welcome.contains("OBSCURITY LABS"), "{welcome}");
+    assert!(
+        welcome.contains("OL // COLOSSUS  ⚠ Security: 2"),
+        "the branded footer must retain the persistent security status: {welcome}"
+    );
     let rail = welcome
-        .find("What are we moving today?")
+        .find("What do you want to work on?")
         .expect("launch rail");
     let warning = welcome
         .find("Journal payloads are stored as plaintext canonical JSON.")
@@ -500,7 +510,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     assert!(output_ready, "{after_turn}");
     assert!(composer_ready, "{after_turn}");
     assert!(
-        !after_turn.contains("What are we moving today?"),
+        !after_turn.contains("What do you want to work on?"),
         "{after_turn}"
     );
     assert!(!after_turn.contains("Implement {feature}"), "{after_turn}");

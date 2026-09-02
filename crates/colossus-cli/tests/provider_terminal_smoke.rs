@@ -1663,8 +1663,9 @@ fn delegated_children_run_concurrently_and_release_lifecycle_output() {
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "Both children completed.");
     let terminal = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        terminal.find("Completed agent.delegate") < terminal.find("Child agent running"),
+    assert_eq!(
+        terminal.matches("Completed agent.delegate").count(),
+        2,
         "{terminal}"
     );
     assert_eq!(

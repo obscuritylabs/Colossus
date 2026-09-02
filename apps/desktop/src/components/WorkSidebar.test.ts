@@ -131,9 +131,14 @@ describe("WorkSidebar", () => {
     expect(markup).not.toContain('class="button primary new-work"');
     expect(markup).toContain("Capabilities");
     expect(markup).toContain("Connections");
+    expect(markup).not.toContain('aria-label="Activity"');
     expect(markup).toContain('aria-label="Resize Workspace sidebar"');
     expect(markup).toContain('aria-valuemin="260"');
     expect(markup).toContain('aria-valuemax="480"');
+    expect(markup).toContain('class="lab-signature"');
+    expect(markup).toContain('class="lab-signature-mark"');
+    expect(markup).toContain('viewBox="0 0 444 433"');
+    expect(markup).toContain("Obscurity Labs");
     expect(markup).not.toContain("<strong>Primary</strong>");
   });
 

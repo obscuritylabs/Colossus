@@ -62,6 +62,8 @@ pub const MINIMUM_TERMINAL_WIDTH: u16 = 40;
 pub const MINIMUM_TERMINAL_HEIGHT: u16 = 12;
 /// Most completion rows shown before the suggestion menu scrolls.
 const MAX_COMPLETION_MENU_ROWS: usize = 6;
+/// Most completion rows shown when the terminal can preserve a useful transcript above them.
+const ROOMY_COMPLETION_MENU_ROWS: usize = 12;
 /// Transcript rows retained above completion chrome so the menu remains renderable.
 const MINIMUM_COMPLETION_TRANSCRIPT_ROWS: u16 = 3;
 /// Most rows occupied by the bottom-docked effect approval surface.

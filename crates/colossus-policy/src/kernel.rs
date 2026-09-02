@@ -1153,7 +1153,14 @@ pub(super) fn is_environment_credential_reference(value: &Value) -> bool {
     })
 }
 
-pub(super) fn disclosure_summary(request: &EffectRequest) -> Value {
+pub(super) async fn disclosure_summary(request: &EffectRequest) -> Result<Value, GatewayError> {
+    let request = request.clone();
+    tokio::task::spawn_blocking(move || build_disclosure_summary(&request))
+        .await
+        .map_err(|_| GatewayError::Contract("disclosure summary worker failed".into()))
+}
+
+fn build_disclosure_summary(request: &EffectRequest) -> Value {
     let fields = request
         .content
         .as_object()

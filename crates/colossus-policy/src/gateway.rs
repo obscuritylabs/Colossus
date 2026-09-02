@@ -631,7 +631,7 @@ impl EffectGateway {
             &request,
             "effect.requested.v1",
             EventClassification::Effect,
-            disclosure_summary(&request),
+            disclosure_summary(&request).await?,
         )?;
         let mut request = match self.kernel.prepare(&request) {
             Ok(request) => request,
@@ -863,7 +863,7 @@ impl EffectGateway {
                 &post_request,
                 "effect.release_requested.v1",
                 EventClassification::Effect,
-                disclosure_summary(&post_request),
+                disclosure_summary(&post_request).await?,
             )?;
             let post_decision = self.decide(&post_request).await?;
             if post_decision.outcome != DecisionOutcome::Allow {
@@ -925,7 +925,7 @@ impl EffectGateway {
                 &post_request,
                 "effect.release_requested.v1",
                 EventClassification::Effect,
-                disclosure_summary(&post_request),
+                disclosure_summary(&post_request).await?,
             )?;
             let post_decision = self.decide(&post_request).await?;
             if post_decision.outcome != DecisionOutcome::Allow {

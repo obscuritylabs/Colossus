@@ -36,10 +36,13 @@ tool boundary. Resume the most recent session with:
 colossus -w /absolute/path/to/repository tui --resume
 ```
 
-A new empty session opens with a responsive launch rail showing the canonical workspace,
-provider route, sandbox profile, approval mode, and readiness state. The rail is process-local:
+A new empty session opens with a responsive Lab Console showing the canonical workspace,
+provider route, sandbox profile, approval mode, and readiness state. The console is process-local:
 it is not written to the durable transcript, and it recedes as soon as the first command or
-prompt is submitted. Resumed sessions open directly on their retained transcript. At narrow or
+prompt is submitted. Its terminal-native `OL // COLOSSUS` lockup brands both the header and
+persistent footer without depending on an image protocol. Roomy layouts add the Obscurity Labs
+name, a restrained red rail, the prompt **What do you want to work on?**, and distinct
+`// RUNTIME` and `// SESSION` sections. Resumed sessions open directly on their retained transcript. At narrow or
 short terminal sizes, the same startup context collapses into a compact briefing. Inline startup
 moves the existing terminal view into native scrollback and begins from a clean visible viewport;
 it does not purge earlier shell history.
@@ -170,6 +173,8 @@ values are never stored as presentation preferences.
 
 - Type `/` at the start of a draft for slash-command completion.
 - Type `@` at a skill-token boundary for installed skill completion.
+- On roomy terminals, completion expands to 96 columns and shows up to 12 suggestions;
+  compact terminals keep the smaller six-row menu.
 - Use Down/Up or Shift-Tab to move through suggestions, Tab or Right Arrow to accept the
   visible suggestion, and Enter to submit.
 - In the default inline mode, use the terminal's normal wheel and scrollback shortcuts.

@@ -31,11 +31,6 @@ const COPY = {
     title: "Library",
     description: "Artifacts that crossed the public API release boundary.",
   },
-  activity: {
-    kicker: "Audit-friendly feed",
-    title: "Activity",
-    description: "Bounded operational events without hidden runtime details.",
-  },
   connections: {
     kicker: "Runtime routing",
     title: "Connections",
