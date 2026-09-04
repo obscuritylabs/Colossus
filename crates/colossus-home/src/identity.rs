@@ -3,10 +3,17 @@ use crate::HomeError;
 use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(any(target_os = "linux", test))]
+use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 const LINUX_IDENTITY_DOMAIN: &[u8] = b"colossus-home-workspace-linux-device-inode-birthtime-v4\0";
+#[cfg(any(target_os = "linux", test))]
+const LINUX_NFS_IDENTITY_DOMAIN: &[u8] =
+    b"colossus-home-workspace-linux-nfs-server-file-handle-v5\0";
 #[cfg(target_os = "macos")]
 const MACOS_IDENTITY_DOMAIN: &[u8] =
     b"colossus-sidecar-workspace-macos-device-inode-birthtime-v2\0";
@@ -19,6 +26,30 @@ pub struct WorkspaceIdentity {
     canonical_path: PathBuf,
     version: u16,
     sha256: String,
+}
+
+/// Opaque identity captured from one already-open Linux workspace directory.
+///
+/// This type contains only a version and digest. Raw kernel file-handle material
+/// is discarded immediately after the digest is derived.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinuxWorkspaceIdentity {
+    version: u16,
+    digest: [u8; 32],
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl LinuxWorkspaceIdentity {
+    /// Exact Linux identity derivation version.
+    pub const fn version(self) -> u16 {
+        self.version
+    }
+
+    /// Domain-separated SHA-256 digest of the object identity.
+    pub const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
 }
 
 impl WorkspaceIdentity {
@@ -67,7 +98,7 @@ pub struct WorkspaceIdentityRef<'a> {
 
 impl WorkspaceIdentityRef<'_> {
     pub(crate) fn validate(self) -> Result<(), HomeError> {
-        if matches!(self.version, 2..=4)
+        if matches!(self.version, 2..=5)
             && self.sha256.len() == 64
             && self
                 .sha256
@@ -84,6 +115,138 @@ impl WorkspaceIdentityRef<'_> {
 /// Capture the canonical path and stable object identity of a workspace directory.
 pub fn detect_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, HomeError> {
     detect_platform_workspace_identity(workspace)
+}
+
+/// Capture the identity of an already-open Linux workspace directory.
+///
+/// Linux filesystems that report `statx` birth time retain the v4 identity.
+/// When birth time is absent, a v5 identity is accepted only for NFS and is
+/// derived from the remote volume identity plus the kernel's opaque file handle.
+#[cfg(target_os = "linux")]
+pub fn capture_linux_workspace_identity(directory: &File) -> io::Result<LinuxWorkspaceIdentity> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() {
+        return Err(invalid_linux_identity());
+    }
+    let statx = rustix::fs::statx(
+        directory,
+        "",
+        rustix::fs::AtFlags::EMPTY_PATH,
+        rustix::fs::StatxFlags::BASIC_STATS | rustix::fs::StatxFlags::BTIME,
+    )
+    .map_err(io::Error::from)?;
+    select_linux_workspace_identity(
+        metadata.dev(),
+        metadata.ino(),
+        LinuxStatxIdentityEvidence {
+            metadata_matches: statx.stx_mask & rustix::fs::StatxFlags::INO.bits() != 0
+                && statx.stx_ino == metadata.ino()
+                && statx.stx_dev_major == rustix::fs::major(metadata.dev())
+                && statx.stx_dev_minor == rustix::fs::minor(metadata.dev()),
+            birthtime: (statx.stx_mask & rustix::fs::StatxFlags::BTIME.bits() != 0)
+                .then_some((statx.stx_btime.tv_sec, statx.stx_btime.tv_nsec)),
+        },
+        || {
+            let identity = colossus_linux_native::capture_nfs_file_identity(directory)?;
+            Ok(linux_nfs_identity_digest(
+                identity.nfs_version(),
+                identity.server_address(),
+                identity.server_port(),
+                identity.fsid_major(),
+                identity.fsid_minor(),
+                identity.handle_type(),
+                identity.handle(),
+            ))
+        },
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy)]
+struct LinuxStatxIdentityEvidence {
+    metadata_matches: bool,
+    birthtime: Option<(i64, u32)>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn select_linux_workspace_identity(
+    device: u64,
+    inode: u64,
+    evidence: LinuxStatxIdentityEvidence,
+    nfs_fallback: impl FnOnce() -> io::Result<[u8; 32]>,
+) -> io::Result<LinuxWorkspaceIdentity> {
+    if !evidence.metadata_matches {
+        return Err(invalid_linux_identity());
+    }
+    if let Some((birth_seconds, birth_nanoseconds)) = evidence.birthtime {
+        if birth_seconds <= 0 || birth_nanoseconds >= 1_000_000_000 {
+            return Err(invalid_linux_identity());
+        }
+        return Ok(LinuxWorkspaceIdentity {
+            version: 4,
+            digest: linux_birthtime_identity_digest(
+                device,
+                inode,
+                birth_seconds,
+                birth_nanoseconds,
+            ),
+        });
+    }
+    Ok(LinuxWorkspaceIdentity {
+        version: 5,
+        digest: nfs_fallback()?,
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn invalid_linux_identity() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "Linux workspace identity evidence is invalid",
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_birthtime_identity_digest(
+    device: u64,
+    inode: u64,
+    birth_seconds: i64,
+    birth_nanoseconds: u32,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(LINUX_IDENTITY_DOMAIN);
+    digest.update(device.to_le_bytes());
+    digest.update(inode.to_le_bytes());
+    digest.update(birth_seconds.to_le_bytes());
+    digest.update(birth_nanoseconds.to_le_bytes());
+    digest.finalize().into()
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[allow(clippy::too_many_arguments)]
+fn linux_nfs_identity_digest(
+    nfs_version: u8,
+    server_address: &[u8],
+    server_port: u16,
+    fsid_major: u64,
+    fsid_minor: u64,
+    handle_type: i32,
+    handle: &[u8],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(LINUX_NFS_IDENTITY_DOMAIN);
+    digest.update([nfs_version]);
+    digest.update((server_address.len() as u32).to_le_bytes());
+    digest.update(server_address);
+    digest.update(server_port.to_le_bytes());
+    digest.update(fsid_major.to_le_bytes());
+    digest.update(fsid_minor.to_le_bytes());
+    digest.update(handle_type.to_le_bytes());
+    digest.update((handle.len() as u32).to_le_bytes());
+    digest.update(handle);
+    digest.finalize().into()
 }
 
 #[cfg(unix)]
@@ -149,29 +312,9 @@ fn detect_platform_workspace_identity(workspace: &Path) -> Result<WorkspaceIdent
 
     #[cfg(target_os = "linux")]
     let (version, sha256) = {
-        let statx = rustix::fs::statx(
-            &directory,
-            "",
-            rustix::fs::AtFlags::EMPTY_PATH,
-            rustix::fs::StatxFlags::BASIC_STATS | rustix::fs::StatxFlags::BTIME,
-        )
-        .map_err(|error| HomeError::io(&canonical_path, error.into()))?;
-        if statx.stx_mask & rustix::fs::StatxFlags::BTIME.bits() == 0
-            || statx.stx_ino != opened.ino()
-            || statx.stx_dev_major != rustix::fs::major(opened.dev())
-            || statx.stx_dev_minor != rustix::fs::minor(opened.dev())
-            || statx.stx_btime.tv_sec <= 0
-            || statx.stx_btime.tv_nsec >= 1_000_000_000
-        {
-            return Err(HomeError::InvalidWorkspace(canonical_path));
-        }
-        let mut digest = Sha256::new();
-        digest.update(LINUX_IDENTITY_DOMAIN);
-        digest.update(opened.dev().to_le_bytes());
-        digest.update(opened.ino().to_le_bytes());
-        digest.update(statx.stx_btime.tv_sec.to_le_bytes());
-        digest.update(statx.stx_btime.tv_nsec.to_le_bytes());
-        (4, hex::encode(digest.finalize()))
+        let identity = capture_linux_workspace_identity(&directory)
+            .map_err(|_| HomeError::InvalidWorkspace(canonical_path.clone()))?;
+        (identity.version(), hex::encode(identity.digest()))
     };
 
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
@@ -242,6 +385,135 @@ mod tests {
                 sha256: &digest,
             }
             .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn linux_birthtime_v4_digest_is_unchanged() {
+        assert_eq!(
+            hex::encode(linux_birthtime_identity_digest(
+                42,
+                84,
+                1_700_000_000,
+                123_456_789,
+            )),
+            "af11b5d9a35e09cce55b020dfb8656f6ed3a1cb035119bf2d5f9f36013734c62"
+        );
+    }
+
+    #[test]
+    fn linux_nfs_v5_digest_binds_remote_volume_and_opaque_handle() {
+        let first =
+            linux_nfs_identity_digest(4, &[192, 0, 2, 10], 2049, 0x1234, 0x5678, -7, &[1, 2, 3, 4]);
+        assert_eq!(
+            first,
+            linux_nfs_identity_digest(4, &[192, 0, 2, 10], 2049, 0x1234, 0x5678, -7, &[1, 2, 3, 4],)
+        );
+        assert_ne!(
+            first,
+            linux_nfs_identity_digest(4, &[192, 0, 2, 11], 2049, 0x1234, 0x5678, -7, &[1, 2, 3, 4],)
+        );
+        assert_ne!(
+            first,
+            linux_nfs_identity_digest(4, &[192, 0, 2, 10], 2049, 0x1234, 0x5678, -7, &[1, 2, 3, 5],)
+        );
+    }
+
+    #[test]
+    fn nfs_file_handle_identity_is_valid_for_home_partitioning() {
+        let digest = "0".repeat(64);
+        assert!(
+            WorkspaceIdentityRef {
+                version: 5,
+                sha256: &digest,
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn missing_linux_birthtime_selects_nfs_v5() {
+        let identity = select_linux_workspace_identity(
+            42,
+            84,
+            LinuxStatxIdentityEvidence {
+                metadata_matches: true,
+                birthtime: None,
+            },
+            || Ok([0x5a; 32]),
+        )
+        .expect("NFS fallback identity");
+
+        assert_eq!(identity.version(), 5);
+        assert_eq!(identity.digest(), [0x5a; 32]);
+    }
+
+    #[test]
+    fn linux_nfs_v5_digest_ignores_transient_device_and_inode() {
+        let capture = |device, inode| {
+            select_linux_workspace_identity(
+                device,
+                inode,
+                LinuxStatxIdentityEvidence {
+                    metadata_matches: true,
+                    birthtime: None,
+                },
+                || Ok([0xa5; 32]),
+            )
+            .expect("NFS fallback identity")
+        };
+
+        assert_eq!(capture(1, 2), capture(9, 10));
+    }
+
+    #[test]
+    fn claimed_invalid_linux_birthtime_never_downgrades_to_nfs() {
+        for birthtime in [(0, 0), (1, 1_000_000_000)] {
+            assert!(
+                select_linux_workspace_identity(
+                    42,
+                    84,
+                    LinuxStatxIdentityEvidence {
+                        metadata_matches: true,
+                        birthtime: Some(birthtime),
+                    },
+                    || panic!("invalid claimed birthtime must not invoke NFS fallback"),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn conflicting_linux_metadata_never_downgrades_to_nfs() {
+        assert!(
+            select_linux_workspace_identity(
+                42,
+                84,
+                LinuxStatxIdentityEvidence {
+                    metadata_matches: false,
+                    birthtime: None,
+                },
+                || panic!("conflicting metadata must not invoke NFS fallback"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_linux_birthtime_fails_closed_when_nfs_capture_fails() {
+        assert!(
+            select_linux_workspace_identity(
+                42,
+                84,
+                LinuxStatxIdentityEvidence {
+                    metadata_matches: true,
+                    birthtime: None,
+                },
+                || Err(io::Error::other("unsupported NFS identity")),
+            )
             .is_err()
         );
     }
