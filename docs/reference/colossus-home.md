@@ -86,6 +86,10 @@ fails with an identity error rather than falling back to a path or reusable inod
 Changing the remote filesystem, its identity scope, or a volatile server handle may
 therefore select a new partition.
 
+The version-5 fallback is supported by CLI/TUI workspace binding. Linux SDK-managed
+sidecar launches still use device/inode-only bootstrap tokens and reject these NFS
+workspaces; those tokens cannot prove that a server-side replacement is the same object.
+
 The `cli` and `desktop` partitions intentionally cannot alias. Their redb writer
 leases, worker authentication, provider-key namespaces, and application lifecycle stay
 independent even when both interfaces select the same repository.

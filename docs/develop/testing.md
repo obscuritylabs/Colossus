@@ -98,7 +98,13 @@ scope, handle type, length, and bytes. Cover bounded handle sizing, unsupported
 syscalls/filesystems, malformed or changing results, missing or ambiguous scope, and
 descriptor/stat metadata disagreement as fail-closed cases. Runtime tests must
 independently reproduce the expected identity kind and reject replacement before
-repository, tool, or effect access. A live NFS acceptance test may supplement these
+repository, tool, or effect access. An inode-only bootstrap token must not authorize a
+version-5 identity even when its device and inode match. Unsupported identity scope on
+an unrelated NFS volume must not prevent selecting a supported workspace, while
+malformed record structure and duplicate device matches remain rejected.
+Version-5 revalidation must accept the same scoped digest across changed client
+device/inode values, reject changed digests, and retain version-4 metadata checks.
+A live NFS acceptance test may supplement these
 contracts, but cannot replace the deterministic negative cases.
 
 ## Removal criteria

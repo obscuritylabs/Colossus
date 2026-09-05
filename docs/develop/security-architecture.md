@@ -623,7 +623,14 @@ durable version-5 identity. A claimed but malformed birthtime, conflicting descr
 metadata, an unsupported or malformed handle, or missing or ambiguous filesystem scope
 fails closed. Colossus never weakens this case to a pathname-only or device/inode-only
 identity, and runtime acquisition and revalidation independently reproduce the selected
-identity kind.
+identity kind. A version-5 NFS workspace rejects legacy device/inode-only expected
+tokens at runtime acquisition. The Linux SDK-managed sidecar bootstrap still carries
+those legacy tokens, so it cannot launch a birthtime-less NFS workspace until its
+bootstrap contract carries the complete version-5 identity.
+Across version-5 captures, an unchanged scoped digest identifies the same remote
+directory even if a remount changes client device or inode numbers. The retained
+descriptor must still pass its original metadata and identity checks; a stale or
+invalid descriptor remains a failure.
 
 The same identity feeds a versioned domain-separated SHA-256 home partition. CLI/TUI
 and Desktop select disjoint children, preventing a shared redb writer lease, worker
