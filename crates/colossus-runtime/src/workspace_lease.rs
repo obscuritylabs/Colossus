@@ -12,8 +12,7 @@ const LEASE_DIRECTORY: &str = "colossus-worker-leases";
 #[cfg(unix)]
 const LEASE_INODE_DOMAIN: &[u8] = b"colossus-workspace-owner-unix-inode-v1\0";
 #[cfg(target_os = "linux")]
-const HOME_LINUX_IDENTITY_DOMAIN: &[u8] =
-    b"colossus-home-workspace-linux-device-inode-birthtime-v4\0";
+const LEASE_NFS_IDENTITY_DOMAIN: &[u8] = b"colossus-workspace-owner-linux-nfs-file-handle-v2\0";
 #[cfg(target_os = "macos")]
 const MACOS_IDENTITY_DOMAIN: &[u8] = b"colossus-workspace-owner-macos-inode-birthtime-v2\0";
 #[cfg(target_os = "macos")]
@@ -44,10 +43,71 @@ enum WorkspaceIdentityTokenKind {
     WindowsFileIdV3,
     #[cfg(target_os = "linux")]
     HomeLinuxBirthtimeV4,
+    #[cfg(target_os = "linux")]
+    HomeLinuxNfsFileHandleV5,
     #[cfg(target_os = "macos")]
     HomeMacosBirthtimeV2,
     #[cfg(windows)]
     HomeWindowsFileIdV3,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinuxWorkspaceIdentityVersion {
+    BirthtimeV4,
+    NfsFileHandleV5,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxWorkspaceIdentityVersion {
+    const fn from_raw(version: u16) -> Option<Self> {
+        match version {
+            4 => Some(Self::BirthtimeV4),
+            5 => Some(Self::NfsFileHandleV5),
+            _ => None,
+        }
+    }
+
+    const fn home_token_kind(self) -> WorkspaceIdentityTokenKind {
+        match self {
+            Self::BirthtimeV4 => WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4,
+            Self::NfsFileHandleV5 => WorkspaceIdentityTokenKind::HomeLinuxNfsFileHandleV5,
+        }
+    }
+
+    const fn from_home_token_kind(kind: WorkspaceIdentityTokenKind) -> Option<Self> {
+        match kind {
+            WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4 => Some(Self::BirthtimeV4),
+            WorkspaceIdentityTokenKind::HomeLinuxNfsFileHandleV5 => Some(Self::NfsFileHandleV5),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn home_workspace_token_kind(version: u16) -> Option<WorkspaceIdentityTokenKind> {
+    Some(LinuxWorkspaceIdentityVersion::from_raw(version)?.home_token_kind())
+}
+
+#[cfg(target_os = "macos")]
+const fn home_workspace_token_kind(version: u16) -> Option<WorkspaceIdentityTokenKind> {
+    match version {
+        2 => Some(WorkspaceIdentityTokenKind::HomeMacosBirthtimeV2),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+const fn home_workspace_token_kind(version: u16) -> Option<WorkspaceIdentityTokenKind> {
+    match version {
+        3 => Some(WorkspaceIdentityTokenKind::HomeWindowsFileIdV3),
+        _ => None,
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+const fn home_workspace_token_kind(_version: u16) -> Option<WorkspaceIdentityTokenKind> {
+    None
 }
 
 /// Opaque expected identity supplied by a host that securely opened the workspace.
@@ -71,15 +131,7 @@ impl WorkspaceIdentityToken {
             return None;
         }
         let digest: [u8; 32] = hex::decode(identity.sha256).ok()?.try_into().ok()?;
-        let kind = match identity.version {
-            #[cfg(target_os = "linux")]
-            4 => WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4,
-            #[cfg(target_os = "macos")]
-            2 => WorkspaceIdentityTokenKind::HomeMacosBirthtimeV2,
-            #[cfg(windows)]
-            3 => WorkspaceIdentityTokenKind::HomeWindowsFileIdV3,
-            _ => return None,
-        };
+        let kind = home_workspace_token_kind(identity.version)?;
         Some(Self { kind, digest })
     }
 
@@ -235,9 +287,7 @@ struct WorkspaceIdentityInner {
     #[cfg(target_os = "macos")]
     birth_nanoseconds: i64,
     #[cfg(target_os = "linux")]
-    birth_seconds: i64,
-    #[cfg(target_os = "linux")]
-    birth_nanoseconds: u32,
+    linux_identity: colossus_home::LinuxWorkspaceIdentity,
 }
 
 #[cfg(windows)]
@@ -287,11 +337,9 @@ impl WorkspaceIdentity {
             }
             #[cfg(target_os = "linux")]
             {
-                let (birth_seconds, birth_nanoseconds) =
-                    linux_directory_birthtime(&self.0.directory, &retained)?;
-                if birth_seconds != self.0.birth_seconds
-                    || birth_nanoseconds != self.0.birth_nanoseconds
-                {
+                let current = colossus_home::capture_linux_workspace_identity(&self.0.directory)
+                    .map_err(|_| identity_changed())?;
+                if current != self.0.linux_identity {
                     return Err(identity_changed());
                 }
             }
@@ -308,12 +356,28 @@ impl WorkspaceIdentity {
         &self.0.canonical_path
     }
 
+    #[cfg(target_os = "linux")]
+    fn matches_expected(&self, expected: &WorkspaceIdentityToken) -> Result<bool, StoreError> {
+        let version = LinuxWorkspaceIdentityVersion::from_raw(self.0.linux_identity.version())
+            .ok_or_else(identity_changed)?;
+        Ok(linux_workspace_identity_matches(
+            version,
+            self.0.linux_identity.digest(),
+            self.0.device,
+            self.0.inode,
+            expected,
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn matches_expected(&self, expected: &WorkspaceIdentityToken) -> Result<bool, StoreError> {
         match expected.kind {
             #[cfg(all(unix, not(target_os = "macos")))]
             WorkspaceIdentityTokenKind::UnixV1 => {
                 let mut digest = Sha256::new();
-                update_workspace_identity(&mut digest, self)?;
+                digest.update(LEASE_INODE_DOMAIN);
+                digest.update(self.0.device.to_le_bytes());
+                digest.update(self.0.inode.to_le_bytes());
                 Ok(expected.digest == <[u8; 32]>::from(digest.finalize()))
             }
             #[cfg(target_os = "macos")]
@@ -334,16 +398,6 @@ impl WorkspaceIdentity {
                     identity.file_id,
                 )
                 .is_some_and(|actual| actual.digest == expected.digest))
-            }
-            #[cfg(target_os = "linux")]
-            WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4 => {
-                let mut digest = Sha256::new();
-                digest.update(HOME_LINUX_IDENTITY_DOMAIN);
-                digest.update(self.0.device.to_le_bytes());
-                digest.update(self.0.inode.to_le_bytes());
-                digest.update(self.0.birth_seconds.to_le_bytes());
-                digest.update(self.0.birth_nanoseconds.to_le_bytes());
-                Ok(expected.digest == <[u8; 32]>::from(digest.finalize()))
             }
             #[cfg(target_os = "macos")]
             WorkspaceIdentityTokenKind::HomeMacosBirthtimeV2 => {
@@ -377,10 +431,10 @@ impl WorkspaceIdentity {
 
     #[cfg(target_os = "linux")]
     fn same_object(&self, other: &Self) -> bool {
-        self.0.device == other.0.device
-            && self.0.inode == other.0.inode
-            && self.0.birth_seconds == other.0.birth_seconds
-            && self.0.birth_nanoseconds == other.0.birth_nanoseconds
+        linux_workspace_objects_match(
+            &LinuxWorkspaceObjectIdentity::from(self.0.as_ref()),
+            &LinuxWorkspaceObjectIdentity::from(other.0.as_ref()),
+        )
     }
 
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
@@ -396,6 +450,68 @@ impl WorkspaceIdentity {
     #[cfg(not(any(unix, windows)))]
     fn same_object(&self, other: &Self) -> bool {
         self.0.canonical_path == other.0.canonical_path
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxWorkspaceObjectIdentity {
+    version: u16,
+    digest: [u8; 32],
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl From<&WorkspaceIdentityInner> for LinuxWorkspaceObjectIdentity {
+    fn from(workspace: &WorkspaceIdentityInner) -> Self {
+        Self {
+            version: workspace.linux_identity.version(),
+            digest: workspace.linux_identity.digest(),
+            device: workspace.device,
+            inode: workspace.inode,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_workspace_objects_match(
+    expected: &LinuxWorkspaceObjectIdentity,
+    actual: &LinuxWorkspaceObjectIdentity,
+) -> bool {
+    if expected.version != actual.version || expected.digest != actual.digest {
+        return false;
+    }
+    match LinuxWorkspaceIdentityVersion::from_raw(expected.version) {
+        Some(LinuxWorkspaceIdentityVersion::BirthtimeV4) => {
+            expected.device == actual.device && expected.inode == actual.inode
+        }
+        // Each capture checks its own descriptor metadata. Across captures, the
+        // scoped remote identity remains authoritative when NFS is remounted.
+        Some(LinuxWorkspaceIdentityVersion::NfsFileHandleV5) => true,
+        None => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_workspace_identity_matches(
+    actual_version: LinuxWorkspaceIdentityVersion,
+    actual_digest: [u8; 32],
+    device: u64,
+    inode: u64,
+    expected: &WorkspaceIdentityToken,
+) -> bool {
+    match expected.kind {
+        WorkspaceIdentityTokenKind::UnixV1 => {
+            // An open client descriptor cannot prevent the NFS server from reusing
+            // a file ID. An inode-only bootstrap token cannot bind a v5 workspace.
+            actual_version == LinuxWorkspaceIdentityVersion::BirthtimeV4
+                && *expected == WorkspaceIdentityToken::from_unix_parts(device, inode)
+        }
+        kind => {
+            LinuxWorkspaceIdentityVersion::from_home_token_kind(kind)
+                .is_some_and(|expected_version| expected_version == actual_version)
+                && expected.digest == actual_digest
+        }
     }
 }
 
@@ -446,7 +562,8 @@ fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreE
         }
     }
     #[cfg(target_os = "linux")]
-    let (birth_seconds, birth_nanoseconds) = linux_directory_birthtime(&directory, &opened)?;
+    let linux_identity = colossus_home::capture_linux_workspace_identity(&directory)
+        .map_err(|_| identity_changed())?;
 
     Ok(WorkspaceIdentity(Arc::new(WorkspaceIdentityInner {
         directory,
@@ -464,36 +581,8 @@ fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreE
             opened.st_birthtime_nsec()
         },
         #[cfg(target_os = "linux")]
-        birth_seconds,
-        #[cfg(target_os = "linux")]
-        birth_nanoseconds,
+        linux_identity,
     })))
-}
-
-#[cfg(target_os = "linux")]
-fn linux_directory_birthtime(
-    directory: &File,
-    metadata: &fs::Metadata,
-) -> Result<(i64, u32), StoreError> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let statx = rustix::fs::statx(
-        directory,
-        "",
-        rustix::fs::AtFlags::EMPTY_PATH,
-        rustix::fs::StatxFlags::BASIC_STATS | rustix::fs::StatxFlags::BTIME,
-    )
-    .map_err(|_| identity_changed())?;
-    if statx.stx_mask & rustix::fs::StatxFlags::BTIME.bits() == 0
-        || statx.stx_ino != metadata.ino()
-        || statx.stx_dev_major != rustix::fs::major(metadata.dev())
-        || statx.stx_dev_minor != rustix::fs::minor(metadata.dev())
-        || statx.stx_btime.tv_sec <= 0
-        || statx.stx_btime.tv_nsec >= 1_000_000_000
-    {
-        return Err(identity_changed());
-    }
-    Ok((statx.stx_btime.tv_sec, statx.stx_btime.tv_nsec))
 }
 
 #[cfg(windows)]
@@ -521,7 +610,7 @@ fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreE
     })))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn update_workspace_identity(
     digest: &mut Sha256,
     workspace: &WorkspaceIdentity,
@@ -530,6 +619,43 @@ fn update_workspace_identity(
     digest.update(workspace.0.device.to_le_bytes());
     digest.update(workspace.0.inode.to_le_bytes());
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn update_workspace_identity(
+    digest: &mut Sha256,
+    workspace: &WorkspaceIdentity,
+) -> Result<(), StoreError> {
+    update_linux_workspace_lease_digest(
+        digest,
+        workspace.0.linux_identity.version(),
+        workspace.0.linux_identity.digest(),
+        workspace.0.device,
+        workspace.0.inode,
+    )
+    .ok_or_else(identity_changed)
+}
+
+#[cfg(target_os = "linux")]
+fn update_linux_workspace_lease_digest(
+    digest: &mut Sha256,
+    version: u16,
+    identity_digest: [u8; 32],
+    device: u64,
+    inode: u64,
+) -> Option<()> {
+    match LinuxWorkspaceIdentityVersion::from_raw(version)? {
+        LinuxWorkspaceIdentityVersion::BirthtimeV4 => {
+            digest.update(LEASE_INODE_DOMAIN);
+            digest.update(device.to_le_bytes());
+            digest.update(inode.to_le_bytes());
+        }
+        LinuxWorkspaceIdentityVersion::NfsFileHandleV5 => {
+            digest.update(LEASE_NFS_IDENTITY_DOMAIN);
+            digest.update(identity_digest);
+        }
+    }
+    Some(())
 }
 
 #[cfg(windows)]
@@ -929,6 +1055,198 @@ mod tests {
 
         assert_ne!(first, replacement);
         assert!(WorkspaceIdentityToken::from_macos_parts(42, 84, 0, 0).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn home_nfs_file_handle_identity_is_accepted_as_v5() {
+        let digest = "ab".repeat(32);
+        let token = WorkspaceIdentityToken::from_home_workspace_identity(
+            colossus_home::WorkspaceIdentityRef {
+                version: 5,
+                sha256: &digest,
+            },
+        )
+        .expect("NFS identity token");
+
+        assert_eq!(
+            token.kind,
+            WorkspaceIdentityTokenKind::HomeLinuxNfsFileHandleV5
+        );
+        assert_eq!(token.digest, [0xab; 32]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn home_nfs_file_handle_identity_matches_only_v5_and_the_exact_digest() {
+        let digest = [0xab; 32];
+        let version = LinuxWorkspaceIdentityVersion::from_raw(5).expect("v5 identity version");
+        let expected = WorkspaceIdentityToken {
+            kind: WorkspaceIdentityTokenKind::HomeLinuxNfsFileHandleV5,
+            digest,
+        };
+
+        assert!(linux_workspace_identity_matches(
+            version, digest, 42, 84, &expected,
+        ));
+        assert!(!linux_workspace_identity_matches(
+            version, [0xcd; 32], 42, 84, &expected,
+        ));
+        assert!(!linux_workspace_identity_matches(
+            version,
+            digest,
+            42,
+            84,
+            &WorkspaceIdentityToken {
+                kind: WorkspaceIdentityTokenKind::HomeLinuxBirthtimeV4,
+                digest,
+            },
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nfs_identity_rejects_inode_only_bootstrap_even_when_inode_fields_match() {
+        let expected = WorkspaceIdentityToken::from_unix_parts(42, 84);
+
+        // The server may replace the object while reusing its inode number. Neither
+        // the original nor the replacement handle can be authorized by a v1 token.
+        for digest in [[0xab; 32], [0xcd; 32]] {
+            assert!(!linux_workspace_identity_matches(
+                LinuxWorkspaceIdentityVersion::NfsFileHandleV5,
+                digest,
+                42,
+                84,
+                &expected,
+            ));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn birthtime_identity_preserves_inode_only_bootstrap_matching() {
+        let expected = WorkspaceIdentityToken::from_unix_parts(42, 84);
+        let version = LinuxWorkspaceIdentityVersion::BirthtimeV4;
+
+        assert!(linux_workspace_identity_matches(
+            version, [0xab; 32], 42, 84, &expected,
+        ));
+        for (device, inode) in [(43, 84), (42, 85)] {
+            assert!(!linux_workspace_identity_matches(
+                version, [0xab; 32], device, inode, &expected,
+            ));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_object_identity(version: u16) -> LinuxWorkspaceObjectIdentity {
+        LinuxWorkspaceObjectIdentity {
+            version,
+            digest: [0xab; 32],
+            device: 42,
+            inode: 84,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nfs_revalidation_accepts_same_remote_object_after_client_inode_changes() {
+        let expected = linux_object_identity(5);
+
+        for (device, inode) in [(42, 84), (43, 84), (42, 85), (43, 85)] {
+            let current = LinuxWorkspaceObjectIdentity {
+                device,
+                inode,
+                ..linux_object_identity(5)
+            };
+            assert!(linux_workspace_objects_match(&expected, &current));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn birthtime_revalidation_requires_original_device_and_inode() {
+        let expected = linux_object_identity(4);
+
+        assert!(linux_workspace_objects_match(&expected, &expected));
+        for (device, inode) in [(43, 84), (42, 85), (43, 85)] {
+            let current = LinuxWorkspaceObjectIdentity {
+                device,
+                inode,
+                ..linux_object_identity(4)
+            };
+            assert!(!linux_workspace_objects_match(&expected, &current));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_revalidation_rejects_changed_digest_and_identity_version() {
+        for version in [4, 5] {
+            let expected = linux_object_identity(version);
+            let changed_digest = LinuxWorkspaceObjectIdentity {
+                digest: [0xcd; 32],
+                ..linux_object_identity(version)
+            };
+            assert!(!linux_workspace_objects_match(&expected, &changed_digest));
+            for other_version in [4, 5, 6] {
+                if other_version != version {
+                    assert!(!linux_workspace_objects_match(
+                        &expected,
+                        &linux_object_identity(other_version),
+                    ));
+                }
+            }
+        }
+
+        let unsupported = linux_object_identity(6);
+        assert!(!linux_workspace_objects_match(&unsupported, &unsupported));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nfs_lease_digest_ignores_transient_inode_fields_and_uses_a_distinct_namespace() {
+        fn lease_digest(
+            version: u16,
+            identity_digest: [u8; 32],
+            device: u64,
+            inode: u64,
+        ) -> Option<[u8; 32]> {
+            let mut digest = Sha256::new();
+            update_linux_workspace_lease_digest(
+                &mut digest,
+                version,
+                identity_digest,
+                device,
+                inode,
+            )?;
+            Some(digest.finalize().into())
+        }
+
+        let nfs_digest = [0xab; 32];
+        let first_nfs = lease_digest(5, nfs_digest, 1, 2).expect("v5 lease digest");
+        let remounted_nfs = lease_digest(5, nfs_digest, 9, 10).expect("v5 lease digest");
+        let birthtime_lease = lease_digest(4, nfs_digest, 1, 2).expect("v4 lease digest");
+
+        assert_eq!(first_nfs, remounted_nfs);
+        assert_ne!(first_nfs, birthtime_lease);
+        assert_eq!(
+            hex::encode(birthtime_lease),
+            "6de753109ae81e1f364543d94cd8b6d3f5dd227d817549269961e43ab8efeed7"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unsupported_future_linux_identity_version_fails_closed() {
+        assert_eq!(LinuxWorkspaceIdentityVersion::from_raw(6), None);
+        assert_eq!(home_workspace_token_kind(6), None);
+
+        let mut digest = Sha256::new();
+        assert_eq!(
+            update_linux_workspace_lease_digest(&mut digest, 6, [0xab; 32], 1, 2),
+            None
+        );
     }
 
     #[cfg(unix)]

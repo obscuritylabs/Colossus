@@ -48,6 +48,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-integrations` | Keep manifest, credential, dispatch, and live Splunk MCP acceptance tests. |
 | `colossus-journal-postgres` | Keep shared journal conformance, transaction ownership, outage, and recovery tests. |
 | `colossus-journal-redb` | Keep shared journal conformance, encryption, tamper, migration, and crash-recovery tests; retained on-disk readers protect current state. |
+| `colossus-linux-native` | Keep bounded file-handle capture and strict NFS volume-scope parser tests; run native capture checks on Linux CI. |
 | `colossus-mcp` | Keep strict configuration, protocol, OAuth, tool ceiling, and subprocess/remote tests. |
 | `colossus-memory-chroma` | Keep projection/retry tests and the opt-in live Chroma target. |
 | `colossus-memory` | Keep canonical lifecycle, scope, Tantivy projection, and fallback tests. |
@@ -86,6 +87,25 @@ context, documentation examples, integrations, MCP, native/OCI/Windows sandboxin
 plugins, plans, providers, release installation, research, search, rejection,
 worker, and workflow behavior. Their separation lets CI select expensive prerequisites
 without weakening the public-boundary assertions.
+
+Linux workspace-identity changes require focused provider-seam tests in both
+`colossus-home` and `colossus-runtime`. Preserve a known version-4 birthtime digest;
+prove that missing NFS birthtime selects version 5; and prove that transient device,
+inode, mount-ID, and mount-point fields are not independently hashed when the filesystem
+scope and kernel-supplied opaque handle remain identical. Do not assume that the opaque
+handle itself remains stable across an inode remap. Prove separation across filesystem
+scope, handle type, length, and bytes. Cover bounded handle sizing, unsupported
+syscalls/filesystems, malformed or changing results, missing or ambiguous scope, and
+descriptor/stat metadata disagreement as fail-closed cases. Runtime tests must
+independently reproduce the expected identity kind and reject replacement before
+repository, tool, or effect access. An inode-only bootstrap token must not authorize a
+version-5 identity even when its device and inode match. Unsupported identity scope on
+an unrelated NFS volume must not prevent selecting a supported workspace, while
+malformed record structure and duplicate device matches remain rejected.
+Version-5 revalidation must accept the same scoped digest across changed client
+device/inode values, reject changed digests, and retain version-4 metadata checks.
+A live NFS acceptance test may supplement these
+contracts, but cannot replace the deterministic negative cases.
 
 ## Removal criteria
 

@@ -88,11 +88,14 @@ infrastructure adapters implement ports and are assembled only by the runtime.
   it; acknowledged full access deliberately does not.
 - Shared CLI and TUI home resolution selects absolute `COLOSSUS_HOME` or the platform
   user home, validates its owner-private no-follow boundary, and derives one opaque
-  partition from canonical workspace path and object identity. Windows Desktop honors
-  an explicit `COLOSSUS_HOME`; otherwise its native composition selects the fixed
-  owner-private `ColossusDesktopHome` beneath the user's local application-data
-  directory. Interfaces consume the resolved context; renderer code never invents
-  configuration or state paths.
+  partition from canonical workspace path and object identity. Linux keeps the
+  birthtime-based identity when available; an NFS workspace that does not report
+  birthtime uses a distinct filesystem-scoped opaque-handle identity captured from the
+  same opened directory. Missing, malformed, inconsistent, or unsupported identity
+  evidence fails closed. Windows Desktop honors an explicit `COLOSSUS_HOME`; otherwise
+  its native composition selects the fixed owner-private `ColossusDesktopHome` beneath
+  the user's local application-data directory. Interfaces consume the resolved
+  context; renderer code never invents configuration or state paths.
 - Configuration resolution selects one explicit, repository-local, or user-level
   document without merging. Runtime composition receives the selected source and
   resolved storage path after `storage.location` confinement has succeeded.

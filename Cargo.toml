@@ -9,6 +9,7 @@ members = [
     "crates/colossus-api-runtime",
     "crates/colossus-grpc",
     "crates/colossus-home",
+    "crates/colossus-linux-native",
     "crates/colossus-sdk",
     "crates/colossus-darwin-process",
     "crates/colossus-sidecar-protocol",
@@ -178,6 +179,7 @@ colossus-api = { version = "=0.10.10-preview.10", path = "crates/colossus-api" }
 colossus-api-runtime = { version = "=0.10.10-preview.10", path = "crates/colossus-api-runtime" }
 colossus-grpc = { version = "=0.10.10-preview.10", path = "crates/colossus-grpc" }
 colossus-home = { version = "=0.10.10-preview.10", path = "crates/colossus-home" }
+colossus-linux-native = { version = "=0.10.10-preview.10", path = "crates/colossus-linux-native" }
 colossus-sdk = { version = "=0.10.10-preview.10", path = "crates/colossus-sdk" }
 colossus-darwin-process = { version = "=0.10.10-preview.10", path = "crates/colossus-darwin-process" }
 colossus-sidecar-protocol = { version = "=0.10.10-preview.10", path = "crates/colossus-sidecar-protocol" }

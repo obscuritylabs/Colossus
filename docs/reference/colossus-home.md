@@ -78,9 +78,29 @@ canonical workspace and its filesystem object identity. It is opaque and not a p
 identifier. Renaming or replacing a workspace selects a new partition; Colossus
 never silently attaches a replacement filesystem object to the prior database.
 
+On Linux, a valid filesystem birthtime retains the version-4 identity. NFS servers
+commonly omit that field, so version 5 can instead use a bounded, filesystem-scoped
+opaque handle captured from the opened workspace directory. A server or filesystem
+that cannot provide stable, unambiguous handle evidence remains unsupported: Colossus
+fails with an identity error rather than falling back to a path or reusable inode.
+Changing the remote filesystem, its identity scope, or a volatile server handle may
+therefore select a new partition.
+
+The version-5 fallback is supported by CLI/TUI workspace binding. Linux SDK-managed
+sidecar launches still use device/inode-only bootstrap tokens and reject these NFS
+workspaces; those tokens cannot prove that a server-side replacement is the same object.
+
 The `cli` and `desktop` partitions intentionally cannot alias. Their redb writer
 leases, worker authentication, provider-key namespaces, and application lifecycle stay
 independent even when both interfaces select the same repository.
+
+This NFS support covers selecting and binding an NFS workspace. It does not guarantee
+that an NFS-mounted Colossus home provides the locking and durability required by every
+state backend. When the operating-system user home is NFS, set `COLOSSUS_HOME` to an
+absolute owner-private directory on a local filesystem. Use a global configuration with
+`storage.location: home_workspace` to keep CLI/TUI state below that local home; a
+repository configuration that selects `storage.location: workspace` still stores state
+in the workspace.
 
 ## Select configuration
 
@@ -204,5 +224,11 @@ data and cache records described in [Install Colossus](../get-started/install.md
   scope before editing anything.
 - **Unexpected empty state:** confirm the canonical workspace and partition ID. A
   renamed or replaced repository intentionally receives a different partition.
+- **Linux NFS identity rejected:** the server or mount did not supply valid birthtime or
+  stable opaque-handle evidence. Some RHEL 8 kernels cannot obtain handles from NFSv2 or
+  NFSv4.0 mounts; when the server supports it, use NFSv4.1 or NFSv4.2 (or NFSv3), or use
+  a local workspace. Do not bypass the identity check.
+- **NFS user home:** point `COLOSSUS_HOME` at an owner-private local directory and use
+  `storage.location: home_workspace` for local state.
 - **AGENTS.md rejected:** replace links with a bounded regular UTF-8 file and keep each
   source within 64 KiB.

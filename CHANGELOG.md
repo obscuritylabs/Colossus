@@ -8,6 +8,15 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Fixed
+
+- Added a version-5 filesystem-scoped opaque-handle identity for Linux NFS workspaces
+  that do not report birthtime, while preserving the existing birthtime identity and
+  failing closed on unsupported, malformed, or inconsistent identity evidence.
+- Documented that NFS workspace binding does not guarantee state-backend semantics on
+  an NFS user home and recommended an owner-private local `COLOSSUS_HOME` for local
+  workspace state.
+
 ## [0.10.10-preview.10] - 2026-09-02
 
 ### Added

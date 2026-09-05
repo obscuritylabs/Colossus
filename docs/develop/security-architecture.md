@@ -614,17 +614,39 @@ tool dispatch and at permit-bearing filesystem and process adapter boundaries. A
 renamed or replaced workspace therefore cannot inherit prior state or redirect an
 active managed runtime.
 
+On Linux, CLI/TUI workspace identity continues to use the version-4 device, inode, and
+birthtime digest when `statx` supplies valid birthtime. When an opened NFS directory
+genuinely has no birthtime, version 5 instead hashes a bounded opaque file handle with
+durable NFS filesystem-scoping evidence captured for that descriptor. Transient device,
+inode, and mount identifiers remain useful for same-capture race checks but are not the
+durable version-5 identity. A claimed but malformed birthtime, conflicting descriptor
+metadata, an unsupported or malformed handle, or missing or ambiguous filesystem scope
+fails closed. Colossus never weakens this case to a pathname-only or device/inode-only
+identity, and runtime acquisition and revalidation independently reproduce the selected
+identity kind. A version-5 NFS workspace rejects legacy device/inode-only expected
+tokens at runtime acquisition. The Linux SDK-managed sidecar bootstrap still carries
+those legacy tokens, so it cannot launch a birthtime-less NFS workspace until its
+bootstrap contract carries the complete version-5 identity.
+Across version-5 captures, an unchanged scoped digest identifies the same remote
+directory even if a remount changes client device or inode numbers. The retained
+descriptor must still pass its original metadata and identity checks; a stale or
+invalid descriptor remains a failure.
+
 The same identity feeds a versioned domain-separated SHA-256 home partition. CLI/TUI
 and Desktop select disjoint children, preventing a shared redb writer lease, worker
 bootstrap secret, or provider namespace. User-level configuration, Desktop settings,
-and every partition remain beneath the validated owner-private, no-follow home. An
-explicit configuration path outranks the repository file, which outranks the home file;
-the first selected document is complete and a malformed candidate fails without
-fallback. Automatic repository and home candidates additionally use confined no-follow
-opens and fail when unsafe; an explicit path retains the caller's normal explicit-file
-authority. `storage.location: home_workspace` additionally confines relative storage
-paths beneath the CLI partition, while omitted `location` preserves the
-workspace-relative compatibility boundary.
+and every partition remain beneath the validated owner-private, no-follow home. The NFS
+identity fallback establishes workspace binding only; it does not claim that every NFS
+implementation provides the locking and durability required for canonical state.
+Operators with an NFS user home should select an owner-private local `COLOSSUS_HOME` and
+`storage.location: home_workspace` when state must remain local. An explicit
+configuration path outranks the repository file, which outranks the home file; the
+first selected document is complete and a malformed candidate fails without fallback.
+Automatic repository and home candidates additionally use confined no-follow opens and
+fail when unsafe; an explicit path retains the caller's normal explicit-file authority.
+`storage.location: home_workspace` additionally confines relative storage paths beneath
+the CLI partition, while omitted `location` preserves the workspace-relative
+compatibility boundary.
 
 Home and repository `AGENTS.md` files are model-input data, never authority. Each
 top-level user-facing run reads at most those two no-follow UTF-8 regular files, bounded
