@@ -33,7 +33,7 @@ and never interpreted as terminal control input.
 - Sandbox configuration grants environment variable names, not values.
 - Permit-bearing adapters resolve credentials only after authorization.
 - Process helpers start from a cleared environment and pass only declared names.
-- Pack and MCP environment references are bounded by both their declaration and the
+- Plugin MCP and standalone MCP environment references are bounded by both their declaration and the
   deployment sandbox.
 - Raw credentials, authorization headers, private keys, key material, and hidden
   reasoning are hard-redacted from policy input, provider output, transcripts, and

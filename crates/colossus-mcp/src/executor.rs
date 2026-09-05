@@ -34,7 +34,14 @@ pub struct McpExecutor {
     oauth_allowed_environment: Vec<String>,
     oauth_timeout_ms: u64,
     oauth_max_output_bytes: u64,
-    oauth_sessions: tokio::sync::Mutex<BTreeMap<String, AuthorizationSession>>,
+    oauth_sessions: Arc<tokio::sync::Mutex<BTreeMap<String, PendingAuthorization>>>,
+}
+
+struct PendingAuthorization {
+    session: AuthorizationSession,
+    endpoint: Option<String>,
+    oauth: McpOAuthConfig,
+    provenance: Option<Value>,
 }
 
 impl McpExecutor {
@@ -68,6 +75,7 @@ impl McpExecutor {
                 args: server.args.clone(),
                 cwd,
                 environment: server.environment.clone(),
+                literal_environment: server.literal_environment.clone(),
                 url: server.url.clone(),
                 headers: server.headers.clone(),
                 credential_headers: server.credential_headers.clone(),
@@ -93,7 +101,7 @@ impl McpExecutor {
             oauth_allowed_environment: Vec::new(),
             oauth_timeout_ms: 30_000,
             oauth_max_output_bytes: 1024 * 1024,
-            oauth_sessions: tokio::sync::Mutex::new(BTreeMap::new()),
+            oauth_sessions: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -102,6 +110,32 @@ impl McpExecutor {
     pub fn with_credentials(mut self, credentials: Arc<dyn CredentialResolver>) -> Self {
         self.credentials = credentials;
         self
+    }
+
+    /// Freeze a newly validated server configuration while sharing the host's credential
+    /// stores and transport policy. This never resolves credentials or opens a connection.
+    pub fn snapshot_configuration(
+        &self,
+        config: &McpConfig,
+        workspace: &Path,
+        sandbox_backend: &str,
+    ) -> Result<Self, McpError> {
+        let mut snapshot = Self::new(
+            config,
+            workspace,
+            sandbox_backend,
+            Arc::clone(&self.process),
+        )?;
+        snapshot.credentials = Arc::clone(&self.credentials);
+        snapshot.tls_roots = self.tls_roots.clone();
+        snapshot.oauth_store = self.oauth_store.clone();
+        snapshot.oauth_resource_authority = self.oauth_resource_authority;
+        snapshot.oauth_network_destinations = self.oauth_network_destinations.clone();
+        snapshot.oauth_allowed_environment = self.oauth_allowed_environment.clone();
+        snapshot.oauth_timeout_ms = self.oauth_timeout_ms;
+        snapshot.oauth_max_output_bytes = self.oauth_max_output_bytes;
+        snapshot.oauth_sessions = Arc::clone(&self.oauth_sessions);
+        Ok(snapshot)
     }
 
     /// Add validated runtime-wide CA roots to remote MCP clients.
@@ -248,10 +282,15 @@ impl McpExecutor {
             authorization_url.clone(),
             &callback_url,
         );
-        self.oauth_sessions
-            .lock()
-            .await
-            .insert(server.to_owned(), session);
+        self.oauth_sessions.lock().await.insert(
+            server.to_owned(),
+            PendingAuthorization {
+                session,
+                endpoint: configured.url.clone(),
+                oauth: oauth.clone(),
+                provenance: configured.provenance.clone(),
+            },
+        );
         Ok(McpOAuthLogin {
             server: server.into(),
             authorization_url,
@@ -273,7 +312,17 @@ impl McpExecutor {
             .await
             .remove(server)
             .ok_or_else(|| McpError::OAuth("no pending authorization session".into()))?;
+        let (configured, oauth) = self.oauth_server(server)?;
+        if session.endpoint != configured.url
+            || session.oauth != *oauth
+            || session.provenance != configured.provenance
+        {
+            return Err(McpError::OAuth(
+                "server changed during login; begin authorization again".into(),
+            ));
+        }
         session
+            .session
             .handle_callback_url(callback_url)
             .await
             .map_err(safe_oauth_error)?;
@@ -420,6 +469,7 @@ impl McpExecutor {
             cwd: server.cwd.clone(),
             args: server.args.clone(),
             environment: server.environment.clone(),
+            literal_environment: server.literal_environment.clone(),
             url: server.url.clone(),
             headers: server.headers.clone(),
             credential_headers: server.credential_headers.clone(),
@@ -493,6 +543,7 @@ impl McpExecutor {
             || input.cwd != server.cwd
             || input.args != server.args
             || input.environment != server.environment
+            || input.literal_environment != server.literal_environment
             || input.url != server.url
             || input.headers != server.headers
             || input.credential_headers != server.credential_headers
@@ -1427,7 +1478,7 @@ impl EffectExecutor for McpExecutor {
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         if !matches!(request.action.as_str(), "mcp.tools" | "mcp.call")
-            && !request.action.starts_with("pack.mcp.")
+            && !request.action.starts_with("plugin.mcp.")
         {
             return Err(failed("MCP executor received another action"));
         }
@@ -1514,8 +1565,15 @@ impl EffectExecutor for McpExecutor {
                 )),
             };
         }
-        let (environment, secrets) =
+        let (mut environment, secrets) =
             resolve_environment(&server.environment, self.credentials.as_ref())?;
+        for (name, value) in &server.literal_environment {
+            if environment.insert(name.clone(), value.clone()).is_some() {
+                return Err(failed(
+                    "plugin literal environment conflicts with a credential overlay",
+                ));
+            }
+        }
         let protocol = protocol_input(&input.operation)?;
         let process = ProcessSpec {
             cwd: server

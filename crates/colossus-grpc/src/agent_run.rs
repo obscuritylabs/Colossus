@@ -555,13 +555,6 @@ fn create_request(
             "input must contain at most 128 content parts",
         ));
     }
-    if !request.selected_skills.is_empty() {
-        return Err(invalid(
-            caller,
-            "selected_skills",
-            "public skill activation is unavailable in v1alpha1",
-        ));
-    }
     let mode = match RunMode::try_from(request.mode) {
         Ok(RunMode::Execute) => CoreRunMode::Execute,
         Ok(RunMode::Plan) => CoreRunMode::Plan,
@@ -667,7 +660,7 @@ fn create_request(
                 )),
             }
         }).collect::<Result<Vec<_>, _>>()?,
-        skill_ids: request.selected_skills,
+        skill_ids: request.plugin_skill_ids,
         plan_action,
         branch: request
             .branch
@@ -864,6 +857,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
     };
     Ok(Run {
         run_id: value.id,
+        plugin_skill_ids: value.skill_ids,
         session_id: value.session_id,
         title: value.title,
         role: value.role,
@@ -885,7 +879,6 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
         pending_interaction_count: u32::from(value.pending_interaction.is_some()),
         etag: value.etag,
         terminal,
-        selected_skills: value.skill_ids,
         archived: value.archived,
     })
 }
@@ -1498,11 +1491,11 @@ mod tests {
                 &caller,
                 CreateRunRequest {
                     input: Vec::new(),
+                    plugin_skill_ids: Vec::new(),
                     session_id: None,
                     end_user_id: None,
                     role: String::new(),
                     mode,
-                    selected_skills: Vec::new(),
                     plan_action: None,
                     branch: None,
                     research_depth: ResearchDepth::Unspecified as i32,
@@ -1524,11 +1517,11 @@ mod tests {
                 input: (0..=MAX_CREATE_INPUT_PARTS)
                     .map(|_| colossus_api_proto::v1alpha1::ContentPart { content: None })
                     .collect(),
+                plugin_skill_ids: Vec::new(),
                 session_id: None,
                 end_user_id: None,
                 role: "assistant".into(),
                 mode: RunMode::Execute as i32,
-                selected_skills: Vec::new(),
                 plan_action: None,
                 branch: None,
                 research_depth: ResearchDepth::Unspecified as i32,

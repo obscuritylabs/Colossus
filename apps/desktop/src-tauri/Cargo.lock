@@ -968,6 +968,7 @@ name = "colossus-worker-protocol"
 version = "0.10.10-preview.10"
 dependencies = [
  "base64 0.22.1",
+ "colossus-contracts",
  "getrandom 0.4.3",
  "hex",
  "hmac",

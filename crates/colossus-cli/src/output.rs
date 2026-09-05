@@ -303,8 +303,8 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
         ],
         [
             "Agent resources",
-            "/tools · /skills · /skill use|active|clear|show|resources|read",
-            "Discover tools and activate skills",
+            "/tools · /plugins · /plugin skills|use|active|clear|show|resources|read",
+            "Discover plugins and activate qualified plugin skills",
         ],
         [
             "Research",
@@ -312,9 +312,9 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
             "Run research and inspect MCP capabilities",
         ],
         [
-            "Extensions",
-            "/packs list|show|verify|install|enable|disable|call · /collections verify|install · /registry pull|push · /integrations",
-            "Manage trusted extension surfaces",
+            "Plugins & integrations",
+            "/plugins [show NAME] · /integrations · /integration show|call|disconnect",
+            "Inspect active Agent Plugins and native integrations",
         ],
         [
             "Runtime",
@@ -342,7 +342,7 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
     PresentationDocument {
         blocks: vec![
             PresentationBlock::Markdown(
-                "# Colossus Terminal\n\nType a normal message to talk to the configured primary model. Press **Tab** to complete commands and `@skill` names."
+                "# Colossus Terminal\n\nType a normal message to talk to the configured primary model. Press **Tab** to complete commands and qualified `@PLUGIN/SKILL` names."
                     .into(),
             ),
             PresentationBlock::KeyValue(vec![

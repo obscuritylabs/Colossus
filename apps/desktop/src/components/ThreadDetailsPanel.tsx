@@ -526,17 +526,6 @@ export function ThreadDetailsPanel({
         ) : null}
       </dl>
 
-      {run.selectedSkills.length > 0 ? (
-        <section className="thread-details-section">
-          <h3>Labels</h3>
-          <div className="thread-detail-labels">
-            {run.selectedSkills.map((skill) => (
-              <span key={skill}>{skill.replaceAll("-", " ")}</span>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
       <section className="thread-details-section">
         <h3>Participants</h3>
         <div className="thread-detail-participants">

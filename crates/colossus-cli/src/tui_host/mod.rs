@@ -6,10 +6,10 @@ use colossus_contracts::{
     ActorType, AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
     MemoryStatus, ModelContent, ModelContentPart, ModelImageReference, ModelMessageRole,
-    PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision, ProviderReadinessCheck,
-    ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice,
-    RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage, SessionSummary, TerminalPreferences,
-    UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    PlanExecutionOutcome, PlanRecord, PlanStatus, PluginInventoryEntry, PolicyDecision,
+    ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
+    RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
+    SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -458,6 +458,7 @@ fn interactive_runtime_error(error: &RuntimeError) -> String {
 
 mod common;
 mod embedded;
+mod plugins;
 mod worker;
 
 pub(crate) use common::{TuiApprovalProvider, TuiPromptRouter, TuiUserPromptProvider};
@@ -465,6 +466,7 @@ pub(crate) use embedded::EmbeddedInteractiveHost;
 pub(crate) use worker::WorkerInteractiveHost;
 
 use common::*;
+use plugins::*;
 use worker::parse_toggle;
 
 #[cfg(test)]

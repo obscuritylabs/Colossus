@@ -69,7 +69,7 @@ fn openapi_connections_are_durable_hidden_until_connected_and_gateway_bound() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -93,13 +93,6 @@ policy:
 workflows:
   repository: {workflows}
   user: {workflows}
-skills:
-  enabled: true
-  allowUserOverrides: false
-  bundled: {missing}
-  repository: {missing}
-  user: {missing}
-  disabled: []
 agent:
   maxTurns: 4
 sandbox:
@@ -125,7 +118,6 @@ sandbox:
             state = state.display(),
             anchor = anchor.display(),
             workflows = workflows.display(),
-            missing = workspace.join("missing").display(),
             workspace = workspace.display(),
         ),
     )

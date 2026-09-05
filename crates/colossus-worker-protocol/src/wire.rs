@@ -8,10 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 18 adds context snapshots to the strict session-map response. Older workers
-/// cannot produce that required field and older clients reject it, so both sides reject
-/// the mismatch during the handshake and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 18;
+/// Version 21 includes typed plugin management, digest-bound previews, and run skill selections.
+/// Both sides reject mismatches during the handshake and require a worker restart.
+pub const PROTOCOL_VERSION: u16 = 21;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 ///
@@ -107,11 +106,23 @@ pub(crate) enum ControlOperation {
         query: String,
         limit: usize,
     },
-    SkillList,
-    PackList {
-        limit: usize,
+    PluginsInventory,
+    PluginManage {
+        request: colossus_contracts::PluginManagementRequest,
+    },
+    RunInteractive {
+        request: PluginInteractiveRequest,
+        approval_mode: WorkerApprovalMode,
     },
     WorkflowList,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum PluginInteractiveRequest {
+    PluginManage {
+        request: colossus_contracts::PluginManagementRequest,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -416,12 +427,8 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(ControlOperation::SkillList).expect("skill list"),
-            serde_json::json!({"operation": "skill_list"})
-        );
-        assert_eq!(
-            serde_json::to_value(ControlOperation::PackList { limit: 256 }).expect("pack list"),
-            serde_json::json!({"operation": "pack_list", "limit": 256})
+            serde_json::to_value(ControlOperation::PluginsInventory).expect("plugins inventory"),
+            serde_json::json!({"operation": "plugins_inventory"})
         );
         assert_eq!(
             serde_json::to_value(ControlOperation::WorkflowList).expect("workflow list"),

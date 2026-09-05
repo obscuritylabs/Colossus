@@ -1850,6 +1850,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         });
     }
     if let Some((session_id, page, pending_sandbox_boundary_acknowledgement)) = result.session {
+        if state.session_id != session_id {
+            state.sticky_skills.clear();
+        }
         state.session_id = session_id;
         state.pending_sandbox_boundary_acknowledgement = pending_sandbox_boundary_acknowledgement;
         state.selected_plan = None;

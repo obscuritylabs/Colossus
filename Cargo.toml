@@ -39,10 +39,11 @@ members = [
     "crates/colossus-research",
     "crates/colossus-telemetry",
     "crates/colossus-observability",
-    "crates/colossus-skills",
+    "crates/colossus-plugins",
+    "crates/colossus-bundled-plugins",
     "crates/colossus-integrations",
     "crates/colossus-mcp",
-    "crates/colossus-packs",
+    "crates/colossus-bundles",
     "crates/colossus-workflow",
     "crates/colossus-presentation",
     "crates/colossus-tui",
@@ -62,6 +63,7 @@ license = "Apache-2.0"
 repository = "https://github.com/obscuritylabs/Colossus"
 
 [workspace.dependencies]
+colossus-bundled-plugins = { version = "=0.10.10-preview.10", path = "crates/colossus-bundled-plugins" }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
 base64 = "0.22.1"
@@ -107,7 +109,9 @@ subtle = "2.6.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }
 serde-saphyr = "0.0.29"
+sigstore-verify = "0.9.0"
 sha2 = "0.10.9"
+shell-words = "1.1.1"
 sse-stream = "0.2.1"
 tempfile = "3.25.0"
 tar = "0.4.46"
@@ -194,10 +198,10 @@ colossus-telemetry = { version = "=0.10.10-preview.10", path = "crates/colossus-
 colossus-observability = { version = "=0.10.10-preview.10", path = "crates/colossus-observability" }
 colossus-testkit = { version = "=0.10.10-preview.10", path = "crates/colossus-testkit" }
 colossus-fuzzing = { version = "=0.10.10-preview.10", path = "crates/colossus-fuzzing" }
-colossus-skills = { version = "=0.10.10-preview.10", path = "crates/colossus-skills" }
+colossus-plugins = { version = "=0.10.10-preview.10", path = "crates/colossus-plugins" }
 colossus-integrations = { version = "=0.10.10-preview.10", path = "crates/colossus-integrations" }
 colossus-mcp = { version = "=0.10.10-preview.10", path = "crates/colossus-mcp" }
-colossus-packs = { version = "=0.10.10-preview.10", path = "crates/colossus-packs" }
+colossus-bundles = { version = "=0.10.10-preview.10", path = "crates/colossus-bundles" }
 colossus-policy = { version = "=0.10.10-preview.10", path = "crates/colossus-policy" }
 colossus-codex-auth = { version = "=0.10.10-preview.10", path = "crates/colossus-codex-auth" }
 colossus-provider = { version = "=0.10.10-preview.10", path = "crates/colossus-provider" }

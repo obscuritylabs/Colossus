@@ -41,7 +41,6 @@ function view(runId: string, output: string, planRevision?: number): RunView {
             },
           },
     etag: `etag-${runId}`,
-    selectedSkills: [],
     archived: false,
   };
   return {

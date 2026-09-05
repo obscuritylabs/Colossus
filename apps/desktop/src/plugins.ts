@@ -1,0 +1,139 @@
+/** Credential-free runtime inventory. Field names intentionally match the shared contract. */
+export interface PluginSkill {
+  id: string;
+  plugin: string;
+  name: string;
+  description: string;
+  compatibility: string | null;
+  allowed_tools: string | null;
+}
+export interface PluginEntry {
+  manifest: {
+    name: string;
+    version: string | null;
+    description: string | null;
+  };
+  digest: string;
+  source: string;
+  origin: "bundled" | "installed";
+  status: "enabled" | "disabled" | "uninstalled";
+  available: boolean;
+  unavailable_reason: string | null;
+  actions: string[];
+  trust: {
+    trusted: boolean;
+    profile: string | null;
+    signer: string | null;
+    method: string;
+  };
+  skills: PluginSkill[];
+  mcp_servers: {
+    id: string;
+    name: string;
+    transport: string;
+    enabled: boolean;
+    status: string;
+  }[];
+  diagnostics: {
+    kind: string;
+    name: string | null;
+    code: string;
+    detail: string;
+  }[];
+}
+export interface PluginInventory {
+  plugins: PluginEntry[];
+  managementAvailable: boolean;
+}
+export interface PluginResource {
+  skill_id: string;
+  path: string;
+  size: number;
+  text: boolean;
+}
+export type PluginSource =
+  | { kind: "directory"; path: string }
+  | { kind: "layout" | "archive"; path: string; digest: string | null }
+  | { kind: "reference"; registry: string; reference: string };
+export type PluginRequest =
+  | { operation: "validate"; path: string }
+  | {
+      operation: "verify";
+      path: string;
+      digest: string | null;
+      trust_profile: string;
+    }
+  | { operation: "verify_installed"; name: string; digest: string }
+  | { operation: "install"; source: PluginSource; trust_profile: string }
+  | {
+      operation: "enable";
+      name: string;
+      digest: string;
+      allow_untrusted: boolean;
+    }
+  | { operation: "disable"; name: string }
+  | { operation: "update"; name: string; registry: string; reference: string }
+  | {
+      operation: "uninstall";
+      name: string;
+      digest: string;
+      purge_data: boolean;
+    }
+  | { operation: "gc" }
+  | { operation: "package"; directory: string; output: string }
+  | { operation: "pull"; registry: string; reference: string; output: string }
+  | { operation: "push"; registry: string; reference: string; layout: string }
+  | { operation: "export"; name: string; output: string };
+
+export function filterPlugins(
+  plugins: readonly PluginEntry[],
+  query: string,
+): PluginEntry[] {
+  const needle = query.trim().toLocaleLowerCase();
+  return plugins.filter((plugin) =>
+    [
+      plugin.manifest.name,
+      plugin.manifest.description ?? "",
+      ...plugin.skills.map((skill) => `${skill.id} ${skill.description}`),
+    ]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
+export function pluginSelectionKey(
+  target: string | null,
+  session: string | undefined,
+): string {
+  return JSON.stringify([target, session ?? "draft"]);
+}
+
+/** Complete only a leading mention sequence; unknown mentions remain ordinary text. */
+export function pluginMentionSuggestions(
+  prompt: string,
+  skills: readonly PluginSkill[],
+) {
+  const match = /^(\s*(?:@[^\s]+\s+)*)@([^\s]*)$/.exec(prompt);
+  if (!match) return [];
+  const prefix = match[1] ?? "";
+  const known = new Set(skills.map((skill) => skill.id));
+  const selected = prefix
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token.slice(1));
+  if (selected.some((id) => !known.has(id))) return [];
+  const query = match[2] ?? "";
+  return skills
+    .filter(
+      (skill) => skill.id.startsWith(query) && !selected.includes(skill.id),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .slice(0, 12)
+    .map((skill) => ({
+      command: `${prefix}@${skill.id} `,
+      description: skill.description,
+      group: "Skill",
+    }));
+}

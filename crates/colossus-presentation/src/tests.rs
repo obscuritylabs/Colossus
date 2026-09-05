@@ -870,12 +870,12 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
         ("task.list", "[work]"),
         ("context.show", "[context]"),
         ("repo.map", "[repo]"),
-        ("skill.read", "[skill]"),
+        ("plugin.skill.read", "[plugin]"),
         ("web.fetch", "[web]"),
         ("mcp.call", "[mcp]"),
         ("trace.export", "[trace]"),
         ("integration.invoke", "[integration]"),
-        ("pack.verify", "[pack]"),
+        ("bundle.verify", "[bundle]"),
         ("echo", "[tool]"),
     ] {
         let rendered = renderer

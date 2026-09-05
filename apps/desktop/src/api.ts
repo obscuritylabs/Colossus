@@ -1,5 +1,48 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { PluginInventory, PluginRequest } from "./plugins";
+
+export function getPluginInventory(targetId: string): Promise<PluginInventory> {
+  return call("get_plugin_inventory", { targetId });
+}
+export function resolvePluginSelection(
+  targetId: string,
+  prompt: string,
+  pluginSkillIds: readonly string[],
+): Promise<{ prompt: string; pluginSkillIds: string[] }> {
+  return call("resolve_plugin_selection", {
+    targetId,
+    request: { prompt, pluginSkillIds },
+  });
+}
+export function readPluginPreview<T>(
+  targetId: string,
+  request: {
+    kind: "skill" | "resources" | "resource";
+    skillId: string;
+    digest: string;
+    path?: string;
+  },
+): Promise<T> {
+  return call("read_plugin_preview", { targetId, request });
+}
+export function managePlugin(
+  targetId: string,
+  operationId: string,
+  request: PluginRequest,
+  verifyArchive = false,
+): Promise<{ cancelled?: boolean; digest?: string; integrity?: string }> {
+  return call("manage_plugin", {
+    targetId,
+    input: { operationId, request, verifyArchive },
+  });
+}
+export function cancelPluginOperation(
+  targetId: string,
+  operationId: string,
+): Promise<void> {
+  return call("cancel_plugin_operation", { targetId, operationId });
+}
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import type {

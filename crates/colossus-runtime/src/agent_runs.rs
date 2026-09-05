@@ -423,22 +423,22 @@ impl Runtime {
         sticky_skills: &[String],
     ) -> Result<AgentRunResult, RuntimeError> {
         let prepared = self.prepare_agent_instructions(instructions, "")?;
-        let composition = self.skill_composer.compose(
+        let composition = compose_plugins(
+            &prepared.plugins.records,
             &prepared.base_text,
-            prompt,
             explicit_skills,
             sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
+            self.plugins_enabled,
         )?;
         let active = composition
             .active_skills
             .iter()
-            .map(|skill| skill.name.clone())
+            .map(|skill| skill.id.clone())
             .collect::<Vec<_>>();
         let instructions = prepared.complete_composed_base(&composition.instructions);
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             Box::pin(
                 self.run_with_subagent_scheduling(self.agent.run_in_session_with_skills(
                     role,
@@ -577,19 +577,18 @@ impl Runtime {
             AgentRunMode::Plan(target) => plan_mode_instructions(target),
         };
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
-        let composition = self.skill_composer.compose(
+        let composition = compose_plugins(
+            &prepared.plugins.records,
             &prepared.base_text,
-            &prompt.plain_text(),
             explicit_skills,
             sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
+            self.plugins_enabled,
         )?;
         let instructions = prepared.complete_composed_base(&composition.instructions);
         let active = composition
             .active_skills
             .iter()
-            .map(|skill| skill.name.clone())
+            .map(|skill| skill.id.clone())
             .collect::<Vec<_>>();
         // This agent future is already a deep provider/tool state machine. Keep it behind
         // one stable allocation before adding the instruction-snapshot task-local scope;
@@ -612,8 +611,9 @@ impl Runtime {
                     control,
                 ),
         );
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
         )
         .await
@@ -671,18 +671,17 @@ impl Runtime {
         control: &RunControl,
     ) -> Result<AgentRunOutcome, RuntimeError> {
         let prepared = self.prepare_agent_instructions(instructions, "")?;
-        let composition = self.skill_composer.compose(
+        let composition = compose_plugins(
+            &prepared.plugins.records,
             &prepared.base_text,
-            prompt,
             explicit_skills,
             sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
+            self.plugins_enabled,
         )?;
         let active = composition
             .active_skills
             .iter()
-            .map(|skill| skill.name.clone())
+            .map(|skill| skill.id.clone())
             .collect::<Vec<_>>();
         let instructions = prepared.complete_composed_base(&composition.instructions);
 
@@ -699,8 +698,9 @@ impl Runtime {
             &mut buffered_observer,
             control,
         ));
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
         )
         .await
@@ -813,11 +813,6 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, RuntimeError> {
-        if !explicit_skills.is_empty() {
-            return Err(RuntimeError::Config(
-                "public application runs cannot activate skills".into(),
-            ));
-        }
         if let AgentRunMode::Plan(target) = &mode {
             self.validate_plan_target(Some(session_id), target)?;
         }
@@ -826,7 +821,19 @@ impl Runtime {
             AgentRunMode::Plan(target) => plan_mode_instructions(target),
         };
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
-        let instructions = prepared.text.clone();
+        let composition = compose_plugins(
+            &prepared.plugins.records,
+            &prepared.base_text,
+            explicit_skills,
+            &[],
+            self.plugins_enabled,
+        )?;
+        let instructions = prepared.complete_composed_base(&composition.instructions);
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.id.clone())
+            .collect::<Vec<_>>();
         let (events, receiver) = mpsc::channel(64);
         let mut buffered_observer = self.buffered_run_observer(events.clone());
         let run = Box::pin(
@@ -839,7 +846,7 @@ impl Runtime {
                     run_id,
                     session_id,
                     create_session,
-                    &[],
+                    &active,
                     allowed_tools,
                     mode,
                     end_user_id,
@@ -849,8 +856,9 @@ impl Runtime {
                     control,
                 ),
         );
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
         )
         .await
@@ -1296,18 +1304,7 @@ mod plan_mode_instruction_tests {
                 };
                 config.workflows.repository = root.join("workflows-bundled");
                 config.workflows.user = root.join("workflows-user");
-                config.skills.bundled = root.join("skills-bundled");
-                config.skills.repository = root.join("skills-repository");
-                config.skills.user = root.join("skills-user");
-                config.packs.install_root = root.join("packs");
-                for path in [
-                    &config.workflows.repository,
-                    &config.workflows.user,
-                    &config.skills.bundled,
-                    &config.skills.repository,
-                    &config.skills.user,
-                    &config.packs.install_root,
-                ] {
+                for path in [&config.workflows.repository, &config.workflows.user] {
                     fs::create_dir_all(path).expect("fixture directory");
                 }
 
@@ -1459,18 +1456,7 @@ mod plan_mode_instruction_tests {
                 };
                 config.workflows.repository = root.join("workflows-bundled");
                 config.workflows.user = root.join("workflows-user");
-                config.skills.bundled = root.join("skills-bundled");
-                config.skills.repository = root.join("skills-repository");
-                config.skills.user = root.join("skills-user");
-                config.packs.install_root = root.join("packs");
-                for path in [
-                    &config.workflows.repository,
-                    &config.workflows.user,
-                    &config.skills.bundled,
-                    &config.skills.repository,
-                    &config.skills.user,
-                    &config.packs.install_root,
-                ] {
+                for path in [&config.workflows.repository, &config.workflows.user] {
                     fs::create_dir_all(path).expect("fixture directory");
                 }
 

@@ -42,7 +42,6 @@ function renderSurface(
           }
         : null,
     etag: "comparison-etag",
-    selectedSkills: [],
     archived: false,
   };
   const comparisonView: RunView = {

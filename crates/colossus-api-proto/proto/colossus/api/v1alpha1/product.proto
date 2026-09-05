@@ -57,6 +57,15 @@ service ExtensionService {
 
   // ListExtensions returns a stable filtered page.
   rpc ListExtensions(ListExtensionsRequest) returns (ListExtensionsResponse);
+
+  // ReadPluginSkill explicitly loads instructions from an exact manifest digest.
+  rpc ReadPluginSkill(ReadPluginSkillRequest) returns (ReadPluginSkillResponse);
+
+  // ListPluginResources lists contained paths and binary metadata without reading contents.
+  rpc ListPluginResources(ListPluginResourcesRequest) returns (ListPluginResourcesResponse);
+
+  // ReadPluginResource returns a bounded UTF-8 preview, never server-local paths.
+  rpc ReadPluginResource(ReadPluginResourceRequest) returns (ReadPluginResourceResponse);
 }
 
 // OperationsService exposes separately scoped, bounded diagnostic summaries.
@@ -448,23 +457,23 @@ message WatchWorkflowRunResponse {
 
 // ExtensionKind identifies a catalog resource family.
 enum ExtensionKind {
+  reserved 2, 4;
+  reserved "EXTENSION_KIND_SKILL", "EXTENSION_KIND_PACK";
+
   // EXTENSION_KIND_UNSPECIFIED does not filter by kind.
   EXTENSION_KIND_UNSPECIFIED = 0;
 
   // EXTENSION_KIND_TOOL is a model-visible strict tool.
   EXTENSION_KIND_TOOL = 1;
 
-  // EXTENSION_KIND_SKILL is a declarative skill.
-  EXTENSION_KIND_SKILL = 2;
-
   // EXTENSION_KIND_MCP_SERVER is a configured MCP server.
   EXTENSION_KIND_MCP_SERVER = 3;
 
-  // EXTENSION_KIND_PACK is a verified extension pack.
-  EXTENSION_KIND_PACK = 4;
-
   // EXTENSION_KIND_INTEGRATION is a native integration.
   EXTENSION_KIND_INTEGRATION = 5;
+
+  // EXTENSION_KIND_AGENT_PLUGIN is an installed Agent Plugins v1 payload.
+  EXTENSION_KIND_AGENT_PLUGIN = 6;
 }
 
 // ExtensionSummary is credential-free catalog metadata.
@@ -501,6 +510,9 @@ message GetExtensionRequest {
 message GetExtensionResponse {
   // extension is credential-free catalog metadata.
   ExtensionSummary extension = 1;
+
+  // plugin contains typed details when the selected extension is an Agent Plugin.
+  AgentPlugin plugin = 2;
 }
 
 // ListExtensionsRequest selects a stable extension page.
@@ -522,6 +534,155 @@ message ListExtensionsResponse {
 
   // page identifies the next page.
   PageResponse page = 2;
+
+  // plugins contains typed metadata for Agent Plugins on this page.
+  repeated AgentPlugin plugins = 3;
+}
+
+// AgentPlugin is bounded discovery metadata without instructions or credentials.
+message AgentPlugin {
+  // name is the canonical portable name.
+  string name = 1;
+  // version is the author-declared version, when present.
+  string version = 2;
+  // description explains the plugin's purpose.
+  string description = 3;
+  // digest is the exact OCI manifest identity.
+  string digest = 4;
+  // source contains credential-free provenance.
+  string source = 5;
+  // bundled means ownership belongs to the executable, not Cosign verification.
+  bool bundled = 6;
+  // globally_active describes home-wide activation.
+  bool globally_active = 7;
+  // available describes availability in this workspace.
+  bool available = 8;
+  // unavailable_reason explains a workspace exclusion or invalid component.
+  string unavailable_reason = 9;
+  // trust is retained verification evidence.
+  PluginTrust trust = 10;
+  // skills contains metadata only.
+  repeated PluginSkill skills = 11;
+  // mcp_servers contains only credential-free status.
+  repeated PluginMcpServer mcp_servers = 12;
+  // diagnostics contains independent component failures.
+  repeated PluginDiagnostic diagnostics = 13;
+}
+
+// PluginTrust keeps executable provenance distinct from signature verification.
+message PluginTrust {
+  // trusted reports a successful configured verification.
+  bool trusted = 1;
+  // profile names the selected local trust policy.
+  string profile = 2;
+  // method identifies the verification method.
+  string method = 3;
+  // signer is a verified identity, if present.
+  string signer = 4;
+}
+
+// PluginSkill contains progressive discovery metadata, never instructions.
+message PluginSkill {
+  // id is the qualified plugin/skill identifier.
+  string id = 1;
+  // name is the portable skill name.
+  string name = 2;
+  // description states purpose and triggering context.
+  string description = 3;
+  // compatibility contains optional author guidance.
+  string compatibility = 4;
+  // allowed_tools is advisory and never grants tool authority.
+  string allowed_tools = 5;
+}
+
+// PluginMcpServer reports explicit enablement without command or secret data.
+message PluginMcpServer {
+  // id is the qualified plugin/server identifier.
+  string id = 1;
+  // name is the portable server name.
+  string name = 2;
+  // transport is stdio, streamable-http, or unsupported sse.
+  string transport = 3;
+  // enabled requires an explicit runtime configuration entry.
+  bool enabled = 4;
+  // status describes effective availability.
+  string status = 5;
+}
+
+// PluginDiagnostic is an independent component failure.
+message PluginDiagnostic {
+  // kind identifies plugin, skill, or MCP scope.
+  string kind = 1;
+  // name is the optional component name.
+  string name = 2;
+  // code is a stable machine-readable reason.
+  string code = 3;
+  // detail is bounded and credential-free.
+  string detail = 4;
+}
+
+// ReadPluginSkillRequest selects a skill in the current authorized catalog.
+message ReadPluginSkillRequest {
+  // skill_id is the exact qualified identifier.
+  string skill_id = 1;
+  // digest pins the OCI manifest observed during discovery.
+  string digest = 2;
+}
+
+// ReadPluginSkillResponse contains explicitly loaded instructions.
+message ReadPluginSkillResponse {
+  // skill identifies the selected skill.
+  PluginSkill skill = 1;
+  // digest identifies the immutable content.
+  string digest = 2;
+  // instructions is bounded skill Markdown without a server-local path.
+  string instructions = 3;
+}
+
+// ListPluginResourcesRequest selects one exact skill version.
+message ListPluginResourcesRequest {
+  // skill_id is the qualified identifier.
+  string skill_id = 1;
+  // digest pins the plugin manifest.
+  string digest = 2;
+}
+
+// PluginResource contains metadata for a contained resource.
+message PluginResource {
+  // skill_id owns the resource.
+  string skill_id = 1;
+  // path is relative to the skill root, never a server-local path.
+  string path = 2;
+  // size_bytes is the exact file size.
+  uint64 size_bytes = 3;
+  // text_preview_available distinguishes text from addressable binary content.
+  bool text_preview_available = 4;
+}
+
+// ListPluginResourcesResponse does not include resource contents.
+message ListPluginResourcesResponse {
+  // resources are sorted contained paths.
+  repeated PluginResource resources = 1;
+}
+
+// ReadPluginResourceRequest selects an exact bounded text resource.
+message ReadPluginResourceRequest {
+  // skill_id is the qualified skill identifier.
+  string skill_id = 1;
+  // digest pins the plugin manifest.
+  string digest = 2;
+  // path is a contained skill-relative path.
+  string path = 3;
+}
+
+// ReadPluginResourceResponse contains an explicit bounded preview.
+message ReadPluginResourceResponse {
+  // resource identifies the content.
+  PluginResource resource = 1;
+  // digest identifies the immutable plugin.
+  string digest = 2;
+  // content is bounded UTF-8 text; binary content is never coerced to text.
+  string content = 3;
 }
 
 // DiagnosticStatus is a bounded non-sensitive diagnostic state.
@@ -568,17 +729,17 @@ message ListDiagnosticsResponse {
 
 // DistributionArtifactKind identifies a verified distributable family.
 enum DistributionArtifactKind {
+  reserved 1, 3;
+  reserved "DISTRIBUTION_ARTIFACT_KIND_PACK", "DISTRIBUTION_ARTIFACT_KIND_COLLECTION";
+
   // DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED indicates an unrecognized artifact.
   DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED = 0;
-
-  // DISTRIBUTION_ARTIFACT_KIND_PACK is a verified extension pack.
-  DISTRIBUTION_ARTIFACT_KIND_PACK = 1;
 
   // DISTRIBUTION_ARTIFACT_KIND_WORKFLOW is a workflow bundle.
   DISTRIBUTION_ARTIFACT_KIND_WORKFLOW = 2;
 
-  // DISTRIBUTION_ARTIFACT_KIND_COLLECTION is a signed artifact collection.
-  DISTRIBUTION_ARTIFACT_KIND_COLLECTION = 3;
+  // DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN is one whole-plugin OCI artifact.
+  DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN = 4;
 }
 
 // DistributionInspection is a bounded verification result.

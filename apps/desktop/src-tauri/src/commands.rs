@@ -204,15 +204,28 @@ mod attachment_tests {
 pub(crate) async fn create_run(
     state: State<'_, AppState>,
     target_id: String,
-    request: CreateRunInput,
+    mut request: CreateRunInput,
 ) -> Result<RunDto, CommandErrorDto> {
     let branch = request.branch_link();
     let settings = SettingsStore::open_application()?.load()?;
     if branch.is_some() {
         require_selected_space(&settings, &target_id)?;
     }
-    let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
+    if request.has_leading_mention()
+        && let Some(plugins) = target.target.client.plugins()
+    {
+        let available = plugins
+            .list()
+            .await
+            .map_err(CommandErrorDto::from_api)?
+            .into_iter()
+            .filter(|plugin| plugin.available)
+            .flat_map(|plugin| plugin.skills.into_iter().map(|skill| skill.id))
+            .collect::<Vec<_>>();
+        request.resolve_mentions(&available);
+    }
+    let request = request.into_sdk()?;
     let managed_run_creation = if matches!(
         target.target.consent,
         TargetConsentContext::ManagedLocal
@@ -854,7 +867,7 @@ fn is_directional_control(character: char) -> bool {
     )
 }
 
-async fn target<'a>(
+pub(crate) async fn target<'a>(
     state: &'a AppState,
     target_id: &str,
 ) -> Result<SelectedTargetLease<'a>, CommandErrorDto> {
@@ -896,7 +909,9 @@ fn target_selection_changed() -> CommandErrorDto {
     )
 }
 
-fn unary_slot(target: &TargetHandle) -> Result<tokio::sync::OwnedSemaphorePermit, CommandErrorDto> {
+pub(crate) fn unary_slot(
+    target: &TargetHandle,
+) -> Result<tokio::sync::OwnedSemaphorePermit, CommandErrorDto> {
     target.try_unary_slot().ok_or_else(|| {
         CommandErrorDto::busy("The desktop request limit is active. Wait and retry.")
     })

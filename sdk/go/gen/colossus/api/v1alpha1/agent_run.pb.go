@@ -1226,14 +1226,14 @@ type Run struct {
 	Terminal isRun_Terminal `protobuf_oneof:"terminal"`
 	// etag is an opaque optimistic-concurrency token.
 	Etag string `protobuf:"bytes,15,opt,name=etag,proto3" json:"etag,omitempty"`
-	// selected_skills is empty in v1alpha1 because public skill activation is denied.
-	SelectedSkills []string `protobuf:"bytes,16,rep,name=selected_skills,json=selectedSkills,proto3" json:"selected_skills,omitempty"`
 	// title is a bounded deterministic display label derived from the opening request.
 	Title string `protobuf:"bytes,17,opt,name=title,proto3" json:"title,omitempty"`
 	// archived is true when the containing thread is hidden from normal listings.
-	Archived      bool `protobuf:"varint,18,opt,name=archived,proto3" json:"archived,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Archived bool `protobuf:"varint,18,opt,name=archived,proto3" json:"archived,omitempty"`
+	// plugin_skill_ids are the selected qualified Agent Plugin skills, not tool grants.
+	PluginSkillIds []string `protobuf:"bytes,19,rep,name=plugin_skill_ids,json=pluginSkillIds,proto3" json:"plugin_skill_ids,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -1384,13 +1384,6 @@ func (x *Run) GetEtag() string {
 	return ""
 }
 
-func (x *Run) GetSelectedSkills() []string {
-	if x != nil {
-		return x.SelectedSkills
-	}
-	return nil
-}
-
 func (x *Run) GetTitle() string {
 	if x != nil {
 		return x.Title
@@ -1403,6 +1396,13 @@ func (x *Run) GetArchived() bool {
 		return x.Archived
 	}
 	return false
+}
+
+func (x *Run) GetPluginSkillIds() []string {
+	if x != nil {
+		return x.PluginSkillIds
+	}
+	return nil
 }
 
 type isRun_Terminal interface {
@@ -1445,8 +1445,6 @@ type CreateRunRequest struct {
 	// mode selects execute or planning with no implementation/external mutation;
 	// planning may create Colossus-local task and plan records.
 	Mode RunMode `protobuf:"varint,4,opt,name=mode,proto3,enum=colossus.api.v1alpha1.RunMode" json:"mode,omitempty"`
-	// selected_skills is reserved in v1alpha1; public skill activation is denied.
-	SelectedSkills []string `protobuf:"bytes,5,rep,name=selected_skills,json=selectedSkills,proto3" json:"selected_skills,omitempty"`
 	// max_turns is bounded by server policy; zero selects the configured default.
 	MaxTurns uint32 `protobuf:"varint,6,opt,name=max_turns,json=maxTurns,proto3" json:"max_turns,omitempty"`
 	// idempotency_key is required and scoped to the authenticated caller.
@@ -1462,8 +1460,10 @@ type CreateRunRequest struct {
 	ResearchDepth ResearchDepth `protobuf:"varint,11,opt,name=research_depth,json=researchDepth,proto3,enum=colossus.api.v1alpha1.ResearchDepth" json:"research_depth,omitempty"`
 	// research_sources contains the explicit evidence lanes for Research.
 	ResearchSources []ResearchSourceKind `protobuf:"varint,12,rep,packed,name=research_sources,json=researchSources,proto3,enum=colossus.api.v1alpha1.ResearchSourceKind" json:"research_sources,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// plugin_skill_ids select available qualified plugin/skill identifiers for this run.
+	PluginSkillIds []string `protobuf:"bytes,13,rep,name=plugin_skill_ids,json=pluginSkillIds,proto3" json:"plugin_skill_ids,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CreateRunRequest) Reset() {
@@ -1524,13 +1524,6 @@ func (x *CreateRunRequest) GetMode() RunMode {
 	return RunMode_RUN_MODE_UNSPECIFIED
 }
 
-func (x *CreateRunRequest) GetSelectedSkills() []string {
-	if x != nil {
-		return x.SelectedSkills
-	}
-	return nil
-}
-
 func (x *CreateRunRequest) GetMaxTurns() uint32 {
 	if x != nil {
 		return x.MaxTurns
@@ -1576,6 +1569,13 @@ func (x *CreateRunRequest) GetResearchDepth() ResearchDepth {
 func (x *CreateRunRequest) GetResearchSources() []ResearchSourceKind {
 	if x != nil {
 		return x.ResearchSources
+	}
+	return nil
+}
+
+func (x *CreateRunRequest) GetPluginSkillIds() []string {
+	if x != nil {
+		return x.PluginSkillIds
 	}
 	return nil
 }
@@ -4520,7 +4520,7 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\b_plan_idB\x10\n" +
 	"\x0e_plan_revisionB\n" +
 	"\n" +
-	"\b_goal_id\"\xd0\x06\n" +
+	"\b_goal_id\"\xe8\x06\n" +
 	"\x03Run\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -4542,19 +4542,18 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x06result\x18\f \x01(\v2 .colossus.api.v1alpha1.RunResultH\x00R\x06result\x12=\n" +
 	"\afailure\x18\r \x01(\v2!.colossus.api.v1alpha1.RunFailureH\x00R\afailure\x12L\n" +
 	"\fcancellation\x18\x0e \x01(\v2&.colossus.api.v1alpha1.RunCancellationH\x00R\fcancellation\x12\x12\n" +
-	"\x04etag\x18\x0f \x01(\tR\x04etag\x12'\n" +
-	"\x0fselected_skills\x18\x10 \x03(\tR\x0eselectedSkills\x12\x14\n" +
+	"\x04etag\x18\x0f \x01(\tR\x04etag\x12\x14\n" +
 	"\x05title\x18\x11 \x01(\tR\x05title\x12\x1a\n" +
-	"\barchived\x18\x12 \x01(\bR\barchivedB\n" +
+	"\barchived\x18\x12 \x01(\bR\barchived\x12(\n" +
+	"\x10plugin_skill_ids\x18\x13 \x03(\tR\x0epluginSkillIdsB\n" +
 	"\n" +
-	"\bterminal\"\x8f\x05\n" +
+	"\bterminalJ\x04\b\x10\x10\x11R\x0fselected_skills\"\xa7\x05\n" +
 	"\x10CreateRunRequest\x128\n" +
 	"\x05input\x18\x01 \x03(\v2\".colossus.api.v1alpha1.ContentPartR\x05input\x12\"\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tH\x00R\tsessionId\x88\x01\x01\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x122\n" +
-	"\x04mode\x18\x04 \x01(\x0e2\x1e.colossus.api.v1alpha1.RunModeR\x04mode\x12'\n" +
-	"\x0fselected_skills\x18\x05 \x03(\tR\x0eselectedSkills\x12\x1b\n" +
+	"\x04mode\x18\x04 \x01(\x0e2\x1e.colossus.api.v1alpha1.RunModeR\x04mode\x12\x1b\n" +
 	"\tmax_turns\x18\x06 \x01(\rR\bmaxTurns\x12'\n" +
 	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12E\n" +
 	"\vplan_action\x18\b \x01(\v2$.colossus.api.v1alpha1.PlanRunActionR\n" +
@@ -4563,9 +4562,10 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x06branch\x18\n" +
 	" \x01(\v2 .colossus.api.v1alpha1.RunBranchR\x06branch\x12K\n" +
 	"\x0eresearch_depth\x18\v \x01(\x0e2$.colossus.api.v1alpha1.ResearchDepthR\rresearchDepth\x12T\n" +
-	"\x10research_sources\x18\f \x03(\x0e2).colossus.api.v1alpha1.ResearchSourceKindR\x0fresearchSourcesB\r\n" +
+	"\x10research_sources\x18\f \x03(\x0e2).colossus.api.v1alpha1.ResearchSourceKindR\x0fresearchSources\x12(\n" +
+	"\x10plugin_skill_ids\x18\r \x03(\tR\x0epluginSkillIdsB\r\n" +
 	"\v_session_idB\x0e\n" +
-	"\f_end_user_id\"\xb1\x01\n" +
+	"\f_end_user_idJ\x04\b\x05\x10\x06R\x0fselected_skills\"\xb1\x01\n" +
 	"\tRunBranch\x12\"\n" +
 	"\rsource_run_id\x18\x01 \x01(\tR\vsourceRunId\x120\n" +
 	"\x14source_message_count\x18\x02 \x01(\x04R\x12sourceMessageCount\x12N\n" +

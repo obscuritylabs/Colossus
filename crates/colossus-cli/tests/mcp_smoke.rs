@@ -41,7 +41,7 @@ fn configured_mcp_is_allowlisted_permit_bound_redacted_and_research_capable() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -65,13 +65,6 @@ policy:
 workflows:
   repository: {workflows}
   user: {workflows}
-skills:
-  enabled: true
-  allowUserOverrides: false
-  bundled: {missing}
-  repository: {missing}
-  user: {missing}
-  disabled: []
 mcp:
   servers:
     fixture:
@@ -112,7 +105,6 @@ sandbox:
             state = state.display(),
             anchor = anchor.display(),
             workflows = workflows.display(),
-            missing = workspace.join("missing").display(),
             server = server.display(),
             workspace = workspace.display(),
         ),

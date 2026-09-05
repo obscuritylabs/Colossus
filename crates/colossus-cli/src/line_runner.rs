@@ -14,9 +14,9 @@ pub(super) async fn line_runner(
     set_terminal_preferences(&preferences);
     let mut history_entries = runtime.terminal_history(TERMINAL_HISTORY_CAPACITY)?;
     let skill_names = runtime
-        .list_skills()?
-        .into_iter()
-        .map(|skill| skill.manifest.name)
+        .list_plugins()?
+        .iter()
+        .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
         .collect::<Vec<_>>();
     let stdin = io::stdin();
     if stdin.is_terminal() {
@@ -230,64 +230,16 @@ pub(super) async fn line_runner(
             print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
         } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
             print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
-        } else if line == "/packs" || line == "/packs list" {
-            print_json(&runtime.list_packs(100)?)?;
-        } else if let Some(name) = line.strip_prefix("/packs show ") {
+        } else if line == "/plugins" || line == "/plugins list" {
+            print_json(&runtime.plugin_inventory()?)?;
+        } else if let Some(name) = line.strip_prefix("/plugins show ") {
             let name = name.trim();
-            print_json(
-                &runtime
-                    .get_pack(name)?
-                    .ok_or_else(|| cli_error(format!("pack not found: {name}")))?,
-            )?;
-        } else if let Some(path) = line
-            .strip_prefix("/packs verify ")
-            .or_else(|| line.strip_prefix("/packs validate "))
-        {
-            print_json(&runtime.verify_pack(path.trim()).await?)?;
-        } else if let Some(value) = line.strip_prefix("/packs install ") {
-            let value = value.trim();
-            let (path, allow_untrusted) = value
-                .strip_suffix(" --allow-untrusted")
-                .map_or((value, false), |path| (path.trim(), true));
-            print_json(&runtime.install_pack(path, allow_untrusted).await?)?;
-        } else if let Some(name) = line.strip_prefix("/packs enable ") {
-            print_json(&runtime.enable_pack(name.trim()).await?)?;
-        } else if let Some(name) = line.strip_prefix("/packs disable ") {
-            print_json(&runtime.disable_pack(name.trim()).await?)?;
-        } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
-            print_json(&runtime.uninstall_pack(name.trim()).await?)?;
-        } else if let Some(tool) = line.strip_prefix("/packs call ") {
-            print_json(&runtime.call_pack_tool(tool.trim()).await?)?;
-        } else if line == "/packs trust" || line == "/packs trust list" {
-            print_json(&runtime.list_pack_trust(100)?)?;
-        } else if let Some(value) = line.strip_prefix("/packs trust add ") {
-            let (publisher, public_key) = value
-                .trim()
-                .split_once(' ')
-                .ok_or_else(|| cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY"))?;
-            print_json(&runtime.add_pack_trust(publisher, public_key.trim()).await?)?;
-        } else if let Some(path) = line.strip_prefix("/collections verify ") {
-            print_json(&runtime.verify_collection(path.trim()).await?)?;
-        } else if let Some(path) = line.strip_prefix("/collections install ") {
-            print_json(&runtime.install_collection(path.trim()).await?)?;
-        } else if let Some(arguments) = line.strip_prefix("/registry pull ") {
-            let (url, destination, credential_reference) = registry_slash_args(
-                arguments,
-                "usage: /registry pull URL DESTINATION [env:VARIABLE]",
-            )?;
-            print_json(
-                &runtime
-                    .pull_registry_collection(url, destination, credential_reference)
-                    .await?,
-            )?;
-        } else if let Some(arguments) = line.strip_prefix("/registry push ") {
-            let (path, url, credential_reference) =
-                registry_slash_args(arguments, "usage: /registry push PATH URL [env:VARIABLE]")?;
-            print_json(
-                &runtime
-                    .push_registry_collection(path, url, credential_reference)
-                    .await?,
-            )?;
+            let plugins = runtime.plugin_inventory()?;
+            let plugin = plugins
+                .iter()
+                .find(|plugin| plugin.manifest.name == name)
+                .ok_or_else(|| cli_error(format!("plugin not found: {name}")))?;
+            print_json(plugin)?;
         } else if let Some(path) = line.strip_prefix("/bundle verify ") {
             print_json(&runtime.verify_bundle(path.trim()).await?)?;
         } else if line == "/integrations" {
@@ -308,7 +260,7 @@ pub(super) async fn line_runner(
             let arguments: Value = serde_json::from_str(arguments.trim())?;
             print_json(&runtime.call_integration_tool(tool, arguments).await?)?;
         } else if line == "/mcp servers" {
-            print_json(&runtime.mcp_servers())?;
+            print_json(&runtime.mcp_servers()?)?;
         } else if line == "/mcp tools" {
             print_json(&runtime.mcp_tools(None).await?)?;
         } else if let Some(server) = line.strip_prefix("/mcp tools ") {
@@ -331,57 +283,51 @@ pub(super) async fn line_runner(
                     .mcp_call(server, tool, serde_json::from_str(arguments.trim())?)
                     .await?,
             )?;
-        } else if line == "/skills" {
+        } else if line == "/plugin skills" {
             let skills = runtime
-                .list_skills()?
-                .into_iter()
+                .list_plugins()?
+                .iter()
+                .flat_map(|plugin| plugin.skills.iter())
                 .map(|skill| {
                     json!({
-                        "name": skill.manifest.name,
-                        "version": skill.manifest.version,
+                        "id": skill.id,
                         "description": skill.manifest.description,
-                        "source": skill.source,
-                        "active": sticky_skills.contains(&skill.manifest.name),
+                        "active": sticky_skills.contains(&skill.id),
                     })
                 })
                 .collect::<Vec<_>>();
             print_json(&skills)?;
-        } else if line == "/skill active" {
+        } else if line == "/plugin active" {
             if sticky_skills.is_empty() {
                 println!("No skills are active.");
             } else {
                 println!("Active skills: {}", sticky_skills.join(", "));
             }
-        } else if line == "/skill clear" {
+        } else if line == "/plugin clear" {
             sticky_skills.clear();
             println!("active skills cleared");
-        } else if let Some(name) = line.strip_prefix("/skill use ") {
+        } else if let Some(name) = line.strip_prefix("/plugin use ") {
             let name = name.trim();
             runtime
-                .get_skill(name)?
+                .list_plugins()?
+                .iter()
+                .flat_map(|plugin| plugin.skills.iter())
+                .find(|skill| skill.id == name)
                 .ok_or_else(|| cli_error(format!("skill not found: {name}")))?;
             if !sticky_skills.iter().any(|active| active == name) {
                 sticky_skills.push(name.into());
             }
             println!("active skill={name}");
-        } else if let Some(name) = line.strip_prefix("/skill show ") {
-            print_json(
-                &runtime
-                    .get_skill(name.trim())?
-                    .ok_or_else(|| cli_error(format!("skill not found: {name}")))?,
-            )?;
-        } else if let Some(name) = line.strip_prefix("/skill resources ") {
-            print_json(&runtime.skill_resources(name.trim(), &sticky_skills).await?)?;
-        } else if let Some(arguments) = line.strip_prefix("/skill read ") {
+        } else if let Some(name) = line.strip_prefix("/plugin show ") {
+            print_json(&runtime.read_plugin_skill(name.trim()).await?)?;
+        } else if let Some(name) = line.strip_prefix("/plugin resources ") {
+            print_json(&runtime.plugin_skill_resources(name.trim()).await?)?;
+        } else if let Some(arguments) = line.strip_prefix("/plugin read ") {
             let (name, path) = arguments
                 .trim()
                 .split_once(' ')
-                .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
-            print_json(
-                &runtime
-                    .read_skill_resource(name, path.trim(), &sticky_skills)
-                    .await?,
-            )?;
+                .ok_or_else(|| cli_error("usage: /plugin read PLUGIN/SKILL PATH"))?;
+            print_json(&runtime.read_plugin_resource(name, path.trim()).await?)?;
         } else if line == "/context" || line == "/context status" {
             println!(
                 "{}",
@@ -448,7 +394,7 @@ pub(super) async fn line_runner(
         } else {
             let (prompt, explicit_skills) = resolve_skill_mentions(line, &skill_names);
             if prompt.is_empty() {
-                println!("Add a message after the @skill name.");
+                println!("Add a message after the qualified @PLUGIN/SKILL name.");
                 continue;
             }
             let mode = match plan_state.agent_mode() {

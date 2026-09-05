@@ -49,7 +49,7 @@ colossus -w . config effective
 file. The ordinary generated document is intentionally small:
 
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 storage:
   location: home_workspace
   path: state.redb
@@ -63,10 +63,10 @@ resources outside the selected workspace without approval. Provider routes,
 credentials, configured extensions, one-use permits, audit, transport checks, and
 configured bounds still apply. On Unix, however, a deliberately detached direct child
 can evade process-tree memory/count accounting, outlive the effect, and act outside its
-audit record; timeout and output bounds cover the supervised effect. Executable pack
-tools and pack stdio MCP servers are rejected under full access because their manifest
-permission ceilings require isolation. Select an explicit isolating sandbox preset
-when ambient authority or best-effort process cleanup is inappropriate.
+audit record; timeout and output bounds cover the supervised effect. Agent Plugin scripts
+and MCP servers remain governed by ordinary tools, explicit MCP enablement, permits,
+configured limits, and audit. Select an explicit isolating sandbox preset when ambient
+authority or best-effort process cleanup is inappropriate.
 
 The selected workspace is canonicalized once and its state resolves beneath
 `workspaces/<partition-id>/cli/`.

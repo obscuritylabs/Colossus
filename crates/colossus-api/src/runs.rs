@@ -678,7 +678,7 @@ pub struct Run {
     pub mode: RunMode,
     /// Resolved logical model role.
     pub role: String,
-    /// Reserved skill identities; always empty for public v1alpha1 runs.
+    /// Qualified Agent Plugin skill selections, revalidated at execution.
     pub skill_ids: Vec<String>,
     /// UTC RFC3339 creation time.
     pub created_at: String,
@@ -993,12 +993,23 @@ impl CreateRunRequest {
         if let Some(role) = &self.role {
             token(role, "role", MAX_ROLE_BYTES)?;
         }
-        if !self.skill_ids.is_empty() {
+        if self.skill_ids.len() > 64 {
             return Err(ApiError::invalid(
                 ApiErrorReason::InvalidArgument,
-                "skill_ids",
-                "public application runs do not support skill activation",
+                "plugin_skill_ids",
+                "at most 64 qualified plugin skills may be selected",
             ));
+        }
+        let mut selected = std::collections::BTreeSet::new();
+        for id in &self.skill_ids {
+            let valid = colossus_contracts::valid_plugin_skill_id(id);
+            if !valid || !selected.insert(id) {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "plugin_skill_ids",
+                    "select distinct qualified plugin/skill identifiers",
+                ));
+            }
         }
         match self.mode {
             RunMode::Research => {

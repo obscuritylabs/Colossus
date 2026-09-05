@@ -123,6 +123,49 @@ test("slash commands complete and change Desktop modes without becoming prompts"
   ).toHaveAttribute("aria-current", "page");
 });
 
+test("plugin mentions complete with keyboard controls without submitting a message", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    (
+      window as unknown as { __TAURI_INTERNALS__: unknown }
+    ).__TAURI_INTERNALS__ = {
+      invoke: async (command: string) => {
+        if (command !== "get_plugin_inventory")
+          throw new Error(`Unexpected command ${command}`);
+        return {
+          managementAvailable: true,
+          plugins: [
+            {
+              available: true,
+              skills: ["coding", "plugin-authoring"].map((name) => ({
+                id: `colossus/${name}`,
+                name,
+                plugin: "colossus",
+                description: `Help with ${name}`,
+                compatibility: null,
+                allowed_tools: null,
+              })),
+            },
+          ],
+        };
+      },
+    };
+  });
+  const prompt = page.getByRole("textbox", { name: "Prompt" });
+  await prompt.fill("@colossus/");
+  const menu = page.getByRole("listbox", { name: "Plugin skills" });
+  await expect(menu.getByRole("option")).toHaveCount(2);
+  await prompt.press("ArrowDown");
+  await prompt.press("Tab");
+  await expect(prompt).toHaveValue("@colossus/plugin-authoring ");
+  await expect(menu).toBeHidden();
+  await prompt.fill("@someone @colossus/co");
+  await expect(menu).toBeHidden();
+  await prompt.fill("Email @colossus/co");
+  await expect(menu).toBeHidden();
+});
+
 test("slash-command palette remains contained, scrollable, and accessible at compact width", async ({
   page,
 }) => {

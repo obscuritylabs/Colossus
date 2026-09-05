@@ -912,166 +912,15 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 print_json(&runtime.telemetry_metrics(session.as_deref(), limit)?)?;
             }
         },
-        Command::Skills(command) => match command.command {
-            SkillsAction::List => {
-                let skills = runtime
-                    .list_skills()?
-                    .into_iter()
-                    .map(|skill| {
-                        json!({
-                            "name": skill.manifest.name,
-                            "version": skill.manifest.version,
-                            "description": skill.manifest.description,
-                            "offline_compatible": skill.manifest.offline_compatible,
-                            "source": skill.source,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                print_json(&skills)?;
+        Command::Plugins(command) => {
+            let request = command.command.request().map_err(cli_error)?;
+            let mut result = runtime.manage_plugin(request).await?;
+            if let PluginsAction::List { limit } = command.command
+                && let Some(entries) = result.as_array_mut() {
+                entries.truncate(limit);
             }
-            SkillsAction::Show { name } => print_json(
-                &runtime
-                    .get_skill(&name)?
-                    .ok_or_else(|| cli_error(format!("skill not found: {name}")))?,
-            )?,
-            SkillsAction::Duplicates => print_json(&runtime.skill_duplicates()?)?,
-            SkillsAction::Compose { prompt, skills } => {
-                print_json(&runtime.compose_skills("You are Colossus.", &prompt, &skills, &[])?)?
-            }
-            SkillsAction::Scaffold {
-                name,
-                description,
-                instructions,
-                resource_dirs,
-            } => {
-                let instructions = instructions
-                    .unwrap_or_else(|| format!("# {name}\n\nAdd data-only instructions here.\n"));
-                print_json(
-                    &runtime
-                        .scaffold_skill(&name, &description, &instructions, &resource_dirs)
-                        .await?,
-                )?;
-            }
-            SkillsAction::Inspect { name } => {
-                print_json(&runtime.inspect_skill(&name).await?)?;
-            }
-            SkillsAction::FileRead { name, path } => {
-                print_json(&runtime.read_skill_file(&name, &path).await?)?;
-            }
-            SkillsAction::Write {
-                name,
-                path,
-                content,
-                expected_sha256,
-            } => {
-                print_json(
-                    &runtime
-                        .write_skill_file(&name, &path, &content, expected_sha256.as_deref())
-                        .await?,
-                )?;
-            }
-            SkillsAction::Validate { target, local } => {
-                if local {
-                    print_json(&runtime.validate_local_skill(&target).await?)?;
-                } else {
-                    print_json(&runtime.validate_installed_skill(&target).await?)?;
-                }
-            }
-            SkillsAction::Install { path } => {
-                print_json(&runtime.install_local_skill(&path).await?)?;
-            }
-            SkillsAction::Resources { name } => {
-                print_json(
-                    &runtime
-                        .skill_resources(&name, std::slice::from_ref(&name))
-                        .await?,
-                )?;
-            }
-            SkillsAction::Read { name, path } => print_json(
-                &runtime
-                    .read_skill_resource(&name, &path, std::slice::from_ref(&name))
-                    .await?,
-            )?,
-        },
-        Command::Packs(command) => match command.command {
-            PacksAction::List { limit } => print_json(&runtime.list_packs(limit)?)?,
-            PacksAction::Show { name } => print_json(
-                &runtime
-                    .get_pack(&name)?
-                    .ok_or_else(|| cli_error(format!("pack not found: {name}")))?,
-            )?,
-            PacksAction::Verify { path } | PacksAction::Validate { path } => {
-                print_json(&runtime.verify_pack(path).await?)?;
-            }
-            PacksAction::Install {
-                path,
-                allow_untrusted,
-            } => print_json(&runtime.install_pack(path, allow_untrusted).await?)?,
-            PacksAction::Enable { name } => print_json(&runtime.enable_pack(&name).await?)?,
-            PacksAction::Disable { name } => print_json(&runtime.disable_pack(&name).await?)?,
-            PacksAction::Uninstall { name } => {
-                print_json(&runtime.uninstall_pack(&name).await?)?;
-            }
-            PacksAction::Call { tool } => print_json(&runtime.call_pack_tool(&tool).await?)?,
-            PacksAction::Trust(command) => match command.command {
-                PackTrustAction::List { limit } => {
-                    print_json(&runtime.list_pack_trust(limit)?)?;
-                }
-                PackTrustAction::Add {
-                    publisher,
-                    public_key,
-                } => print_json(&runtime.add_pack_trust(&publisher, &public_key).await?)?,
-            },
-        },
-        Command::Collections(command) => match command.command {
-            CollectionsAction::Verify { path } => {
-                print_json(&runtime.verify_collection(path).await?)?;
-            }
-            CollectionsAction::Build {
-                source,
-                destination,
-                name,
-                version,
-                publisher,
-                created_at,
-                signing_key_reference,
-            } => print_json(
-                &runtime
-                    .build_collection(
-                        source,
-                        destination,
-                        &name,
-                        &version,
-                        &publisher,
-                        &created_at,
-                        &signing_key_reference,
-                    )
-                    .await?,
-            )?,
-            CollectionsAction::Install { path } => {
-                print_json(&runtime.install_collection(path).await?)?;
-            }
-        },
-        Command::Registry(command) => match command.command {
-            RegistryAction::Pull {
-                url,
-                destination,
-                credential_reference,
-            } => print_json(
-                &runtime
-                    .pull_registry_collection(&url, destination, credential_reference.as_deref())
-                    .await?,
-            )?,
-            RegistryAction::Push {
-                path,
-                url,
-                credential_reference,
-            } => print_json(
-                &runtime
-                    .push_registry_collection(path, &url, credential_reference.as_deref())
-                    .await?,
-            )?,
-        },
+            print_json(&result)?;
+        }
         Command::Bundle(command) => match command.command {
             BundleAction::KeyInfo {
                 signing_key_reference,
@@ -1183,7 +1032,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             }
         },
         Command::Mcp(command) => match command.command {
-            McpAction::Servers => print_json(&runtime.mcp_servers())?,
+            McpAction::Servers => print_json(&runtime.mcp_servers()?)?,
             McpAction::Tools { server } => {
                 print_json(&runtime.mcp_tools(server.as_deref()).await?)?;
             }

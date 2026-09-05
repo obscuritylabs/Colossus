@@ -523,6 +523,9 @@ async fn dispatch_interactive(
     control: &RunControl,
 ) -> Result<Value, WorkerError> {
     match request {
+        InteractiveWorkerRequest::PluginManage { request } => {
+            Ok(Box::pin(runtime.manage_plugin(request)).await?)
+        }
         InteractiveWorkerRequest::SandboxBoundaryAcknowledge { session_id, mode } => {
             let bridge = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone).map_err(|_| {
                 WorkerError::Protocol("no interactive worker client attached".into())
@@ -598,21 +601,20 @@ async fn dispatch_interactive(
                 ModelContent::Parts(parts)
             };
             Ok(serde_json::to_value(
-                runtime
-                    .run_with_mode_with_skills_stream_controlled_content(
-                        mode,
-                        &role,
-                        &instructions,
-                        &content,
-                        max_turns,
-                        Some(&session_id),
-                        &explicit_skills,
-                        &sticky_skills,
-                        include_provider_response_diagnostics,
-                        observer,
-                        control,
-                    )
-                    .await?,
+                Box::pin(runtime.run_with_mode_with_skills_stream_controlled_content(
+                    mode,
+                    &role,
+                    &instructions,
+                    &content,
+                    max_turns,
+                    Some(&session_id),
+                    &explicit_skills,
+                    &sticky_skills,
+                    include_provider_response_diagnostics,
+                    observer,
+                    control,
+                ))
+                .await?,
             )?)
         }
         InteractiveWorkerRequest::ImageAttach { path } => Ok(serde_json::to_value(

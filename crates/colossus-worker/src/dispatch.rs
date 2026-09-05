@@ -3,7 +3,48 @@ use super::*;
 const BACKGROUND_PROJECTION_BATCH_LIMIT: usize = 32;
 const BACKGROUND_PROJECTION_MAX_ROUNDS: usize = 1;
 
-pub(super) async fn dispatch(
+// Keep plugin reads/mutations off the large general dispatch future's polling stack.
+pub(super) fn dispatch<'a>(
+    runtime: &'a Arc<Runtime>,
+    operation: WorkerOperation,
+    maintenance: &'a tokio::sync::Mutex<()>,
+    approval_mode: &'a WorkerApprovalModeState,
+    observability_diagnostics: Option<&'a Arc<dyn Fn() -> Value + Send + Sync>>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, WorkerError>> + Send + 'a>> {
+    match operation {
+        WorkerOperation::PluginManage { request } => {
+            Box::pin(async move { Ok(runtime.manage_plugin(request).await?) })
+        }
+        WorkerOperation::ResearchRun {
+            question,
+            session_id,
+            depth,
+            source_kinds,
+        } => Box::pin(async move {
+            let session_id = match session_id {
+                Some(id) => {
+                    runtime
+                        .get_session(&id)?
+                        .ok_or_else(|| WorkerError::Remote(format!("session {id} not found")))?
+                        .id
+                }
+                None => runtime.create_session(Some("Research"))?.id,
+            };
+            Ok(serde_json::to_value(
+                Box::pin(runtime.run_research(&session_id, &question, depth, source_kinds)).await?,
+            )?)
+        }),
+        operation => Box::pin(dispatch_general(
+            runtime,
+            operation,
+            maintenance,
+            approval_mode,
+            observability_diagnostics,
+        )),
+    }
+}
+
+async fn dispatch_general(
     runtime: &Arc<Runtime>,
     operation: WorkerOperation,
     maintenance: &tokio::sync::Mutex<()>,
@@ -494,29 +535,9 @@ pub(super) async fn dispatch(
             let _guard = maintenance.lock().await;
             Ok(runtime.rebuild_memory_index().await?)
         }
-        WorkerOperation::ResearchRun {
-            question,
-            session_id,
-            depth,
-            source_kinds,
-        } => {
-            let session_id = match session_id {
-                Some(session_id) => {
-                    runtime
-                        .get_session(&session_id)?
-                        .ok_or_else(|| {
-                            WorkerError::Remote(format!("session {session_id} not found"))
-                        })?
-                        .id
-                }
-                None => runtime.create_session(Some("Research"))?.id,
-            };
-            Ok(serde_json::to_value(
-                runtime
-                    .run_research(&session_id, &question, depth, source_kinds)
-                    .await?,
-            )?)
-        }
+        WorkerOperation::ResearchRun { .. } => Err(WorkerError::Protocol(
+            "research operations must use the dedicated dispatcher".into(),
+        )),
         WorkerOperation::ResearchList { session_id, limit } => Ok(serde_json::to_value(
             runtime.list_research_runs(session_id.as_deref(), limit.clamp(1, 1_000))?,
         )?),
@@ -544,7 +565,7 @@ pub(super) async fn dispatch(
                 "bytes_base64": BASE64.encode(released.bytes),
             }))
         }
-        WorkerOperation::McpServers => Ok(serde_json::to_value(runtime.mcp_servers())?),
+        WorkerOperation::McpServers => Ok(serde_json::to_value(runtime.mcp_servers()?)?),
         WorkerOperation::McpTools { server } => Ok(serde_json::to_value(
             runtime.mcp_tools(server.as_deref()).await?,
         )?),
@@ -575,154 +596,68 @@ pub(super) async fn dispatch(
         WorkerOperation::McpAuthLogout { server } => Ok(serde_json::to_value(
             runtime.mcp_oauth_logout(&server).await?,
         )?),
-        WorkerOperation::SkillList => {
-            let skills = runtime
-                .list_skills()?
+        WorkerOperation::PluginsInventory => Ok(serde_json::to_value(runtime.plugin_inventory()?)?),
+        WorkerOperation::PluginManage { .. } => Err(WorkerError::Protocol(
+            "plugin operation requires plugin dispatch".into(),
+        )),
+        WorkerOperation::PluginList { limit } => {
+            let mut plugins = runtime.plugin_installations()?;
+            plugins.truncate(limit.clamp(1, 10_000));
+            Ok(serde_json::to_value(plugins)?)
+        }
+        WorkerOperation::PluginShow { name } => Ok(serde_json::to_value(
+            runtime
+                .plugin_installations()?
                 .into_iter()
-                .map(|skill| {
-                    json!({
-                        "name": skill.manifest.name,
-                        "version": skill.manifest.version,
-                        "description": skill.manifest.description,
-                        "offline_compatible": skill.manifest.offline_compatible,
-                        "source": skill.source,
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok(serde_json::to_value(skills)?)
-        }
-        WorkerOperation::SkillGet { name } => Ok(serde_json::to_value(runtime.get_skill(&name)?)?),
-        WorkerOperation::SkillDuplicates => Ok(serde_json::to_value(runtime.skill_duplicates()?)?),
-        WorkerOperation::SkillCompose { prompt, skills } => Ok(serde_json::to_value(
-            runtime.compose_skills("You are Colossus.", &prompt, &skills, &[])?,
+                .filter(|plugin| plugin.manifest.name == name)
+                .collect::<Vec<_>>(),
         )?),
-        WorkerOperation::SkillScaffold {
+        WorkerOperation::PluginSkillRead { skill_id } => Ok(serde_json::to_value(
+            runtime.read_plugin_skill(&skill_id).await?,
+        )?),
+        WorkerOperation::PluginResourceList { skill_id } => Ok(serde_json::to_value(
+            runtime.plugin_skill_resources(&skill_id).await?,
+        )?),
+        WorkerOperation::PluginResourceRead { skill_id, path } => Ok(serde_json::to_value(
+            runtime.read_plugin_resource(&skill_id, &path).await?,
+        )?),
+        WorkerOperation::PluginValidate { path } => Ok(serde_json::to_value(
+            colossus_plugins::validate_plugin(Path::new(&path))?,
+        )?),
+        WorkerOperation::PluginInstallDirectory { path } => Ok(serde_json::to_value(
+            runtime.install_plugin_directory(path).await?,
+        )?),
+        WorkerOperation::PluginInstallLayout { path, digest } => Ok(serde_json::to_value(
+            runtime
+                .install_plugin_layout(path, digest.as_deref())
+                .await?,
+        )?),
+        WorkerOperation::PluginInstallArchive { path, digest } => Ok(serde_json::to_value(
+            runtime
+                .install_plugin_archive(path, digest.as_deref())
+                .await?,
+        )?),
+        WorkerOperation::PluginEnable {
             name,
-            description,
-            instructions,
-            resource_dirs,
-        } => Ok(serde_json::to_value(
-            runtime
-                .scaffold_skill(&name, &description, &instructions, &resource_dirs)
-                .await?,
-        )?),
-        WorkerOperation::SkillInspect { name } => {
-            Ok(serde_json::to_value(runtime.inspect_skill(&name).await?)?)
-        }
-        WorkerOperation::SkillFileRead { name, path } => Ok(serde_json::to_value(
-            runtime.read_skill_file(&name, &path).await?,
-        )?),
-        WorkerOperation::SkillWrite {
-            name,
-            path,
-            content,
-            expected_sha256,
-        } => Ok(serde_json::to_value(
-            runtime
-                .write_skill_file(&name, &path, &content, expected_sha256.as_deref())
-                .await?,
-        )?),
-        WorkerOperation::SkillValidate { target, local } => {
-            if local {
-                Ok(serde_json::to_value(
-                    runtime.validate_local_skill(&target).await?,
-                )?)
-            } else {
-                Ok(serde_json::to_value(
-                    runtime.validate_installed_skill(&target).await?,
-                )?)
-            }
-        }
-        WorkerOperation::SkillInstall { path } => Ok(serde_json::to_value(
-            runtime.install_local_skill(&path).await?,
-        )?),
-        WorkerOperation::SkillResources { name } => Ok(serde_json::to_value(
-            runtime
-                .skill_resources(&name, std::slice::from_ref(&name))
-                .await?,
-        )?),
-        WorkerOperation::SkillResourceRead { name, path } => Ok(serde_json::to_value(
-            runtime
-                .read_skill_resource(&name, &path, std::slice::from_ref(&name))
-                .await?,
-        )?),
-        WorkerOperation::PackList { limit } => Ok(serde_json::to_value(
-            runtime.list_packs(limit.clamp(1, 1_000))?,
-        )?),
-        WorkerOperation::PackGet { name } => Ok(serde_json::to_value(runtime.get_pack(&name)?)?),
-        WorkerOperation::PackVerify { path } => {
-            Ok(serde_json::to_value(runtime.verify_pack(path).await?)?)
-        }
-        WorkerOperation::PackInstall {
-            path,
+            digest,
             allow_untrusted,
         } => Ok(serde_json::to_value(
-            runtime.install_pack(path, allow_untrusted).await?,
+            runtime
+                .enable_plugin(&name, &digest, allow_untrusted)
+                .await?,
         )?),
-        WorkerOperation::PackEnable { name } => {
-            Ok(serde_json::to_value(runtime.enable_pack(&name).await?)?)
+        WorkerOperation::PluginDisable { name } => {
+            runtime.disable_plugin(&name).await?;
+            Ok(json!({"plugin": name, "active": false}))
         }
-        WorkerOperation::PackDisable { name } => {
-            Ok(serde_json::to_value(runtime.disable_pack(&name).await?)?)
-        }
-        WorkerOperation::PackUninstall { name } => {
-            Ok(serde_json::to_value(runtime.uninstall_pack(&name).await?)?)
-        }
-        WorkerOperation::PackCall { tool } => Ok(runtime.call_pack_tool(&tool).await?),
-        WorkerOperation::PackTrustList { limit } => Ok(serde_json::to_value(
-            runtime.list_pack_trust(limit.clamp(1, 1_000))?,
-        )?),
-        WorkerOperation::PackTrustAdd {
-            publisher,
-            public_key,
-        } => Ok(serde_json::to_value(
-            runtime.add_pack_trust(&publisher, &public_key).await?,
-        )?),
-        WorkerOperation::CollectionVerify { path } => Ok(serde_json::to_value(
-            runtime.verify_collection(path).await?,
-        )?),
-        WorkerOperation::CollectionBuild {
-            source,
-            destination,
+        WorkerOperation::PluginUninstall {
             name,
-            version,
-            publisher,
-            created_at,
-            signing_key_reference,
+            digest,
+            purge_data,
         } => Ok(serde_json::to_value(
-            runtime
-                .build_collection(
-                    source,
-                    destination,
-                    &name,
-                    &version,
-                    &publisher,
-                    &created_at,
-                    &signing_key_reference,
-                )
-                .await?,
+            runtime.uninstall_plugin(&name, &digest, purge_data).await?,
         )?),
-        WorkerOperation::CollectionInstall { path } => Ok(serde_json::to_value(
-            runtime.install_collection(path).await?,
-        )?),
-        WorkerOperation::RegistryPull {
-            url,
-            destination,
-            credential_reference,
-        } => Ok(serde_json::to_value(
-            runtime
-                .pull_registry_collection(&url, destination, credential_reference.as_deref())
-                .await?,
-        )?),
-        WorkerOperation::RegistryPush {
-            path,
-            url,
-            credential_reference,
-        } => Ok(serde_json::to_value(
-            runtime
-                .push_registry_collection(path, &url, credential_reference.as_deref())
-                .await?,
-        )?),
+        WorkerOperation::PluginGc => Ok(serde_json::to_value(runtime.gc_plugins().await?)?),
         WorkerOperation::BundleVerify { path } => {
             Ok(serde_json::to_value(runtime.verify_bundle(path).await?)?)
         }

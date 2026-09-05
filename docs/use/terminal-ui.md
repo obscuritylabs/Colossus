@@ -95,7 +95,7 @@ records audit evidence. Cancelling or submitting a blank response keeps process 
 blocked. This boundary acknowledgement is separate from approval mode; every normal
 policy and approval obligation still applies.
 
-The sparse schema-version-2 default already acknowledges `danger_full_access`, so its
+The sparse schema-version-3 default already acknowledges `danger_full_access`, so its
 warning is a persistent startup card and footer badge rather than a blocking prompt.
 It means authorized process, structured filesystem, and HTTP tools can use ambient host
 resources; choose an isolating execution boundary in configuration when that is not
@@ -172,7 +172,8 @@ values are never stored as presentation preferences.
 ### 4. Compose and navigate
 
 - Type `/` at the start of a draft for slash-command completion.
-- Type `@` at a skill-token boundary for installed skill completion.
+- Type `@` at a skill-token boundary for qualified active-plugin skill completion
+  (`@PLUGIN/SKILL`).
 - On roomy terminals, completion expands to 96 columns and shows up to 12 suggestions;
   compact terminals keep the smaller six-row menu.
 - Use Down/Up or Shift-Tab to move through suggestions, Tab or Right Arrow to accept the

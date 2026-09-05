@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn every_operator_plugin_action_can_be_classified_by_pinned_policy() {
+    let descriptors = builtin_action_descriptors();
+    for action in [
+        "plugin.list",
+        "plugin.inspect",
+        "plugin.skill.read",
+        "plugin.resource.list",
+        "plugin.resource.read",
+        "plugin.validate",
+        "plugin.verify",
+        "plugin.install",
+        "plugin.enable",
+        "plugin.disable",
+        "plugin.update",
+        "plugin.uninstall",
+        "plugin.gc",
+        "plugin.package",
+        "plugin.pull",
+        "plugin.push",
+        "plugin.export",
+    ] {
+        assert_eq!(
+            descriptors
+                .iter()
+                .filter(|entry| entry.name == action)
+                .count(),
+            1,
+            "classify {action} exactly once"
+        );
+    }
+}
+
+#[test]
 fn default_access_is_allow_all() {
     assert_eq!(AccessProfile::default(), AccessProfile::AllowAll);
     assert_eq!(AccessConfig::default().profile, AccessProfile::AllowAll);

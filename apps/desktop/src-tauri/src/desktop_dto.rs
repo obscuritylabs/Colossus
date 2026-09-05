@@ -339,7 +339,8 @@ impl CaBundleStatusDto {
 pub(crate) struct DesktopCapabilitiesDto {
     pub(crate) research: bool,
     pub(crate) delegation: bool,
-    pub(crate) skills: bool,
+    pub(crate) plugins: bool,
+    pub(crate) plugin_skill_selection: bool,
     pub(crate) tui: bool,
     pub(crate) shell_terminal: bool,
     pub(crate) files: bool,

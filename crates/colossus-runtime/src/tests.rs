@@ -6,17 +6,15 @@ use super::{
     InstructionSnapshotStore, InteractiveToolExecutor, JournalExternalWorkQueue,
     LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS, LOOPBACK_PROVIDER_TIMEOUT_MS,
     MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation,
-    ModelCapabilities, ModelProfileConfig, PackProcessDeclaration, PackProcessExecutor,
-    PackToolEffectInput, PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
-    REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort, Runtime,
-    RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig, SearchProfileConfig,
-    SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
-    TraceToolExecutor, WorkEffectExecutor, WorkOperation, configure_shell_environment,
-    derive_development_sandbox, goal_objective_from_plan, model_resource_path,
-    model_workspace_path, provider_profile, push_bounded_mcp_discovery_tool,
-    recover_interrupted_subagents, recover_unknown_effects, redacted_risk_metadata,
-    reject_reserved_shell_environment, reject_shell_startup_profiles, shell_command_arguments,
-    terminal_actor,
+    ModelCapabilities, ModelProfileConfig, PresentationEffectExecutor, PresentationOperation,
+    ProviderProfileConfig, REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS,
+    ReasoningEffort, Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig,
+    SearchProfileConfig, SemanticMemoryConfig, StorageAdapter, TraceToolExecutor,
+    WorkEffectExecutor, WorkOperation, configure_shell_environment, derive_development_sandbox,
+    goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
+    push_bounded_mcp_discovery_tool, recover_interrupted_subagents, recover_unknown_effects,
+    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
@@ -41,15 +39,11 @@ use colossus_policy::{
 };
 use colossus_ports::{
     EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PolicyDecisionPoint,
-    PresentationRepository, ProjectionStore, RiskEvaluationError, RiskEvaluator, SkillRepository,
-    ToolExecutor,
+    PresentationRepository, ProjectionStore, RiskEvaluationError, RiskEvaluator, ToolExecutor,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::EFFECT_RECOVERY_PROJECTION;
 use colossus_provider::{ChatCompletionsOutputTokenParameter, ProviderKind};
-use colossus_skills::{
-    FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
-};
 use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
 use colossus_tools::MCP_TOOLS_MAX_OUTPUT_BYTES;
 use colossus_workflow::{WorkflowEffect, WorkflowEffectRunner};
@@ -173,8 +167,6 @@ fn configure_primary_model(
     );
     config.models.roles.insert("primary".into(), profile.into());
 }
-
-struct SecretEchoProcess;
 
 struct PrivateOutputProcess;
 
@@ -898,35 +890,6 @@ impl ToolExecutor for UnusedToolExecutor {
 }
 
 #[async_trait::async_trait]
-impl colossus_policy::EffectExecutor for SecretEchoProcess {
-    async fn execute(
-        &self,
-        request: &EffectRequest,
-        _permit: colossus_policy::ExecutionPermit,
-    ) -> Result<QuarantinedEffectResult, colossus_policy::ExecutionError> {
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-
-        let spec: colossus_sandbox::ProcessSpec =
-            serde_json::from_value(request.content.clone())
-                .map_err(|error| colossus_policy::ExecutionError::Failed(error.to_string()))?;
-        let secret = spec.environment.get("PACK_SECRET").ok_or_else(|| {
-            colossus_policy::ExecutionError::Failed("resolved secret is absent".into())
-        })?;
-        Ok(QuarantinedEffectResult {
-            media_type: "application/json".into(),
-            bytes: serde_json::to_vec(&json!({
-                "stdout_base64": BASE64.encode(secret),
-                "stderr_base64": BASE64.encode([]),
-                "exit_code": 0,
-                "truncated": false
-            }))
-            .map_err(|error| colossus_policy::ExecutionError::Failed(error.to_string()))?,
-            effect_succeeded: true,
-        })
-    }
-}
-
-#[async_trait::async_trait]
 impl colossus_policy::EffectExecutor for PrivateOutputProcess {
     async fn execute(
         &self,
@@ -952,7 +915,7 @@ impl colossus_policy::EffectExecutor for PrivateOutputProcess {
 #[test]
 fn strict_config_rejects_unknown_fields() {
     let yaml = r#"
-schemaVersion: 2
+schemaVersion: 3
 access:
   profile: development
   tools:
@@ -981,9 +944,9 @@ surprise: true
 }
 
 #[test]
-fn sparse_schema_materializes_recursive_defaults_and_show_expands_them() {
+fn sparse_schema_v3_materializes_recursive_defaults_and_show_expands_them() {
     let yaml = r#"
-schemaVersion: 2
+schemaVersion: 3
 storage:
   path: state.redb
 access: {}
@@ -1010,10 +973,9 @@ research:
   maxWorkers: 2
 search: {}
 mcp: {}
-skills:
-  disabled:
+plugins:
+  exclude:
     - legacy
-packs: {}
 sandbox:
   timeoutMs: 45000
 "#;
@@ -1038,8 +1000,7 @@ sandbox:
     assert!(config.memory.index_enabled);
     assert_eq!(config.research.max_workers, 2);
     assert_eq!(config.research.max_sources, 20);
-    assert_eq!(config.skills.disabled, vec!["legacy".to_owned()]);
-    assert_eq!(config.packs.install_root, PathBuf::from(".colossus/packs"));
+    assert_eq!(config.plugins.exclude, vec!["legacy".to_owned()]);
     assert_eq!(config.sandbox.backend, "danger_full_access");
     assert!(config.sandbox.acknowledge_danger_full_access);
     assert_eq!(config.sandbox.timeout_ms, 45_000);
@@ -1068,8 +1029,7 @@ sandbox:
         "research",
         "search",
         "mcp",
-        "skills",
-        "packs",
+        "plugins",
         "sandbox",
     ] {
         assert!(expanded.get(key).is_some(), "expanded output omitted {key}");
@@ -1085,7 +1045,7 @@ sandbox:
 }
 
 #[test]
-fn previous_expanded_schema_v2_configuration_retains_its_explicit_posture() {
+fn previous_expanded_schema_v2_configuration_is_rejected_with_regeneration_guidance() {
     let yaml = r#"
 schemaVersion: 2
 access:
@@ -1204,21 +1164,9 @@ sandbox:
   maxConcurrency: 1
 "#;
 
-    let config = RuntimeConfig::from_yaml(yaml).expect("previous expanded schema-v2 config");
-    assert_eq!(
-        config.access.profile,
-        colossus_access::AccessProfile::Development
-    );
-    assert_eq!(config.sandbox.backend, "native");
-    assert_eq!(config.sandbox.profile, "workspace-development");
-    assert!(!config.sandbox.acknowledge_danger_full_access);
-    assert_eq!(config.sandbox.max_output_bytes, 1_048_576);
-    assert_eq!(config.sandbox.max_memory_bytes, 268_435_456);
-    assert_eq!(
-        config.storage.location,
-        super::StorageLocation::HomeWorkspace
-    );
-    assert_eq!(config.storage.path, Path::new("state.redb"));
+    let error = RuntimeConfig::from_yaml(yaml).expect_err("schema v2 must be rejected");
+    assert!(error.to_string().contains("schemaVersion 3"));
+    assert!(error.to_string().contains("regenerate"));
 }
 
 #[test]
@@ -1228,7 +1176,7 @@ fn explicit_sandbox_resource_overrides_remain_unchanged() {
         (8 * 1024 * 1024_u64, 2 * 1024 * 1024 * 1024_u64),
     ] {
         let config = RuntimeConfig::from_yaml(&format!(
-            "schemaVersion: 2\nstorage:\n  path: state.redb\nsandbox:\n  maxOutputBytes: {max_output_bytes}\n  maxMemoryBytes: {max_memory_bytes}\n"
+            "schemaVersion: 3\nstorage:\n  path: state.redb\nsandbox:\n  maxOutputBytes: {max_output_bytes}\n  maxMemoryBytes: {max_memory_bytes}\n"
         ))
         .expect("explicit sandbox resource overrides");
         assert_eq!(config.sandbox.max_output_bytes, max_output_bytes);
@@ -1240,7 +1188,7 @@ fn explicit_sandbox_resource_overrides_remain_unchanged() {
 fn sandbox_defaults_are_contextual_and_reject_stale_acknowledgements() {
     let parse = |sandbox: &str| {
         RuntimeConfig::from_yaml(&format!(
-            "schemaVersion: 2\nstorage:\n  path: state.redb\n{sandbox}"
+            "schemaVersion: 3\nstorage:\n  path: state.redb\n{sandbox}"
         ))
     };
 
@@ -1270,14 +1218,14 @@ fn sandbox_defaults_are_contextual_and_reject_stale_acknowledgements() {
 
 #[test]
 fn sparse_schema_still_requires_storage_and_explicit_union_tags() {
-    assert!(RuntimeConfig::from_yaml("schemaVersion: 2\n").is_err());
+    assert!(RuntimeConfig::from_yaml("schemaVersion: 3\n").is_err());
     assert!(
-        RuntimeConfig::from_yaml("schemaVersion: 2\nstorage:\n  path: state.redb\npolicy: {}\n")
+        RuntimeConfig::from_yaml("schemaVersion: 3\nstorage:\n  path: state.redb\npolicy: {}\n")
             .is_err()
     );
     assert!(
         RuntimeConfig::from_yaml(
-            "schemaVersion: 2\nstorage:\n  path: state.redb\nstorageExtra: true\n"
+            "schemaVersion: 3\nstorage:\n  path: state.redb\nstorageExtra: true\n"
         )
         .is_err()
     );
@@ -1645,6 +1593,7 @@ fn security_posture_reports_plaintext_storage_and_effective_oauth_state() {
             args: Vec::new(),
             working_directory: None,
             environment: BTreeMap::new(),
+            literal_environment: BTreeMap::new(),
             url: Some("https://mcp.example.com/".into()),
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
@@ -2900,91 +2849,6 @@ fn extension_paths_resolve_against_the_embedded_runtime_workspace() {
     );
 }
 
-#[tokio::test]
-async fn pack_process_resolves_credentials_only_after_permit_and_redacts_output() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use colossus_policy::{
-        BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
-    };
-    use colossus_ports::PolicyDecisionPoint;
-
-    let secret = std::env::var("PATH").expect("PATH");
-    let executable = fs::canonicalize(std::env::current_exe().expect("current executable"))
-        .expect("canonical executable");
-    let cwd = executable.parent().expect("executable parent").to_owned();
-    let action = "pack.tool.demo.secret".to_owned();
-    let declaration = PackProcessDeclaration {
-        pack: "demo".into(),
-        version: "1.0.0".into(),
-        manifest_sha256: "a".repeat(64),
-        tool: "demo.secret".into(),
-        action: action.clone(),
-        executable: executable.clone(),
-        cwd: cwd.clone(),
-        args: Vec::new(),
-        environment: BTreeMap::from([("PACK_SECRET".into(), "env:PATH".into())]),
-        permissions: vec!["process".into(), "credentials".into()],
-    };
-    let executor = PackProcessExecutor::new(
-        BTreeMap::from([("demo.secret".into(), declaration.clone())]),
-        Arc::new(SecretEchoProcess),
-    );
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-    let policy: Arc<dyn PolicyDecisionPoint> = Arc::new(
-        BuiltInPolicy::offline_default()
-            .with_action(&action, DecisionOutcome::Allow)
-            .with_post_effect(true)
-            .with_sandbox("native", "pack-secret-test", false)
-            .with_filesystem_root(executable.display().to_string(), "execute")
-            .with_filesystem_root(cwd.display().to_string(), "read")
-            .with_environment("PACK_SECRET"),
-    );
-    let gateway = EffectGateway::new(
-        journal,
-        policy,
-        Arc::new(DenyApproval),
-        SafetyKernel::new([action.clone()]),
-        [42_u8; 32],
-    );
-    let input = PackToolEffectInput {
-        pack: declaration.pack.clone(),
-        version: declaration.version.clone(),
-        manifest_sha256: declaration.manifest_sha256.clone(),
-        tool: declaration.tool.clone(),
-        executable: executable.clone(),
-        cwd,
-        args: Vec::new(),
-        environment: declaration.environment.clone(),
-        permissions: declaration.permissions.clone(),
-    };
-    let mut request = effect_request(
-        Actor {
-            actor_type: ActorType::User,
-            id: "pack-test".into(),
-        },
-        &action,
-        executable.display().to_string(),
-        serde_json::to_value(input).expect("input"),
-    );
-    request.capabilities = vec![action];
-    request.credential_references = vec![CredentialReference {
-        reference: "env:PATH".into(),
-        value_hash: None,
-    }];
-    let released = gateway.execute(request, &executor).await.expect("execute");
-    let value: serde_json::Value = serde_json::from_slice(&released.bytes).expect("result JSON");
-    let stdout = BASE64
-        .decode(value["stdout_base64"].as_str().expect("stdout"))
-        .expect("stdout base64");
-    assert_eq!(stdout, b"[REDACTED]");
-    assert!(
-        !released
-            .bytes
-            .windows(secret.len())
-            .any(|window| window == secret.as_bytes())
-    );
-}
-
 #[test]
 fn approved_plan_goal_objective_preserves_contract_and_mutation_labels() {
     let objective = goal_objective_from_plan(&PlanRecord {
@@ -3135,6 +2999,7 @@ fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
             args: Vec::new(),
             working_directory: None,
             environment: BTreeMap::from([("CHILD_TOKEN".into(), "env:HOST_TOKEN".into())]),
+            literal_environment: BTreeMap::new(),
             url: None,
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::new(),
@@ -3215,6 +3080,7 @@ fn remote_mcp_stateless_opt_in_round_trips_and_defaults_off() {
             args: Vec::new(),
             working_directory: None,
             environment: BTreeMap::new(),
+            literal_environment: BTreeMap::new(),
             url: Some("http://127.0.0.1:18000/services/mcp".into()),
             headers: BTreeMap::new(),
             credential_headers: BTreeMap::from([(
@@ -3766,165 +3632,6 @@ fn startup_effect_recovery_rejects_more_than_the_safe_pending_bound() {
     }
 }
 
-#[tokio::test]
-async fn model_skill_resource_tool_is_active_scoped_and_post_gated() {
-    let directory = tempdir().expect("tempdir");
-    let skill = directory.path().join("skills/demo");
-    fs::create_dir_all(skill.join("references")).expect("skill directory");
-    fs::write(skill.join("SKILL.md"), "Use the resource.").expect("instructions");
-    fs::write(
-            skill.join("manifest.json"),
-            r#"{"name":"demo","version":"1.0.0","description":"Demo","triggers":[],"required_tools":[],"permissions":[],"offline_compatible":true}"#,
-        )
-        .expect("manifest");
-    fs::write(skill.join("references/guide.md"), "bounded resource").expect("resource");
-    let repository: Arc<dyn SkillRepository> = Arc::new(
-        FilesystemSkillRepository::new(
-            vec![SkillRoot {
-                path: directory.path().join("skills"),
-                label: "test".into(),
-            }],
-            false,
-            Vec::new(),
-        )
-        .expect("repository"),
-    );
-    let skill_executor = Arc::new(SkillEffectExecutor {
-        resources: Arc::new(SkillResourceService::new(repository)),
-        authoring: Arc::new(
-            SkillAuthoringService::new(
-                directory.path().join("user-skills"),
-                directory.path().canonicalize().expect("workspace"),
-            )
-            .expect("authoring"),
-        ),
-    });
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-    let gateway = Arc::new(colossus_policy::EffectGateway::new(
-        Arc::clone(&journal),
-        Arc::new(
-            colossus_policy::BuiltInPolicy::offline_default()
-                .with_action("skill.resource.read", DecisionOutcome::Allow),
-        ),
-        Arc::new(colossus_policy::DenyApproval),
-        colossus_policy::SafetyKernel::new(["skill.resource.read".into()]),
-        [25_u8; 32],
-    ));
-    let executor = GatewayToolExecutor {
-        gateway,
-        filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
-        process: None,
-        http: Arc::new(colossus_sandbox::HttpExecutor::new()),
-        work: None,
-        memory: None,
-        skills: Some(skill_executor),
-        pack_processes: None,
-        integrations: None,
-        mcp: None,
-        bound_effects: None,
-        search: None,
-        workspace: directory.path().to_path_buf(),
-        repository_id: "repo-test".into(),
-        executables: Vec::new(),
-    };
-    let call = ToolCall {
-        call_id: "skill-call".into(),
-        name: "skill.resource.read".into(),
-        arguments: json!({"name": "demo", "path": "references/guide.md"}),
-    };
-    let context = ExecutionContext {
-        correlation_id: "run-1".into(),
-        session_id: Some("session-1".into()),
-        run_id: Some("run-1".into()),
-        skill_ids: vec!["demo".into()],
-        ..ExecutionContext::default()
-    };
-    let result = executor
-        .execute(call.clone(), context)
-        .await
-        .expect("active resource");
-    assert!(result.output.contains("bounded resource"));
-    let denied = executor
-        .execute(
-            call,
-            ExecutionContext {
-                correlation_id: "run-2".into(),
-                session_id: Some("session-1".into()),
-                run_id: Some("run-2".into()),
-                ..ExecutionContext::default()
-            },
-        )
-        .await;
-    assert!(denied.is_err());
-    let event_types = journal
-        .read_global(1, 100)
-        .expect("events")
-        .into_iter()
-        .map(|event| event.event_type)
-        .collect::<Vec<_>>();
-    assert!(event_types.contains(&"effect.release_requested.v1".into()));
-}
-
-#[tokio::test]
-async fn skill_authoring_mutation_cannot_execute_without_approval_permit() {
-    let directory = tempdir().expect("tempdir");
-    let workspace = directory.path().canonicalize().expect("workspace");
-    let repository: Arc<dyn SkillRepository> = Arc::new(
-        FilesystemSkillRepository::new(Vec::new(), false, Vec::new()).expect("repository"),
-    );
-    let executor = SkillEffectExecutor {
-        resources: Arc::new(SkillResourceService::new(repository)),
-        authoring: Arc::new(
-            SkillAuthoringService::new(directory.path().join("user"), workspace)
-                .expect("authoring"),
-        ),
-    };
-    let operation = SkillOperation::Scaffold {
-        name: "permit-demo".into(),
-        description: "Permit-bound skill".into(),
-        instructions: "Data-only instructions.".into(),
-        resource_dirs: Vec::new(),
-    };
-    let request = colossus_policy::effect_request(
-        colossus_policy::system_actor("skill-test"),
-        operation.action(),
-        operation.resource(),
-        serde_json::to_value(&operation).expect("operation"),
-    );
-    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-    let policy = Arc::new(
-        colossus_policy::BuiltInPolicy::offline_default()
-            .with_action("skill.scaffold", DecisionOutcome::RequireApproval),
-    );
-    let denied = colossus_policy::EffectGateway::new(
-        Arc::clone(&journal),
-        policy.clone(),
-        Arc::new(colossus_policy::DenyApproval),
-        colossus_policy::SafetyKernel::new(["skill.scaffold".into()]),
-        [26_u8; 32],
-    )
-    .execute(request.clone(), &executor)
-    .await;
-    assert!(denied.is_err());
-    assert!(!directory.path().join("user/permit-demo").exists());
-
-    let released = colossus_policy::EffectGateway::new(
-        journal,
-        policy,
-        Arc::new(colossus_policy::AllowApproval {
-            approved_by: "test-operator".into(),
-        }),
-        colossus_policy::SafetyKernel::new(["skill.scaffold".into()]),
-        [27_u8; 32],
-    )
-    .execute(request, &executor)
-    .await
-    .expect("approved scaffold");
-    let result: SkillScaffoldResult = serde_json::from_slice(&released.bytes).expect("result");
-    assert_eq!(result.name, "permit-demo");
-    assert!(directory.path().join("user/permit-demo/SKILL.md").is_file());
-}
-
 #[test]
 fn startup_marks_running_subagents_interrupted_without_retrying() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -4062,14 +3769,14 @@ async fn agent_filesystem_tool_executes_only_through_the_gateway() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: allowed.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let result = executor
@@ -4131,14 +3838,14 @@ async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: allowed.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let context = ExecutionContext {
@@ -4233,14 +3940,14 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let denied = denied_executor
@@ -4281,14 +3988,14 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let written = allowed_executor
@@ -4402,14 +4109,14 @@ async fn model_work_tools_are_durable_attributed_and_session_confined() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: Some(work),
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let context = |session: &str| ExecutionContext {
@@ -4537,14 +4244,14 @@ async fn subprocess_content_denied_post_effect_never_reaches_the_tool_caller() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: vec![executable.clone()],
     };
     let error = executor
@@ -4737,14 +4444,14 @@ async fn model_memory_tools_are_durable_scoped_and_post_gated() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: Some(memory),
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let context = |session: &str| ExecutionContext {
@@ -4952,14 +4659,14 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: Some(work),
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let context = |session: &str| ExecutionContext {
@@ -5087,14 +4794,14 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: Some(work),
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let context = |session: &str| ExecutionContext {
@@ -5579,14 +5286,14 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: Some(work),
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     });
     let provider = Arc::new(WorkScriptedProvider {
@@ -5731,14 +5438,14 @@ async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: Some(Arc::clone(&memory)),
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     });
     let provider = Arc::new(WorkScriptedProvider {
@@ -5901,14 +5608,14 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: Some(work),
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     });
     let provider = Arc::new(WorkScriptedProvider {
@@ -6125,14 +5832,14 @@ async fn model_patch_tools_preview_apply_and_reverse_exact_text_under_policy() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let arguments = || json!({"path": "note.txt", "old": "beta", "new": "gamma"});
@@ -6494,14 +6201,14 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace_path,
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let invoke = |name: &str, arguments: Value| ToolCall {
@@ -6707,14 +6414,14 @@ async fn ambient_structured_filesystem_and_repository_tools_accept_external_cont
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: fs::canonicalize(workspace.path()).expect("canonical workspace"),
         repository_id: "ambient-repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
     let invoke = |name: &str, arguments: Value| ToolCall {
@@ -6889,14 +6596,14 @@ async fn danger_full_access_shell_needs_no_process_resource_configuration() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
 
@@ -6969,14 +6676,14 @@ async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: Vec::new(),
     };
 
@@ -7052,14 +6759,14 @@ async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
         http: Arc::new(colossus_sandbox::HttpExecutor::new()),
         work: None,
         memory: None,
-        skills: None,
-        pack_processes: None,
+        plugins: None,
         integrations: None,
         mcp: None,
         bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
+        plugin_skill_roots: BTreeMap::new(),
         executables: vec![executable],
     };
     let status = executor

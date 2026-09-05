@@ -49,7 +49,7 @@ impl EmbeddedInteractiveHost {
         })
     }
 
-    fn result<T: Serialize>(
+    fn result<T: Serialize + ?Sized>(
         &self,
         value: &T,
         title: Option<&str>,
@@ -390,8 +390,8 @@ impl EmbeddedInteractiveHost {
             "memory" => self.memory_command(arguments, session_id).await,
             "research" => self.research_command(arguments, session_id).await,
             "telemetry" => self.telemetry_command(arguments, session_id),
-            "skills" => self.skills_list(sticky_skills),
-            "skill" => self.skill_command(arguments, sticky_skills).await,
+            "plugins" => self.plugins_command(arguments).await,
+            "plugin" => self.plugin_command(arguments, sticky_skills).await,
             "context" => self.context_command(arguments, session_id).await,
             "workflow" => self.workflow_command(arguments).await,
             "audit" if arguments == "verify" => self.result(
@@ -409,7 +409,6 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("Projection status"),
             ),
-            "packs" => self.packs_command(arguments).await,
             "integrations" => self.result(
                 &self
                     .runtime
@@ -652,78 +651,115 @@ impl EmbeddedInteractiveHost {
         }
     }
 
-    fn skills_list(&self, sticky_skills: &[String]) -> Result<HostCommandResult, String> {
-        let skills = self
+    async fn plugins_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
+        let plugins = self
             .runtime
-            .list_skills()
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .map(|skill| {
-                json!({
-                    "name": skill.manifest.name,
-                    "version": skill.manifest.version,
-                    "description": skill.manifest.description,
-                    "source": skill.source,
-                    "active": sticky_skills.contains(&skill.manifest.name),
-                })
-            })
-            .collect::<Vec<_>>();
-        self.result(&skills, Some("Skills"))
+            .plugin_inventory()
+            .map_err(|error| error.to_string())?;
+        let document = match parse_plugins_command(arguments)? {
+            PluginsCommand::Manage(request) => {
+                let result = self
+                    .runtime
+                    .manage_plugin(request)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let skills = self
+                    .runtime
+                    .list_plugins()
+                    .map_err(|error| error.to_string())?
+                    .iter()
+                    .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
+                    .collect::<Vec<_>>();
+                return Ok(HostCommandResult {
+                    completions: Some(terminal_completion_values(&skills, &self.themes)),
+                    ..self.result(&result, Some("Plugins"))?
+                });
+            }
+            PluginsCommand::List => plugins_document(&plugins),
+            PluginsCommand::Show(name) => plugin_document(
+                plugins
+                    .iter()
+                    .find(|plugin| plugin.manifest.name == name)
+                    .ok_or_else(|| format!("plugin not found: {name}"))?,
+            ),
+        };
+        Ok(HostCommandResult::document(document))
     }
 
-    async fn skill_command(
+    async fn plugin_command(
         &self,
         arguments: &str,
         sticky_skills: &[String],
     ) -> Result<HostCommandResult, String> {
         let mut sticky = sticky_skills.to_vec();
-        let result = if arguments == "active" {
-            self.result(&sticky, Some("Active skills"))?
-        } else if arguments == "clear" {
-            sticky.clear();
-            self.result(&sticky, Some("Active skills"))?
-        } else if let Some(name) = arguments.strip_prefix("use ") {
-            let name = name.trim();
-            self.runtime
-                .get_skill(name)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("skill not found: {name}"))?;
-            if !sticky.iter().any(|active| active == name) {
-                sticky.push(name.into());
-            }
-            self.result(&sticky, Some("Active skills"))?
-        } else if let Some(name) = arguments.strip_prefix("show ") {
-            self.result(
+        let result = match parse_plugin_command(arguments)? {
+            PluginCommand::Skills => HostCommandResult::document(plugin_skills_document(
                 &self
                     .runtime
-                    .get_skill(name.trim())
+                    .plugin_inventory()
                     .map_err(|error| error.to_string())?,
-                Some("Skill"),
-            )?
-        } else if let Some(name) = arguments.strip_prefix("resources ") {
-            self.result(
+                &sticky,
+            )),
+            PluginCommand::Active => self.result(&sticky, Some("Active plugin skills"))?,
+            PluginCommand::Clear => {
+                sticky.clear();
+                self.result(&sticky, Some("Active plugin skills"))?
+            }
+            PluginCommand::Remove(name) => {
+                sticky.retain(|skill| skill != name);
+                self.result(&sticky, Some("Active plugin skills"))?
+            }
+            PluginCommand::Use(name) => {
+                if !name.contains('/') {
+                    let plugins = self
+                        .runtime
+                        .plugin_inventory()
+                        .map_err(|error| error.to_string())?;
+                    let plugin = plugins
+                        .iter()
+                        .find(|plugin| plugin.manifest.name == name)
+                        .ok_or_else(|| format!("plugin not found: {name}"))?;
+                    return Ok(HostCommandResult::document(plugin_skills_document(
+                        std::slice::from_ref(plugin),
+                        &sticky,
+                    )));
+                }
+                self.runtime
+                    .list_plugins()
+                    .map_err(|error| error.to_string())?
+                    .iter()
+                    .flat_map(|plugin| plugin.skills.iter())
+                    .find(|skill| skill.id == name)
+                    .ok_or_else(|| format!("skill not found: {name}"))?;
+                if !sticky.iter().any(|active| active == name) {
+                    sticky.push(name.into());
+                }
+                self.result(&sticky, Some("Active plugin skills"))?
+            }
+            PluginCommand::Show(name) => self.result(
                 &self
                     .runtime
-                    .skill_resources(name.trim(), &sticky)
+                    .read_plugin_skill(name)
+                    .await
+                    .map_err(|error| error.to_string())?,
+                Some("Plugin skill"),
+            )?,
+            PluginCommand::Resources(name) => self.result(
+                &self
+                    .runtime
+                    .plugin_skill_resources(name)
                     .await
                     .map_err(|error| error.to_string())?,
                 Some("Skill resources"),
-            )?
-        } else if let Some(arguments) = arguments.strip_prefix("read ") {
-            let (name, path) = arguments
-                .trim()
-                .split_once(' ')
-                .ok_or_else(|| "/skill read expects NAME PATH".to_owned())?;
-            self.result(
+            )?,
+            PluginCommand::Read { skill, path } => self.result(
                 &self
                     .runtime
-                    .read_skill_resource(name, path.trim(), &sticky)
+                    .read_plugin_resource(skill, path)
                     .await
                     .map_err(|error| error.to_string())?,
                 Some("Skill resource"),
-            )?
-        } else {
-            return Err("/skill expects active, clear, use, show, resources, or read".into());
+            )?,
         };
         Ok(HostCommandResult {
             sticky_skills: Some(sticky),
@@ -889,41 +925,6 @@ impl EmbeddedInteractiveHost {
         )
     }
 
-    async fn packs_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
-        match arguments.trim() {
-            "" | "list" => self.result(
-                &self
-                    .runtime
-                    .list_packs(100)
-                    .map_err(|error| error.to_string())?,
-                Some("Packs"),
-            ),
-            "trust" | "trust list" => self.result(
-                &self
-                    .runtime
-                    .list_pack_trust(100)
-                    .map_err(|error| error.to_string())?,
-                Some("Trusted publishers"),
-            ),
-            arguments if arguments.starts_with("show ") => self.result(
-                &self
-                    .runtime
-                    .get_pack(arguments.trim_start_matches("show ").trim())
-                    .map_err(|error| error.to_string())?,
-                Some("Pack"),
-            ),
-            arguments if arguments.starts_with("verify ") => self.result(
-                &self
-                    .runtime
-                    .verify_pack(arguments.trim_start_matches("verify ").trim())
-                    .await
-                    .map_err(|error| error.to_string())?,
-                Some("Pack verification"),
-            ),
-            _ => Err("unsupported /packs command".into()),
-        }
-    }
-
     async fn integration_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
         if let Some(name) = arguments.strip_prefix("show ") {
             return self.result(
@@ -949,7 +950,13 @@ impl EmbeddedInteractiveHost {
 
     async fn mcp_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
         match arguments.trim() {
-            "servers" => self.result(&self.runtime.mcp_servers(), Some("MCP servers")),
+            "servers" => self.result(
+                &self
+                    .runtime
+                    .mcp_servers()
+                    .map_err(|error| error.to_string())?,
+                Some("MCP servers"),
+            ),
             "tools" => self.result(
                 &self
                     .runtime
@@ -1162,10 +1169,10 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .map_err(|error| error.to_string())?;
         let skill_names = self
             .runtime
-            .list_skills()
+            .list_plugins()
             .map_err(|error| error.to_string())?
-            .into_iter()
-            .map(|skill| skill.manifest.name)
+            .iter()
+            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
             .collect::<Vec<_>>();
         Ok(InteractiveSnapshot {
             session_id: session.id.clone(),
@@ -1272,18 +1279,19 @@ impl InteractiveHost for EmbeddedInteractiveHost {
     ) -> Result<HostRunResult, String> {
         let skill_names = self
             .runtime
-            .list_skills()
+            .list_plugins()
             .map_err(|error| error.to_string())?
-            .into_iter()
-            .map(|skill| skill.manifest.name)
+            .iter()
+            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
             .collect::<Vec<_>>();
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
         if prompt.is_empty() {
-            return Err("add a message after the @skill name".into());
+            return Err("add a message after the qualified @PLUGIN/SKILL name".into());
         }
         request.prompt = prompt;
-        request.explicit_skills = explicit_skills;
+        request.explicit_skills =
+            colossus_contracts::merge_plugin_selections(&explicit_skills, &request.explicit_skills);
         let content = interactive_model_content(request.prompt.clone(), request.images.clone());
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };

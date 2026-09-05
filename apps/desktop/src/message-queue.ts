@@ -17,6 +17,10 @@ export interface QueuedMessage {
   targetId: string;
   sessionId: string;
   prompt: string;
+  /** Native-parsed text; retain the original prompt for the conversation display. */
+  executionPrompt?: string;
+  conversationSkillIds?: readonly string[];
+  pluginSkillIds?: readonly string[];
   role: string;
   mode: RunMode;
   researchDepth: ResearchDepth;

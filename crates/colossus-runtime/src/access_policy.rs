@@ -16,7 +16,7 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) development_sandbox: &'a DevelopmentSandbox,
     pub(super) searches: &'a SearchRegistry,
     pub(super) integration_specs: &'a [ToolSpec],
-    pub(super) active_pack_extensions: &'a ActivePackExtensions,
+    pub(super) active_plugin_extensions: &'a ActivePluginExtensions,
     pub(super) tls_roots: &'a AdditionalRootCertificates,
     pub(super) model_network_tools: bool,
     pub(super) interactive: bool,
@@ -31,7 +31,7 @@ pub(super) fn compose_access_policy(
         development_sandbox,
         searches,
         integration_specs,
-        active_pack_extensions,
+        active_plugin_extensions,
         tls_roots,
         model_network_tools,
         interactive,
@@ -51,15 +51,6 @@ pub(super) fn compose_access_policy(
             Vec::new(),
         )
     }));
-    candidate_tool_specs.extend(active_pack_extensions.tool_specs.clone());
-    tool_descriptors.extend(active_pack_extensions.tool_specs.iter().map(|spec| {
-        ToolDescriptor::new(
-            &spec.name,
-            "packs",
-            CapabilitySource::SignedPack,
-            Vec::new(),
-        )
-    }));
     let mut action_descriptors = builtin_action_descriptors();
     let mut described_actions = action_descriptors
         .iter()
@@ -76,12 +67,12 @@ pub(super) fn compose_access_policy(
             ));
         }
     }
-    for action in &active_pack_extensions.actions {
+    for action in &active_plugin_extensions.actions {
         if described_actions.insert(action.clone()) {
             action_descriptors.push(ActionDescriptor::new(
                 action,
                 ActionClass::Execution,
-                CapabilitySource::SignedPack,
+                CapabilitySource::Core,
             ));
         }
     }
@@ -112,7 +103,12 @@ pub(super) fn compose_access_policy(
         model_network_tools,
         agent_search_route: searches.resolve("agent").is_ok(),
         interactive,
-        mcp_configured: !active_pack_extensions.mcp.servers.is_empty(),
+        mcp_configured: !active_plugin_extensions.mcp.servers.is_empty()
+            || config
+                .plugins
+                .mcp_servers
+                .values()
+                .any(|overlay| overlay.enabled),
     };
     let access = resolve_access(
         &config.access,
@@ -171,9 +167,6 @@ pub(super) fn compose_access_policy(
                 let root = fs::canonicalize(&grant.root)?;
                 policy = policy.with_filesystem_root(root.display().to_string(), &grant.mode);
             }
-            for grant in &active_pack_extensions.filesystem {
-                policy = policy.with_filesystem_root(&grant.root, &grant.mode);
-            }
             for executable in &config.sandbox.executables {
                 let executable = if config.sandbox.backend == "oci" {
                     executable.clone()
@@ -188,6 +181,74 @@ pub(super) fn compose_access_policy(
             for destination in &config.sandbox.network_destinations {
                 policy = policy.with_network_destination(destination);
             }
+            let registry_destinations = config
+                .plugins
+                .registries
+                .values()
+                .flat_map(|profile| {
+                    std::iter::once(profile.origin.clone())
+                        .chain(profile.token_origins.iter().cloned())
+                        .chain(profile.blob_redirect_origins.iter().cloned())
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let mut registry_read = vec![FilesystemGrant {
+                root: workspace.display().to_string(),
+                mode: "read".into(),
+            }];
+            for profile in config.plugins.registries.values() {
+                for path in profile
+                    .ca_bundle_path
+                    .iter()
+                    .chain(profile.token_ca_bundle_paths.values())
+                    .chain(profile.blob_redirect_ca_bundle_paths.values())
+                {
+                    registry_read.push(FilesystemGrant {
+                        root: path.display().to_string(),
+                        mode: "read".into(),
+                    });
+                }
+            }
+            let mut registry_write = registry_read.clone();
+            registry_write[0].mode = "write".into();
+            policy = policy.with_action_restrictions(
+                "plugin.pull",
+                registry_write,
+                Vec::new(),
+                registry_destinations.clone(),
+            );
+            policy = policy.with_action_restrictions(
+                "plugin.push",
+                registry_read,
+                Vec::new(),
+                registry_destinations,
+            );
+            let mut helper_filesystem = vec![FilesystemGrant {
+                root: workspace.display().to_string(),
+                mode: "read".into(),
+            }];
+            for executable in config.plugins.registries.values().flat_map(|profile| {
+                if let RegistryAuthConfig::Docker {
+                    helper_executables, ..
+                } = &profile.auth
+                {
+                    helper_executables.values().cloned().collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            }) {
+                helper_filesystem.push(FilesystemGrant {
+                    root: executable.display().to_string(),
+                    mode: "execute".into(),
+                });
+            }
+            policy = policy.with_action_restrictions(
+                "plugin.registry.credential_helper",
+                helper_filesystem,
+                Vec::new(),
+                Vec::new(),
+            );
             if config.sandbox.profile == WORKSPACE_DEVELOPMENT_PROFILE {
                 policy = policy.with_workspace_development(
                     development_sandbox.filesystem.clone(),
@@ -195,7 +256,7 @@ pub(super) fn compose_access_policy(
                     development_environment_names(),
                 );
             }
-            for restriction in &active_pack_extensions.restrictions {
+            for restriction in &active_plugin_extensions.restrictions {
                 policy = policy.with_action_restrictions(
                     &restriction.action,
                     restriction.filesystem.clone(),
@@ -272,6 +333,11 @@ pub(super) fn compose_access_policy(
             .map_err(GatewayError::from)?,
         ),
     };
+    let policy: Arc<dyn PolicyDecisionPoint> = Arc::new(PluginScopedPolicy::new(
+        policy,
+        active_plugin_extensions.skill_roots.clone(),
+        matches!(config.policy, PolicyConfig::BuiltIn { .. }),
+    ));
     Ok(AccessPolicyComposition {
         candidate_tool_specs,
         access,

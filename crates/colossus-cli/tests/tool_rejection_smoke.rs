@@ -163,7 +163,7 @@ fn write_config(
     let config = directory.join("config.json");
     let executable = std::env::current_exe().expect("current test executable");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {

@@ -46,7 +46,7 @@ struct RuntimeFixture {
     _directory: TempDir,
 }
 
-fn runtime_tempdir() -> TempDir {
+pub(super) fn runtime_tempdir() -> TempDir {
     #[cfg(windows)]
     {
         let directory = tempfile::Builder::new()
@@ -306,18 +306,7 @@ fn runtime_fixture() -> RuntimeFixture {
     };
     config.workflows.repository = root.join("workflows-bundled");
     config.workflows.user = root.join("workflows-user");
-    config.skills.bundled = root.join("skills-bundled");
-    config.skills.repository = root.join("skills-repository");
-    config.skills.user = root.join("skills-user");
-    config.packs.install_root = root.join("packs");
-    for path in [
-        &config.workflows.repository,
-        &config.workflows.user,
-        &config.skills.bundled,
-        &config.skills.repository,
-        &config.skills.user,
-        &config.packs.install_root,
-    ] {
+    for path in [&config.workflows.repository, &config.workflows.user] {
         fs::create_dir_all(path).expect("fixture directory");
     }
 

@@ -21,7 +21,6 @@ const RUN: Run = {
   pendingInteractionCount: 0,
   terminal: null,
   etag: "etag-sidebar",
-  selectedSkills: [],
   archived: false,
 };
 
@@ -42,7 +41,7 @@ const SPACE: SpaceSummary = {
 
 const CAPABILITIES = {
   delegation: true,
-  skills: true,
+  plugins: true,
   tui: true,
   shellTerminal: true,
   files: true,
@@ -185,7 +184,7 @@ describe("WorkSidebar", () => {
       capabilities: {
         ...CAPABILITIES,
         delegation: false,
-        skills: false,
+        plugins: false,
         artifacts: false,
         agentWorkflows: false,
       },

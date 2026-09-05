@@ -1840,7 +1840,6 @@ fn representative_builtin_schemas_project_to_openai_compatible_roots() {
     let specs = colossus_tools::builtin_specs();
     for (name, canonical_root_keyword, description_fragment) in [
         ("shell.run", "oneOf", "exactly one of command or argv"),
-        ("skill.validate", "oneOf", "exactly one of"),
         ("user.ask", "allOf", "allow_free_form is false"),
     ] {
         let spec = specs

@@ -13,7 +13,9 @@ sdk_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
   npm ci --ignore-scripts --no-audit --no-fund
 )
 
-python3 -m venv --clear "$sdk_dir/python/.codegen"
+if [ ! -x "$sdk_dir/python/.codegen/bin/python" ]; then
+  python3 -m venv "$sdk_dir/python/.codegen"
+fi
 "$sdk_dir/python/.codegen/bin/python" -m pip install \
   --disable-pip-version-check \
   --no-deps \

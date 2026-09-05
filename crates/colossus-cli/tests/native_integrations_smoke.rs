@@ -100,7 +100,7 @@ fn native_connectors_are_hidden_typed_credential_brokered_and_post_gated() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -124,13 +124,6 @@ policy:
 workflows:
   repository: {workflows}
   user: {workflows}
-skills:
-  enabled: true
-  allowUserOverrides: false
-  bundled: {missing}
-  repository: {missing}
-  user: {missing}
-  disabled: []
 agent:
   maxTurns: 4
 sandbox:
@@ -154,7 +147,6 @@ sandbox:
             state = state.display(),
             anchor = anchor.display(),
             workflows = workflows.display(),
-            missing = workspace.join("missing").display(),
         ),
     )
     .expect("config");

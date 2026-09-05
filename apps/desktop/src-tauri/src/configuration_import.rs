@@ -1106,8 +1106,9 @@ fn locked_import_fields(explicit_fields: &[String]) -> Vec<String> {
         "network.caBundlePath",
         "sandbox.backend",
         "memory.indexPath",
-        "skills.user",
-        "packs.installRoot",
+        "plugins.trustProfiles",
+        "plugins.registries",
+        "plugins.mcpServers",
         "workflows.user",
     ];
     explicit_fields

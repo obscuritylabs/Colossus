@@ -93,15 +93,14 @@ pub struct Runtime {
     pub(super) session_activity: Arc<ProjectedSessionActivityReader>,
     pub(super) audit_exports: Arc<AuditExportService>,
     pub(super) telemetry: Arc<TelemetryService>,
-    pub(super) skills_enabled: bool,
-    pub(super) skills: Arc<dyn SkillRepository>,
-    pub(super) skill_composer: Arc<SkillComposer>,
-    pub(super) skill_executor: Arc<dyn EffectExecutor>,
-    pub(super) extensions: Arc<dyn ExtensionRepository>,
-    pub(super) packs: Arc<PackService>,
-    pub(super) pack_executor: Arc<dyn EffectExecutor>,
-    pub(super) pack_process_executor: Arc<PackProcessExecutor>,
-    pub(super) pack_process_effect_executor: Arc<dyn EffectExecutor>,
+    pub(super) plugins_enabled: bool,
+    pub(super) plugin_store: Option<Arc<PluginStore>>,
+    pub(super) plugin_configuration: Arc<PluginsConfig>,
+    pub(super) plugin_catalog: Arc<PluginCatalogSource>,
+    pub(super) plugin_credentials: Arc<dyn CredentialResolver>,
+    pub(super) plugin_executor: Arc<dyn EffectExecutor>,
+    pub(super) integrations: Arc<dyn IntegrationRepository>,
+    pub(super) bundle_executor: Arc<dyn EffectExecutor>,
     pub(super) integration_executor: Arc<IntegrationExecutor>,
     pub(super) integration_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
@@ -111,8 +110,6 @@ pub struct Runtime {
     pub(super) work: Arc<dyn WorkRepository>,
     pub(super) work_executor: Arc<WorkEffectExecutor>,
     pub(super) memory_executor: Arc<MemoryEffectExecutor>,
-    pub(super) mcp_executor: Arc<McpExecutor>,
-    pub(super) mcp_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) research: Arc<dyn ResearchRepository>,
     pub(super) research_executor: Arc<ResearchEffectExecutor>,
     pub(super) policy: Arc<dyn PolicyDecisionPoint>,
@@ -327,22 +324,18 @@ impl Runtime {
             &projection_store,
         )));
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
-        let extensions: Arc<dyn ExtensionRepository> =
-            Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
-        let pack_install_root = workspace_absolute_path(&workspace, &config.packs.install_root);
-        let user_skill_root = workspace_absolute_path(&workspace, &config.skills.user);
-        let packs = Arc::new(
-            PackService::new(Arc::clone(&extensions), pack_install_root)
-                .with_skill_install_root(user_skill_root.clone())
-                .with_tls_roots(tls_roots.clone()),
-        );
-        let raw_pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
-        let pack_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
+        let integrations: Arc<dyn IntegrationRepository> =
+            Arc::new(EventSourcedIntegrationRepository::new(Arc::clone(&journal)));
+        let bundles = Arc::new(BundleService::new(
+            config.bundles.trusted_publishers.clone(),
+        ));
+        let raw_bundle_executor = Arc::new(BundleExecutor::new(Arc::clone(&bundles)));
+        let bundle_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
             workspace_identity.clone(),
-            raw_pack_executor,
+            raw_bundle_executor,
         ));
         let integration_executor = Arc::new(
-            IntegrationExecutor::new(Arc::clone(&extensions))?.with_tls_roots(tls_roots.clone()),
+            IntegrationExecutor::new(Arc::clone(&integrations))?.with_tls_roots(tls_roots.clone()),
         );
         let integration_effect_executor: Arc<dyn EffectExecutor> =
             Arc::new(WorkspaceBoundEffectExecutor::new(
@@ -350,81 +343,57 @@ impl Runtime {
                 Arc::clone(&integration_executor),
             ));
         let integration_specs = integration_executor.tool_specs()?;
-        let mut skill_roots = vec![
-            SkillRoot {
-                path: workspace_absolute_path(&workspace, &config.skills.bundled),
-                label: "bundled".into(),
-            },
-            SkillRoot {
-                path: workspace_absolute_path(&workspace, &config.skills.repository),
-                label: "repository".into(),
-            },
-            SkillRoot {
-                path: user_skill_root.clone(),
-                label: "user".into(),
-            },
-        ];
-        let mut active_pack_installations = Vec::new();
-        for installation in packs.list(1_000)? {
-            if installation.status != colossus_contracts::PackStatus::Enabled {
-                continue;
+        let plugin_store = colossus_home
+            .as_ref()
+            .map(PluginStore::new)
+            .transpose()?
+            .map(Arc::new);
+        let mut plugin_configuration = config.plugins.clone();
+        if let Some(store) = &plugin_store
+            && let Err(error) = store
+                .bootstrap_bundled(colossus_bundled_plugins::core_artifact()?, terminal_actor())
+        {
+            // Preserve an already recorded, corrupt core as an unavailable installation.
+            // Never replace its leased tree or fall back to an older bundled version.
+            if matches!(error, StoreError::Verification(_)) && store.bundled_digest()?.is_some() {
+                plugin_configuration.exclude.push("colossus".into());
+            } else {
+                return Err(error.into());
             }
-            let verification = packs.verify(Path::new(&installation.installed_path))?;
-            if verification.manifest_sha256 != installation.manifest_sha256
-                || verification.trust_key_id != installation.trust_key_id
-            {
-                return Err(RuntimeError::Config(format!(
-                    "enabled pack {} failed canonical re-verification",
-                    installation.manifest.name
-                )));
-            }
-            for skill in &installation.manifest.skills {
-                skill_roots.push(SkillRoot {
-                    path: PathBuf::from(&installation.installed_path).join(&skill.path),
-                    label: format!(
-                        "pack:{}@{}",
-                        installation.manifest.name, installation.manifest.version
-                    ),
-                });
-            }
-            active_pack_installations.push(installation);
         }
-        let active_pack_extensions = compile_active_pack_extensions(
-            &active_pack_installations,
+        let (active_plugins, _startup_plugin_lease) = if config.plugins.enabled {
+            plugin_store.as_ref().map_or_else(
+                || Ok((Vec::new(), None)),
+                |store| {
+                    store
+                        .available_snapshot_with_lease(
+                            &plugin_configuration.include,
+                            &plugin_configuration.exclude,
+                        )
+                        .map(|(plugins, lease)| (plugins, Some(lease)))
+                },
+            )?
+        } else {
+            (Vec::new(), None)
+        };
+        let plugins = Arc::new(active_plugins);
+        let plugin_catalog = Arc::new(PluginCatalogSource {
+            store: plugin_store.clone(),
+            configuration: Arc::new(plugin_configuration.clone()),
+            standalone_mcp: config.mcp.clone(),
+            sandbox: config.sandbox.clone(),
+            workspace: workspace.clone(),
+            mcp_template: std::sync::OnceLock::new(),
+        });
+        let active_plugin_extensions = compile_active_plugin_extensions(
+            &plugins,
+            &config.plugins,
             &config.mcp,
             &config.sandbox,
+            plugin_store.as_deref(),
         )?;
         let security_posture =
-            security_posture::build_security_posture(config, &active_pack_extensions.mcp);
-        #[cfg(unix)]
-        let filesystem_skills: Arc<dyn SkillRepository> =
-            Arc::new(FilesystemSkillRepository::new_workspace_bound(
-                workspace_identity.directory()?,
-                &workspace,
-                skill_roots,
-                config.skills.allow_user_overrides,
-                config.skills.disabled.clone(),
-            )?);
-        // Platforms without Unix descriptor-relative traversal retain the existing
-        // compatibility adapter plus the outer identity checks below. Managed Local
-        // remains macOS-first; no non-Unix build silently claims the Unix object-bound
-        // guarantee.
-        #[cfg(not(unix))]
-        let filesystem_skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
-            skill_roots,
-            config.skills.allow_user_overrides,
-            config.skills.disabled.clone(),
-        )?);
-        let skills: Arc<dyn SkillRepository> = Arc::new(WorkspaceBoundSkillRepository::new(
-            workspace_identity.clone(),
-            filesystem_skills,
-        ));
-        let skill_composer = Arc::new(SkillComposer::new(Arc::clone(&skills)));
-        let skill_resources = Arc::new(SkillResourceService::new(Arc::clone(&skills)));
-        let skill_authoring = Arc::new(SkillAuthoringService::new(
-            user_skill_root,
-            workspace.clone(),
-        )?);
+            security_posture::build_security_posture(config, &active_plugin_extensions.mcp);
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
@@ -492,7 +461,7 @@ impl Runtime {
             development_sandbox: &development_sandbox,
             searches: searches.as_ref(),
             integration_specs: &integration_specs,
-            active_pack_extensions: &active_pack_extensions,
+            active_plugin_extensions: &active_plugin_extensions,
             tls_roots: &tls_roots,
             model_network_tools,
             interactive: user_prompts.is_some(),
@@ -522,7 +491,10 @@ impl Runtime {
             oci_image: config.sandbox.oci_image.clone(),
             oci_proxy_image: config.sandbox.oci_proxy_image.clone(),
         };
-        let raw_filesystem_executor = Arc::new(FilesystemExecutor::new());
+        let raw_filesystem_executor = Arc::new(
+            FilesystemExecutor::new()
+                .with_workspace_search_exclusions(colossus_home.iter().cloned().collect()),
+        );
         let filesystem_executor: Arc<dyn EffectExecutor> = Arc::new(
             WorkspaceBoundEffectExecutor::new(workspace_identity.clone(), raw_filesystem_executor),
         );
@@ -536,11 +508,11 @@ impl Runtime {
                 Arc::clone(&raw_process_executor),
             ));
         let mut effective_executables = access_executables.clone();
-        effective_executables.extend(active_pack_extensions.executables.iter().cloned());
+        effective_executables.extend(active_plugin_extensions.executables.iter().cloned());
         let mut effective_filesystem = access_filesystem.clone();
-        effective_filesystem.extend(active_pack_extensions.filesystem.iter().cloned());
+        effective_filesystem.extend(active_plugin_extensions.filesystem.iter().cloned());
         validate_mcp_config(
-            &active_pack_extensions.mcp,
+            &active_plugin_extensions.mcp,
             &workspace,
             McpValidationContext {
                 resource_authority: configured_resource_authority(&config.sandbox),
@@ -552,12 +524,12 @@ impl Runtime {
             },
         )?;
         let mcp_executor = McpExecutor::new(
-            &active_pack_extensions.mcp,
+            &config.mcp,
             &workspace,
             &config.sandbox.backend,
             Arc::clone(&process_executor),
         )?
-        .with_credentials(provider_credentials)
+        .with_credentials(Arc::clone(&provider_credentials))
         .with_tls_roots(tls_roots.clone())
         // Operator OAuth runs outside the effect gateway and has no session-scoped
         // acknowledgement capability. Only the global acknowledgement may widen it.
@@ -568,15 +540,20 @@ impl Runtime {
             config.sandbox.timeout_ms,
             config.sandbox.max_output_bytes,
         );
-        let mcp_executor = if !active_pack_extensions
+        let mcp_executor = if !config
             .mcp
             .servers
             .values()
             .any(|server| server.oauth.is_some())
+            && !config
+                .plugins
+                .mcp_servers
+                .values()
+                .any(|server| server.oauth.is_some())
         {
             mcp_executor
         } else {
-            match active_pack_extensions.mcp.oauth_credential_store {
+            match active_plugin_extensions.mcp.oauth_credential_store {
                 McpOAuthCredentialStoreKind::Auto
                     if config.storage.adapter == StorageAdapter::Ephemeral =>
                 {
@@ -655,6 +632,10 @@ impl Runtime {
             }
         };
         let mcp_executor = Arc::new(mcp_executor);
+        plugin_catalog
+            .mcp_template
+            .set(Arc::clone(&mcp_executor))
+            .map_err(|_| RuntimeError::Config("plugin MCP template initialized twice".into()))?;
         let mcp_effect_executor: Arc<dyn EffectExecutor> =
             Arc::new(WorkspaceBoundEffectExecutor::new(
                 workspace_identity.clone(),
@@ -739,23 +720,13 @@ impl Runtime {
             service: Arc::clone(&memory_service),
             repository_id: repository_id.clone(),
         });
-        let raw_skill_executor = Arc::new(SkillEffectExecutor {
-            resources: Arc::clone(&skill_resources),
-            authoring: skill_authoring,
+        let raw_plugin_executor = Arc::new(PluginEffectExecutor {
+            catalog: Arc::clone(&plugin_catalog),
         });
-        let skill_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
+        let plugin_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
             workspace_identity.clone(),
-            raw_skill_executor,
+            raw_plugin_executor,
         ));
-        let pack_process_executor = Arc::new(PackProcessExecutor::new(
-            active_pack_extensions.process_declarations.clone(),
-            Arc::clone(&process_executor),
-        ));
-        let pack_process_effect_executor: Arc<dyn EffectExecutor> =
-            Arc::new(WorkspaceBoundEffectExecutor::new(
-                workspace_identity.clone(),
-                Arc::clone(&pack_process_executor),
-            ));
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
             executor: Arc::clone(&memory_executor),
@@ -785,8 +756,8 @@ impl Runtime {
             filesystem: Arc::clone(&filesystem_executor),
             workspace: workspace.clone(),
             search: Arc::clone(&search_provider),
-            mcp: Arc::clone(&mcp_executor),
-            mcp_effect: Arc::clone(&mcp_effect_executor),
+            plugins: Arc::clone(&plugin_catalog),
+            identity: workspace_identity.clone(),
         });
         let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
             provider: Arc::clone(&model_provider),
@@ -837,19 +808,18 @@ impl Runtime {
             http: Arc::clone(&http_executor),
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
-            skills: Some(Arc::clone(&skill_executor)),
-            pack_processes: Some(Arc::clone(&pack_process_executor)),
+            plugins: Some(Arc::clone(&plugin_executor)),
             integrations: Some(Arc::clone(&integration_executor)),
             mcp: Some(Arc::clone(&mcp_executor)),
             bound_effects: Some(GatewayBoundEffects {
                 identity: workspace_identity.clone(),
-                pack_process: Arc::clone(&pack_process_effect_executor),
                 integration: Arc::clone(&integration_effect_executor),
                 mcp: Arc::clone(&mcp_effect_executor),
             }),
             search: Some(Arc::clone(&search_provider)),
             workspace: workspace.clone(),
             repository_id: repository_id.clone(),
+            plugin_skill_roots: BTreeMap::new(),
             executables: access_executables
                 .iter()
                 .map(|path| {
@@ -904,7 +874,8 @@ impl Runtime {
                 tool_executor,
                 Arc::clone(&sessions),
             )
-            .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>),
+            .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>)
+            .with_run_provenance(Arc::new(CatalogRunProvenance)),
         );
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
@@ -947,15 +918,14 @@ impl Runtime {
             session_activity,
             audit_exports,
             telemetry,
-            skills_enabled: config.skills.enabled,
-            skills,
-            skill_composer,
-            skill_executor,
-            extensions,
-            packs,
-            pack_executor,
-            pack_process_executor,
-            pack_process_effect_executor,
+            plugins_enabled: config.plugins.enabled,
+            plugin_store,
+            plugin_configuration: Arc::new(plugin_configuration),
+            plugin_catalog,
+            plugin_credentials: provider_credentials,
+            plugin_executor,
+            integrations,
+            bundle_executor,
             integration_executor,
             integration_effect_executor,
             sessions,
@@ -965,8 +935,6 @@ impl Runtime {
             work,
             work_executor,
             memory_executor,
-            mcp_executor,
-            mcp_effect_executor,
             research,
             research_executor,
             policy,

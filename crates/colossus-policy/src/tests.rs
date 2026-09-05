@@ -308,26 +308,26 @@ fn mcp_call_request(
 #[tokio::test]
 async fn action_restrictions_remove_ambient_and_undeclared_global_resources() {
     let policy = BuiltInPolicy::offline_default()
-        .with_action("pack.tool.demo.fixed", DecisionOutcome::Allow)
+        .with_action("plugin.mcp.demo.fixed.call", DecisionOutcome::Allow)
         .with_sandbox("danger_full_access", "offline-default", false)
         .with_resource_authority(ResourceAuthority::Ambient)
         .with_network_destination("https://example.com")
         .with_environment("GLOBAL_SECRET")
         .with_action_restrictions(
-            "pack.tool.demo.fixed",
+            "plugin.mcp.demo.fixed.call",
             vec![colossus_contracts::FilesystemGrant {
-                root: "/verified/pack".into(),
+                root: "/verified/plugin".into(),
                 mode: "read".into(),
             }],
             Vec::new(),
             Vec::new(),
         );
     let request = effect_request(
-        system_actor("pack-test"),
-        "pack.tool.demo.fixed",
-        "/verified/pack/tool",
+        system_actor("plugin-test"),
+        "plugin.mcp.demo.fixed.call",
+        "/verified/plugin/tool",
         serde_json::json!({
-            "cwd": "/verified/pack",
+            "cwd": "/verified/plugin",
             "environment": {},
         }),
     );
@@ -461,8 +461,7 @@ async fn every_effect_category_denies_before_adapter_without_a_permit() {
         ("workflow_control", "workflow.start"),
         ("subagent", "subagent.create"),
         ("research", "research.run"),
-        ("skill", "skill.install"),
-        ("pack", "pack.install"),
+        ("plugin", "plugin.install"),
         ("bundle", "bundle.install"),
         ("repository", "repository.read"),
         ("context", "context.compact"),
@@ -711,8 +710,8 @@ async fn sensitive_disclosures_always_require_post_effect_release() {
         "provider.openai.responses",
         "process.spawn",
         "memory.search",
-        "registry.pull",
-        "registry.push",
+        "plugin.pull",
+        "plugin.push",
     ];
     let mut policy = BuiltInPolicy::offline_default().with_post_effect(false);
     for action in actions {
@@ -1210,8 +1209,8 @@ async fn network_origins_not_in_obligations_never_reach_adapters() {
     for action in [
         "network.http",
         "audit.export.worm.write",
-        "registry.pull",
-        "registry.push",
+        "plugin.pull",
+        "plugin.push",
     ] {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let policy = BuiltInPolicy::offline_default().with_action(action, DecisionOutcome::Allow);

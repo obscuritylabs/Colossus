@@ -711,7 +711,6 @@ pub(crate) struct RunDto {
     pub(crate) pending_interaction_count: u32,
     pub(crate) terminal: Option<RunTerminalDto>,
     pub(crate) etag: String,
-    pub(crate) selected_skills: Vec<String>,
     pub(crate) archived: bool,
 }
 
@@ -732,7 +731,6 @@ impl From<Run> for RunDto {
             pending_interaction_count: value.pending_interaction_count,
             terminal: value.terminal.map(Into::into),
             etag: value.etag,
-            selected_skills: value.selected_skills,
             archived: value.archived,
         }
     }
@@ -1516,6 +1514,11 @@ impl From<RunModeInput> for RunMode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CreateRunInput {
     prompt: String,
+    // Parsing is presentation only. This never skips SDK/runtime selection validation.
+    #[serde(default)]
+    plugin_mentions_resolved: bool,
+    #[serde(default)]
+    plugin_skill_ids: Vec<String>,
     #[serde(default)]
     artifact_ids: Vec<String>,
     session_id: Option<String>,
@@ -1540,6 +1543,18 @@ struct RunBranchInput {
 }
 
 impl CreateRunInput {
+    pub(crate) fn has_leading_mention(&self) -> bool {
+        !self.plugin_mentions_resolved && self.prompt.trim_start().starts_with('@')
+    }
+
+    pub(crate) fn resolve_mentions(&mut self, available: &[String]) {
+        let (prompt, message) =
+            colossus_sdk::parse_leading_plugin_mentions(&self.prompt, available);
+        self.prompt = prompt;
+        self.plugin_skill_ids =
+            colossus_sdk::merge_plugin_selections(&message, &self.plugin_skill_ids);
+    }
+
     pub(crate) fn branch_link(&self) -> Option<String> {
         self.branch
             .as_ref()
@@ -1596,6 +1611,7 @@ impl CreateRunInput {
         }
         Ok(CreateRunRequest {
             input,
+            plugin_skill_ids: self.plugin_skill_ids,
             session_id: self.session_id,
             end_user_id: None,
             role: self.role,
@@ -1614,7 +1630,6 @@ impl CreateRunInput {
                     ResearchSourceInput::Mcp => ResearchSourceKind::Mcp,
                 })
                 .collect(),
-            selected_skills: Vec::new(),
             plan_action,
             branch,
             max_turns: self.max_turns,
@@ -1935,7 +1950,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn create_input_is_bounded_and_cannot_activate_skills() {
+    fn create_input_is_bounded_and_preserves_plan_mode() {
         let input: CreateRunInput = serde_json::from_value(json!({
             "prompt": "Plan the release",
             "sessionId": null,
@@ -1946,7 +1961,6 @@ mod tests {
         }))
         .expect("valid desktop request");
         let request = input.into_sdk().expect("valid SDK request");
-        assert!(request.selected_skills.is_empty());
         assert!(request.plan_action.is_none());
         assert_eq!(request.mode, RunMode::Plan);
 
@@ -1965,6 +1979,35 @@ mod tests {
                 .expect_err("oversized prompt rejected")
                 .code,
             "invalid_argument"
+        );
+    }
+
+    #[test]
+    fn queued_mentions_keep_exact_selections_without_reinterpreting_unknown_text() {
+        let mut input: CreateRunInput = serde_json::from_value(json!({
+            "prompt": "@colossus/coding @unknown/name work",
+            "pluginSkillIds": ["colossus/coding", "colossus/security-review"],
+            "role": "primary", "mode": "execute", "maxTurns": 1,
+            "idempotencyKey": "queued-mention-test"
+        }))
+        .expect("input");
+        input.resolve_mentions(&["colossus/coding".into()]);
+        assert_eq!(input.prompt, "@unknown/name work");
+        assert_eq!(
+            input.plugin_skill_ids,
+            ["colossus/coding", "colossus/security-review"]
+        );
+        input.plugin_mentions_resolved = true;
+        assert!(!input.has_leading_mention());
+        let request = input.into_sdk().expect("SDK request");
+        assert_eq!(
+            request.plugin_skill_ids,
+            ["colossus/coding", "colossus/security-review"]
+        );
+        // The receiving runtime, not a renderer parsing flag, rejects unavailable selections.
+        assert_eq!(
+            request.input,
+            vec![InputContentPart::Text("@unknown/name work".into())]
         );
     }
 

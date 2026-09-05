@@ -28,9 +28,10 @@ pub(super) fn check(repository: &Repository, base: &str) -> Result<(), String> {
         .task("./sdk/scripts/check-breaking")
         .arg(base)
         .run()?;
+    let generated_before = generated_binding_state(repository)?;
     repository.task("./sdk/scripts/generate").run()?;
     repository.task("./sdk/scripts/check-generated").run()?;
-    require_clean_generated_bindings(repository)?;
+    require_unchanged_generated_bindings(repository, &generated_before)?;
     repository
         .task("node")
         .args(["--test", "scripts/ci/sdk-release.test.mjs"])
@@ -94,16 +95,38 @@ fn has_hosted_generator(contents: &str) -> bool {
     })
 }
 
-fn require_clean_generated_bindings(repository: &Repository) -> Result<(), String> {
+#[derive(Debug, Eq, PartialEq)]
+struct GeneratedBindingState {
+    status: String,
+    diff: String,
+}
+
+fn generated_binding_state(repository: &Repository) -> Result<GeneratedBindingState, String> {
     let status = repository
         .task("git")
         .args(["status", "--porcelain", "--untracked-files=all", "--"])
         .args(GENERATED_PATHS)
         .output()?;
-    if status.trim().is_empty() {
+    let diff = repository
+        .task("git")
+        .args(["diff", "--binary", "HEAD", "--"])
+        .args(GENERATED_PATHS)
+        .output()?;
+    Ok(GeneratedBindingState { status, diff })
+}
+
+fn require_unchanged_generated_bindings(
+    repository: &Repository,
+    before: &GeneratedBindingState,
+) -> Result<(), String> {
+    let after = generated_binding_state(repository)?;
+    if &after == before {
         Ok(())
     } else {
-        Err(format!("committed SDK bindings are stale:\n{status}"))
+        Err(format!(
+            "SDK generation changed the checked-in binding state; regenerate the SDKs before running this gate:\n{}",
+            after.status
+        ))
     }
 }
 

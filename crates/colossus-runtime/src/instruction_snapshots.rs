@@ -4,8 +4,8 @@ use std::io::Read as _;
 const AGENTS_FILE_NAME: &str = "AGENTS.md";
 const MAX_AGENTS_FILE_BYTES: usize = 64 * 1024;
 const MAX_AGENTS_TOTAL_BYTES: usize = 128 * 1024;
-const SNAPSHOT_VERSION: u16 = 1;
-const SNAPSHOT_HASH_DOMAIN: &[u8] = b"colossus-instruction-snapshot-v1\0";
+const SNAPSHOT_VERSION: u16 = 2;
+const SNAPSHOT_HASH_DOMAIN: &[u8] = b"colossus-instruction-snapshot-v2\0";
 const SNAPSHOT_STREAM_PREFIX: &str = "instruction-snapshot:";
 const SNAPSHOT_EVENT: &str = "instruction.snapshot.v1";
 
@@ -62,6 +62,10 @@ pub(super) struct InstructionSnapshot {
     version: u16,
     id: String,
     sources: Vec<InstructionSourceSnapshot>,
+    #[serde(default)]
+    plugin_digests: BTreeMap<String, String>,
+    #[serde(default)]
+    plugin_skill_ids: Vec<String>,
 }
 
 /// File and invocation layers captured at the start of one top-level run.
@@ -71,6 +75,7 @@ pub(super) struct InstructionSnapshot {
 /// re-reading either AGENTS.md file or creating a second snapshot identity.
 pub(super) struct CapturedAgentInstructions {
     sources: Vec<InstructionSourceSnapshot>,
+    plugins: Option<Arc<PluginRunCatalog>>,
 }
 
 impl std::fmt::Debug for InstructionSnapshot {
@@ -133,11 +138,33 @@ impl InstructionSnapshot {
             InstructionSourceKind::Invocation,
             invocation.into(),
         ));
-        Ok(CapturedAgentInstructions { sources })
+        Ok(CapturedAgentInstructions {
+            sources,
+            plugins: None,
+        })
     }
 
     pub(super) fn id(&self) -> &str {
         &self.id
+    }
+
+    pub(super) fn plugin_digests(&self) -> &BTreeMap<String, String> {
+        &self.plugin_digests
+    }
+
+    pub(super) fn plugin_skill_ids(&self) -> &[String] {
+        &self.plugin_skill_ids
+    }
+
+    pub(super) fn with_plugin_selections(&self, selections: &[String]) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.plugin_skill_ids = selections.to_vec();
+        snapshot.id = snapshot_id(
+            &snapshot.sources,
+            &snapshot.plugin_digests,
+            &snapshot.plugin_skill_ids,
+        );
+        snapshot
     }
 
     pub(super) fn compose(&self) -> String {
@@ -202,7 +229,8 @@ impl InstructionSnapshot {
                 .iter()
                 .any(|source| source.kind == InstructionSourceKind::Invocation)
             || agents_bytes > MAX_AGENTS_TOTAL_BYTES
-            || snapshot_id(&self.sources) != self.id
+            || self.plugin_skill_ids.len() > 64
+            || snapshot_id(&self.sources, &self.plugin_digests, &self.plugin_skill_ids) != self.id
         {
             return Err(snapshot_verification_error());
         }
@@ -239,10 +267,21 @@ pub(super) struct PreparedAgentInstructions {
     pub(super) text: String,
     runtime_mode: String,
     pub(super) snapshot: Option<Arc<InstructionSnapshot>>,
+    pub(super) plugins: Arc<PluginRunCatalog>,
 }
 
 impl CapturedAgentInstructions {
     fn into_snapshot(self, runtime_mode: &str) -> InstructionSnapshot {
+        let plugin_digests = self
+            .plugins
+            .as_ref()
+            .map(|plugins| plugins.digests())
+            .unwrap_or_default();
+        let plugin_skill_ids = self
+            .plugins
+            .as_ref()
+            .map(|plugins| plugins.selected_skills.clone())
+            .unwrap_or_default();
         let mut sources = self.sources;
         sources.push(InstructionSourceSnapshot::new(
             InstructionSourceKind::RuntimeMode,
@@ -250,21 +289,35 @@ impl CapturedAgentInstructions {
         ));
         InstructionSnapshot {
             version: SNAPSHOT_VERSION,
-            id: snapshot_id(&sources),
+            id: snapshot_id(&sources, &plugin_digests, &plugin_skill_ids),
             sources,
+            plugin_digests,
+            plugin_skill_ids,
         }
     }
 
-    pub(super) fn finalize(self, runtime_mode: &str) -> PreparedAgentInstructions {
+    pub(super) fn finalize(
+        self,
+        runtime_mode: &str,
+    ) -> Result<PreparedAgentInstructions, RuntimeError> {
+        let plugins = self.plugins.clone().unwrap_or_default();
         let snapshot = Arc::new(self.into_snapshot(runtime_mode));
         let base_text = snapshot.compose_without_runtime_mode();
-        let text = snapshot.compose();
-        PreparedAgentInstructions {
+        let composition = compose_plugins(
+            &plugins.records,
+            &base_text,
+            &plugins.selected_skills,
+            &[],
+            true,
+        )?;
+        let text = append_runtime_mode(&composition.instructions, snapshot.runtime_mode());
+        Ok(PreparedAgentInstructions {
             base_text,
             text,
             runtime_mode: snapshot.runtime_mode().into(),
             snapshot: Some(snapshot),
-        }
+            plugins,
+        })
     }
 }
 
@@ -277,11 +330,29 @@ impl PreparedAgentInstructions {
 
 pub(super) struct InstructionSnapshotStore {
     journal: Arc<dyn EventJournal>,
+    queued_plugins: StdMutex<BTreeMap<String, Arc<PluginRunCatalog>>>,
 }
 
 impl InstructionSnapshotStore {
     pub(super) fn new(journal: Arc<dyn EventJournal>) -> Self {
-        Self { journal }
+        Self {
+            journal,
+            queued_plugins: StdMutex::new(BTreeMap::new()),
+        }
+    }
+
+    pub(super) fn retain_job_catalog(&self, job: &str, catalog: Arc<PluginRunCatalog>) {
+        self.queued_plugins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(job.into(), catalog);
+    }
+
+    pub(super) fn take_job_catalog(&self, job: &str) -> Option<Arc<PluginRunCatalog>> {
+        self.queued_plugins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(job)
     }
 
     pub(super) fn persist(&self, snapshot: &InstructionSnapshot) -> Result<(), RuntimeError> {
@@ -364,12 +435,13 @@ impl Runtime {
         invocation: &str,
     ) -> Result<CapturedAgentInstructions, RuntimeError> {
         self._workspace_lease.identity().revalidate()?;
-        let captured = capture_layers_for_run(
+        let mut captured = capture_layers_for_run(
             self.colossus_home_root.as_ref(),
             &self.workspace,
             invocation,
             self.automatic_agent_instructions,
         )?;
+        captured.plugins = Some(self.plugin_catalog.capture()?);
         // The retained lease binds the workspace object. Revalidate after path-based
         // instruction reads so a rename/replacement race can never reach the provider.
         self._workspace_lease.identity().revalidate()?;
@@ -381,9 +453,8 @@ impl Runtime {
         invocation: &str,
         runtime_mode: &str,
     ) -> Result<PreparedAgentInstructions, RuntimeError> {
-        Ok(self
-            .capture_agent_instructions(invocation)?
-            .finalize(runtime_mode))
+        self.capture_agent_instructions(invocation)?
+            .finalize(runtime_mode)
     }
 }
 
@@ -397,6 +468,7 @@ fn capture_layers_for_run(
         InstructionSnapshot::capture_layers(home, workspace, invocation)
     } else {
         Ok(CapturedAgentInstructions {
+            plugins: None,
             sources: vec![InstructionSourceSnapshot::new(
                 InstructionSourceKind::Invocation,
                 invocation.into(),
@@ -452,7 +524,11 @@ fn append_runtime_mode(base: &str, runtime_mode: &str) -> String {
     }
 }
 
-fn snapshot_id(sources: &[InstructionSourceSnapshot]) -> String {
+fn snapshot_id(
+    sources: &[InstructionSourceSnapshot],
+    plugins: &BTreeMap<String, String>,
+    selections: &[String],
+) -> String {
     let mut digest = Sha256::new();
     digest.update(SNAPSHOT_HASH_DOMAIN);
     for source in sources {
@@ -469,6 +545,17 @@ fn snapshot_id(sources: &[InstructionSourceSnapshot]) -> String {
                 .to_le_bytes(),
         );
         digest.update(source.contents.as_bytes());
+    }
+    for (name, identity) in plugins {
+        for value in [name, identity] {
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value.as_bytes());
+        }
+    }
+    digest.update((selections.len() as u64).to_le_bytes());
+    for selection in selections {
+        digest.update((selection.len() as u64).to_le_bytes());
+        digest.update(selection.as_bytes());
     }
     hex::encode(digest.finalize())
 }
@@ -927,7 +1014,9 @@ mod tests {
             .expect("captured layers");
 
         fs::write(&path, "rules changed during goal creation").expect("changed instructions");
-        let prepared = captured.finalize("immutable Goal Mode goal-123");
+        let prepared = captured
+            .finalize("immutable Goal Mode goal-123")
+            .expect("finalize");
 
         assert!(prepared.text.contains("rules at run start"));
         assert!(!prepared.text.contains("rules changed during goal creation"));
@@ -971,7 +1060,8 @@ mod tests {
             false,
         )
         .expect("suppressed capture")
-        .finalize("immutable Plan probe mode");
+        .finalize("immutable Plan probe mode")
+        .expect("finalize");
 
         assert!(!prepared.text.contains("hostile home diagnostic sentinel"));
         assert!(

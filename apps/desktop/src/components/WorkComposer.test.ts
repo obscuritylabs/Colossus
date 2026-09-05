@@ -73,6 +73,43 @@ function renderRevisionComposer(): string {
 }
 
 describe("WorkComposer capabilities", () => {
+  it("protects the draft while queued mentions are being resolved", () => {
+    const markup = renderComposer(false, {
+      submitting: true,
+      queueing: true,
+      prompt: "@colossus/coding review this",
+    });
+    const textarea = markup.slice(
+      markup.indexOf("<textarea"),
+      markup.indexOf("</textarea>"),
+    );
+    expect(textarea).toContain('disabled=""');
+    expect(textarea).toContain("@colossus/coding review this");
+  });
+
+  it("renders qualified mention completion and explicit stale selections", () => {
+    const markup = renderComposer(false, {
+      prompt: "@colossus/co",
+      pluginSelections: ["example/missing"],
+      pluginSkills: [
+        {
+          id: "colossus/coding",
+          plugin: "colossus",
+          name: "coding",
+          description: "Work on code",
+          compatibility: null,
+          allowed_tools: null,
+        },
+      ],
+    });
+    expect(markup).toContain('aria-label="Plugin skills"');
+    expect(markup).toContain("Use for this message only");
+    expect(markup).toContain("@colossus/coding");
+    expect(markup).toContain(
+      "Unavailable conversation skills: example/missing",
+    );
+    expect(markup).toContain('aria-label="Remove example/missing"');
+  });
   it("renders the dedicated Research composer controls", () => {
     const markup = renderComposer(false, {
       mode: "research",

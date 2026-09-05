@@ -34,11 +34,13 @@ mod native_sidecar;
 #[cfg(all(feature = "sidecar", not(any(unix, windows))))]
 #[path = "native_sidecar_unsupported.rs"]
 mod native_sidecar;
+mod plugins;
 mod secret;
 #[cfg(feature = "sidecar")]
 mod sidecar;
 mod stream;
 mod types;
+pub use plugins::*;
 
 #[cfg(feature = "embedded")]
 pub use backend::ContextBoundAgentRunClient;

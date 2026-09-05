@@ -47,7 +47,8 @@ const ACTIVE_RUN_PAGE_SIZE: u32 = 100;
 const MAX_ACTIVE_RUN_PAGES: usize = 4_096;
 const CONFIGURATION_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIGURATION_DRAIN_TIMEOUT: Duration = Duration::from_mins(5);
-const PRIMARY_SCOPES: [&str; 6] = [
+const PRIMARY_SCOPES: [&str; 7] = [
+    scopes::EXTENSIONS_READ,
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
     scopes::RUNS_CONTROL,
@@ -102,14 +103,11 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "repo.references",
     "repo.symbol_search",
     "shell.run",
-    "skill.install",
-    "skill.inspect",
-    "skill.read",
-    "skill.resource.list",
-    "skill.resource.read",
-    "skill.scaffold",
-    "skill.validate",
-    "skill.write",
+    "plugin.list",
+    "plugin.inspect",
+    "plugin.skill.read",
+    "plugin.resource.list",
+    "plugin.resource.read",
     "task.create",
     "task.list",
     "task.update",
@@ -547,13 +545,13 @@ async fn probe_offline_echo(client: &Colossus) -> Result<(), CommandErrorDto> {
 fn offline_self_test_request(idempotency_key: IdempotencyKey) -> CreateRunRequest {
     CreateRunRequest {
         input: vec![InputContentPart::Text("offline self-test".into())],
+        plugin_skill_ids: Vec::new(),
         session_id: None,
         end_user_id: None,
         role: "primary".into(),
         mode: RunMode::Execute,
         research_depth: None,
         research_sources: Vec::new(),
-        selected_skills: Vec::new(),
         plan_action: None,
         branch: None,
         max_turns: 1,
@@ -1302,7 +1300,7 @@ mod tests {
             "agent.delegate",
             "filesystem.read",
             "shell.run",
-            "skill.install",
+            "plugin.skill.read",
             "mcp.call",
             "web.search",
             "network.http",
@@ -1312,7 +1310,7 @@ mod tests {
         }
         assert!(!debug.contains("worker.admin"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
-        assert_eq!(PRIMARY_SCOPES.len(), 6);
+        assert_eq!(PRIMARY_SCOPES.len(), 7);
         for required in PRIMARY_SCOPES {
             assert!(debug.contains(required));
         }
@@ -1414,7 +1412,6 @@ mod tests {
         assert_eq!(request.mode, RunMode::Execute);
         assert_eq!(request.max_turns, 1);
         assert!(request.plan_action.is_none());
-        assert!(request.selected_skills.is_empty());
     }
 
     #[test]

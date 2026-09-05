@@ -42,7 +42,7 @@ fn offline_agent_run_uses_active_tools_and_persists_typed_events() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

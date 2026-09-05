@@ -68,7 +68,7 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
     },
     capabilities: {
       delegation: false,
-      skills: false,
+      plugins: false,
       tui: false,
       shellTerminal: false,
       files: false,
@@ -155,7 +155,7 @@ describe("OperationsSurface runtime targets", () => {
       desktop({
         capabilities: {
           delegation: true,
-          skills: false,
+          plugins: false,
           tui: false,
           shellTerminal: false,
           files: false,

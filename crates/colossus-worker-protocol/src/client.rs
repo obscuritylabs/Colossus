@@ -28,8 +28,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Narrow authenticated client for worker readiness and live approval-mode control.
 #[derive(Clone)]
 pub struct WorkerControlClient {
-    endpoint: String,
-    authentication_key: Arc<Zeroizing<[u8; 32]>>,
+    pub(crate) endpoint: String,
+    pub(crate) authentication_key: Arc<Zeroizing<[u8; 32]>>,
 }
 
 impl WorkerControlClient {
@@ -241,14 +241,17 @@ impl WorkerControlClient {
         .await
     }
 
-    /// Return metadata-only data-skill inventory from the live runtime.
-    pub async fn skills(&self) -> Result<serde_json::Value, WorkerControlError> {
-        self.call(ControlOperation::SkillList).await
+    /// Return the active Agent Plugins inventory from the live runtime.
+    pub async fn plugins(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::PluginsInventory).await
     }
 
-    /// Return bounded installed-pack lifecycle metadata from the live runtime.
-    pub async fn packs(&self) -> Result<serde_json::Value, WorkerControlError> {
-        self.call(ControlOperation::PackList { limit: 256 }).await
+    /// Request one typed operator plugin operation; no field constitutes approval proof.
+    pub async fn manage_plugin(
+        &self,
+        request: colossus_contracts::PluginManagementRequest,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::PluginManage { request }).await
     }
 
     /// Return bounded registered-workflow event metadata from the live runtime.
@@ -289,7 +292,7 @@ impl WorkerControlClient {
         }
     }
 
-    async fn connect(&self) -> Result<platform::ClientStream, WorkerControlError> {
+    pub(crate) async fn connect(&self) -> Result<platform::ClientStream, WorkerControlError> {
         platform::validate_endpoint(&self.endpoint)?;
         match tokio::time::timeout(CONNECT_TIMEOUT, platform::connect(&self.endpoint)).await {
             Err(_) => Err(WorkerControlError::Busy),
@@ -314,6 +317,11 @@ fn validate_mcp_server_name(server: &str) -> Result<(), WorkerControlError> {
 }
 
 fn valid_mcp_server_name(server: &str) -> bool {
+    if let Some((plugin, component)) = server.split_once('/') {
+        return !component.contains('/')
+            && valid_mcp_server_name(plugin)
+            && valid_mcp_server_name(component);
+    }
     !server.is_empty()
         && server.len() <= 128
         && server
@@ -336,7 +344,10 @@ fn validate_profile_name(profile: &str) -> Result<(), WorkerControlError> {
     }
 }
 
-async fn client_handshake<S>(stream: &mut S, key: &[u8; 32]) -> Result<String, WorkerControlError>
+pub(crate) async fn client_handshake<S>(
+    stream: &mut S,
+    key: &[u8; 32],
+) -> Result<String, WorkerControlError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -378,7 +389,7 @@ where
     Ok(hello.server_nonce)
 }
 
-fn signed_request(
+pub(crate) fn signed_request(
     key: &[u8; 32],
     operation: ControlOperation,
     connection_nonce: &str,

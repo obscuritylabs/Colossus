@@ -154,7 +154,7 @@ Configure identity, access, isolation, storage, policy, and audit.
 
 <p class="home-audience-card__title" markdown>[Connect your systems](extend/index.md)</p>
 
-Add workflows, enterprise integrations, MCP servers, skills, and packs.
+Add workflows, enterprise integrations, standalone MCP servers, and OCI-distributed Agent Plugins.
 
 </div>
 <div class="home-audience-card" markdown>

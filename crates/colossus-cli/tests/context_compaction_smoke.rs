@@ -45,7 +45,7 @@ fn automatic_compaction_is_visible_deterministic_and_preserves_raw_history() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

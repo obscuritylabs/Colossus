@@ -34,6 +34,24 @@ function message(
 }
 
 describe("message queue", () => {
+  it("retains captured per-message IDs and original display text through delivery and retry", () => {
+    const queued = {
+      ...message("selected"),
+      prompt: "@colossus/coding work",
+      executionPrompt: "work",
+      pluginSkillIds: ["colossus/coding", "colossus/security-review"],
+      conversationSkillIds: ["colossus/security-review"],
+    };
+    const sending = updateQueuedMessage([queued], queued.id, (item) => ({
+      ...item,
+      state: "sending",
+    }));
+    const retry = updateQueuedMessage(sending, queued.id, (item) => ({
+      ...item,
+      state: "pending",
+    }));
+    expect(nextPendingMessage(retry, "target-1", "session-1")).toEqual(queued);
+  });
   it("keeps ordinary follow-ups FIFO and places redirects first in their thread", () => {
     const first = enqueueMessage([], message("one"), "last");
     expect(first.accepted).toBe(true);

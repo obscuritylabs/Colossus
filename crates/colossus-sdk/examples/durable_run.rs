@@ -73,6 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let created = client
         .create_run(colossus_sdk::CreateRunRequest {
+            plugin_skill_ids: Vec::new(),
             input,
             session_id: None,
             end_user_id: None,
@@ -80,7 +81,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             mode: options.mode,
             research_depth: None,
             research_sources: Vec::new(),
-            selected_skills: Vec::new(),
             plan_action: None,
             branch: None,
             max_turns: 12,

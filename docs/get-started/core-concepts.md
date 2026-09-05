@@ -56,7 +56,7 @@ These controls are deliberately independent:
   supervision cannot guarantee process-tree limits or cleanup for deliberately detached
   descendants.
 
-Sparse schema-version-2 configuration starts with `allow_all`, which removes built-in
+Sparse schema-version-3 configuration starts with `allow_all`, which removes built-in
 approval friction, and acknowledged `danger_full_access`, which gives authorized tools
 ambient host resources. This is deliberately convenient and unsafe. `development`
 adds approval obligations, `minimal` narrows the surface, and `pinned` uses exact tool
@@ -67,8 +67,9 @@ configured bounds remain active. Under direct Unix execution, timeout and output
 the supervised effect, while a hostile `setsid` or double-fork descendant may escape
 process/memory accounting, outlive the effect, and act outside its audit record. Use
 native, OCI, Windows Job, or a containing external host boundary when strict process
-containment is required. Executable pack tools and pack stdio MCP servers are rejected
-under full access because their manifest permission ceilings require isolation.
+containment is required. Agent Plugin scripts and MCP servers still use ordinary tools,
+explicit MCP enablement, permits, configured limits, and audit; plugin metadata never
+grants ambient authority.
 
 ## Durable work
 
@@ -81,12 +82,12 @@ An effect that started but lacks a terminal event after a crash becomes
 
 ## Extensions
 
-- **Skills** are declarative instructions and bounded resources; they do not execute.
+- **Agent Plugins** are owner-scoped, immutable packages distributed as whole-plugin OCI
+  artifacts. They may contain declarative Agent Skills, resources, and optional MCP servers.
 - **Integrations** expose configured external operations as strict tools.
 - **MCP servers** are exact configured subprocess identities with tool allowlists.
-- **Packs** are verified capability packages for executable extensions and related
-  assets.
-- **Collections** distribute a signed set of packs and skills.
+- **Plugin MCP servers** require an explicit workspace enablement and exact tool allowlist;
+  skill-referenced scripts use ordinary process tools and authority.
 - **Workflows** orchestrate versioned, bounded steps with durable recovery.
 
 Continue with [Use Colossus](../use/index.md), or see the

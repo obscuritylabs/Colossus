@@ -156,7 +156,7 @@ data: [DONE]
     fs::write(
         &config,
         serde_json::to_vec_pretty(&json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "storage": {
                 "path": directory.path().join("state.redb"),
                 "keys": {

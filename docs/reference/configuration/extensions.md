@@ -1,49 +1,73 @@
 ---
-title: Skills, packs, and workflow configuration
-description: Exact roots and controls for Colossus workflows, skills, and packs.
+title: Plugins and workflow configuration
+description: Workspace narrowing, trust, OCI registries, plugin MCP overlays, and workflow roots.
 audience: operator
 type: reference
 ---
 
-# Skills, packs, and workflow configuration
-
-These fields select workspace-relative extension roots and control skill loading.
+# Plugins and workflow configuration
 
 ```yaml
+plugins:
+  enabled: true
+  include: []
+  exclude: []
+  trustProfiles:
+    default:
+      mode: required
+      publicKeys: []
+      identities: []
+      trustRootPath: null
+  registries:
+    production:
+      origin: https://registry.example.com
+      auth:
+        kind: bearer
+        credentialReference: env:REGISTRY_TOKEN
+      trustProfile: default
+      tokenOrigins:
+        - https://auth.example.com
+      blobRedirectOrigins: []
+      caBundlePath: null
+      tokenCaBundlePaths: {}
+      blobRedirectCaBundlePaths: {}
+      allowNonPublic: false
+  mcpServers:
+    example-plugin/server:
+      enabled: true
+      allowedTools: [lookup]
+      environment: {}
+      credentialHeaders: {}
+      oauth: null
+      researchTools: []
+      allowStateless: false
+      timeoutMs: null
+      maxOutputBytes: null
+
 workflows:
   repository: .colossus/workflows
   user: workflows
-skills:
-  enabled: true
-  allowUserOverrides: false
-  bundled: bundled-skills
-  repository: .colossus/skills
-  user: skills
-  disabled: []
-packs:
-  installRoot: .colossus/packs
 ```
 
-## Fields
-
-| Field | Values / constraint |
+| Field | Meaning |
 | --- | --- |
-| `workflows.repository` | Repository-owned workflow root |
-| `workflows.user` | User workflow root |
-| `skills.enabled` | Enables or disables skill discovery |
-| `skills.allowUserOverrides` | Allows user skills to replace lower-precedence names |
-| `skills.bundled` | Bundled skill root |
-| `skills.repository` | Repository-owned skill root |
-| `skills.user` | User skill root |
-| `skills.disabled` | Unique skill directory names to suppress |
-| `packs.installRoot` | Pack installation root |
+| `plugins.enabled` | Disable all plugin exposure for this workspace when false |
+| `plugins.include` | Optional exact allowlist applied to the globally active set |
+| `plugins.exclude` | Exact denylist applied after include |
+| `plugins.trustProfiles` | Reusable `required`, `optional`, or `disabled` Sigstore policy |
+| `plugins.registries` | Exact-origin OCI Distribution profiles |
+| `plugins.mcpServers` | Explicit workspace enablement and authority overlay keyed by `PLUGIN/SERVER` |
 
-Relative paths resolve from the selected workspace. Each `skills.disabled` entry is a
-unique 1–128 character directory name made from ASCII letters, digits, `.`, `_`, and
-`-`. Pack installation uses only `packs.installRoot`.
+The owner-scoped plugin store is always `$COLOSSUS_HOME/plugins`; it is not configurable by
+a workspace. Trust roots, CA bundles, Docker config files, and Docker helper executables
+must use absolute paths. Registry credentials are references, never literal values.
 
-See [Workflow authoring](../../extend/workflows/authoring.md),
-[Skills](../../extend/skills.md), and [Packs](../../extend/packs.md) for operational
-guidance.
+Every enabled plugin MCP overlay requires an exact tool allowlist. Credential environment
+and header overlays use references and cannot replace `PLUGIN_ROOT` or `PLUGIN_DATA`.
+Portable `mcp.json` values remain package data and cannot expand workspace authority.
 
-Return to the [configuration overview](../configuration.md).
+Workflow paths remain workspace-relative configuration. Workflows are not packaged or
+activated as plugins.
+
+See [Agent Plugins](../../extend/plugins.md), [Agent Plugin formats](../extension-formats.md),
+and [Workflow schema](../workflow-schema.md).

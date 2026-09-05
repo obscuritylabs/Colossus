@@ -1,6 +1,6 @@
 ---
 title: Extension and presentation architecture
-description: How integrations, MCP, packs, skills, search, and terminal presentation remain inside core safety boundaries.
+description: How integrations, MCP, Agent Plugins, search, and terminal presentation remain inside core safety boundaries.
 audience: developer
 type: concept
 ---
@@ -20,14 +20,19 @@ credential broker resolves environment references inside permit-bearing adapters
 filters paginated discovery through exact allowlists, and validates each call against a
 fresh schema. Each discovery page and call is a separate authorized effect.
 
-`colossus-packs` verifies signed file inventories, publisher trust, declared
-permissions, executable identities, skills, integrations, MCP declarations, and
-dependency closure. Only enabled, reverified, trusted pack capabilities become
-candidates.
+`colossus-plugins` validates Agent Plugins v1 and Agent Skills, packages one whole plugin
+as one deterministic OCI artifact, verifies registry descriptors and Sigstore/Cosign
+evidence, and owns the owner-scoped global lifecycle journal. Each run leases one active
+digest snapshot after workspace include/exclude narrowing.
 
-Skills remain declarative instructions and resources. Activation can compose text into
-provider instructions but cannot execute a script. Executable behavior belongs in an
-explicit pack tool, MCP server, or integration.
+Agent Skills remain declarative instructions and resources. The model receives bounded
+metadata for all available skills and loads a body or resource only through qualified
+`PLUGIN/SKILL` selection. Referenced scripts use ordinary process tools; selected plugin
+roots only add read/execute grants and `allowed-tools` remains advisory.
+
+Plugin MCP declarations are portable data until a matching workspace overlay explicitly
+enables `PLUGIN/SERVER` with an exact tool allowlist. Stdio and Streamable HTTP effects use
+the same MCP, policy, sandbox, credential, quarantine, and audit adapters as standalone MCP.
 
 Provider-neutral search sits behind a `SearchProvider` port. Named profiles and explicit
 agent/research routes keep provider selection outside model arguments. Search and fetch
@@ -57,7 +62,7 @@ For a new extension:
 - keep credentials as references;
 - use a port when core services need the capability;
 - route effects through the gateway and post-release boundary;
-- add restart/replay and trust-revalidation tests;
+- add snapshot-lease, OCI round-trip, registry, and trust-revalidation tests;
 - prove disabled, untrusted, unconfigured, and unselected states stay hidden.
 
 For a new presentation:

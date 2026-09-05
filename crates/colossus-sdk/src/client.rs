@@ -51,6 +51,10 @@ impl Colossus {
         self.backend.artifacts()
     }
 
+    pub(crate) fn plugin_client(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        self.backend.plugins()
+    }
+
     /// Upload one complete bounded artifact.
     pub async fn upload_artifact(
         &self,
@@ -83,6 +87,17 @@ impl Colossus {
 
     /// Create a durable agent run.
     pub async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
+        if !request.plugin_skill_ids.is_empty()
+            && !self
+                .backend
+                .capabilities()
+                .contains("plugins.skill_selection")
+        {
+            return Err(crate::ApiError::failed_precondition(
+                crate::ApiErrorReason::InvalidRunTransition,
+                "the connected target does not support Agent Plugin skill selection",
+            ));
+        }
         if request.plan_action.is_some()
             && !self
                 .backend

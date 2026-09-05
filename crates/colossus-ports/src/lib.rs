@@ -7,17 +7,15 @@ use colossus_contracts::{
     Actor, ApprovalProof, AuditEvidence, AutomaticApprovalNotice, ContextSnapshot, DecisionStatus,
     EffectRequest, EventEnvelope, ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus,
     IntegrationConnection, KeyDecision, MemoryRecord, ModelImageReference, ModelMessage,
-    ModelRequest, ModelRoute, ModelToolDefinition, NewEvent, PackInstallation, PackStatus,
-    PendingSessionToolTurn, PlanRecord, PlanStatus, PolicyDecision, PreparedContext,
-    ProjectionBatch, ProjectionWorkItem, ProviderEvent, ProviderResponseDiagnostic, ProviderTurn,
-    PublisherTrust, ResearchClaim, ResearchRun, ResearchSource, RiskReviewFallbackNotice,
-    RunEventEnvelope, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
-    SecureAnchor, SessionMessage, SessionMessageAppend, SessionMessagePage, SessionSummary,
-    SignedCheckpoint, SkillDuplicate, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences, ToolCall, ToolResult,
-    ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
-    WorkflowSchedule, WorkflowSubscription, WorkflowSubscriptionDelivery, WorkflowWebhook,
-    WorkflowWebhookDelivery,
+    ModelRequest, ModelRoute, ModelToolDefinition, NewEvent, PendingSessionToolTurn, PlanRecord,
+    PlanStatus, PluginInstallation, PolicyDecision, PreparedContext, ProjectionBatch,
+    ProjectionWorkItem, ProviderEvent, ProviderResponseDiagnostic, ProviderTurn, ResearchClaim,
+    ResearchRun, ResearchSource, RiskReviewFallbackNotice, RunEventEnvelope, SearchProfileSummary,
+    SearchRequest, SearchResponse, SearchRoute, SecureAnchor, SessionMessage, SessionMessageAppend,
+    SessionMessagePage, SessionSummary, SignedCheckpoint, SubagentJob, SubagentStatus, TaskRecord,
+    TaskStatus, TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
+    UserPromptResponse, WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowSubscription,
+    WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,6 +27,9 @@ use thiserror::Error;
 
 mod control;
 pub use control::*;
+
+mod run_provenance;
+pub use run_provenance::*;
 
 mod credentials;
 pub use credentials::*;

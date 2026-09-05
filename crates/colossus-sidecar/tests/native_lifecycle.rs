@@ -182,6 +182,14 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     });
     let bootstrap = SidecarBootstrapConfig::new(&workspace, runtime_config, grant)
         .expect("bootstrap")
+        .with_colossus_home(
+            instance_root
+                .path()
+                .canonicalize()
+                .expect("private root")
+                .join("home"),
+        )
+        .expect("explicit isolated Colossus home")
         .with_expected_workspace_identity(current_workspace_identity(&workspace_metadata))
         .expect("expected workspace identity");
     let bootstrap = bootstrap
@@ -217,6 +225,23 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
         Zeroizing::new([0x5a; 32]),
     )
     .expect("worker control client");
+    let inventory = worker.plugins().await.expect("embedded core inventory");
+    assert_eq!(inventory[0]["manifest"]["name"], "colossus");
+    assert_eq!(inventory[0]["origin"], "bundled");
+    let skills = inventory[0]["skills"].as_array().expect("core skills");
+    assert_eq!(skills.len(), 4);
+    for name in [
+        "coding",
+        "offline-dev",
+        "security-review",
+        "plugin-authoring",
+    ] {
+        assert!(
+            skills
+                .iter()
+                .any(|skill| skill["id"] == format!("colossus/{name}"))
+        );
+    }
     let diagnostic = worker
         .observability_doctor()
         .await
@@ -230,6 +255,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     assert_ne!(log_check["status"], "not_applicable");
     let created = client
         .create_run(CreateRunRequest {
+            plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text("managed sidecar self-test".into())],
             session_id: None,
             end_user_id: None,
@@ -237,7 +263,6 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
             mode: RunMode::Execute,
             research_depth: None,
             research_sources: Vec::new(),
-            selected_skills: Vec::new(),
             plan_action: None,
             branch: None,
             max_turns: 1,

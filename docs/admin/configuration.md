@@ -82,7 +82,7 @@ Common deployment shapes are:
 `allow_all` changes built-in action decisions. Under the acknowledged full-access
 default, the runtime separately supplies ambient filesystem, executable, environment,
 and HTTP(S) resource authority. It still does not invent provider routes, credentials,
-MCP servers or tools, integrations, signed packs, actions, or permits.
+MCP servers or tools, integrations, Agent Plugins, actions, or permits.
 
 The `workspace-development` sandbox preset is a separate resource decision. It derives
 workspace writes and a trusted non-interactive shell for users and agents outside
@@ -181,7 +181,8 @@ The run should complete through the configured role and the audit chain should v
 - An exact tool include with a missing prerequisite is an error; inherited tools with
   missing prerequisites are hidden and explained by `config effective`.
 - Relative explicit sandbox roots and executables are rejected. Workspace-owned config,
-  workflow, skill, and pack paths resolve from canonical `--workspace`; storage uses
+  workflow and standalone MCP paths resolve from canonical `--workspace`; plugin state uses
+  the owner-scoped Colossus home, while storage uses
   its explicit `location`.
 - Under an isolating boundary, a configured remote origin must also appear in
   `sandbox.networkDestinations`. Under acknowledged full access, each requested

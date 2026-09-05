@@ -36,9 +36,9 @@ pub enum RuntimeError {
     /// Configured MCP adapter or protocol contract failed.
     #[error(transparent)]
     Mcp(#[from] McpError),
-    /// Capability-pack or offline-bundle contract failed.
+    /// Offline release-bundle contract failed.
     #[error(transparent)]
-    Pack(#[from] PackError),
+    Bundle(#[from] BundleError),
     /// Workflow validation or execution failed.
     #[error(transparent)]
     Workflow(#[from] WorkflowError),
@@ -73,7 +73,7 @@ impl RuntimeError {
             | Self::Context(_)
             | Self::ToolCatalog(_)
             | Self::Mcp(_)
-            | Self::Pack(_)
+            | Self::Bundle(_)
             | Self::Workflow(_) => false,
         }
     }

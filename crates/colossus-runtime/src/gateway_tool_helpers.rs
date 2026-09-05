@@ -5,6 +5,17 @@ pub(super) struct McpAgentToolResult {
     pub(super) exit_code: i32,
 }
 
+pub(super) struct ProcessToolOutput {
+    pub(super) executable: PathBuf,
+    pub(super) cwd: PathBuf,
+    pub(super) args: Vec<String>,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+    pub(super) exit_code: i32,
+    pub(super) truncated: bool,
+    pub(super) observed_origins: Vec<String>,
+}
+
 pub(super) fn mcp_agent_tool_result(
     output: colossus_mcp::McpCallOutput,
 ) -> Result<McpAgentToolResult, ToolError> {
@@ -16,7 +27,6 @@ pub(super) fn mcp_agent_tool_result(
 
 pub(super) struct GatewayBoundEffects {
     pub(super) identity: workspace_lease::WorkspaceIdentity,
-    pub(super) pack_process: Arc<dyn EffectExecutor>,
     pub(super) integration: Arc<dyn EffectExecutor>,
     pub(super) mcp: Arc<dyn EffectExecutor>,
 }
@@ -28,8 +38,7 @@ pub(super) struct GatewayToolExecutor {
     pub(super) http: Arc<HttpExecutor>,
     pub(super) work: Option<Arc<WorkEffectExecutor>>,
     pub(super) memory: Option<Arc<MemoryEffectExecutor>>,
-    pub(super) skills: Option<Arc<dyn EffectExecutor>>,
-    pub(super) pack_processes: Option<Arc<PackProcessExecutor>>,
+    pub(super) plugins: Option<Arc<dyn EffectExecutor>>,
     pub(super) integrations: Option<Arc<IntegrationExecutor>>,
     pub(super) mcp: Option<Arc<McpExecutor>>,
     pub(super) bound_effects: Option<GatewayBoundEffects>,
@@ -37,6 +46,7 @@ pub(super) struct GatewayToolExecutor {
     pub(super) workspace: PathBuf,
     pub(super) repository_id: String,
     pub(super) executables: Vec<PathBuf>,
+    pub(super) plugin_skill_roots: BTreeMap<String, PathBuf>,
 }
 
 pub(super) fn ambient_executable(requested: &str) -> Option<PathBuf> {
@@ -180,11 +190,11 @@ impl GatewayToolExecutor {
         Ok(bounded_tool_text(&output, 1024 * 1024))
     }
 
-    pub(super) async fn execute_skill_tool(
+    pub(super) async fn execute_plugin_tool(
         &self,
         call: &ToolCall,
         context: ExecutionContext,
-        operation: SkillOperation,
+        operation: PluginOperation,
     ) -> Result<String, ToolError> {
         let action = operation.action().to_owned();
         let mut request = effect_request(
@@ -200,16 +210,16 @@ impl GatewayToolExecutor {
             .gateway
             .execute(
                 request,
-                self.skills
+                self.plugins
                     .as_deref()
-                    .ok_or_else(|| ToolError::Failed("skill adapter is unavailable".into()))?,
+                    .ok_or_else(|| ToolError::Failed("plugin adapter is unavailable".into()))?,
             )
             .await
             .map_err(tool_gateway_error)?;
         let output = String::from_utf8(result.bytes)
-            .map_err(|_| ToolError::Failed("skill resource returned non-UTF-8".into()))?;
+            .map_err(|_| ToolError::Failed("plugin result returned non-UTF-8".into()))?;
         serde_json::from_str::<Value>(&output)
-            .map_err(|error| ToolError::Failed(format!("invalid skill result: {error}")))?;
+            .map_err(|error| ToolError::Failed(format!("invalid plugin result: {error}")))?;
         Ok(bounded_tool_text(&output, 256 * 1024))
     }
 
@@ -256,102 +266,39 @@ impl GatewayToolExecutor {
         Ok(Some(bounded_tool_text(&output, 1024 * 1024)))
     }
 
-    pub(super) async fn execute_pack_tool(
-        &self,
-        call: &ToolCall,
-        context: ExecutionContext,
-    ) -> Result<Option<(String, i32)>, ToolError> {
-        let executor = self
-            .pack_processes
-            .as_deref()
-            .ok_or_else(|| ToolError::Failed("pack process adapter is unavailable".into()))?;
-        let effect = self
-            .bound_effects
-            .as_ref()
-            .map_or(executor as &dyn EffectExecutor, |effects| {
-                effects.pack_process.as_ref()
-            });
-        let Some((declaration, input)) = executor.invocation(&call.name) else {
-            return Ok(None);
-        };
-        if !call
-            .arguments
-            .as_object()
-            .is_some_and(serde_json::Map::is_empty)
-        {
-            return Err(ToolError::InvalidArguments {
-                tool: call.name.clone(),
-                message: "verified pack tool accepts no dynamic arguments".into(),
-            });
-        }
-        let mut request = effect_request(
-            model_actor(call, &context),
-            &declaration.action,
-            declaration.executable.display().to_string(),
-            serde_json::to_value(input).map_err(|error| ToolError::Failed(error.to_string()))?,
-        );
-        request.capabilities = vec![declaration.action];
-        request.credential_references = declaration
-            .environment
-            .values()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|reference| CredentialReference {
-                reference,
-                value_hash: None,
-            })
-            .collect();
-        request.context = context;
-        let result = self
-            .gateway
-            .execute(request, effect)
-            .await
-            .map_err(tool_gateway_error)?;
-        let value: Value = serde_json::from_slice(&result.bytes)
-            .map_err(|error| ToolError::Failed(format!("invalid pack process result: {error}")))?;
-        let decode = |field: &str| -> Result<String, ToolError> {
-            let encoded = value.get(field).and_then(Value::as_str).ok_or_else(|| {
-                ToolError::Failed(format!("pack process result field {field} is absent"))
-            })?;
-            let bytes = BASE64
-                .decode(encoded)
-                .map_err(|error| ToolError::Failed(format!("invalid pack output: {error}")))?;
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
-        };
-        let exit_code = value
-            .get("exit_code")
-            .and_then(Value::as_i64)
-            .and_then(|code| i32::try_from(code).ok())
-            .ok_or_else(|| ToolError::Failed("pack process exit_code is absent".into()))?;
-        let output = serde_json::to_string(&json!({
-            "pack": declaration.pack,
-            "tool": declaration.tool,
-            "stdout": decode("stdout_base64")?,
-            "stderr": decode("stderr_base64")?,
-            "exit_code": exit_code,
-            "truncated": value.get("truncated").and_then(Value::as_bool).unwrap_or(false),
-        }))
-        .map_err(|error| ToolError::Failed(error.to_string()))?;
-        Ok(Some((bounded_tool_text(&output, 1024 * 1024), exit_code)))
-    }
-
     pub(super) async fn discover_mcp_tool_output(
         &self,
         call: &ToolCall,
         context: ExecutionContext,
         server: Option<&str>,
     ) -> Result<String, ToolError> {
+        let catalog = active_plugin_catalog();
         let executor = self
             .mcp
             .as_deref()
             .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?;
+        let executor = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.mcp.as_deref())
+            .unwrap_or(executor);
+        let bound = self.bound_effects.as_ref().map(|effects| {
+            WorkspaceBoundEffectExecutor::new(
+                effects.identity.clone(),
+                catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.mcp.clone())
+                    .unwrap_or_else(|| Arc::clone(self.mcp.as_ref().expect("MCP checked"))),
+            )
+        });
         let effect = self
             .bound_effects
             .as_ref()
             .map_or(executor as &dyn EffectExecutor, |effects| {
                 effects.mcp.as_ref()
             });
+        let effect = bound
+            .as_ref()
+            .map_or(effect, |bound| bound as &dyn EffectExecutor);
         let tools = discover_mcp_tools(
             self.gateway.as_ref(),
             executor,
@@ -378,16 +325,33 @@ impl GatewayToolExecutor {
         tool: &str,
         arguments: Value,
     ) -> Result<McpAgentToolResult, ToolError> {
+        let catalog = active_plugin_catalog();
         let executor = self
             .mcp
             .as_deref()
             .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?;
+        let executor = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.mcp.as_deref())
+            .unwrap_or(executor);
+        let bound = self.bound_effects.as_ref().map(|effects| {
+            WorkspaceBoundEffectExecutor::new(
+                effects.identity.clone(),
+                catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.mcp.clone())
+                    .unwrap_or_else(|| Arc::clone(self.mcp.as_ref().expect("MCP checked"))),
+            )
+        });
         let effect = self
             .bound_effects
             .as_ref()
             .map_or(executor as &dyn EffectExecutor, |effects| {
                 effects.mcp.as_ref()
             });
+        let effect = bound
+            .as_ref()
+            .map_or(effect, |bound| bound as &dyn EffectExecutor);
         let output = invoke_mcp_tool(
             self.gateway.as_ref(),
             executor,
@@ -543,6 +507,7 @@ impl GatewayToolExecutor {
         &self,
         requested: &str,
         danger_full_access: bool,
+        context: &ExecutionContext,
     ) -> Result<PathBuf, ToolError> {
         if requested.is_empty() || requested.contains('\0') {
             return Err(ToolError::InvalidArguments {
@@ -558,6 +523,26 @@ impl GatewayToolExecutor {
             });
         }
         let requested_path = Path::new(requested);
+        if requested_path.is_absolute() {
+            let selected_roots = self.selected_plugin_roots(context);
+            if selected_roots
+                .iter()
+                .any(|root| requested_path.starts_with(root))
+            {
+                let executable = canonical_executable(requested_path).ok_or_else(|| {
+                    ToolError::Denied(format!("plugin executable {requested} is not executable"))
+                })?;
+                if selected_roots
+                    .iter()
+                    .any(|root| executable.starts_with(root))
+                {
+                    return Ok(executable);
+                }
+                return Err(ToolError::Denied(format!(
+                    "plugin executable {requested} escapes its selected plugin root"
+                )));
+            }
+        }
         let matches = self
             .executables
             .iter()
@@ -576,6 +561,57 @@ impl GatewayToolExecutor {
             _ => Err(ToolError::Denied(format!(
                 "executable name {requested} is ambiguous; use its configured absolute path"
             ))),
+        }
+    }
+
+    pub(super) fn selected_plugin_roots(&self, context: &ExecutionContext) -> Vec<PathBuf> {
+        let roots = active_plugin_catalog().map(|catalog| catalog.skill_roots());
+        let roots = roots.as_ref().unwrap_or(&self.plugin_skill_roots);
+        context
+            .skill_ids
+            .iter()
+            .filter_map(|skill_id| roots.get(skill_id).cloned())
+            .collect()
+    }
+
+    pub(super) fn model_read_path(
+        &self,
+        input: &str,
+        context: &ExecutionContext,
+        ambient: bool,
+    ) -> Result<PathBuf, ToolError> {
+        if ambient || !Path::new(input).is_absolute() {
+            return model_resource_path(&self.workspace, input, ambient);
+        }
+        let path = PathBuf::from(input);
+        if self
+            .selected_plugin_roots(context)
+            .iter()
+            .any(|root| path.starts_with(root))
+        {
+            Ok(path)
+        } else {
+            Err(ToolError::Denied(
+                "absolute path is not within a selected Agent Plugin".into(),
+            ))
+        }
+    }
+
+    pub(super) fn display_read_path(
+        &self,
+        path: &Path,
+        context: &ExecutionContext,
+        ambient: bool,
+    ) -> Result<String, ToolError> {
+        if !ambient
+            && self
+                .selected_plugin_roots(context)
+                .iter()
+                .any(|root| path.starts_with(root))
+        {
+            Ok(path.display().to_string())
+        } else {
+            display_resource_path(&self.workspace, path, ambient)
         }
     }
 

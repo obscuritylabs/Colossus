@@ -9,6 +9,7 @@
 mod artifacts;
 mod error;
 mod identity;
+mod plugins;
 mod repository;
 mod runs;
 mod validation;
@@ -25,6 +26,7 @@ pub use identity::{
     ApiScope, ApplicationKind, ApplicationPrincipal, CallerContext, IdempotencyKey, RequestId,
     scopes,
 };
+pub use plugins::*;
 pub use repository::{EventSourcedRunRepository, RunRepository};
 pub use runs::{
     AgentRunApi, ApprovalRisk, ArchiveThreadRequest, CancelRunRequest, ContentPart,

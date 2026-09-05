@@ -1,12 +1,13 @@
 use super::*;
+use crate::workspace_lease::WorkspaceIdentity;
 
 pub(super) struct GatewayResearchCollector {
     pub(super) gateway: Arc<EffectGateway>,
     pub(super) filesystem: Arc<dyn EffectExecutor>,
     pub(super) workspace: PathBuf,
     pub(super) search: Arc<dyn SearchProvider>,
-    pub(super) mcp: Arc<McpExecutor>,
-    pub(super) mcp_effect: Arc<dyn EffectExecutor>,
+    pub(super) plugins: Arc<PluginCatalogSource>,
+    pub(super) identity: WorkspaceIdentity,
 }
 
 impl GatewayResearchCollector {
@@ -16,7 +17,30 @@ impl GatewayResearchCollector {
         query: &str,
         limit: usize,
     ) -> ResearchCollection {
-        let calls = self.mcp.research_calls(query);
+        let catalog = match self.plugins.capture() {
+            Ok(catalog) => catalog,
+            Err(error) => return failed_collection(error),
+        };
+        scope_plugin_catalog(
+            Arc::clone(&catalog),
+            self.collect_mcp_snapshot(&catalog, run, query, limit),
+        )
+        .await
+    }
+
+    async fn collect_mcp_snapshot(
+        &self,
+        catalog: &PluginRunCatalog,
+        run: &ResearchRun,
+        query: &str,
+        limit: usize,
+    ) -> ResearchCollection {
+        let executor = match catalog.mcp_executor() {
+            Ok(executor) => executor,
+            Err(error) => return failed_collection(error),
+        };
+        let bound = WorkspaceBoundEffectExecutor::new(self.identity.clone(), Arc::clone(&executor));
+        let calls = executor.research_calls(query);
         if calls.is_empty() {
             return ResearchCollection {
                 status: colossus_contracts::ResearchLaneStatus::Disabled,
@@ -36,8 +60,8 @@ impl GatewayResearchCollector {
             };
             match invoke_mcp_tool(
                 self.gateway.as_ref(),
-                self.mcp.as_ref(),
-                self.mcp_effect.as_ref(),
+                executor.as_ref(),
+                &bound,
                 Actor {
                     actor_type: ActorType::System,
                     id: "research-mcp-collector".into(),
@@ -195,6 +219,19 @@ impl GatewayResearchModel {
         prompt: String,
         run: &ResearchRun,
     ) -> Result<String, String> {
+        let instructions = if let Some(catalog) = active_plugin_catalog() {
+            compose_plugins(
+                &catalog.records,
+                instructions,
+                &catalog.selected_skills,
+                &[],
+                true,
+            )
+            .map_err(|error| error.to_string())?
+            .instructions
+        } else {
+            instructions.into()
+        };
         self.provider
             .route(role)
             .map_err(|error| error.to_string())?;
@@ -203,7 +240,7 @@ impl GatewayResearchModel {
             .turn(
                 role,
                 ModelRequest {
-                    instructions: instructions.into(),
+                    instructions,
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
                         content: prompt.into(),
@@ -217,6 +254,12 @@ impl GatewayResearchModel {
                     correlation_id: format!("research:{}", run.id),
                     session_id: Some(run.session_id.clone()),
                     run_id: Some(run.id.clone()),
+                    plugin_digests: active_plugin_catalog()
+                        .map(|catalog| catalog.digests())
+                        .unwrap_or_default(),
+                    skill_ids: active_plugin_catalog()
+                        .map(|catalog| catalog.selected_skills.clone())
+                        .unwrap_or_default(),
                     ..ExecutionContext::default()
                 },
             )

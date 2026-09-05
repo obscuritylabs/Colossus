@@ -2158,8 +2158,7 @@ fn decode_created(
             .allowed_tools
             .iter()
             .any(|tool| token(tool, "allowed_tool", MAX_TOOL_BYTES).is_err())
-        || execution.request.validate().is_err()
-        || !execution.request.skill_ids.is_empty();
+        || execution.request.validate().is_err();
     if created.id != run_id
         || first.context.run_id.as_deref() != Some(run_id)
         || first.context.session_id.as_deref() != Some(created.session_id.as_str())

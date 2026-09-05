@@ -79,10 +79,16 @@ SHA-256 digest of the decoded public key.
 ```bash
 colossus --approval-mode ask bundle key-info \
   --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED
-colossus --approval-mode ask packs trust add colossus \
-  --public-key BASE64_ED25519_PUBLIC_KEY
-colossus packs trust list
 colossus bundle verify ./bundle
+```
+
+Bind the returned key ID and public key in strict configuration before verification:
+
+```yaml
+bundles:
+  trustedPublishers:
+    colossus:
+      SHA256_KEY_ID: BASE64_ED25519_PUBLIC_KEY
 ```
 
 Verification returns bounded bundle identity, canonical manifest hash, file count, total

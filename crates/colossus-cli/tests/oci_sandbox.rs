@@ -129,7 +129,7 @@ fn live_oci_enforces_mount_environment_network_timeout_and_cleanup_boundaries() 
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

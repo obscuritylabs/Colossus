@@ -54,12 +54,12 @@ pub struct RuntimeConfig {
     /// Explicit allowlisted stdio Model Context Protocol servers.
     #[serde(default)]
     pub mcp: McpConfig,
-    /// Declarative skill libraries and precedence policy.
+    /// Machine-scoped Agent Plugins catalog and workspace narrowing policy.
     #[serde(default)]
-    pub skills: SkillsConfig,
-    /// Verified executable pack installation boundary.
+    pub plugins: PluginsConfig,
+    /// Explicit signing-key trust for the retained offline release-bundle format.
     #[serde(default)]
-    pub packs: PacksConfig,
+    pub bundles: BundlesConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -339,51 +339,67 @@ const fn default_search_timeout_ms() -> u64 {
     30_000
 }
 
-/// Declarative skill discovery and override configuration.
+/// Agent Plugins configuration for one workspace using the owner-scoped global store.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-pub struct SkillsConfig {
-    /// Whether prompt mentions and explicit activation are enabled.
+pub struct PluginsConfig {
+    /// Whether this workspace exposes globally active plugins at all.
     pub enabled: bool,
-    /// Whether later repository/user roots may replace earlier skills with the same name.
-    pub allow_user_overrides: bool,
-    /// Bundled offline skill library.
-    pub bundled: PathBuf,
-    /// Repository-local skill library.
-    pub repository: PathBuf,
-    /// User skill library.
-    pub user: PathBuf,
-    /// Disabled directory names across every root.
-    pub disabled: Vec<String>,
+    /// Optional exact allowlist of globally active plugin names.
+    pub include: Vec<String>,
+    /// Exact denylist applied after `include`.
+    pub exclude: Vec<String>,
+    /// Reusable supply-chain trust policies.
+    pub trust_profiles: BTreeMap<String, PluginTrustProfile>,
+    /// Exact-origin OCI registry profiles.
+    pub registries: BTreeMap<String, PluginRegistryProfile>,
+    /// Explicit runtime enablement and credential overlays for plugin MCP servers.
+    pub mcp_servers: BTreeMap<String, PluginMcpServerConfig>,
 }
 
-impl Default for SkillsConfig {
+impl Default for PluginsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            allow_user_overrides: false,
-            bundled: PathBuf::from("bundled-skills"),
-            repository: PathBuf::from(".colossus/skills"),
-            user: PathBuf::from("skills"),
-            disabled: Vec::new(),
+            include: Vec::new(),
+            exclude: Vec::new(),
+            trust_profiles: BTreeMap::from([("default".into(), PluginTrustProfile::default())]),
+            registries: BTreeMap::new(),
+            mcp_servers: BTreeMap::new(),
         }
     }
 }
 
-/// Capability-pack installation configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Workspace authority overlay for one canonical `<plugin>/<server>` MCP identity.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-pub struct PacksConfig {
-    /// Fresh Rust pack installation directory.
-    pub install_root: PathBuf,
+pub struct PluginMcpServerConfig {
+    /// Explicitly expose this portable server to the runtime.
+    pub enabled: bool,
+    /// Secret child-environment values expressed as credential references.
+    pub environment: BTreeMap<String, String>,
+    /// Secret HTTP header overlays expressed as credential references.
+    pub credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
+    /// Optional client-owned OAuth configuration.
+    pub oauth: Option<McpOAuthConfig>,
+    /// Exact tools that may be exposed, or the sole wildcard `*`.
+    pub allowed_tools: Vec<String>,
+    /// Optional research-tool mappings for this server.
+    pub research_tools: Vec<McpResearchToolConfig>,
+    /// Permit a remote server to omit MCP session identifiers.
+    pub allow_stateless: bool,
+    /// Optional server timeout bounded by normal sandbox policy.
+    pub timeout_ms: Option<u64>,
+    /// Optional output cap bounded by normal sandbox policy.
+    pub max_output_bytes: Option<u64>,
 }
 
-impl Default for PacksConfig {
-    fn default() -> Self {
-        Self {
-            install_root: PathBuf::from(".colossus/packs"),
-        }
-    }
+/// Trust bindings for signed offline release bundles.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct BundlesConfig {
+    /// Publisher to key-id to base64 Ed25519 public-key bindings.
+    pub trusted_publishers: BundleTrustStore,
 }
 
 /// Strict provider connection profiles.
@@ -925,14 +941,20 @@ impl RuntimeConfig {
         match root.get("schemaVersion").and_then(Value::as_u64) {
             Some(1) => {
                 return Err(RuntimeError::Config(
-                    "schemaVersion 1 is no longer supported because provider connections and model profiles are now separate; generate a fresh schemaVersion 2 configuration with `colossus --config PATH config init`"
+                    "schemaVersion 1 is no longer supported; provider connections and model profiles are now separate, and Agent Plugins replace the legacy extension configuration without migration. Run `colossus --config PATH config init` to generate a fresh schemaVersion 3 configuration"
                         .into(),
                 ));
             }
-            Some(2) => {}
+            Some(2) => {
+                return Err(RuntimeError::Config(
+                    "schemaVersion 2 is no longer supported; Agent Plugins replace the legacy skills and packs configuration without migration. Run `colossus --config PATH config init` to regenerate a fresh schemaVersion 3 configuration"
+                        .into(),
+                ));
+            }
+            Some(3) => {}
             _ => {
                 return Err(RuntimeError::Config(
-                    "schemaVersion must be exactly 2".into(),
+                    "schemaVersion must be exactly 3".into(),
                 ));
             }
         }
@@ -1185,19 +1207,7 @@ impl RuntimeConfig {
             },
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        if config.skills.disabled.iter().any(|name| {
-            name.trim().is_empty()
-                || name.len() > 128
-                || name.bytes().any(|byte| {
-                    !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-                })
-        }) || config.skills.disabled.iter().collect::<BTreeSet<_>>().len()
-            != config.skills.disabled.len()
-        {
-            return Err(RuntimeError::Config(
-                "skills.disabled contains an invalid or duplicate directory name".into(),
-            ));
-        }
+        validate_plugins_config(&config.plugins)?;
         validate_provider_config(&config)?;
         Ok(config)
     }
@@ -1259,7 +1269,7 @@ impl RuntimeConfig {
     /// Safe offline configuration template with dependency-free plaintext storage.
     pub fn offline_template(state_path: impl Into<PathBuf>) -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             access: AccessConfig::default(),
             storage: StorageConfig {
                 location: StorageLocation::Workspace,
@@ -1284,8 +1294,8 @@ impl RuntimeConfig {
             research: ResearchConfig::default(),
             search: SearchConfig::default(),
             mcp: McpConfig::default(),
-            skills: SkillsConfig::default(),
-            packs: PacksConfig::default(),
+            plugins: PluginsConfig::default(),
+            bundles: BundlesConfig::default(),
             sandbox: SandboxConfig::platform_isolating(),
         }
     }
@@ -1550,6 +1560,133 @@ impl RuntimeConfig {
         self.revalidate_resolved_home_file(&path)?;
         Ok(path)
     }
+}
+
+fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
+    fn valid_name(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    }
+    fn unique_names(values: &[String]) -> bool {
+        values.iter().all(|value| valid_name(value))
+            && values.iter().collect::<BTreeSet<_>>().len() == values.len()
+    }
+    if !unique_names(&config.include) || !unique_names(&config.exclude) {
+        return Err(RuntimeError::Config(
+            "plugins.include and plugins.exclude require unique valid plugin names".into(),
+        ));
+    }
+    let include = config.include.iter().collect::<BTreeSet<_>>();
+    if config.exclude.iter().any(|name| include.contains(name)) {
+        return Err(RuntimeError::Config(
+            "a plugin name cannot appear in both plugins.include and plugins.exclude".into(),
+        ));
+    }
+    if config.trust_profiles.is_empty()
+        || config.trust_profiles.keys().any(|name| !valid_name(name))
+    {
+        return Err(RuntimeError::Config(
+            "plugins.trustProfiles requires at least one valid named profile".into(),
+        ));
+    }
+    for (name, profile) in &config.trust_profiles {
+        if profile.public_keys.iter().any(|path| !path.is_absolute())
+            || profile
+                .trust_root_path
+                .as_ref()
+                .is_some_and(|path| !path.is_absolute())
+            || profile
+                .identities
+                .iter()
+                .any(|identity| identity.issuer.is_empty() || identity.subject.is_empty())
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugins.trustProfiles.{name} requires absolute trust-root paths and non-empty identities"
+            )));
+        }
+    }
+    for (name, registry) in &config.registries {
+        if !valid_name(name)
+            || registry.trust_profile.is_empty()
+            || !config.trust_profiles.contains_key(&registry.trust_profile)
+            || !matches!(canonical_network_origin(&registry.origin), Ok(origin) if origin == registry.origin)
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugins.registries.{name} requires a canonical exact origin and existing trust profile"
+            )));
+        }
+        for origin in registry
+            .token_origins
+            .iter()
+            .chain(&registry.blob_redirect_origins)
+        {
+            if !matches!(canonical_network_origin(origin), Ok(canonical) if canonical == *origin) {
+                return Err(RuntimeError::Config(format!(
+                    "plugins.registries.{name} contains a non-canonical permitted origin"
+                )));
+            }
+        }
+        if registry.ca_bundle_path.as_ref().is_some_and(|path| !path.is_absolute())
+            || registry
+                .token_ca_bundle_paths
+                .values()
+                .chain(registry.blob_redirect_ca_bundle_paths.values())
+                .any(|path| !path.is_absolute())
+            || registry.token_ca_bundle_paths.keys().any(|origin| {
+                !registry.token_origins.contains(origin)
+                    || !matches!(canonical_network_origin(origin), Ok(canonical) if canonical == *origin)
+            })
+            || registry.blob_redirect_ca_bundle_paths.keys().any(|origin| {
+                !registry.blob_redirect_origins.contains(origin)
+                    || !matches!(canonical_network_origin(origin), Ok(canonical) if canonical == *origin)
+            })
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugins.registries.{name} CA paths must be absolute and keyed by permitted exact origins"
+            )));
+        }
+        if let RegistryAuthConfig::Docker {
+            config_path,
+            helper_executables,
+        } = &registry.auth
+            && (config_path.as_ref().is_some_and(|path| !path.is_absolute())
+                || helper_executables
+                    .values()
+                    .any(|executable| !executable.is_absolute()))
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugins.registries.{name} Docker config and helper paths must be absolute"
+            )));
+        }
+    }
+    for (id, server) in &config.mcp_servers {
+        let Some((plugin, name)) = id.split_once('/') else {
+            return Err(RuntimeError::Config(format!(
+                "plugins.mcpServers key {id} must be a qualified <plugin>/<server> identity"
+            )));
+        };
+        if !valid_name(plugin) || !valid_name(name) || id.matches('/').count() != 1 {
+            return Err(RuntimeError::Config(format!(
+                "plugins.mcpServers key {id} must be a qualified <plugin>/<server> identity"
+            )));
+        }
+        if server.enabled && server.allowed_tools.is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "enabled plugin MCP server {id} requires an explicit allowedTools list"
+            )));
+        }
+        if server.environment.keys().any(|name| {
+            !valid_environment_name(name) || matches!(name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA")
+        }) {
+            return Err(RuntimeError::Config(format!(
+                "plugins.mcpServers.{id}.environment contains an invalid or reserved variable"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn confined_relative_storage_path(path: &Path) -> bool {

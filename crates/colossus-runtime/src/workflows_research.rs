@@ -162,10 +162,13 @@ impl Runtime {
         request.context.session_id = Some(session_id.into());
         request.context.run_id = context.message_run_id;
         request.context.offered_tools = context.allowed_tools;
-        let result = self
-            .gateway
-            .execute(request, self.research_executor.as_ref())
-            .await?;
+        let catalog = self.plugin_catalog.capture()?;
+        let result = scope_plugin_catalog(
+            catalog,
+            self.gateway
+                .execute(request, self.research_executor.as_ref()),
+        )
+        .await?;
         serde_json::from_slice(&result.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }

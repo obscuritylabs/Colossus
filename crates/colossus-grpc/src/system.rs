@@ -85,6 +85,7 @@ pub struct SystemServiceAdapter {
     metadata: SystemMetadata,
     readiness: Arc<dyn ReadinessProvider>,
     application_limits: Vec<ApiLimit>,
+    plugin_discovery: bool,
 }
 
 impl SystemServiceAdapter {
@@ -94,12 +95,18 @@ impl SystemServiceAdapter {
             metadata,
             readiness,
             application_limits: default_application_limits(),
+            plugin_discovery: false,
         }
     }
 
     /// Replace application-resource limits with values enforced by the host.
     pub fn with_application_limits(mut self, limits: Vec<ApiLimit>) -> Self {
         self.application_limits = limits;
+        self
+    }
+
+    pub(crate) fn with_plugin_discovery(mut self) -> Self {
+        self.plugin_discovery = true;
         self
     }
 }
@@ -127,6 +134,16 @@ impl SystemService for SystemServiceAdapter {
             enabled: caller.principal().has_scope(scope),
             detail: String::new(),
         })
+        .chain(std::iter::once(Capability {
+            name: "plugins.discovery".into(),
+            enabled: self.plugin_discovery && caller.principal().has_scope(scopes::EXTENSIONS_READ),
+            detail: String::new(),
+        }))
+        .chain(std::iter::once(Capability {
+            name: "plugins.skill_selection".into(),
+            enabled: self.plugin_discovery && caller.principal().has_scope(scopes::RUNS_EXECUTE),
+            detail: String::new(),
+        }))
         .chain(std::iter::once(Capability {
             name: "research.create".into(),
             enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE),

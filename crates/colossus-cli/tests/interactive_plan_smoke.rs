@@ -141,7 +141,7 @@ fn write_config(origin: &str) -> Fixture {
     fs::write(
         &config,
         serde_json::to_vec_pretty(&json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "storage": {
                 "path": directory.path().join("state.redb"),
                 "keys": {
@@ -165,7 +165,10 @@ fn write_config(origin: &str) -> Fixture {
                         "plan.update",
                         "plan.discard",
                         "plan.execute",
-                        "context.show"
+                        "context.show",
+                        "presentation.history.append",
+                        "plugin.list",
+                        "plugin.skill.read"
                     ],
                     "requireApproval": ["plan.approve_request"],
                     "deny": []
@@ -709,6 +712,21 @@ fn run_full_screen_lifecycle(
 
     let booted = wait_for_screen(&output, ROWS, COLS, "mode=execute");
     if booted {
+        writer
+            .write_all(b"/plugins\r")
+            .expect("write plugin inventory command");
+        writer.flush().expect("flush plugin inventory command");
+    }
+    let plugins_visible = booted && wait_for_screen(&output, ROWS, COLS, "Bundled with Colossus");
+    if plugins_visible {
+        writer
+            .write_all(b"/plugin skills\r")
+            .expect("write plugin skills command");
+        writer.flush().expect("flush plugin skills command");
+    }
+    let plugin_skills_visible =
+        plugins_visible && wait_for_screen(&output, ROWS, COLS, "colossus/plugin-authoring");
+    if plugin_skills_visible {
         let commands = format!("/plan on\r/plan use {plan_id}\r/plan approve\r");
         writer
             .write_all(commands.as_bytes())
@@ -717,7 +735,7 @@ fn run_full_screen_lifecycle(
     }
     let short_id = plan_id.chars().take(8).collect::<String>();
     let approved_marker = format!("plan={short_id}:r2:approved");
-    let approved = booted && wait_for_screen(&output, ROWS, COLS, &approved_marker);
+    let approved = plugin_skills_visible && wait_for_screen(&output, ROWS, COLS, &approved_marker);
     let execution_choice_visible =
         approved && wait_for_screen(&output, ROWS, COLS, "choose strategy");
     let approved_screen = screen_contents(&output, ROWS, COLS);
@@ -755,6 +773,18 @@ fn run_full_screen_lifecycle(
         status,
         approved_screen,
         raw_output
+    );
+    assert!(
+        plugins_visible,
+        "{} TUI did not render the plugin inventory: {}",
+        host.label(),
+        approved_screen
+    );
+    assert!(
+        plugin_skills_visible,
+        "{} TUI did not render the plugin skill inventory: {}",
+        host.label(),
+        approved_screen
     );
     assert!(
         approved,

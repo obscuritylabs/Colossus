@@ -187,6 +187,7 @@ async fn run_rust_prompt(
     let client = Colossus::connect_installed(connect).await?;
     let created = client
         .create_run(CreateRunRequest {
+            plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text(prompt)],
             session_id: None,
             end_user_id: None,
@@ -194,7 +195,6 @@ async fn run_rust_prompt(
             mode: RunMode::Execute,
             research_depth: None,
             research_sources: Vec::new(),
-            selected_skills: Vec::new(),
             plan_action: None,
             branch: None,
             max_turns: 12,

@@ -8,7 +8,7 @@ function renderRail(
   terminalAvailable: boolean,
   capabilities = {
     delegation: false,
-    skills: false,
+    plugins: false,
     tui: true,
     shellTerminal: true,
     files: true,
@@ -64,7 +64,7 @@ describe("ProductRail terminal availability", () => {
   it("offers the embedded shell independently of TUI readiness", () => {
     const markup = renderRail(false, {
       delegation: false,
-      skills: false,
+      plugins: false,
       tui: false,
       shellTerminal: true,
       files: false,
@@ -82,7 +82,7 @@ describe("ProductRail terminal availability", () => {
   it("hides optional runtime areas until they are explicitly advertised", () => {
     const markup = renderRail(true, {
       delegation: false,
-      skills: false,
+      plugins: false,
       tui: false,
       shellTerminal: false,
       files: false,
@@ -102,7 +102,7 @@ describe("ProductRail terminal availability", () => {
   it("shows orchestration for an authenticated delegation capability", () => {
     const markup = renderRail(true, {
       delegation: true,
-      skills: false,
+      plugins: false,
       tui: false,
       shellTerminal: false,
       files: false,

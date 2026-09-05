@@ -5,7 +5,7 @@ use crate::{
     ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
     MessageContentPart, MessageRole, OutcomeCertainty, PageResponse, PlanExecutionStrategy,
     PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind,
-    RespondInteractionRequest, RespondInteractionResponse, Run, RunBranch, RunBranchContextMode,
+    RespondInteractionRequest, RespondInteractionResponse, Run, RunBranchContextMode,
     RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
     RunUpdateKind, SessionActivity, SessionActivityContent, SessionActivityKind,
     SessionActivityLane, SessionActivityStatus, SessionMessage, ThreadLifecycle, TokenUsage,
@@ -47,7 +47,7 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
                 ResearchSourceKind::Mcp => core::ResearchSourceKind::Mcp,
             })
             .collect(),
-        skill_ids: value.selected_skills,
+        skill_ids: value.plugin_skill_ids,
         plan_action: value.plan_action.map(|action| match action {
             PlanRunAction::Revise {
                 source_run_id,
@@ -403,6 +403,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
         _ => return Err(projection_error()),
     };
     Ok(Run {
+        plugin_skill_ids: value.skill_ids,
         run_id: value.id,
         session_id: value.session_id,
         title: value.title,
@@ -421,7 +422,6 @@ fn run(value: core::Run) -> ApiResult<Run> {
         pending_interaction_count: u32::from(value.pending_interaction.is_some()),
         terminal,
         etag: value.etag,
-        selected_skills: value.skill_ids,
         archived: value.archived,
     })
 }

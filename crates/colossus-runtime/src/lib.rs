@@ -29,9 +29,13 @@ mod instruction_snapshots;
 mod memory;
 mod memory_gateway;
 mod operations;
-mod pack_extensions;
-mod pack_process;
 mod plan_runs;
+mod plugin_catalog;
+#[cfg(test)]
+mod plugin_catalog_tests;
+mod plugin_extensions;
+mod plugin_management;
+mod plugin_registry_effects;
 mod prelude;
 mod presentation_work_effects;
 mod provider_gateway;
@@ -69,11 +73,11 @@ pub use colossus_observability::{
 };
 pub use composition::Runtime;
 pub use config::{
-    AgentConfig, AuditConfig, AuditExporterConfig, KeyConfig, MemoryConfig, MemoryEmbeddingConfig,
-    ModelProfileConfig, ModelsConfig, NetworkConfig, PacksConfig, PolicyConfig,
-    ProviderProfileConfig, ProvidersConfig, ResearchConfig, RuntimeConfig, SandboxConfig,
-    SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig, StorageAdapter,
-    StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
+    AgentConfig, AuditConfig, AuditExporterConfig, BundlesConfig, KeyConfig, MemoryConfig,
+    MemoryEmbeddingConfig, ModelProfileConfig, ModelsConfig, NetworkConfig, PluginMcpServerConfig,
+    PluginsConfig, PolicyConfig, ProviderProfileConfig, ProvidersConfig, ResearchConfig,
+    RuntimeConfig, SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig,
+    StorageAdapter, StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;
@@ -92,8 +96,9 @@ use generic_effects::*;
 use instruction_snapshots::*;
 use memory_gateway::*;
 use operations::*;
-use pack_extensions::*;
-use pack_process::*;
+use plugin_catalog::*;
+use plugin_extensions::*;
+use plugin_registry_effects::*;
 use presentation_work_effects::*;
 use provider_gateway::*;
 use repository_tools::*;

@@ -739,15 +739,23 @@ fn create_request_accepts_opaque_artifact_input_and_rejects_path_like_ids() {
 }
 
 #[test]
-fn create_request_rejects_public_skill_activation() {
-    let mut request = create_request("skill-denied", "Do not load skills");
-    request.skill_ids = vec!["private-skill".into()];
-
-    let error = request
+fn create_request_accepts_only_distinct_qualified_plugin_skill_selections() {
+    let mut request = create_request("plugin-selection", "Use the selected instructions");
+    request.skill_ids = vec!["colossus/coding".into(), "colossus/plugin-authoring".into()];
+    request
         .validate()
-        .expect_err("public skills must fail closed until grants have a skill ceiling");
-    assert_eq!(error.reason, ApiErrorReason::InvalidArgument);
-    assert_eq!(error.violations[0].field, "skill_ids");
+        .expect("qualified plugin skill selections");
+    for invalid in [
+        vec!["private-skill".into()],
+        vec!["colossus/coding".into(); 2],
+    ] {
+        request.skill_ids = invalid;
+        let error = request
+            .validate()
+            .expect_err("invalid or duplicate selection");
+        assert_eq!(error.reason, ApiErrorReason::InvalidArgument);
+        assert_eq!(error.violations[0].field, "plugin_skill_ids");
+    }
 }
 
 #[test]
@@ -1828,7 +1836,8 @@ fn run_ownership_isolated_by_application_but_survives_credential_rotation() {
 #[test]
 fn orphan_recovery_uses_the_accepted_grant_without_borrowing_trigger_authority() {
     let (_, repository, owner) = fixture();
-    let request = create_request("recovery-create", "Recover this run");
+    let mut request = create_request("recovery-create", "Recover this run");
+    request.skill_ids = vec!["colossus/coding".into()];
     create_run(
         &repository,
         &owner,

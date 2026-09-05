@@ -17,6 +17,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:browser": "playwright test",
+    "test:plugin-runtime": "node scripts/test-plugin-runtime.mjs",
     "test:browser:install": "playwright install chromium",
     "test:watch": "vitest",
     "tauri": "tauri",

@@ -986,7 +986,6 @@ function recentRun(
         }
       : null,
     etag: `fixture-etag-${runId}`,
-    selectedSkills: [],
     archived: false,
   };
 }
@@ -1189,7 +1188,6 @@ export function buildOperationsStudioFixture(
     pendingInteractionCount: 1,
     terminal: null,
     etag: "fixture-etag-desktop-release",
-    selectedSkills: ["release-management", "security-review", "documents"],
     archived: false,
   };
   const selectedView: RunView = {
@@ -1553,7 +1551,6 @@ export function buildPlanWorkflowFixture(): ChatState {
       },
     },
     etag: "fixture-etag-plan-workflow",
-    selectedSkills: [],
     archived: false,
   };
   const updates: RunUpdate[] = [

@@ -202,7 +202,19 @@ impl AgentService {
             workflow_hash: scope.workflow_hash.map(str::to_owned),
             step_id: scope.step_id.map(str::to_owned),
             attempt: scope.attempt,
-            skill_ids: scope.active_skills.to_vec(),
+            skill_ids: colossus_contracts::merge_plugin_selections(
+                scope.active_skills,
+                &self
+                    .provenance
+                    .as_ref()
+                    .map(|provider| provider.plugin_skill_ids())
+                    .unwrap_or_default(),
+            ),
+            plugin_digests: self
+                .provenance
+                .as_ref()
+                .map(|provider| provider.plugin_digests())
+                .unwrap_or_default(),
             draft_plan_id: plan_target.as_ref().and_then(|target| match target {
                 PlanDraftTarget::Create => None,
                 PlanDraftTarget::Update { plan_id, .. } => Some(plan_id.clone()),
@@ -304,7 +316,7 @@ impl AgentService {
                 "tool_calls": route.capabilities.tool_calls,
                 "streaming": route.capabilities.streaming,
                 "max_turns": max_turns,
-                "active_skills": scope.active_skills,
+                "active_skills": context.skill_ids,
                 "mode": &scope.mode,
             }),
         )?;
@@ -448,7 +460,7 @@ impl AgentService {
                     "message_count": request.messages.len(),
                     "tool_count": request.tools.len(),
                     "request_bytes": serde_json::to_vec(&request).map_or(0, |bytes| bytes.len()),
-                    "active_skills": scope.active_skills,
+                    "active_skills": context.skill_ids,
                 }),
             )?;
             emit_run_event(

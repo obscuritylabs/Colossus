@@ -163,6 +163,19 @@ jobs:
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Test the desktop native bridge
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Exercise Desktop plugins against the authenticated runtime
+        working-directory: apps/desktop
+        run: npm run test:plugin-runtime
+      - name: Retain macOS plugin acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-plugin-acceptance
+          path: |
+            apps/desktop/test-results
+            output/playwright
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Remove standalone debug artifacts before release packaging
         run: |
           expected="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target"
@@ -274,7 +287,29 @@ jobs:
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Install Chromium for Windows plugin acceptance
+        if: steps.desktop_prepare.outcome == 'success'
+        working-directory: apps/desktop
+        run: npm run test:browser:install
+      - name: Exercise Windows Desktop plugins against the authenticated runtime
+        id: plugin_runtime
+        if: steps.desktop_prepare.outcome == 'success'
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npm run test:plugin-runtime
+      - name: Retain Windows plugin acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-plugin-acceptance
+          path: |
+            apps/desktop/test-results
+            output/playwright
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require every Windows acceptance check
+        # The following aggregation remains authoritative even when an individual
+        # acceptance command used continue-on-error to collect other failures.
         shell: bash
         env:
           CLIPPY_OUTCOME: ${{ steps.native_clippy.outcome }}
@@ -288,6 +323,7 @@ jobs:
           RENDERER_TEST_OUTCOME: ${{ steps.renderer_tests.outcome }}
           TYPECHECK_OUTCOME: ${{ steps.renderer_typecheck.outcome }}
           WORKER_OUTCOME: ${{ steps.worker_acceptance.outcome }}
+          PLUGIN_RUNTIME_OUTCOME: ${{ steps.plugin_runtime.outcome }}
         run: |
           set -eu
           failed=
@@ -302,7 +338,8 @@ jobs:
             "worker-and-sandbox=$WORKER_OUTCOME" \
             "desktop-prepare=$PREPARE_OUTCOME" \
             "desktop-clippy=$CLIPPY_OUTCOME" \
-            "desktop-tests=$NATIVE_TEST_OUTCOME"
+            "desktop-tests=$NATIVE_TEST_OUTCOME" \
+            "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME"
           do
             if test "${result#*=}" != success; then
               failed="$failed ${result%%=*}"

@@ -10,6 +10,13 @@ repository = "https://github.com/obscuritylabs/Colossus"
 
 [workspace]
 
+[features]
+plugin-test-bridge = []
+
+[[example]]
+name = "plugin-test-bridge"
+required-features = ["plugin-test-bridge"]
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

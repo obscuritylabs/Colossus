@@ -108,7 +108,7 @@ public roots:
 | Integrations | Native and imported HTTP integrations |
 | Brokered HTTP | `network.http` and WORM audit export |
 | Remote MCP | Streamable HTTP requests and OAuth metadata/token calls |
-| Packs | Remote pack registry operations |
+| Agent Plugins | Exact-origin OCI registry, token-service, and permitted blob-redirect requests, each with its own optional CA root |
 | Semantic memory | Chroma and OpenAI-compatible embedding endpoints |
 | PostgreSQL | `webpki_roots` TLS policy |
 | OPA | Shared pinned trust when remote OPA omits `ca_pem_path` |

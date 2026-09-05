@@ -685,111 +685,58 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
-            name: "skill.scaffold".into(),
-            description: "Create a validated data-only skill skeleton in the configured user library.".into(),
+            name: "plugin.list".into(),
+            description: "List the immutable Agent Plugins in this run's active catalog snapshot.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("plugin.list".into()),
+            capability: Some("plugin.list".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "plugin.inspect".into(),
+            description: "Inspect one active Agent Plugin, including skills, MCP servers, trust, and component diagnostics.".into(),
             input_schema: object_schema(
-                json!({
-                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "description": {"type": "string", "minLength": 1, "maxLength": 8192},
-                    "instructions": {"type": "string", "minLength": 1, "maxLength": 262144},
-                    "resource_dirs": {"type": "array", "maxItems": 5, "uniqueItems": true, "items": {"type": "string", "enum": ["assets", "examples", "references", "scripts", "tests"]}, "default": []}
-                }),
-                &["name", "description", "instructions"],
+                json!({"plugin": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["plugin"],
             ),
-            effect_action: Some("skill.scaffold".into()),
-            capability: Some("skill.scaffold".into()),
+            effect_action: Some("plugin.inspect".into()),
+            capability: Some("plugin.inspect".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "plugin.skill.read".into(),
+            description: "Load one Agent Skill's instructions by its qualified <plugin>/<skill> identifier.".into(),
+            input_schema: object_schema(
+                json!({"skill": {"type": "string", "minLength": 3, "maxLength": 257, "pattern": "^[^/]+/[^/]+$"}}),
+                &["skill"],
+            ),
+            effect_action: Some("plugin.skill.read".into()),
+            capability: Some("plugin.skill.read".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "plugin.resource.list".into(),
+            description: "List arbitrary contained resources for one qualified Agent Skill.".into(),
+            input_schema: object_schema(
+                json!({"skill": {"type": "string", "minLength": 3, "maxLength": 257, "pattern": "^[^/]+/[^/]+$"}}),
+                &["skill"],
+            ),
+            effect_action: Some("plugin.resource.list".into()),
+            capability: Some("plugin.resource.list".into()),
             max_output_bytes: 256 * 1024,
         },
         ToolSpec {
-            name: "skill.inspect".into(),
-            description: "Inspect manifests and hashes for one installed user skill without releasing file bodies.".into(),
-            input_schema: object_schema(
-                json!({"name": {"type": "string", "minLength": 1, "maxLength": 128}}),
-                &["name"],
-            ),
-            effect_action: Some("skill.inspect".into()),
-            capability: Some("skill.inspect".into()),
-            max_output_bytes: 256 * 1024,
-        },
-        ToolSpec {
-            name: "skill.read".into(),
-            description: "Read one bounded UTF-8 file from an installed user skill for authoring.".into(),
+            name: "plugin.resource.read".into(),
+            description: "Read a bounded UTF-8 resource from one qualified Agent Skill; binary resources remain addressable by path.".into(),
             input_schema: object_schema(
                 json!({
-                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "skill": {"type": "string", "minLength": 3, "maxLength": 257, "pattern": "^[^/]+/[^/]+$"},
                     "path": {"type": "string", "minLength": 1, "maxLength": 4096}
                 }),
-                &["name", "path"],
+                &["skill", "path"],
             ),
-            effect_action: Some("skill.read".into()),
-            capability: Some("skill.read".into()),
-            max_output_bytes: 256 * 1024,
-        },
-        ToolSpec {
-            name: "skill.write".into(),
-            description: "Write one validated installed user-skill file; existing files require their current SHA-256.".into(),
-            input_schema: object_schema(
-                json!({
-                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
-                    "content": {"type": "string", "maxLength": 262144},
-                    "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-                }),
-                &["name", "path", "content"],
-            ),
-            effect_action: Some("skill.write".into()),
-            capability: Some("skill.write".into()),
-            max_output_bytes: 256 * 1024,
-        },
-        ToolSpec {
-            name: "skill.validate".into(),
-            description: "Validate one skill target; provide exactly one of an installed user skill name or a workspace-local skill directory path.".into(),
-            input_schema: object_schema_with(
-                json!({
-                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "path": {"type": "string", "minLength": 1, "maxLength": 4096}
-                }),
-                &[],
-                json!({"oneOf": [{"required": ["name"]}, {"required": ["path"]}], "maxProperties": 1}),
-            ),
-            effect_action: Some("skill.validate".into()),
-            capability: Some("skill.validate".into()),
-            max_output_bytes: 256 * 1024,
-        },
-        ToolSpec {
-            name: "skill.install".into(),
-            description: "Validate and install a workspace-local data-only skill into the configured user library.".into(),
-            input_schema: object_schema(
-                json!({"path": {"type": "string", "minLength": 1, "maxLength": 4096}}),
-                &["path"],
-            ),
-            effect_action: Some("skill.install".into()),
-            capability: Some("skill.install".into()),
-            max_output_bytes: 256 * 1024,
-        },
-        ToolSpec {
-            name: "skill.resource.list".into(),
-            description: "List bounded regular resources for a skill active on this turn.".into(),
-            input_schema: object_schema(
-                json!({"name": {"type": "string", "minLength": 1, "maxLength": 128}}),
-                &["name"],
-            ),
-            effect_action: Some("skill.resource.list".into()),
-            capability: Some("skill.resource.list".into()),
-            max_output_bytes: 256 * 1024,
-        },
-        ToolSpec {
-            name: "skill.resource.read".into(),
-            description: "Read one bounded UTF-8 resource for a skill active on this turn. Scripts are returned only as text.".into(),
-            input_schema: object_schema(
-                json!({
-                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "path": {"type": "string", "minLength": 1, "maxLength": 4096}
-                }),
-                &["name", "path"],
-            ),
-            effect_action: Some("skill.resource.read".into()),
-            capability: Some("skill.resource.read".into()),
+            effect_action: Some("plugin.resource.read".into()),
+            capability: Some("plugin.resource.read".into()),
             max_output_bytes: 64 * 1024,
         },
         ToolSpec {

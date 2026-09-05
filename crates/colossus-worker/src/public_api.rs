@@ -301,7 +301,10 @@ impl PreparedPublicApi {
             artifacts,
         )
         .await
-        .map_err(|error| WorkerError::PublicApi(error.to_string()))?;
+        .map_err(|error| WorkerError::PublicApi(error.to_string()))?
+        .with_extensions(Arc::new(colossus_api_runtime::RuntimeExtensionApi::new(
+            Arc::clone(&runtime),
+        )));
 
         write_endpoint_certificate(&options.certificate_path, server.certificate_pem()).map_err(
             |_| {

@@ -34,7 +34,7 @@ const (
 	ArtifactPurpose_ARTIFACT_PURPOSE_RUN_OUTPUT ArtifactPurpose = 2
 	// ARTIFACT_PURPOSE_WORKFLOW is a workflow document or input.
 	ArtifactPurpose_ARTIFACT_PURPOSE_WORKFLOW ArtifactPurpose = 3
-	// ARTIFACT_PURPOSE_EXTENSION is a pack or extension archive.
+	// ARTIFACT_PURPOSE_EXTENSION is an Agent Plugin or extension archive.
 	ArtifactPurpose_ARTIFACT_PURPOSE_EXTENSION ArtifactPurpose = 4
 	// ARTIFACT_PURPOSE_ARCHIVE is an exported Colossus archive.
 	ArtifactPurpose_ARTIFACT_PURPOSE_ARCHIVE ArtifactPurpose = 5

@@ -1,0 +1,17 @@
+[package]
+name = "colossus-bundled-plugins"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+colossus-plugins.workspace = true
+colossus-ports.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

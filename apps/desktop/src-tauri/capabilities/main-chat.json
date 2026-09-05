@@ -4,6 +4,11 @@
   "description": "Only the main bundled WebView may use the narrow Colossus chat commands.",
   "windows": ["main"],
   "permissions": [
+    "allow-get-plugin-inventory",
+    "allow-resolve-plugin-selection",
+    "allow-read-plugin-preview",
+    "allow-manage-plugin",
+    "allow-cancel-plugin-operation",
     "allow-desktop-release-channel",
     "allow-desktop-release-metadata",
     "allow-export-diagnostics",

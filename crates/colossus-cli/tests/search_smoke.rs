@@ -58,7 +58,7 @@ fn configured_search_is_inspectable_visible_and_queryable() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

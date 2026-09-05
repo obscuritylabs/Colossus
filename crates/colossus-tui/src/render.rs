@@ -946,10 +946,14 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
             }
         }
     };
-    frame.render_widget(
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title)),
-        area,
-    );
+    let mut composer_block = Block::default().borders(Borders::ALL).title(title);
+    if !state.sticky_skills.is_empty() {
+        composer_block = composer_block.title_bottom(format!(
+            " Skills: {} · /plugin remove ID ",
+            state.sticky_skills.join(", ")
+        ));
+    }
+    frame.render_widget(Paragraph::new(text).block(composer_block), area);
     if state.preview_cache.native_graphics() {
         let pending = state
             .pending_images

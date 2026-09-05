@@ -27,7 +27,7 @@ and output bounds.
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | Durable child jobs; recursive delegation denied |
 | Memories | `memory.create`, `memory.update`, `memory.list`, `memory.search`, `memory.archive`, `memory.supersede` | Canonical lifecycle; retrieval post-gated |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
-| Skills | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.install`, `skill.resource.list`, `skill.resource.read` | Data-only authoring/resources |
+| Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
 | MCP | `mcp.servers`, `mcp.tools`, `mcp.call` | Configured stdio servers and exact tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
@@ -56,7 +56,7 @@ The remaining Plan Mode allowlist is:
 - `filesystem.list`, `filesystem.read`, `filesystem.search`, `git.status`, `git.diff`,
   `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`,
   `repo.file_summary`, and `patch.preview`;
-- `context.show`, `context.snapshots`, `skill.resource.read`, `task.create`,
+- `context.show`, `context.snapshots`, `plugin.resource.read`, `task.create`,
   `task.list`, `decision.list`, `plan.show`, `memory.list`, `memory.search`,
   `agent.result`, and `agent.list`.
 
@@ -116,9 +116,9 @@ exceptions operators need when writing action overrides:
 | `mcp.call` | `mcp.call` |
 
 Connected integration operations use their generated tool name as the action name.
-Verified pack tools use `pack.tool.PACK.TOOL`; pack MCP operations use
-`pack.mcp.PACK.SERVER.tools` and `pack.mcp.PACK.SERVER.call`. Inspect the exact active
-names with `config effective`.
+Explicitly enabled plugin MCP operations use
+`plugin.mcp.PLUGIN.SERVER.tools` and `plugin.mcp.PLUGIN.SERVER.call`. Inspect the exact
+active names with `config effective`.
 
 Plan lifecycle operations that have no model-callable tool keep their action identity:
 operator discard is `plan.discard`, and either execution strategy is `plan.execute`.
@@ -126,18 +126,18 @@ operator discard is `plan.discard`, and either execution strategy is `plan.execu
 ## Exact built-in action catalog
 
 The following names are the complete first-party catalog accepted by exact access
-overrides. Dynamic integration and verified-pack actions are added only from their
-active trusted declarations.
+overrides. Dynamic integration and explicitly enabled plugin MCP actions are added only
+from the active run snapshot and workspace overlay.
 
 | Class | Exact action names |
 | --- | --- |
 | Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.codex`, `provider.openai.chat`, `provider.models`, `provider.call` |
-| Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `skill.inspect`, `skill.read`, `skill.validate`, `skill.resource.list`, `skill.resource.read`, `pack.verify`, `bundle.verify`, `bundle.key.inspect`, `collection.verify`, `mcp.tools` |
+| Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read`, `plugin.validate`, `plugin.verify`, `bundle.verify`, `bundle.key.inspect`, `mcp.tools` |
 | Local state | `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
-| Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `skill.scaffold`, `skill.write`, `skill.install`, `audit.export.write` |
-| Execution | `process.spawn`, `shell.run`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
+| Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `audit.export.write` |
+| Execution | `process.spawn`, `shell.run`, `plugin.registry.credential_helper`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
 | External network | `network.http`, `web.search`, `embedding.openai.create`, `memory.index.chroma.search`, `memory.index.chroma.status`, `memory.index.chroma.upsert`, `memory.index.chroma.remove`, `memory.index.chroma.reset`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call` |
-| Administration | `plan.approve_request`, `audit.export.worm.write`, `pack.install`, `pack.enable`, `pack.disable`, `pack.uninstall`, `pack.trust.add`, `bundle.build`, `bundle.install`, `collection.build`, `collection.install`, `registry.pull`, `registry.push` |
+| Administration | `plan.approve_request`, `audit.export.worm.write`, `plugin.install`, `plugin.enable`, `plugin.disable`, `plugin.update`, `plugin.uninstall`, `plugin.gc`, `plugin.package`, `plugin.pull`, `plugin.push`, `plugin.export`, `bundle.build`, `bundle.install` |
 
 ## Effect action classes
 
@@ -151,9 +151,9 @@ these operational classes:
 | Read | Filesystem, Git, repository, memory, context | Allowed with exact obligations; output may be post-gated |
 | Colossus state mutation | Tasks, decisions, plans, goals, sessions | Allowed with canonical ownership checks |
 | Workspace mutation | File write, patch apply | Approval-required |
-| Execution | Process and pack tool | Approval-required |
-| External network | HTTP, search, integration, registry | Approval-required |
-| Installation and trust | Skill/pack/bundle/collection lifecycle | Approval-required |
+| Execution | Process and plugin MCP tool | Approval-required |
+| External network | HTTP, search, integration, plugin registry | Approval-required |
+| Installation and trust | Plugin and release-bundle lifecycle | Approval-required |
 | Administration and recovery | Export reset, recovery transitions | Approval-required |
 
 An action decision never supplies a resource grant. `allow_all` still requires a trusted

@@ -29,7 +29,6 @@ function renderOutput(
     pendingInteractionCount: 0,
     terminal: null,
     etag: "etag-markdown-test",
-    selectedSkills: [],
     archived: false,
     ...runOverrides,
   };

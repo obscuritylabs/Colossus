@@ -308,11 +308,6 @@ impl WorkspaceIdentity {
         &self.0.canonical_path
     }
 
-    #[cfg(unix)]
-    pub(super) fn directory(&self) -> Result<File, StoreError> {
-        self.0.directory.try_clone().map_err(|_| identity_changed())
-    }
-
     fn matches_expected(&self, expected: &WorkspaceIdentityToken) -> Result<bool, StoreError> {
         match expected.kind {
             #[cfg(all(unix, not(target_os = "macos")))]

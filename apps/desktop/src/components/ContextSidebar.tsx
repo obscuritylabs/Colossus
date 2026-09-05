@@ -21,6 +21,12 @@ interface ContextSidebarProps {
 }
 
 const COPY = {
+  plugins: {
+    kicker: "Agent Plugins",
+    title: "Plugins",
+    description:
+      "Home-wide installations and workspace-scoped skill selection.",
+  },
   fleet: {
     kicker: "Command and control",
     title: "Fleet",

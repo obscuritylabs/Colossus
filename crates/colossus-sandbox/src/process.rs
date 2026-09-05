@@ -102,11 +102,11 @@ impl SandboxProcessExecutor {
 }
 
 pub(super) fn is_sandbox_process_action(action: &str) -> bool {
-    action.starts_with("pack.tool.")
-        || action.starts_with("pack.mcp.")
+    action.starts_with("plugin.mcp.")
         || matches!(
             action,
-            "process.spawn"
+            "plugin.registry.credential_helper"
+                | "process.spawn"
                 | "shell.run"
                 | "git.status"
                 | "git.diff"
@@ -117,7 +117,7 @@ pub(super) fn is_sandbox_process_action(action: &str) -> bool {
 }
 
 pub(super) fn is_mcp_process_action(action: &str) -> bool {
-    action.starts_with("pack.mcp.") || matches!(action, "mcp.tools" | "mcp.call")
+    action.starts_with("plugin.mcp.") || matches!(action, "mcp.tools" | "mcp.call")
 }
 
 pub(super) fn sandbox_helper_budget(

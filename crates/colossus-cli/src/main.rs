@@ -77,6 +77,7 @@ mod mcp_auth;
 mod memory_research_args;
 mod output;
 mod pickers;
+mod plugin_requests;
 mod presentation_commands;
 mod public_api_admin;
 mod service_args;

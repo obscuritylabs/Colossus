@@ -46,7 +46,6 @@ const view: RunView = {
       },
     },
     etag: "etag-child",
-    selectedSkills: [],
     archived: false,
   },
   localPrompt: null,

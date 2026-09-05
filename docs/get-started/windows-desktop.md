@@ -101,8 +101,8 @@ storage. The original path is not retained or returned to the WebView.
 
 Settings shows only whether a bundle is configured, the certificate count, and SHA-256
 certificate fingerprints. Managed Local restarts transactionally and supplies the
-private copy to providers, external gRPC clients, webhooks, search/vector services, pack
-downloads, policy clients, and the other Colossus-owned network adapters. Removing the
+private copy to providers, external gRPC clients, webhooks, search/vector services, plugin
+registry transfers, policy clients, and the other Colossus-owned network adapters. Removing the
 bundle also restarts Managed Local; public system roots remain available.
 
 ### 4. Upgrade previews manually
@@ -168,7 +168,7 @@ bundle reports only certificate count and fingerprints.
   suspended, is checked against the bundle identity, enters a kill-on-close Job Object,
   and completes the private worker-key exchange before the terminal is released to the
   renderer. Colossus never substitutes an arbitrary shell PTY.
-- Fleet, delegation, agent workflows, skills, and attachments remain hidden unless an
+- Fleet, delegation, agent workflows, plugin skills, and attachments remain hidden unless an
   authenticated runtime advertises them.
 - Preview upgrades are manual. A stable Windows channel remains disabled until the
   installer, app, CLI, and sidecar can all be Authenticode signed.

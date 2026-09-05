@@ -48,6 +48,7 @@ import {
   removeCaBundle,
   removeExternalTarget,
   respondInteraction,
+  resolvePluginSelection,
   runManagedSelfTest,
   searchSpaceThreads,
   selectSpace,
@@ -69,6 +70,8 @@ import {
   managedRuntimeBoundaryActive,
 } from "./components/ExecutionBoundaryBanner";
 import { OperationsSurface } from "./components/OperationsSurface";
+import { pluginSelectionKey } from "./plugins";
+import { usePluginSkills } from "./use-plugin-skills";
 import type { AsideDraft } from "./components/AsidePanel";
 import { OnboardingSurface } from "./components/OnboardingSurface";
 import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
@@ -369,7 +372,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
   capabilities: {
     research: true,
     delegation: false,
-    skills: false,
+    plugins: false,
+    pluginSkillSelection: FIXTURE_MODE,
     tui: FIXTURE_MODE,
     shellTerminal: FIXTURE_MODE,
     files: FIXTURE_MODE,
@@ -582,7 +586,6 @@ function buildDelegateFixture(
       },
     },
     etag: `fixture-etag-${runId}`,
-    selectedSkills: [],
     archived: false,
   };
   const activities: Array<{
@@ -802,6 +805,8 @@ interface PlanRevisionTarget {
 
 interface RunSubmission {
   prompt: string;
+  executionPrompt?: string;
+  pluginSkillIds?: readonly string[];
   attachments: readonly ArtifactReference[];
   role: string;
   mode: RunMode;
@@ -867,6 +872,18 @@ export default function App() {
   const [initialWorkSidebarWidth] = useState(readStoredWorkSidebarWidth);
   const workSidebarWidthRef = useRef(initialWorkSidebarWidth);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
+  const [conversationSkills, setConversationSkills] = useState<
+    Record<string, readonly string[]>
+  >({});
+  const selectionSession =
+    chat.activeRunId === null
+      ? undefined
+      : chat.views.get(chat.activeRunId)?.run.sessionId;
+  const selectionKey = pluginSelectionKey(
+    desktop.selectedTargetId,
+    selectionSession,
+  );
+  const pluginSelections = conversationSkills[selectionKey] ?? [];
   const [storedThreadPins, setStoredThreadPins] = useState(() => {
     const fixtureSessionId =
       FIXTURE_MODE && chat.activeRunId !== null
@@ -939,6 +956,11 @@ export default function App() {
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
   const [prompt, setPrompt] = useState("");
+  const completionSkills = usePluginSkills(
+    desktop.selectedTargetId,
+    desktop.capabilities.pluginSkillSelection === true,
+    prompt.trimStart().startsWith("@") || pluginSelections.length > 0,
+  );
   const [attachments, setAttachments] = useState<ArtifactReference[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [artifactPreviews, setArtifactPreviews] = useState<
@@ -1843,6 +1865,10 @@ export default function App() {
       return;
     }
     setWorkNavigationOpen(false);
+    setConversationSkills((current) => ({
+      ...current,
+      [pluginSelectionKey(desktop.selectedTargetId, undefined)]: [],
+    }));
     setSurface("work");
     dispatch({ type: "select_run", runId: null });
     setRunLoadError("");
@@ -1866,7 +1892,11 @@ export default function App() {
         return { type: "stale" };
       }
       const request: CreateRunRequest = {
-        prompt: submission.prompt,
+        prompt: submission.executionPrompt ?? submission.prompt,
+        ...(submission.executionPrompt === undefined
+          ? {}
+          : { pluginMentionsResolved: true }),
+        pluginSkillIds: [...(submission.pluginSkillIds ?? [])],
         artifactIds: submission.attachments.map(
           (attachment) => attachment.artifactId,
         ),
@@ -1938,7 +1968,6 @@ export default function App() {
               },
             },
             etag: `fixture-etag-${runId}`,
-            selectedSkills: [],
             archived: false,
           };
         } else {
@@ -1948,6 +1977,13 @@ export default function App() {
           return { type: "stale" };
         }
         targetRoutes.current.bindRun(run.runId, route);
+        if (submission.sessionId === undefined) {
+          setConversationSkills((current) => ({
+            ...current,
+            [pluginSelectionKey(route.targetId, run.sessionId)]:
+              submission.pluginSkillIds ?? [],
+          }));
+        }
         dispatch({ type: "upsert_run", run });
         dispatch({
           type: "record_local_prompt",
@@ -1974,11 +2010,11 @@ export default function App() {
     [markConnectionFailure, startWatch],
   );
 
-  function enqueueCurrentMessage(
+  async function enqueueCurrentMessage(
     currentView: NonNullable<ReturnType<typeof chat.views.get>>,
     route: TargetRoute,
     placement: QueuePlacement,
-  ): QueuedMessage | null {
+  ): Promise<QueuedMessage | null> {
     const cleanPrompt = prompt.trim();
     const cleanRole = role.trim();
     if (
@@ -1989,12 +2025,35 @@ export default function App() {
     ) {
       return null;
     }
+    let resolved: { prompt: string; pluginSkillIds: string[] } | undefined;
+    if (!FIXTURE_MODE && cleanPrompt.startsWith("@")) {
+      if (submitInFlight.current) return null;
+      submitInFlight.current = true;
+      setSubmitting(true);
+      try {
+        resolved = await resolvePluginSelection(
+          route.targetId,
+          cleanPrompt,
+          pluginSelections,
+        );
+        if (targetRoutes.current?.isCurrent(route) !== true) return null;
+      } catch (error: unknown) {
+        setComposerError(commandError(error));
+        return null;
+      } finally {
+        submitInFlight.current = false;
+        setSubmitting(false);
+      }
+    }
     const message: QueuedMessage = {
       id: crypto.randomUUID(),
       idempotencyKey: crypto.randomUUID(),
       targetId: route.targetId,
       sessionId: currentView.run.sessionId,
       prompt: cleanPrompt,
+      ...(resolved === undefined ? {} : { executionPrompt: resolved.prompt }),
+      pluginSkillIds: resolved?.pluginSkillIds ?? [...pluginSelections],
+      conversationSkillIds: [...pluginSelections],
       role: cleanRole,
       mode,
       researchDepth,
@@ -2133,7 +2192,7 @@ export default function App() {
           action.surface === "fleet" &&
           !desktop.capabilities.delegation &&
           !desktop.capabilities.agentWorkflows &&
-          !desktop.capabilities.skills
+          !desktop.capabilities.plugins
         ) {
           setSlashCommandError("Agents are unavailable for this target.");
           return "preserve";
@@ -2232,7 +2291,7 @@ export default function App() {
       (!isTerminalStatus(continuationView.run.status) ||
         continuationQueueLength > 0)
     ) {
-      enqueueCurrentMessage(continuationView, route, "last");
+      await enqueueCurrentMessage(continuationView, route, "last");
       return;
     }
 
@@ -2248,6 +2307,7 @@ export default function App() {
     }
     const fingerprint = operationFingerprint([
       cleanPrompt,
+      ...pluginSelections,
       route.targetId,
       sessionId ?? "",
       cleanRole,
@@ -2273,6 +2333,7 @@ export default function App() {
     const result = await performRunSubmission(
       {
         prompt: cleanPrompt,
+        pluginSkillIds: [...pluginSelections],
         attachments: [...attachments],
         role: cleanRole,
         mode: effectiveMode,
@@ -2312,6 +2373,10 @@ export default function App() {
         const result = await performRunSubmission(
           {
             prompt: message.prompt,
+            ...(message.executionPrompt === undefined
+              ? {}
+              : { executionPrompt: message.executionPrompt }),
+            pluginSkillIds: message.pluginSkillIds ?? [],
             attachments: message.attachments,
             role: message.role,
             mode: message.mode,
@@ -2357,7 +2422,8 @@ export default function App() {
     [commitQueuedMessages, performRunSubmission],
   );
 
-  function editQueuedMessage(messageId: string, nextPrompt: string) {
+  async function editQueuedMessage(messageId: string, nextPrompt: string) {
+    if (submitInFlight.current || connectingRef.current) return;
     if (!isPromptWithinByteLimit(nextPrompt)) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
@@ -2367,6 +2433,39 @@ export default function App() {
       });
       return;
     }
+    const original = queuedMessagesRef.current.find(
+      (message) => message.id === messageId,
+    );
+    const route = targetRoutes.current?.capture() ?? null;
+    if (
+      original === undefined ||
+      route === null ||
+      original.targetId !== route.targetId ||
+      original.state === "sending" ||
+      original.error?.outcomeUnknown === true
+    )
+      return;
+    const sticky =
+      original.conversationSkillIds ?? original.pluginSkillIds ?? [];
+    let resolved = { prompt: nextPrompt.trim(), pluginSkillIds: [...sticky] };
+    if (!FIXTURE_MODE && nextPrompt.trim().startsWith("@")) {
+      submitInFlight.current = true;
+      setSubmitting(true);
+      try {
+        resolved = await resolvePluginSelection(
+          route.targetId,
+          nextPrompt.trim(),
+          sticky,
+        );
+        if (targetRoutes.current?.isCurrent(route) !== true) return;
+      } catch (error: unknown) {
+        setComposerError(commandError(error));
+        return;
+      } finally {
+        submitInFlight.current = false;
+        setSubmitting(false);
+      }
+    }
     commitQueuedMessages(
       updateQueuedMessage(queuedMessagesRef.current, messageId, (message) =>
         message.state === "sending" || message.error?.outcomeUnknown === true
@@ -2374,6 +2473,8 @@ export default function App() {
           : {
               ...message,
               prompt: nextPrompt.trim(),
+              executionPrompt: resolved.prompt,
+              pluginSkillIds: resolved.pluginSkillIds,
               idempotencyKey: crypto.randomUUID(),
               state: "pending",
               error: null,
@@ -2430,7 +2531,7 @@ export default function App() {
       });
       return;
     }
-    const queued = enqueueCurrentMessage(activeView, route, "next");
+    const queued = await enqueueCurrentMessage(activeView, route, "next");
     if (queued === null) {
       return;
     }
@@ -2508,6 +2609,7 @@ export default function App() {
       strategy.type === "goal" ? strategy.maxIterations : 0,
       source.run.role,
       maxTurns,
+      ...pluginSelections,
     ]);
     const previousRoutedAttempt = createAttempt.current;
     const previousAttempt =
@@ -2522,6 +2624,7 @@ export default function App() {
     };
     const request: CreateRunRequest = {
       prompt: actionPrompt,
+      pluginSkillIds: [...pluginSelections],
       sessionId: source.run.sessionId,
       role: source.run.role,
       mode: "execute",
@@ -2578,7 +2681,6 @@ export default function App() {
             },
           },
           etag: `fixture-etag-${runId}`,
-          selectedSkills: [],
           archived: false,
         };
       } else {
@@ -3456,6 +3558,7 @@ export default function App() {
   }
 
   async function handleSelectTarget(targetId: string) {
+    setConversationSkills({});
     if (
       targetId === desktop.selectedTargetId ||
       connectingRef.current ||
@@ -4522,6 +4625,16 @@ export default function App() {
 
   const composer = (
     <WorkComposer
+      pluginSkills={completionSkills}
+      pluginSelections={pluginSelections}
+      onRemovePluginSkill={(id) =>
+        setConversationSkills((current) => ({
+          ...current,
+          [selectionKey]: (current[selectionKey] ?? []).filter(
+            (selected) => selected !== id,
+          ),
+        }))
+      }
       formRef={composerFormRef}
       textareaRef={composerRef}
       prompt={prompt}
@@ -4879,6 +4992,17 @@ export default function App() {
         />
       ) : (
         <OperationsSurface
+          pluginSelections={pluginSelections}
+          onUsePluginSkill={(id) => {
+            setConversationSkills((current) => ({
+              ...current,
+              [selectionKey]: [
+                ...new Set([...(current[selectionKey] ?? []), id]),
+              ],
+            }));
+            setSurface("work");
+            requestAnimationFrame(() => composerRef.current?.focus());
+          }}
           surface={surface}
           connection={connection}
           desktop={desktop}

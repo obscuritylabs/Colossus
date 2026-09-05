@@ -1,6 +1,7 @@
 import {
   IconBriefcase2,
   IconLibrary,
+  IconPlugConnected,
   IconSettings,
   IconTerminal2,
   IconTopologyStar3,
@@ -10,7 +11,7 @@ import colossusMark from "../assets/colossus-mark.svg";
 import type { ConnectionState, DesktopCapabilities } from "../types";
 
 export type WorkspaceSurface =
-  "work" | "fleet" | "library" | "connections" | "settings";
+  "work" | "fleet" | "library" | "connections" | "settings" | "plugins";
 
 interface ProductRailProps {
   surface: WorkspaceSurface;
@@ -28,6 +29,7 @@ const MAIN_ITEMS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
   { id: "fleet", label: "Agents", Icon: IconTopologyStar3 },
   { id: "library", label: "Library", Icon: IconLibrary },
+  { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
 ] as const;
 
 export function ProductRail({
@@ -53,7 +55,7 @@ export function ProductRail({
             return (
               capabilities.delegation ||
               capabilities.agentWorkflows ||
-              capabilities.skills
+              capabilities.plugins
             );
           }
           if (id === "library") {

@@ -9,6 +9,9 @@
 mod admission;
 mod feed;
 mod interactions;
+#[cfg(test)]
+mod plugin_tests;
+mod plugins;
 mod service;
 #[cfg(test)]
 mod service_tests;
@@ -16,4 +19,5 @@ mod writer;
 
 pub use admission::{RunAdmissionConfig, RunAdmissionConfigError};
 pub use interactions::{PublicApprovalMode, PublicApprovalModeProvider, PublicInteractionRouter};
+pub use plugins::RuntimeExtensionApi;
 pub use service::RuntimeAgentRunApi;

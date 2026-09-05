@@ -1,0 +1,94 @@
+.plugin-surface {
+  padding: 24px;
+  overflow: auto;
+}
+.plugin-surface h2 {
+  margin-top: 0;
+}
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-block: 12px;
+}
+.plugin-surface label,
+.plugin-operation label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block: 8px;
+}
+.plugin-surface input,
+.plugin-surface select {
+  padding: 8px;
+  max-width: 100%;
+}
+.plugin-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
+  gap: 20px;
+}
+.plugin-inventory {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plugin-card {
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  padding: 16px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.plugin-card[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.plugin-digest,
+.plugin-detail,
+.plugin-skill {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.plugin-skill {
+  padding-block: 12px;
+  border-bottom: 1px solid currentColor;
+}
+.plugin-surface pre {
+  white-space: pre-wrap;
+  max-height: 400px;
+  overflow: auto;
+  padding: 12px;
+  background: #151820;
+  color: #e2e7ef;
+}
+.plugin-operation {
+  padding: 16px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+}
+.plugin-operation fieldset {
+  border: 0;
+  padding: 0;
+}
+.plugin-selections {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+}
+@media (max-width: 800px) {
+  .plugin-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plugin-surface {
+    padding: 12px;
+  }
+}

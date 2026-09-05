@@ -18,7 +18,18 @@ const terminalSurface =
   new URLSearchParams(window.location.search).get("surface") === "terminal";
 const initialAppearance = initializeAppearance();
 
-if (terminalSurface) {
+if (
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get("fixture") === "plugin-studio"
+) {
+  void import("./dev/plugin-studio").then(({ default: PluginStudio }) => {
+    createRoot(root).render(
+      <AppearanceProvider initialPreference={initialAppearance}>
+        <PluginStudio />
+      </AppearanceProvider>,
+    );
+  });
+} else if (terminalSurface) {
   void import("./TerminalWindow").then(({ default: TerminalWindow }) => {
     createRoot(root).render(
       <AppearanceProvider initialPreference={initialAppearance}>

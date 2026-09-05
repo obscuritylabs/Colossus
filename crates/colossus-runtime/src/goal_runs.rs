@@ -124,7 +124,7 @@ impl Runtime {
                 &mut buffered_observer,
                 control,
             );
-            let run = scope_instruction_snapshot(prepared.snapshot.clone(), run);
+            let run = scope_run_snapshots(prepared.snapshot.clone(), prepared.plugins.clone(), run);
             let outcome = self
                 .forward_run_with_subagent_scheduling(run, events, receiver, observer, control)
                 .await;
@@ -220,7 +220,7 @@ impl Runtime {
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
         let goal = created.goal;
         let mode = goal_mode_instructions(&goal);
-        let prepared = captured.finalize(&mode);
+        let prepared = captured.finalize(&mode)?;
         let instructions = prepared.text.clone();
         let mut iterations = Vec::new();
         for iteration in 1..=max_iterations {
@@ -244,8 +244,9 @@ impl Runtime {
             })
             .await?;
             let result = self
-                .run_with_subagent_scheduling(scope_instruction_snapshot(
+                .run_with_subagent_scheduling(scope_run_snapshots(
                     prepared.snapshot.clone(),
+                    prepared.plugins.clone(),
                     self.agent.run_goal_iteration(
                         role,
                         &instructions,

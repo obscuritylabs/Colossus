@@ -80,7 +80,7 @@ fn repository_research_crosses_gateway_and_reconstructs_citations() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

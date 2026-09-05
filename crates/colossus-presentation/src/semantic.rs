@@ -1112,12 +1112,12 @@ enum ToolFamily {
     Work,
     Context,
     Repository,
-    Skills,
+    Plugins,
     Web,
     Mcp,
     Trace,
     Integrations,
-    Packs,
+    Bundles,
     Generic,
 }
 
@@ -1131,12 +1131,12 @@ impl ToolFamily {
             "task" | "decision" | "plan" | "goal" | "agent" | "memory" => Self::Work,
             "context" => Self::Context,
             "repo" => Self::Repository,
-            "skill" => Self::Skills,
+            "plugin" => Self::Plugins,
             "web" | "docs" | "network" => Self::Web,
             "mcp" => Self::Mcp,
             "trace" | "telemetry" | "audit" => Self::Trace,
             "integration" => Self::Integrations,
-            "pack" | "bundle" => Self::Packs,
+            "bundle" => Self::Bundles,
             _ => Self::Generic,
         }
     }
@@ -1149,12 +1149,12 @@ impl ToolFamily {
             Self::Work => "work",
             Self::Context => "context",
             Self::Repository => "repo",
-            Self::Skills => "skill",
+            Self::Plugins => "plugin",
             Self::Web => "web",
             Self::Mcp => "mcp",
             Self::Trace => "trace",
             Self::Integrations => "integration",
-            Self::Packs => "pack",
+            Self::Bundles => "bundle",
             Self::Generic => "tool",
         }
     }
@@ -1180,12 +1180,12 @@ impl ToolFamily {
                 "compacted",
             ],
             Self::Repository => &["path", "symbol", "matches", "files", "summary"],
-            Self::Skills => &["name", "path", "status", "sha256"],
+            Self::Plugins => &["name", "digest", "status", "trusted"],
             Self::Web => &["url", "status", "title", "media_type", "bytes"],
             Self::Mcp => &["server", "tool", "status", "content"],
             Self::Trace => &["run_id", "event_count", "path", "status"],
             Self::Integrations => &["name", "tool", "status", "connected"],
-            Self::Packs => &["name", "version", "trusted", "status", "publisher"],
+            Self::Bundles => &["name", "version", "trust_key_id", "publisher"],
             Self::Generic => &["id", "name", "status", "message"],
         }
     }

@@ -22,7 +22,6 @@ const RUN: Run = {
   pendingInteractionCount: 0,
   terminal: null,
   etag: "etag-parent",
-  selectedSkills: [],
   archived: false,
 };
 

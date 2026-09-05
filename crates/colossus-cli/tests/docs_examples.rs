@@ -55,7 +55,7 @@ fn published_configuration_baseline_matches_runtime_defaults() {
     let documented: serde_json::Value =
         serde_saphyr::from_str(documented_yaml).expect("documented configuration value");
     let resolved_defaults = RuntimeConfig::from_yaml(
-        "schemaVersion: 2\nstorage:\n  location: home_workspace\n  path: state.redb\n",
+        "schemaVersion: 3\nstorage:\n  location: home_workspace\n  path: state.redb\n",
     )
     .expect("minimal global configuration")
     .to_resolved_yaml()

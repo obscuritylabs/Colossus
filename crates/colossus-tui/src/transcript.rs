@@ -213,15 +213,12 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
             "Memory & context",
             "Recall memory and manage context snapshots",
         ),
-        ("Agent resources", "Discover tools and activate skills"),
+        ("Agent resources", "Discover tools and Agent Plugin skills"),
         (
             "Research & connections",
             "Use research, integrations, and MCP",
         ),
-        (
-            "Extensions",
-            "Inspect and manage packs, collections, and bundles",
-        ),
+        ("Extensions", "Inspect Agent Plugins and release bundles"),
         (
             "Runtime",
             "Inspect workflows, telemetry, audit, and projections",
@@ -294,13 +291,7 @@ fn command_help_category(command: &str) -> &'static str {
         command if command.starts_with("/memor") || command.starts_with("/context") => {
             "Memory & context"
         }
-        command
-            if command == "/tools"
-                || command.starts_with("/skill")
-                || command.starts_with("/skills") =>
-        {
-            "Agent resources"
-        }
+        command if command == "/tools" || command.starts_with("/plugin") => "Agent resources",
         command
             if command.starts_with("/research")
                 || command.starts_with("/integration")
@@ -308,12 +299,7 @@ fn command_help_category(command: &str) -> &'static str {
         {
             "Research & connections"
         }
-        command
-            if command.starts_with("/packs")
-                || command.starts_with("/collections")
-                || command.starts_with("/registry")
-                || command.starts_with("/bundle") =>
-        {
+        command if command.starts_with("/plugins") || command.starts_with("/bundle") => {
             "Extensions"
         }
         command

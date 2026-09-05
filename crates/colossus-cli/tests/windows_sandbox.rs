@@ -122,7 +122,7 @@ fn write_config(
     fs::write(
         config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

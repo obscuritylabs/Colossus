@@ -28,9 +28,12 @@ import type {
 import type { AgentParticipant } from "./AgentFlow";
 import { AgentFlow } from "./AgentFlow";
 import { ManagedSettingsPane } from "./ManagedSettingsPane";
+import { PluginsSurface } from "./PluginsSurface";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
+  pluginSelections?: readonly string[];
+  onUsePluginSkill?: (id: string) => void;
   surface: Exclude<WorkspaceSurface, "work" | "terminal">;
   connection: ConnectionStatus;
   desktop: DesktopStatus;
@@ -97,7 +100,7 @@ function FleetView({
       <SurfaceHeader
         eyebrow="Capabilities / This Workspace"
         title="Derived capability catalog"
-        description="A read-only view derived from the selected sidecar, access profile, tools, skills, workflows, and agents."
+        description="A read-only view derived from the selected sidecar, access profile, tools, Agent Plugins, workflows, and agents."
       />
       <div className="overview-scroll" tabIndex={0}>
         <section className="overview-section">
@@ -166,16 +169,16 @@ function FleetView({
                 <span className="status-chip tone-success">Available</span>
               </article>
             ) : null}
-            {desktop.capabilities.skills ? (
+            {desktop.capabilities.plugins ? (
               <article className="capability-summary-card">
                 <span className="target-node-icon" aria-hidden="true">
                   <IconArchive size={20} stroke={1.6} />
                 </span>
                 <span>
-                  <strong>Declarative skills</strong>
+                  <strong>Agent Plugins</strong>
                   <small>
-                    Skill selection is enabled for this authenticated
-                    application.
+                    Portable plugins and their skills are available through the
+                    authenticated runtime catalog.
                   </small>
                 </span>
                 <span className="status-chip tone-success">Available</span>
@@ -990,6 +993,19 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
         <span className="compact-action-copy">Workspaces</span>
       </button>
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
+      {props.surface === "plugins" ? (
+        <PluginsSurface
+          key={props.desktop.selectedTargetId}
+          targetId={props.desktop.selectedTargetId}
+          supported={props.desktop.capabilities.plugins}
+          selections={props.pluginSelections}
+          onUseSkill={
+            props.desktop.capabilities.pluginSkillSelection
+              ? props.onUsePluginSkill
+              : undefined
+          }
+        />
+      ) : null}
       {props.surface === "library" ? (
         <LibraryView artifacts={props.artifacts} />
       ) : null}

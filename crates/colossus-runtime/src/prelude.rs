@@ -12,35 +12,37 @@ pub(super) use colossus_audit::{
     AuditExportReport, AuditExportService, AuditExportStatus, GatewayDirectoryAuditExporter,
     GatewayWormAuditExporter, evidence,
 };
+pub(super) use colossus_bundles::{
+    BundleError, BundleExecutor, BundleOperation, BundleService, BundleTrustStore,
+};
 pub(super) use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
+pub(super) use colossus_contracts::PluginOperation;
 pub(super) use colossus_contracts::{
-    Actor, ActorType, AgentRunMode, AgentRunOutcome, AgentRunResult, AuditEvidence,
-    BundleInstallation, BundleMaterialization, BundleSigningKeyInfo, CollectionInstallation,
-    CollectionMaterialization, CollectionVerification, ContextSnapshot, ContextStatus,
-    ControlledAgentTerminal, CredentialReference, DecisionOutcome, DecisionPriority,
-    DecisionSource, DecisionStatus, EffectRequest, EventClassification, ExecutionContext,
-    FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunOutcome, GoalRunResult, GoalStatus,
-    IntegrationAuth, IntegrationConnection, IntegrationSummary, KeyDecision, MemoryRecord,
-    MemoryScope, MemoryStatus, ModelImageReference, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelRoute, ModelToolDefinition, NewEvent, PackInstallation, PackVerification, PlanDraftTarget,
-    PlanExecutionOutcome, PlanExecutionStrategy, PlanRecord, PlanStatus, PlanStep, PreparedContext,
-    ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck,
-    ProviderResponseDiagnostic, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
-    QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
-    ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority, RiskAssessment,
-    RunBranchContextMode, RunEvent, RunEventEnvelope, RunTelemetryDetail, RunTelemetrySummary,
-    SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
-    SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity, SessionMessage,
-    SessionMessageAppend, SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate,
-    SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry,
-    SkillResourceRead, SkillScaffoldResult, SkillValidationResult, SkillWriteResult,
+    Actor, ActorType, AgentPluginRecord, AgentRunMode, AgentRunOutcome, AgentRunResult,
+    AuditEvidence, BundleInstallation, BundleMaterialization, BundleSigningKeyInfo,
+    ContextSnapshot, ContextStatus, ControlledAgentTerminal, CredentialReference, DecisionOutcome,
+    DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
+    ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunOutcome,
+    GoalRunResult, GoalStatus, IntegrationAuth, IntegrationConnection, IntegrationSummary,
+    KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, ModelImageReference, ModelMessage,
+    ModelMessageRole, ModelRequest, ModelRoute, ModelToolDefinition, NewEvent, PlanDraftTarget,
+    PlanExecutionOutcome, PlanExecutionStrategy, PlanRecord, PlanStatus, PlanStep,
+    PluginComposition, PluginInstallation, PluginInventoryEntry, PluginMcpTransport,
+    PluginResourceEntry, PluginResourceRead, PreparedContext, ProjectionStatus, ProviderEvent,
+    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic,
+    ProviderRoute, ProviderStreamItem, ProviderTurn, QuarantinedEffectResult, ResearchClaim,
+    ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority,
+    RiskAssessment, RunBranchContextMode, RunEvent, RunEventEnvelope, RunTelemetryDetail,
+    RunTelemetrySummary, SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse,
+    SearchRoute, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
+    SessionMessage, SessionMessageAppend, SessionMessagePage, SessionSummary,
     StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord,
     TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
     UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch, validate_model_transcript,
 };
 pub(super) use colossus_home::ConfinedRoot;
 pub(super) use colossus_integrations::{
-    EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
+    EventSourcedIntegrationRepository, IntegrationExecutor, IntegrationRequest,
 };
 pub(super) use colossus_journal_postgres::{PostgresEventJournal, PostgresJournalConfig};
 pub(super) use colossus_journal_redb::{
@@ -48,10 +50,11 @@ pub(super) use colossus_journal_redb::{
     PlaintextKeyProvider, PlatformKeyProvider, RedbEventJournal, RedbWriterLease, platform_secret,
 };
 pub(super) use colossus_mcp::{
-    MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor,
-    McpOAuthCredentialStoreKind, McpOAuthLogin, McpOAuthStatus, McpOperation, McpServerConfig,
-    McpServerSummary, McpToolSummary, McpToolsPage, McpValidationContext,
-    validate_config as validate_mcp_config, validate_tool_arguments,
+    MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpCredentialHeaderConfig, McpError,
+    McpExecutor, McpOAuthConfig, McpOAuthCredentialStoreKind, McpOAuthLogin, McpOAuthStatus,
+    McpOperation, McpResearchToolConfig, McpServerConfig, McpServerSummary, McpToolSummary,
+    McpToolsPage, McpValidationContext, validate_config as validate_mcp_config,
+    validate_tool_arguments,
 };
 pub(super) use colossus_media::{
     JournalRunInputMediaResolver, MAX_IMAGE_BYTES, validate_image_bytes,
@@ -66,7 +69,13 @@ pub(super) use colossus_memory_chroma::{
 };
 pub(super) use colossus_network::AdditionalRootCertificates;
 pub(super) use colossus_observability::ObservedEventJournal;
-pub(super) use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
+pub(super) use colossus_plugins::{
+    PluginRegistryClient, PluginRegistryProfile, PluginRegistryTransfer, PluginSnapshotLease,
+    PluginStore, PluginTrustProfile, RegistryAuthConfig, RegistryCredential, compose_plugins,
+    docker_credential_helper, list_resources as list_plugin_resources,
+    read_resource as read_plugin_resource, registry_credential_from_helper_output,
+    resolve_registry_credential,
+};
 pub(super) use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
@@ -76,13 +85,13 @@ pub(super) use colossus_policy::{
 };
 pub(super) use colossus_ports::{
     ApprovalProvider, AuditExporter, CheckpointSigner, ContextError, ContextPreparer,
-    ContextRepository, EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue,
+    ContextRepository, EmbeddingProvider, EventJournal, ExternalWorkQueue, IntegrationRepository,
     KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
-    PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
-    ProviderTurnOptions, ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl,
-    RunEventObserver, RunInputMediaResolver, SearchError, SearchProvider, SessionRepository,
-    SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider,
-    WorkRepository, WorkflowRepository,
+    PolicyDecisionPoint, PolicyError, PresentationRepository, ProjectionStore,
+    ProviderEventObserver, ProviderTurnOptions, ResearchRepository, RiskEvaluationError,
+    RiskEvaluator, RunControl, RunEventObserver, RunInputMediaResolver, SearchError,
+    SearchProvider, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 pub(super) use colossus_presentation::EventSourcedPresentationRepository;
 pub(super) use colossus_projection::{
@@ -106,10 +115,6 @@ pub(super) use colossus_search::{
     SearchRegistry, default_search_limit,
 };
 pub(super) use colossus_session::EventSourcedSessionRepository;
-pub(super) use colossus_skills::{
-    FilesystemSkillRepository, SkillAuthoringService, SkillComposer, SkillResourceService,
-    SkillRoot,
-};
 pub(super) use colossus_telemetry::TelemetryService;
 pub(super) use colossus_tools::{
     MCP_TOOLS_MAX_OUTPUT_BYTES, StaticToolRegistry, ToolCatalogError, builtin_specs,

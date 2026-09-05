@@ -12,7 +12,7 @@ metadata:
   namespace: colossus-observability-dev
 data:
   config.yaml: |
-    schemaVersion: 2
+    schemaVersion: 3
     access:
       profile: development
       tools:

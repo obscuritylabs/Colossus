@@ -170,6 +170,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
     assert_eq!(client.backend_kind(), BackendKind::Sidecar);
     let created = client
         .create_run(CreateRunRequest {
+            plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text("managed sidecar self-test".into())],
             session_id: None,
             end_user_id: None,
@@ -177,7 +178,6 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
             mode: RunMode::Execute,
             research_depth: None,
             research_sources: Vec::new(),
-            selected_skills: Vec::new(),
             plan_action: None,
             branch: None,
             max_turns: 1,

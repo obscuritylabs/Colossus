@@ -66,7 +66,6 @@ func RunPrompt(
 		}},
 		Role:           "primary",
 		Mode:           mode,
-		SelectedSkills: []string{},
 		MaxTurns:       12,
 		IdempotencyKey: createKey,
 	})

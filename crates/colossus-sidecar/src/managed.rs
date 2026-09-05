@@ -34,10 +34,8 @@ use colossus_worker::{
     ApplicationGrant, PublicApiAuthenticationKey, PublicApiDeploymentMode, PublicApiHostOptions,
     WorkerApprovalMode, WorkerAuthenticationKey, WorkerServer,
 };
-#[cfg(test)]
-use std::collections::BTreeMap;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     io::{Read as _, Write as _},
     net::{Ipv4Addr, SocketAddr},
@@ -703,6 +701,7 @@ fn managed_runtime_config(
                         .iter()
                         .map(|(name, credential)| (name.clone(), format!("host:{credential}")))
                         .collect(),
+                    literal_environment: BTreeMap::new(),
                     url: server.url.clone(),
                     headers: server.headers.clone(),
                     credential_headers: server
@@ -860,8 +859,6 @@ fn managed_runtime_config(
     config.sandbox.network_destinations = network_destinations.into_iter().collect();
     config.memory.index_path = Some(PathBuf::from("memory-index"));
     config.workflows.user = instance_dir.join("workflows");
-    config.skills.user = instance_dir.join("skills");
-    config.packs.install_root = instance_dir.join("packs");
     let yaml = config
         .to_yaml()
         .map_err(|_| FailureCode::InvalidConfiguration)?;
@@ -883,8 +880,8 @@ fn apply_managed_field_overrides(
         "observability",
         "sandbox.backend",
         "memory.indexPath",
-        "skills.user",
-        "packs.installRoot",
+        "plugins.trustProfiles",
+        "plugins.registries",
         "workflows.user",
     ];
     let agent =
@@ -1752,9 +1749,8 @@ mod tests {
 
     #[test]
     fn full_access_desktop_runtime_opens_loopback_wildcard_mcp_servers() {
-        let temporary_root = std::env::current_dir().expect("current directory");
-        let instance = tempfile::tempdir_in(&temporary_root).expect("instance");
-        let workspace = tempfile::tempdir_in(&temporary_root).expect("workspace");
+        let instance = tempfile::tempdir().expect("instance");
+        let workspace = tempfile::tempdir().expect("workspace");
         #[cfg(unix)]
         std::fs::set_permissions(
             instance.path(),
@@ -1908,13 +1904,14 @@ mod tests {
 
     fn managed_configuration_field_is_classified(field: &str) -> bool {
         const TYPED_CATALOGS: [&str; 5] = ["providers", "models", "search", "mcp", "observability"];
-        const LOCKED_INVARIANTS: [&str; 8] = [
+        const LOCKED_INVARIANTS: [&str; 9] = [
             "schemaVersion",
             "storage",
+            "bundles.trustedPublishers",
             "network.caBundlePath",
             "memory.indexPath",
-            "skills.user",
-            "packs.installRoot",
+            "plugins.trustProfiles",
+            "plugins.registries",
             "workflows.user",
             "sandbox.backend",
         ];

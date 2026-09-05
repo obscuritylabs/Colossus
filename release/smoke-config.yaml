@@ -1,11 +1,11 @@
-schemaVersion: 2
+schemaVersion: 3
 access:
   profile: pinned
   tools:
     include: [echo]
     exclude: []
   actions:
-    allow: []
+    allow: [plugin.list]
     requireApproval: []
     deny: []
 storage:

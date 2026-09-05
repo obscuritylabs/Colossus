@@ -141,7 +141,7 @@ function desktop(): DesktopStatus {
     capabilities: {
       research: true,
       delegation: true,
-      skills: true,
+      plugins: true,
       tui: true,
       shellTerminal: true,
       files: true,
@@ -1200,27 +1200,22 @@ describe("ManagedSettingsPane", () => {
     );
   });
 
-  it.each(["Skills", "Packs", "Workflows"])(
+  it.each(["Plugins", "Workflows"])(
     "renders the live %s catalog without private paths or payloads",
     (section) => {
       const inventory: ManagedExtensionInventory = {
-        skills: [
+        plugins: [
           {
-            name: "incident-response",
-            version: "1.0.0",
-            description: "Incident triage",
-            source: "repository:incident-response",
-            offlineCompatible: true,
-          },
-        ],
-        packs: [
-          {
-            name: "engineering-tools",
+            name: "dev.example.engineering-tools",
             version: "2.0.0",
-            publisher: "Obscurity Labs",
+            description: "Incident triage",
+            source: "registry.example.test/engineering-tools@sha256:opaque",
             status: "enabled",
-            manifestSha256: "a".repeat(64),
+            digest: `sha256:${"a".repeat(64)}`,
             trusted: true,
+            skillIds: ["dev.example.engineering-tools/incident-response"],
+            mcpServerIds: [],
+            diagnosticCount: 0,
           },
         ],
         workflows: [

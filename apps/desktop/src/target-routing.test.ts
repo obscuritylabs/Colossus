@@ -43,7 +43,6 @@ function run(
     pendingInteractionCount: 0,
     terminal,
     etag: `etag-${lastSequence}`,
-    selectedSkills: [],
     archived: false,
   };
 }
@@ -114,7 +113,7 @@ function status(): DesktopStatus {
     },
     capabilities: {
       delegation: false,
-      skills: false,
+      plugins: false,
       tui: true,
       shellTerminal: true,
       files: true,

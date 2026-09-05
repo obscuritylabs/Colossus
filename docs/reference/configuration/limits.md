@@ -256,7 +256,7 @@ Backend-specific minimum timeouts are:
 | OCI with network destinations | `10000` |
 | Windows Job Object | `10000` |
 
-A policy permit, MCP declaration, pack declaration, or individual request may impose a
+A policy permit, MCP declaration, Agent Plugin overlay, or individual request may impose a
 smaller timeout or output cap. It cannot widen the sandbox ceiling. For example, an MCP
 server's `maxOutputBytes` must be at least 1,024 bytes and no greater than
 `sandbox.maxOutputBytes`.

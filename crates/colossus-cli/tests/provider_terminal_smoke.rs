@@ -3,6 +3,9 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+#[path = "support/plugin_provider.rs"]
+mod plugin_provider;
+
 use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
@@ -58,7 +61,7 @@ fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -277,7 +280,7 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -360,7 +363,7 @@ fn write_provider_timeout_config(
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -734,7 +737,7 @@ fn write_subagent_config(
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1316,7 +1319,7 @@ fn compatible_provider_streams_tool_use_and_tui_output_through_terminal_surfaces
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1527,7 +1530,7 @@ fn model_delegation_runs_the_child_before_agent_result_in_the_same_turn() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1711,7 +1714,7 @@ fn responses_provider_keeps_credentials_out_of_streamed_tool_terminal_output() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1875,7 +1878,7 @@ fn malformed_provider_tool_arguments_retry_twice_without_executing_the_tool() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

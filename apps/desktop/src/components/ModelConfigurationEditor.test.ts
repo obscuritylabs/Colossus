@@ -75,7 +75,7 @@ const desktop: DesktopStatus = {
   },
   capabilities: {
     delegation: false,
-    skills: false,
+    plugins: false,
     tui: false,
     shellTerminal: false,
     files: false,
