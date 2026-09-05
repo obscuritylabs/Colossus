@@ -87,24 +87,76 @@ impl Terminal {
     }
 
     fn wait(&self, text: &str) -> String {
+        self.wait_until(text, |screen| screen.contains(text))
+    }
+
+    fn wait_until(&self, description: &str, ready: impl Fn(&str) -> bool) -> String {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let screen = self.screen.lock().expect("screen").screen().contents();
-            if screen.contains(text) {
+            if ready(&screen) {
                 return screen;
             }
             assert!(
                 Instant::now() < deadline,
-                "TUI never rendered {text:?}:\n{screen}"
+                "TUI never rendered {description:?}:\n{screen}"
             );
             thread::sleep(Duration::from_millis(20));
         }
     }
 
     fn command(&self, command: &str, expected: &str) -> String {
-        self.send(format!("\x1b[200~{command}\x1b[201~\r").as_bytes());
-        self.wait(expected)
+        // An earlier transcript entry may already contain `expected`. Observe
+        // this input in the composer before submitting, then wait for both its
+        // consumption and the host operation's completed render.
+        self.send(format!("\x1b[200~{command}\x1b[201~").as_bytes());
+        self.wait_until(&format!("composer accepted {command:?}"), |screen| {
+            composer_contents(screen).is_some_and(|draft| draft.starts_with(command))
+        });
+        self.send(b"\r");
+        self.wait_until(&format!("{expected:?} after {command:?}"), |screen| {
+            screen.contains(expected)
+                && !screen.contains("running /")
+                && composer_contents(screen).is_some_and(|draft| draft.is_empty())
+        })
     }
+
+    fn resize(&self, rows: u16, cols: u16) {
+        // Resize the emulator before the child can publish a new-width frame.
+        let mut screen = self.screen.lock().expect("screen");
+        screen.screen_mut().set_size(rows, cols);
+        self.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("resize");
+        drop(screen);
+        // A truncated old frame can still contain every plugin name. Require
+        // the closing border at the new width before sending any more input.
+        self.wait_until("resized composer border", |screen| {
+            screen.lines().any(|line| {
+                line.starts_with("┌ Message")
+                    && line.ends_with('┐')
+                    && line.chars().count() == usize::from(cols)
+            })
+        });
+    }
+}
+
+fn composer_contents(screen: &str) -> Option<String> {
+    let mut lines = screen
+        .lines()
+        .skip_while(|line| !line.starts_with("┌ Message") && !line.starts_with("┌ Execute"));
+    lines.next()?;
+    Some(
+        lines
+            .take_while(|line| !line.starts_with('└'))
+            .map(|line| line.trim_matches('│').trim())
+            .collect(),
+    )
 }
 
 #[test]
@@ -178,21 +230,7 @@ fn exercise(worker_host: bool) {
     terminal.command("/plugin remove colossus/coding", "Active plugin skills");
     terminal.command("/plugins disable colossus", "Active  no");
     terminal.command("/plugins", "disabled");
-    terminal
-        .master
-        .resize(PtySize {
-            rows: 32,
-            cols: 55,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("resize");
-    terminal
-        .screen
-        .lock()
-        .expect("screen")
-        .screen_mut()
-        .set_size(32, 55);
+    terminal.resize(32, 55);
     terminal.command("/plugins", "colossus");
     terminal.command("/plugin invalid", "/plugin expects");
     terminal.command("/plu", "Unknown command");
