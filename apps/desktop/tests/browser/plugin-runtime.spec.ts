@@ -14,6 +14,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { AcceptanceProcesses } from "./support/acceptance-processes";
+import { AcceptanceOperations } from "./support/acceptance-operations";
 
 // Explicit, separate acceptance tier: no test server or runtime implementation is
 // linked into production Desktop. The driver compiles the production native adapter.
@@ -104,6 +105,7 @@ test("browser → production native adapter → authenticated worker: offline co
   );
   let worker: ChildProcess | undefined;
   const processes = new AcceptanceProcesses();
+  const operations = new AcceptanceOperations();
   const execute = processes.execute.bind(processes);
   let scenarioFailed = false;
   let workerError = "";
@@ -115,34 +117,47 @@ test("browser → production native adapter → authenticated worker: offline co
     args: Record<string, unknown>,
     overrides = {},
   ) => {
-    const answer = JSON.parse(
-      await execute(
-        bridge,
-        [join(workspace, "state.redb")],
-        workspace,
-        env,
-        JSON.stringify({
-          command,
-          args,
-          paths: nativePaths,
-          approve: consent,
-          ...overrides,
-        }),
-      ),
-    ) as {
-      response: { result?: unknown; error?: unknown };
-      prompts: unknown[];
-    };
-    prompts.push(...answer.prompts);
-    if (answer.response.error) {
-      await test.info().attach("isolated-worker-diagnostic", {
-        body: workerError || "No worker stderr",
-        contentType: "text/plain",
-      });
-      throw answer.response.error;
+    try {
+      const answer = JSON.parse(
+        await execute(
+          bridge,
+          [join(workspace, "state.redb")],
+          workspace,
+          env,
+          JSON.stringify({
+            command,
+            args,
+            paths: nativePaths,
+            approve: consent,
+            ...overrides,
+          }),
+        ),
+      ) as {
+        response: { result?: unknown; error?: unknown };
+        prompts: unknown[];
+      };
+      prompts.push(...answer.prompts);
+      if (answer.response.error) {
+        await test.info().attach("isolated-worker-diagnostic", {
+          body: workerError || "No worker stderr",
+          contentType: "text/plain",
+        });
+        throw answer.response.error;
+      }
+      return answer.response.result;
+    } finally {
+      if (command === "manage_plugin") {
+        const input = args.input as
+          { request?: { operation?: string } } | undefined;
+        if (input?.request?.operation)
+          operations.complete(input.request.operation);
+      }
     }
-    return answer.response.result;
   };
+  const continueOperation = (operation: string) =>
+    operations.submit(operation, () =>
+      page.getByRole("button", { name: `Continue ${operation}` }).click(),
+    );
   try {
     worker = processes.start(
       binary,
@@ -234,7 +249,7 @@ test("browser → production native adapter → authenticated worker: offline co
       page.getByRole("button", { name: "Remove colossus/plugin-authoring" }),
     ).toBeVisible();
     await detail.getByRole("button", { name: "Disable", exact: true }).click();
-    await page.getByRole("button", { name: "Continue disable" }).click();
+    await continueOperation("disable");
     await expect(
       detail.getByRole("button", { name: "Activate this digest" }),
     ).toBeVisible();
@@ -247,19 +262,19 @@ test("browser → production native adapter → authenticated worker: offline co
     );
     expect(listed).toContain("disabled");
     await detail.getByRole("button", { name: "Activate this digest" }).click();
-    await page.getByRole("button", { name: "Continue enable" }).click();
+    await continueOperation("enable");
     await expect(
       detail.getByRole("button", { name: "Disable", exact: true }),
     ).toBeVisible();
     nativePaths = [source];
     await page.getByRole("button", { name: "Validate", exact: true }).click();
-    await page.getByRole("button", { name: "Continue validate" }).click();
+    await continueOperation("validate");
     await expect(
       page.getByRole("status").filter({ hasText: "validate completed" }),
     ).toBeVisible();
     nativePaths = [source, join(workspace, "layout")];
     await page.getByRole("button", { name: "Package", exact: true }).click();
-    await page.getByRole("button", { name: "Continue package" }).click();
+    await continueOperation("package");
     await expect(
       page.getByRole("status").filter({ hasText: "package completed" }),
     ).toBeVisible();
@@ -270,7 +285,7 @@ test("browser → production native adapter → authenticated worker: offline co
       .getByRole("option", { name: "OCI layout directory", exact: true })
       .click();
     await page.getByLabel("Trust profile", { exact: true }).fill("offline");
-    await page.getByRole("button", { name: "Continue install" }).click();
+    await continueOperation("install");
     await page.getByRole("button", { name: /example 1\.0/u }).click();
     const imported = page.getByRole("article", { name: "example details" });
     await expect(
@@ -280,11 +295,11 @@ test("browser → production native adapter → authenticated worker: offline co
       .getByRole("button", { name: "Activate this digest" })
       .click();
     await page.getByRole("checkbox", { name: /Request approval/u }).check();
-    await page.getByRole("button", { name: "Continue enable" }).click();
+    await continueOperation("enable");
     await expect(page.getByRole("alert")).toBeVisible();
     expect(prompts.length).toBeGreaterThan(0); // The checkbox did not authorize activation.
     consent = true;
-    await page.getByRole("button", { name: "Continue enable" }).click();
+    await continueOperation("enable");
     await expect(
       imported.getByRole("button", { name: "Disable", exact: true }),
     ).toBeVisible();

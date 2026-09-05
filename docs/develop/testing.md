@@ -135,6 +135,9 @@ The tier first checks that the bridge derives the worker's canonical state endpo
 (including Windows verbatim paths), and tests bounded subprocess shutdown. Browser
 refresh is stopped and every owned process is closed before deleting the private
 fixture; cleanup diagnostics must not replace the original scenario failure.
+Management assertions wait for the matching native request to finish within its IPC
+bound before checking the rendered result. This tier disables scenario retries so a
+passing CI result cannot conceal a failed first attempt.
 
 Ordinary `npm run test:browser` runs mocked interface interaction cases separately.
 The macOS Desktop and Windows runtime pre-merge lanes also run the real-worker tier.
