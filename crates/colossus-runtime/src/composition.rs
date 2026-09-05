@@ -462,6 +462,7 @@ impl Runtime {
             searches: searches.as_ref(),
             integration_specs: &integration_specs,
             active_plugin_extensions: &active_plugin_extensions,
+            plugin_store: plugin_store.clone(),
             tls_roots: &tls_roots,
             model_network_tools,
             interactive: user_prompts.is_some(),

@@ -325,20 +325,7 @@ fn resolve_docker_auths(
     helper_executables: &BTreeMap<String, PathBuf>,
     registry_origin: &str,
 ) -> Result<RegistryCredentialResolution, StoreError> {
-    let path = configured_path.map(Path::to_owned).map_or_else(
-        || {
-            std::env::var_os("DOCKER_CONFIG")
-                .map(PathBuf::from)
-                .map(|path| path.join("config.json"))
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .map(|path| path.join(".docker/config.json"))
-                })
-                .ok_or_else(|| StoreError::Adapter("Docker config path is unavailable".into()))
-        },
-        Ok,
-    )?;
+    let path = docker_config_path(configured_path)?;
     let config: DockerConfigFile =
         serde_json::from_slice(&read_bounded(&path, MAX_MANIFEST_BYTES)?).map_err(adapter)?;
     let url = Url::parse(registry_origin).map_err(adapter)?;
@@ -439,7 +426,8 @@ pub fn docker_credential_helper(
         .transpose()
 }
 
-fn docker_config_path(configured_path: Option<&Path>) -> Result<PathBuf, StoreError> {
+/// Resolve the explicitly selected Docker configuration path without opening the file.
+pub fn docker_config_path(configured_path: Option<&Path>) -> Result<PathBuf, StoreError> {
     configured_path.map(Path::to_owned).map_or_else(
         || {
             std::env::var_os("DOCKER_CONFIG")

@@ -52,7 +52,10 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
     let api = RuntimeExtensionApi::new(Arc::clone(&runtime));
     let unauthorized = caller(false);
     assert_eq!(
-        api.plugins(&unauthorized).await.expect_err("scope").code,
+        api.plugins(&unauthorized, false)
+            .await
+            .expect_err("scope")
+            .code,
         ApiErrorCode::PermissionDenied
     );
     assert_eq!(
@@ -63,7 +66,14 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
         ApiErrorCode::PermissionDenied
     );
     let authorized = caller(true);
-    let plugins = api.plugins(&authorized).await.expect("catalog");
+    assert_eq!(
+        api.plugins(&unauthorized, true)
+            .await
+            .expect_err("inventory scope")
+            .code,
+        ApiErrorCode::PermissionDenied
+    );
+    let plugins = api.plugins(&authorized, false).await.expect("catalog");
     assert_eq!(plugins.len(), 1);
     assert_eq!(plugins[0].skills.len(), 4);
     assert!(plugins[0].actions.is_empty());
@@ -129,11 +139,73 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
         .await
         .expect("disable");
     assert!(
-        api.plugins(&authorized)
+        api.plugins(&authorized, false)
             .await
             .expect("fresh public catalog")
             .is_empty()
     );
     assert!(!runtime.plugin_inventory().expect("management inventory")[0].available);
+    let disabled = api
+        .plugins(&authorized, true)
+        .await
+        .expect("live disabled inventory");
+    assert_eq!(disabled.len(), 1);
+    assert!(!disabled[0].available);
+    assert_ne!(
+        disabled[0].status,
+        colossus_contracts::PluginStatus::Enabled
+    );
+    assert!(disabled[0].actions.is_empty());
+    assert!(disabled[0].manifest.extensions.is_empty());
+    let encoded = serde_json::to_string(&disabled).expect("disabled metadata");
+    assert!(!encoded.contains("instructions"));
+    assert!(!encoded.contains(&root.display().to_string()));
     assert!(api.skill(&authorized, id, digest).await.is_err());
+    runtime
+        .manage_plugin(colossus_contracts::PluginManagementRequest::Enable {
+            name: "colossus".into(),
+            digest: digest.clone(),
+            allow_untrusted: false,
+        })
+        .await
+        .expect("restore global core activation");
+    let excluded_workspace = root.join("excluded-workspace");
+    fs::create_dir(&excluded_workspace).expect("excluded workspace");
+    config.plugins.exclude = vec!["colossus".into()];
+    let excluded = RuntimeExtensionApi::new(Arc::new(
+        Runtime::open_with_options(
+            &config,
+            Arc::new(DenyApproval),
+            None,
+            RuntimeOpenOptions::for_workspace(&excluded_workspace)
+                .expect("workspace binding")
+                .with_colossus_home(&home)
+                .expect("shared home"),
+        )
+        .expect("excluded workspace runtime"),
+    ));
+    assert!(
+        excluded
+            .plugins(&authorized, false)
+            .await
+            .expect("effective catalog")
+            .is_empty()
+    );
+    let unavailable = excluded
+        .plugins(&authorized, true)
+        .await
+        .expect("workspace-unavailable inventory");
+    assert_eq!(unavailable.len(), 1);
+    assert_eq!(
+        unavailable[0].status,
+        colossus_contracts::PluginStatus::Enabled
+    );
+    assert!(!unavailable[0].available);
+    assert!(
+        unavailable[0]
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("excluded"))
+    );
+    assert!(excluded.skill(&authorized, id, digest).await.is_err());
 }

@@ -14,31 +14,83 @@ impl PluginRegistryOperation {
             Self::Push { .. } => "plugin.push",
         }
     }
-
-    pub(super) fn resource(&self) -> &str {
-        match self {
-            Self::Pull { output, .. } => output,
-            Self::Push { layout, .. } => layout,
-        }
-    }
 }
 
 pub(super) struct PluginRegistryEffectExecutor {
     profile: PluginRegistryProfile,
     credentials: Arc<dyn CredentialResolver>,
-    helper_credential: Option<RegistryCredential>,
+    gateway: Arc<EffectGateway>,
+    process: Arc<dyn EffectExecutor>,
+    workspace: PathBuf,
+    oci: bool,
 }
 
 impl PluginRegistryEffectExecutor {
     pub(super) fn new(
         profile: PluginRegistryProfile,
         credentials: Arc<dyn CredentialResolver>,
-        helper_credential: Option<RegistryCredential>,
+        gateway: Arc<EffectGateway>,
+        process: Arc<dyn EffectExecutor>,
+        workspace: PathBuf,
+        oci: bool,
     ) -> Self {
         Self {
             profile,
             credentials,
-            helper_credential,
+            gateway,
+            process,
+            workspace,
+            oci,
+        }
+    }
+
+    async fn credential(
+        &self,
+        parent: &EffectRequest,
+    ) -> Result<RegistryCredential, ExecutionError> {
+        // This method is entered only after the transfer permit and all file grants
+        // have been checked. Parse Docker configuration exactly once inside that effect.
+        match resolve_registry_credential_source(&self.profile, self.credentials.as_ref())
+            .map_err(failed)?
+        {
+            RegistryCredentialResolution::Ready(credential) => Ok(credential),
+            RegistryCredentialResolution::DockerHelper { executable, server } => {
+                let executable = if self.oci {
+                    executable
+                } else {
+                    fs::canonicalize(executable).map_err(failed)?
+                };
+                let spec = ProcessSpec {
+                    cwd: self.workspace.clone(),
+                    args: vec!["get".into()],
+                    environment: BTreeMap::new(),
+                    stdin_base64: Some(BASE64.encode(format!("{server}\n"))),
+                    stdin_completion: None,
+                    timeout_ms: None,
+                    max_output_bytes: None,
+                };
+                let action = "plugin.registry.credential_helper";
+                let mut request = effect_request(
+                    parent.actor.clone(),
+                    action,
+                    executable.display().to_string(),
+                    serde_json::to_value(spec).map_err(failed)?,
+                );
+                request.context = parent.context.clone();
+                request.capabilities = vec![action.into()];
+                let executor = DockerCredentialHelperExecutor::new(Arc::clone(&self.process));
+                let released = self
+                    .gateway
+                    .execute(request, &executor)
+                    .await
+                    .map_err(failed)?;
+                let value: Value = serde_json::from_slice(&released.bytes).map_err(failed)?;
+                let handle = value
+                    .get("handle")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| failed("credential helper returned no opaque handle"))?;
+                executor.take(handle).map_err(failed)
+            }
         }
     }
 }
@@ -52,7 +104,7 @@ impl EffectExecutor for PluginRegistryEffectExecutor {
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let operation: PluginRegistryOperation =
             serde_json::from_value(request.content.clone()).map_err(failed)?;
-        if request.action != operation.action() || request.resource != operation.resource() {
+        if request.action != operation.action() || request.resource != self.profile.origin {
             return Err(failed(
                 "plugin registry request does not match its authorized effect",
             ));
@@ -60,14 +112,12 @@ impl EffectExecutor for PluginRegistryEffectExecutor {
         enforce_registry_network(&self.profile, &permit)?;
         enforce_registry_filesystem(&operation, &permit)?;
         enforce_registry_ca_files(&self.profile, &permit)?;
-        let credential = self
-            .helper_credential
-            .clone()
-            .map_or_else(
-                || resolve_registry_credential(&self.profile, self.credentials.as_ref()),
-                Ok,
-            )
-            .map_err(failed)?;
+        if let RegistryAuthConfig::Docker { config_path, .. } = &self.profile.auth {
+            let path =
+                colossus_plugins::docker_config_path(config_path.as_deref()).map_err(failed)?;
+            plugin_management::enforce_management_path(&path, false, &permit)?;
+        }
+        let credential = self.credential(request).await?;
         let client = PluginRegistryClient::new(self.profile.clone(), credential).map_err(failed)?;
         let transfer = match operation {
             PluginRegistryOperation::Pull { reference, output } => client

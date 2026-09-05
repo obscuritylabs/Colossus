@@ -61,19 +61,7 @@ impl RuntimeExtensionApi {
             .runtime
             .read_plugin_as(operation, digest, caller.actor())
             .await
-            .map_err(|error| match error {
-                colossus_runtime::RuntimeError::Gateway(
-                    colossus_policy::GatewayError::Denied(_)
-                    | colossus_policy::GatewayError::Approval(_),
-                ) => ApiError::permission_denied(
-                    ApiErrorReason::ToolDenied,
-                    "workspace policy did not authorize this plugin read",
-                ),
-                _ => ApiError::failed_precondition(
-                    ApiErrorReason::InvalidArgument,
-                    "plugin content is unavailable; refresh the inventory",
-                ),
-            })?;
+            .map_err(plugin_read_error)?;
         serde_json::from_value(value).map_err(|_| {
             ApiError::failed_precondition(
                 ApiErrorReason::InternalInvariant,
@@ -83,11 +71,44 @@ impl RuntimeExtensionApi {
     }
 }
 
+fn plugin_read_error(error: colossus_runtime::RuntimeError) -> ApiError {
+    match error {
+        colossus_runtime::RuntimeError::Gateway(
+            colossus_policy::GatewayError::Denied(_) | colossus_policy::GatewayError::Approval(_),
+        ) => ApiError::permission_denied(
+            ApiErrorReason::ToolDenied,
+            "workspace policy did not authorize this plugin read",
+        ),
+        _ => ApiError::failed_precondition(
+            ApiErrorReason::InvalidArgument,
+            "plugin content is unavailable; refresh the inventory",
+        ),
+    }
+}
+
 #[async_trait]
 impl ExtensionApi for RuntimeExtensionApi {
-    async fn plugins(&self, caller: &CallerContext) -> ApiResult<Vec<PluginInventoryEntry>> {
-        let mut entries: Vec<PluginInventoryEntry> =
-            self.read(caller, PluginOperation::List, None).await?;
+    async fn plugins(
+        &self,
+        caller: &CallerContext,
+        include_disabled: bool,
+    ) -> ApiResult<Vec<PluginInventoryEntry>> {
+        caller.require_scope(scopes::EXTENSIONS_READ)?;
+        let mut entries: Vec<PluginInventoryEntry> = if include_disabled {
+            let value = self
+                .runtime
+                .read_plugin_inventory_as(caller.actor())
+                .await
+                .map_err(plugin_read_error)?;
+            serde_json::from_value(value).map_err(|_| {
+                ApiError::failed_precondition(
+                    ApiErrorReason::InternalInvariant,
+                    "plugin response failed validation",
+                )
+            })?
+        } else {
+            self.read(caller, PluginOperation::List, None).await?
+        };
         for entry in &mut entries {
             // Public discovery cannot grant local management or disclose opaque client data.
             entry.actions.clear();

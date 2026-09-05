@@ -17,6 +17,7 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) searches: &'a SearchRegistry,
     pub(super) integration_specs: &'a [ToolSpec],
     pub(super) active_plugin_extensions: &'a ActivePluginExtensions,
+    pub(super) plugin_store: Option<Arc<PluginStore>>,
     pub(super) tls_roots: &'a AdditionalRootCertificates,
     pub(super) model_network_tools: bool,
     pub(super) interactive: bool,
@@ -32,6 +33,7 @@ pub(super) fn compose_access_policy(
         searches,
         integration_specs,
         active_plugin_extensions,
+        plugin_store,
         tls_roots,
         model_network_tools,
         interactive,
@@ -198,6 +200,14 @@ pub(super) fn compose_access_policy(
                 mode: "read".into(),
             }];
             for profile in config.plugins.registries.values() {
+                if let RegistryAuthConfig::Docker { config_path, .. } = &profile.auth {
+                    registry_read.push(FilesystemGrant {
+                        root: colossus_plugins::docker_config_path(config_path.as_deref())?
+                            .display()
+                            .to_string(),
+                        mode: "read".into(),
+                    });
+                }
                 for path in profile
                     .ca_bundle_path
                     .iter()
@@ -337,6 +347,8 @@ pub(super) fn compose_access_policy(
         policy,
         active_plugin_extensions.skill_roots.clone(),
         matches!(config.policy, PolicyConfig::BuiltIn { .. }),
+        config.plugins.clone(),
+        plugin_store,
     ));
     Ok(AccessPolicyComposition {
         candidate_tool_specs,

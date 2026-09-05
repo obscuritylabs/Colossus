@@ -262,6 +262,17 @@ require explicit runtime enablement. Their signatures, trust state, portable dec
 and selected-root grants remain necessary under every boundary and never grant ambient
 authority.
 
+Plugin registry effects identify the exact registry origin as their network resource;
+local layout paths are separately checked against the transfer permit. Docker config
+is parsed only after that authorization and an explicit file grant. Selected credential
+helpers require a nested process permit, and only an opaque credential handle crosses
+their result-release boundary. Verification and installation also check every selected
+trust-profile key and local trust-root path before reading it, including re-verification
+of installed content. Outside-workspace trust paths require explicit operator approval
+under the built-in policy; external policy must supply the corresponding file grants.
+Public discovery may request unavailable installation metadata, but this does not expand
+the active run catalog or authorize instruction/resource reads for those installations.
+
 Ambient destination authority does not weaken dedicated security-channel contracts.
 Remote OPA remains HTTPS with pinned CA trust and mTLS identity. WORM audit export
 remains HTTPS-only, create-only, and hash-bound.

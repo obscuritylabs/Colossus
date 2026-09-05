@@ -11,6 +11,10 @@ use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
+#[cfg(test)]
+#[path = "extensions_tests.rs"]
+mod tests;
+
 /// Transport-only adapter; all reads retain application and runtime policy checks.
 #[derive(Clone)]
 pub struct ExtensionServiceAdapter {
@@ -49,7 +53,7 @@ impl ExtensionService for ExtensionServiceAdapter {
             })?;
         let plugin = self
             .api()?
-            .plugins(caller)
+            .plugins(caller, false)
             .await
             .map_err(api_status)?
             .into_iter()
@@ -69,21 +73,31 @@ impl ExtensionService for ExtensionServiceAdapter {
         caller
             .require_scope(scopes::EXTENSIONS_READ)
             .map_err(api_status)?;
-        let mut plugins = self.api()?.plugins(caller).await.map_err(api_status)?;
+        let mut plugins = self
+            .api()?
+            .plugins(caller, request.get_ref().include_disabled)
+            .await
+            .map_err(api_status)?;
         let request = request.get_ref();
-        if !request.kinds.is_empty()
-            && !request
-                .kinds
-                .contains(&(proto::ExtensionKind::AgentPlugin as i32))
-        {
+        if !includes_plugins(&request.kinds) {
             return bounded(proto::ListExtensionsResponse::default());
         }
-        plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
+        plugins.sort_by(|left, right| {
+            (&left.manifest.name, &left.digest).cmp(&(&right.manifest.name, &right.digest))
+        });
         // A continuation is bound to the exact catalog, so an activation between pages
         // cannot silently skip or duplicate entries.
         let identity: String = plugins
             .iter()
-            .map(|entry| format!("{}@{}\n", entry.manifest.name, entry.digest))
+            .map(|entry| {
+                format!(
+                    "{}@{}:{}:{}\n",
+                    entry.manifest.name,
+                    entry.digest,
+                    entry.status == PluginStatus::Enabled,
+                    entry.available
+                )
+            })
             .collect();
         let identity = format!("{:x}", Sha256::digest(identity.as_bytes()));
         let page = request.page.clone().unwrap_or_default();
@@ -185,6 +199,12 @@ impl ExtensionService for ExtensionServiceAdapter {
             content: resource.content,
         })
     }
+}
+
+fn includes_plugins(kinds: &[i32]) -> bool {
+    kinds.is_empty()
+        || kinds.contains(&(proto::ExtensionKind::Unspecified as i32))
+        || kinds.contains(&(proto::ExtensionKind::AgentPlugin as i32))
 }
 
 fn bounded<T: prost::Message>(value: T) -> Result<Response<T>, Status> {

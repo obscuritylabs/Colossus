@@ -775,6 +775,7 @@ pub(super) fn is_process_action(action: &str) -> bool {
         || matches!(
             action,
             "process.spawn"
+                | "plugin.registry.credential_helper"
                 | "shell.run"
                 | "git.status"
                 | "git.diff"

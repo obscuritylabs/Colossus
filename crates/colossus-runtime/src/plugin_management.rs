@@ -277,8 +277,11 @@ impl EffectExecutor for PluginManagementExecutor {
                 "operator plugin request does not match its authorized effect",
             ));
         }
-        for (path, write) in management_paths(&operation) {
-            enforce_management_path(path, write, &permit)?;
+        for (path, write) in
+            management_paths(&operation, &self.configuration, self.store.as_deref())
+                .map_err(failed)?
+        {
+            enforce_management_path(&path, write, &permit)?;
         }
         let value = self.execute_local(operation, request.actor.clone(), request)?;
         Ok(QuarantinedEffectResult {
@@ -289,9 +292,13 @@ impl EffectExecutor for PluginManagementExecutor {
     }
 }
 
-pub(super) fn management_paths(operation: &PluginManagementRequest) -> Vec<(&str, bool)> {
+pub(super) fn management_paths(
+    operation: &PluginManagementRequest,
+    configuration: &PluginsConfig,
+    store: Option<&PluginStore>,
+) -> Result<Vec<(PathBuf, bool)>, StoreError> {
     use PluginManagementRequest as Op;
-    match operation {
+    let paths = match operation {
         Op::Validate { path } | Op::Verify { path, .. } => vec![(path, false)],
         Op::Install {
             source:
@@ -304,15 +311,56 @@ pub(super) fn management_paths(operation: &PluginManagementRequest) -> Vec<(&str
         Op::Export { output, .. } | Op::Pull { output, .. } => vec![(output, true)],
         Op::Push { layout, .. } => vec![(layout, false)],
         _ => Vec::new(),
+    };
+    let mut paths: Vec<_> = paths
+        .into_iter()
+        .map(|(path, write)| (PathBuf::from(path), write))
+        .collect();
+    let profile = match operation {
+        Op::Verify { trust_profile, .. } | Op::Install { trust_profile, .. } => {
+            Some(trust_profile.clone())
+        }
+        Op::VerifyInstalled { name, digest } => {
+            let installation = store
+                .ok_or_else(|| {
+                    StoreError::Adapter("plugin verification requires an explicit home".into())
+                })?
+                .list(10_000)?
+                .into_iter()
+                .find(|entry| entry.manifest.name == *name && entry.digest == *digest)
+                .ok_or_else(|| {
+                    StoreError::Adapter("selected plugin digest is not installed".into())
+                })?;
+            (installation.origin != PluginOrigin::Bundled).then(|| {
+                installation
+                    .trust
+                    .profile
+                    .unwrap_or_else(|| "default".into())
+            })
+        }
+        _ => None,
+    };
+    if let Some(name) = profile {
+        let profile = configuration.trust_profiles.get(&name).ok_or_else(|| {
+            StoreError::Adapter(format!("plugin trust profile not found: {name}"))
+        })?;
+        paths.extend(
+            profile
+                .public_keys
+                .iter()
+                .chain(profile.trust_root_path.iter())
+                .cloned()
+                .map(|path| (path, false)),
+        );
     }
+    Ok(paths)
 }
 
-fn enforce_management_path(
-    path: &str,
+pub(super) fn enforce_management_path(
+    path: &Path,
     write: bool,
     permit: &ExecutionPermit,
 ) -> Result<(), ExecutionError> {
-    let path = Path::new(path);
     if !path.is_absolute()
         || path
             .components()

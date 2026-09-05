@@ -26,7 +26,12 @@ pub struct PluginSkillContent {
 #[async_trait]
 pub trait ExtensionApi: Send + Sync {
     /// List workspace-effective plugin metadata authorized for this application.
-    async fn plugins(&self, caller: &CallerContext) -> ApiResult<Vec<PluginInventoryEntry>>;
+    /// With `include_disabled`, include live unavailable installation metadata only.
+    async fn plugins(
+        &self,
+        caller: &CallerContext,
+        include_disabled: bool,
+    ) -> ApiResult<Vec<PluginInventoryEntry>>;
     /// Explicitly load a qualified skill from an exact catalog digest.
     async fn skill(
         &self,

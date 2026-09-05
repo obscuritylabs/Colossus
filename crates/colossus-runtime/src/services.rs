@@ -317,14 +317,13 @@ impl Runtime {
         output: impl AsRef<Path>,
     ) -> Result<PluginRegistryTransfer, RuntimeError> {
         let profile = self.plugin_registry_profile(registry)?.clone();
-        let credential = self.resolve_plugin_registry_credential(&profile).await?;
         let operation = PluginRegistryOperation::Pull {
             reference: reference.into(),
             output: workspace_absolute_path(&self.workspace, output.as_ref())
                 .display()
                 .to_string(),
         };
-        self.execute_plugin_registry_operation(profile, credential, operation)
+        self.execute_plugin_registry_operation(profile, operation)
             .await
     }
 
@@ -336,14 +335,13 @@ impl Runtime {
         reference: &str,
     ) -> Result<PluginRegistryTransfer, RuntimeError> {
         let profile = self.plugin_registry_profile(registry)?.clone();
-        let credential = self.resolve_plugin_registry_credential(&profile).await?;
         let operation = PluginRegistryOperation::Push {
             layout: workspace_absolute_path(&self.workspace, layout.as_ref())
                 .display()
                 .to_string(),
             reference: reference.into(),
         };
-        self.execute_plugin_registry_operation(profile, credential, operation)
+        self.execute_plugin_registry_operation(profile, operation)
             .await
     }
 
@@ -418,69 +416,30 @@ impl Runtime {
     async fn execute_plugin_registry_operation(
         &self,
         profile: PluginRegistryProfile,
-        helper_credential: Option<RegistryCredential>,
         operation: PluginRegistryOperation,
     ) -> Result<PluginRegistryTransfer, RuntimeError> {
         let mut request = effect_request(
             terminal_actor(),
             operation.action(),
-            operation.resource(),
+            profile.origin.clone(),
             serde_json::to_value(&operation)
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
         request.capabilities = vec![operation.action().into()];
-        let executor = PluginRegistryEffectExecutor::new(
-            profile,
-            Arc::clone(&self.plugin_credentials),
-            helper_credential,
+        let executor = WorkspaceBoundEffectExecutor::new(
+            self._workspace_lease.identity(),
+            Arc::new(PluginRegistryEffectExecutor::new(
+                profile,
+                Arc::clone(&self.plugin_credentials),
+                Arc::clone(&self.gateway),
+                Arc::clone(&self.process_executor),
+                self.workspace.clone(),
+                self.sandbox_backend == "oci",
+            )),
         );
         let released = self.gateway.execute(request, &executor).await?;
         serde_json::from_slice(&released.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
-    }
-
-    async fn resolve_plugin_registry_credential(
-        &self,
-        profile: &PluginRegistryProfile,
-    ) -> Result<Option<RegistryCredential>, RuntimeError> {
-        match docker_credential_helper(profile)? {
-            None => Ok(None),
-            Some((executable, server)) => {
-                let executable = if self.sandbox_backend == "oci" {
-                    executable
-                } else {
-                    fs::canonicalize(executable)?
-                };
-                let spec = ProcessSpec {
-                    cwd: self.workspace.clone(),
-                    args: vec!["get".into()],
-                    environment: BTreeMap::new(),
-                    stdin_base64: Some(BASE64.encode(format!("{server}\n"))),
-                    stdin_completion: None,
-                    timeout_ms: None,
-                    max_output_bytes: None,
-                };
-                let action = "plugin.registry.credential_helper";
-                let mut request = effect_request(
-                    terminal_actor(),
-                    action,
-                    executable.display().to_string(),
-                    serde_json::to_value(spec)
-                        .map_err(|error| RuntimeError::Config(error.to_string()))?,
-                );
-                request.capabilities = vec![action.into()];
-                let executor = Arc::new(DockerCredentialHelperExecutor::new(Arc::clone(
-                    &self.process_executor,
-                )));
-                let released = self.gateway.execute(request, executor.as_ref()).await?;
-                let value: Value = serde_json::from_slice(&released.bytes)
-                    .map_err(|error| RuntimeError::Config(error.to_string()))?;
-                let handle = value.get("handle").and_then(Value::as_str).ok_or_else(|| {
-                    RuntimeError::Config("credential helper returned no opaque handle".into())
-                })?;
-                executor.take(handle).map(Some)
-            }
-        }
     }
 
     /// Select one exact installed manifest digest as globally active.

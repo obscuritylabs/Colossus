@@ -41,6 +41,9 @@ Desktop's **Plugins** surface lists installed candidates, availability, source, 
 trust, component diagnostics, skills and MCP servers. Managed Local owns lifecycle
 operations and native import/export dialogs. External targets provide authorized
 discovery and bounded previews when they advertise support; they are not managed locally.
+Public API clients can request unavailable metadata with `include_disabled`; instruction
+and resource reads still require the plugin to be available in the workspace. An empty
+kind filter or `EXTENSION_KIND_UNSPECIFIED` includes Agent Plugins.
 
 Use **Use in this conversation** for a sticky selection, or start one message with
 `@colossus/plugin-authoring` for a message-only selection. Sticky and message selections
@@ -119,12 +122,18 @@ at startup and no ambient Docker credentials are used unless `auth.kind: docker`
 selected explicitly. Bearer/basic values remain credential references. Docker helpers
 require an exact configured executable and run through the normal process permit and audit
 boundary.
+Docker configuration is opened only inside an authorized registry transfer, and its file
+must be covered by that transfer's permit. Denied transfers do not inspect credentials.
 
 Trust profiles are `required` by default. `optional` admits unmatched content as untrusted;
 enabling it requires explicit approval. `disabled` deliberately applies digest integrity
 only and has the same explicit untrusted-enable requirement. Signature verification is
 in-process Sigstore/Cosign using configured public keys or keyless issuer/subject identity,
 with optional local trust roots and bundled transparency evidence for disconnected use.
+Verification and installation require read grants for the selected profile's public-key
+and trust-root files. The built-in policy requests approval for paths outside existing
+workspace grants; an external policy must supply those grants explicitly. Re-verifying
+an installed plugin uses the same checks.
 
 ```bash
 colossus plugins pull registry.example/acme/review:v1 \

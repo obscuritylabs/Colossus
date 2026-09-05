@@ -71,10 +71,10 @@ pub(super) use colossus_network::AdditionalRootCertificates;
 pub(super) use colossus_observability::ObservedEventJournal;
 pub(super) use colossus_plugins::{
     PluginRegistryClient, PluginRegistryProfile, PluginRegistryTransfer, PluginSnapshotLease,
-    PluginStore, PluginTrustProfile, RegistryAuthConfig, RegistryCredential, compose_plugins,
-    docker_credential_helper, list_resources as list_plugin_resources,
+    PluginStore, PluginTrustProfile, RegistryAuthConfig, RegistryCredential,
+    RegistryCredentialResolution, compose_plugins, list_resources as list_plugin_resources,
     read_resource as read_plugin_resource, registry_credential_from_helper_output,
-    resolve_registry_credential,
+    resolve_registry_credential_source,
 };
 pub(super) use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,

@@ -321,6 +321,8 @@ pub(super) struct PluginScopedPolicy {
     inner: Arc<dyn PolicyDecisionPoint>,
     skill_roots: BTreeMap<String, PathBuf>,
     builtin_policy: bool,
+    configuration: PluginsConfig,
+    store: Option<Arc<PluginStore>>,
 }
 
 impl PluginScopedPolicy {
@@ -328,11 +330,15 @@ impl PluginScopedPolicy {
         inner: Arc<dyn PolicyDecisionPoint>,
         skill_roots: BTreeMap<String, PathBuf>,
         builtin_policy: bool,
+        configuration: PluginsConfig,
+        store: Option<Arc<PluginStore>>,
     ) -> Self {
         Self {
             inner,
             skill_roots,
             builtin_policy,
+            configuration,
+            store,
         }
     }
 }
@@ -366,10 +372,15 @@ impl PolicyDecisionPoint for PluginScopedPolicy {
                     "Explicit approval is required to enable untrusted plugin content".into();
             }
             if self.builtin_policy && decision.outcome != DecisionOutcome::Deny {
-                for (path, write) in plugin_management::management_paths(&operation) {
-                    let path = Path::new(path);
+                let paths = plugin_management::management_paths(
+                    &operation,
+                    &self.configuration,
+                    self.store.as_deref(),
+                )
+                .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+                for (path, write) in paths {
                     let canonical = if path.exists() {
-                        fs::canonicalize(path).ok()
+                        fs::canonicalize(&path).ok()
                     } else {
                         path.parent()
                             .and_then(|parent| fs::canonicalize(parent).ok())
@@ -387,7 +398,7 @@ impl PolicyDecisionPoint for PluginScopedPolicy {
                             if request.approval.is_none() {
                                 decision.outcome = DecisionOutcome::RequireApproval;
                                 decision.reason =
-                                    "Approve the exact operator-selected plugin transfer path"
+                                    "Approve the exact plugin transfer and trust-profile paths"
                                         .into();
                             } else {
                                 decision.obligations.filesystem.push(FilesystemGrant {

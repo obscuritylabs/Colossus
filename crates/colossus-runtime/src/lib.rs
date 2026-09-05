@@ -30,12 +30,17 @@ mod memory;
 mod memory_gateway;
 mod operations;
 mod plan_runs;
+#[cfg(test)]
+mod plugin_authorization_tests;
 mod plugin_catalog;
 #[cfg(test)]
 mod plugin_catalog_tests;
 mod plugin_extensions;
+mod plugin_inventory;
 mod plugin_management;
 mod plugin_registry_effects;
+#[cfg(test)]
+mod plugin_registry_tests;
 mod prelude;
 mod presentation_work_effects;
 mod provider_gateway;
