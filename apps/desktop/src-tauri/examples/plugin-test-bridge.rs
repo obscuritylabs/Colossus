@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     io::Read as _,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -32,7 +32,10 @@ async fn main() -> anyhow::Result<()> {
     let state = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow::anyhow!("expected isolated worker state path"))?;
-    let auth = zeroize::Zeroizing::new(std::fs::read_to_string(format!("{state}.worker-auth"))?);
+    let state = canonical_state_path(Path::new(&state))?;
+    let mut auth_path = state.as_os_str().to_os_string();
+    auth_path.push(".worker-auth");
+    let auth = zeroize::Zeroizing::new(std::fs::read_to_string(PathBuf::from(auth_path))?);
     let encoded = auth
         .trim()
         .strip_prefix("colossus-worker-auth-v1:")
@@ -40,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     let mut key = zeroize::Zeroizing::new([0_u8; 32]);
     hex::decode_to_slice(encoded, key.as_mut())
         .map_err(|_| anyhow::anyhow!("invalid isolated worker key"))?;
-    let worker = WorkerControlClient::new(worker_ipc_endpoint(Path::new(&state))?, key)?;
+    let worker = WorkerControlClient::new(worker_ipc_endpoint(&state)?, key)?;
     let mut input = String::new();
     std::io::stdin()
         .take(1024 * 1024 + 1)
@@ -111,4 +114,37 @@ async fn invoke(
 
 fn invalid(_: serde_json::Error) -> WorkerControlError {
     WorkerControlError::Protocol("invalid acceptance input".into())
+}
+
+fn canonical_state_path(state: &Path) -> std::io::Result<PathBuf> {
+    // Node's realpath omits the Windows verbatim prefix that Rust's canonicalized
+    // worker workspace retains. Endpoint hashing requires the same canonical spelling.
+    std::fs::canonicalize(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_state_matches_the_workers_canonical_workspace_identity() {
+        let root = tempfile::tempdir().expect("fixture");
+        let state = root.path().join("state.redb");
+        std::fs::write(&state, b"fixture").expect("state file");
+        let supplied = state.to_string_lossy();
+        // Reproduce Node's path spelling on Windows instead of passing Rust's
+        // already canonical path and accidentally skipping the regression.
+        let supplied = supplied.strip_prefix(r"\\?\").unwrap_or(&supplied);
+        let worker_state = root
+            .path()
+            .canonicalize()
+            .expect("workspace")
+            .join("state.redb");
+        let bridge_state = canonical_state_path(Path::new(supplied)).expect("bridge state");
+        assert_eq!(bridge_state, worker_state);
+        assert_eq!(
+            worker_ipc_endpoint(&bridge_state).expect("bridge endpoint"),
+            worker_ipc_endpoint(&worker_state).expect("worker endpoint"),
+        );
+    }
 }

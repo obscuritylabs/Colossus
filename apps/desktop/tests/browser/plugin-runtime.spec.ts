@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   chmod,
   cp,
@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { AcceptanceProcesses } from "./support/acceptance-processes";
 
 // Explicit, separate acceptance tier: no test server or runtime implementation is
 // linked into production Desktop. The driver compiles the production native adapter.
@@ -20,38 +21,6 @@ test.skip(
   process.env.COLOSSUS_PLUGIN_RUNTIME_ACCEPTANCE !== "1",
   "Run npm run test:plugin-runtime after building the acceptance binaries",
 );
-
-function execute(
-  binary: string,
-  args: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-  input = "",
-) {
-  return new Promise<string>((resolveResult, reject) => {
-    const child = spawn(binary, args, { cwd, env, stdio: "pipe" });
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error("Acceptance command timed out"));
-    }, 45_000);
-    child.on("error", reject);
-    child.stdout.on("data", (bytes: Buffer) => {
-      stdout += bytes.toString();
-      if (stdout.length > 4 * 1024 * 1024) child.kill();
-    });
-    child.stderr.on("data", (bytes: Buffer) => {
-      if (stderr.length < 64 * 1024) stderr += bytes.toString();
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      if (code === 0) resolveResult(stdout);
-      else reject(new Error(`Acceptance command exited ${code}: ${stderr}`));
-    });
-    child.stdin.end(input);
-  });
-}
 
 async function removePrivateFixture(path: string) {
   // Only the fresh mkdtemp tree created by this test; never follow links. Content
@@ -61,7 +30,12 @@ async function removePrivateFixture(path: string) {
     if (entry.isDirectory() && !entry.isSymbolicLink())
       await removePrivateFixture(join(path, entry.name));
   }
-  await rm(path, { recursive: true, force: true });
+  await rm(path, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
 }
 
 test("browser → production native adapter → authenticated worker: offline core, previews, approval, lifecycle and authoring", async ({
@@ -129,6 +103,9 @@ test("browser → production native adapter → authenticated worker: offline co
     "---\nname: hello\ndescription: Say hello using ordinary authorized tools.\n---\nSay hello from the scratch workspace.\n",
   );
   let worker: ChildProcess | undefined;
+  const processes = new AcceptanceProcesses();
+  const execute = processes.execute.bind(processes);
+  let scenarioFailed = false;
   let workerError = "";
   const prompts: unknown[] = [];
   let nativePaths: (string | null)[] = [];
@@ -167,7 +144,7 @@ test("browser → production native adapter → authenticated worker: offline co
     return answer.response.result;
   };
   try {
-    worker = spawn(
+    worker = processes.start(
       binary,
       ["--config", config, "--approval-mode", "ask", "worker"],
       { cwd: workspace, env, stdio: ["ignore", "ignore", "pipe"] },
@@ -195,6 +172,16 @@ test("browser → production native adapter → authenticated worker: offline co
         { timeout: 30_000 },
       )
       .toBe("ready");
+    // CLI readiness alone does not prove the native adapter derived the same
+    // endpoint (notably Rust versus Node canonical Windows path spellings).
+    const readyInventory = (await invoke("get_plugin_inventory", {
+      targetId: "local",
+    })) as { plugins: { manifest: { name: string } }[] };
+    expect(
+      readyInventory.plugins.some(
+        (plugin) => plugin.manifest.name === "colossus",
+      ),
+    ).toBe(true);
     await page.exposeBinding(
       "nativePluginAcceptance",
       async (_, command: string, args: Record<string, unknown>) =>
@@ -338,19 +325,34 @@ test("browser → production native adapter → authenticated worker: offline co
       path: "../../output/playwright/plugins-real-runtime.png",
       fullPage: true,
     });
+  } catch (error) {
+    scenarioFailed = true;
+    await test.info().attach("isolated-worker-diagnostic", {
+      body: workerError || "No worker stderr",
+      contentType: "text/plain",
+    });
+    if (!page.isClosed())
+      await test.info().attach("scenario-failure", {
+        body: await page.screenshot().catch(() => Buffer.from([])),
+        contentType: "image/png",
+      });
+    throw error;
   } finally {
-    if (worker && worker.exitCode === null && worker.signalCode === null) {
-      await new Promise<void>((resolveExit) => {
-        const timer = setTimeout(() => {
-          worker!.kill("SIGKILL");
-        }, 5_000);
-        worker!.once("exit", () => {
-          clearTimeout(timer);
-          resolveExit();
-        });
-        worker!.kill();
+    try {
+      // Stop refresh callbacks before shutting down IPC, then await every owned
+      // bridge/CLI/worker process's close event before touching immutable content.
+      try {
+        await page.close();
+      } finally {
+        await processes.close();
+      }
+      await removePrivateFixture(temporary);
+    } catch (error) {
+      if (!scenarioFailed) throw error;
+      await test.info().attach("fixture-cleanup-diagnostic", {
+        body: String(error),
+        contentType: "text/plain",
       });
     }
-    await removePrivateFixture(temporary);
   }
 });

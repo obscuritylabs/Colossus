@@ -131,6 +131,10 @@ private temporary home, and drives production React components through the produ
 native plugin adapter into an authenticated worker. Test-owned paths and approval
 responses replace only OS dialogs; runtime policy, journal, OCI packaging, trust, and
 IPC authentication stay real. The test has no registry prerequisite.
+The tier first checks that the bridge derives the worker's canonical state endpoint
+(including Windows verbatim paths), and tests bounded subprocess shutdown. Browser
+refresh is stopped and every owned process is closed before deleting the private
+fixture; cleanup diagnostics must not replace the original scenario failure.
 
 Ordinary `npm run test:browser` runs mocked interface interaction cases separately.
 The macOS Desktop and Windows runtime pre-merge lanes also run the real-worker tier.

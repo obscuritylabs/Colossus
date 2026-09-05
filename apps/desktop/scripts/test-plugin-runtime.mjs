@@ -22,6 +22,20 @@ run(
 run(
   "cargo",
   [
+    "test",
+    "--locked",
+    "--manifest-path",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "--example",
+    "plugin-test-bridge",
+    "--features",
+    "plugin-test-bridge",
+  ],
+  repository,
+);
+run(
+  "cargo",
+  [
     "build",
     "--locked",
     "--manifest-path",
@@ -43,6 +57,7 @@ run(
   [
     join(desktop, "node_modules/@playwright/test/cli.js"),
     "test",
+    "tests/browser/acceptance-processes.spec.ts",
     "tests/browser/plugin-runtime.spec.ts",
   ],
   desktop,
