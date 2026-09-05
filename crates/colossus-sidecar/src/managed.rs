@@ -1749,8 +1749,11 @@ mod tests {
 
     #[test]
     fn full_access_desktop_runtime_opens_loopback_wildcard_mcp_servers() {
-        let instance = tempfile::tempdir().expect("instance");
-        let workspace = tempfile::tempdir().expect("workspace");
+        let temporary_root = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let instance = tempfile::tempdir_in(&temporary_root).expect("instance");
+        let workspace = tempfile::tempdir_in(&temporary_root).expect("workspace");
         #[cfg(unix)]
         std::fs::set_permissions(
             instance.path(),
