@@ -1,0 +1,22 @@
+[package]
+publish = false
+name = "colossus-linux-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Audited safe wrappers for Linux workspace identity primitives"
+
+[dependencies]
+libc = "0.2.186"
+rustix = { workspace = true, features = ["fs"] }
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"

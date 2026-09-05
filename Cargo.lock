@@ -1132,6 +1132,7 @@ dependencies = [
 name = "colossus-home"
 version = "0.10.10-preview.10"
 dependencies = [
+ "colossus-linux-native",
  "colossus-windows-native",
  "directories",
  "hex",
@@ -1217,6 +1218,14 @@ dependencies = [
  "tempfile",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "colossus-linux-native"
+version = "0.10.10-preview.10"
+dependencies = [
+ "libc",
+ "rustix 1.1.4",
 ]
 
 [[package]]

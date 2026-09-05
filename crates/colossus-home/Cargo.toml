@@ -16,6 +16,9 @@ thiserror.workspace = true
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+colossus-linux-native.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

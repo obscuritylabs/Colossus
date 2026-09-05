@@ -845,12 +845,21 @@ dependencies = [
 name = "colossus-home"
 version = "0.10.10-preview.10"
 dependencies = [
+ "colossus-linux-native",
  "colossus-windows-native",
  "directories",
  "hex",
  "rustix",
  "sha2",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "colossus-linux-native"
+version = "0.10.10-preview.10"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]
