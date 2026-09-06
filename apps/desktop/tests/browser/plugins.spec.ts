@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
+  const icon = `data:image/png;base64,${readFileSync(new URL("../../../../bundled-plugins/colossus/com.obscuritylabs.colossus/icon.png", import.meta.url)).toString("base64")}`;
+  await page.addInitScript((icon) => {
     const core = {
+      icon_data_url: icon,
       manifest: {
         name: "colossus",
         version: "0.10.10-preview.10",
@@ -39,7 +42,7 @@ test.beforeEach(async ({ page }) => {
         {
           id: "colossus/docs",
           name: "docs",
-          transport: "http",
+          transport: "streamable-http",
           enabled: false,
           status: "Requires explicit runtime enablement",
         },
@@ -48,6 +51,7 @@ test.beforeEach(async ({ page }) => {
     };
     const imported = {
       ...core,
+      icon_data_url: null,
       manifest: {
         name: "example",
         version: "1.0.0",
@@ -183,7 +187,7 @@ test.beforeEach(async ({ page }) => {
         throw new Error(`Unexpected command: ${command}`);
       },
     };
-  });
+  }, icon);
   await page.goto("/?fixture=plugin-studio");
   await expect(
     page.getByRole("button", { name: /colossus 0\.10/u }),
@@ -364,7 +368,10 @@ for (const action of [
   test(`management ${action} translates a typed native request`, async ({
     page,
   }) => {
-    await page
+    if (action !== "install")
+      await page.getByText("Developer tools", { exact: true }).click();
+    const actions = action === "install" ? page : page.locator(".plugin-tools");
+    await actions
       .getByRole("button", {
         name:
           action === "gc"
@@ -374,6 +381,7 @@ for (const action of [
       })
       .click();
     const form = page.getByRole("form", { name: `${action} plugin` });
+    await expect(form).toBeFocused();
     if (action === "pull" || action === "push") {
       await form
         .getByLabel("Registry profile", { exact: true })
@@ -492,4 +500,52 @@ test("typed settings preserve disabled MCP, explicit credentials, trust, and Doc
     configPath: "/opt/credentials/docker.json",
   });
   expect(settings["plugins.trustProfiles"].offline.mode).toBe("optional");
+});
+
+test("plugin icons, availability filters, search recovery, and installation disclosure", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  const detail = page.getByRole("article", { name: "colossus details" });
+  const icon = detail.locator(".plugin-icon img");
+  await expect(icon).toBeVisible();
+  await expect(icon).toHaveJSProperty("naturalWidth", 128);
+  await expect(page.locator(".plugin-digest")).toBeHidden();
+  await page.getByText("Installation details", { exact: true }).click();
+  await expect(page.locator(".plugin-digest")).toBeVisible();
+  await page.getByText("Installation details", { exact: true }).click();
+  await page.locator(".plugin-surface").screenshot({
+    path: "../../output/playwright/plugins-desktop.png",
+    animations: "disabled",
+  });
+  await page
+    .getByRole("button", { name: "Unavailable 1", exact: true })
+    .click();
+  await expect(page.locator(".plugin-card")).toHaveCount(1);
+  await expect(
+    page.getByRole("article", { name: "example details" }),
+  ).toBeVisible();
+  await expect(page.locator(".plugin-card .plugin-icon")).toHaveText("EX");
+  await page.getByLabel("Search plugins and skills").fill("no-such-plugin");
+  await expect(
+    page.getByText("No matching plugins", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.locator(".plugin-card")).toHaveCount(2);
+  await page.getByLabel("Search plugins and skills").fill("authoring");
+  await expect(page.locator(".plugin-card")).toHaveCount(1);
+  await expect(detail).toBeVisible();
+  await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+  await page.locator(".plugin-surface").screenshot({
+    path: "../../output/playwright/plugins-dark.png",
+    animations: "disabled",
+  });
+  const results = await new AxeBuilder({ page })
+    .include(".plugin-surface")
+    .analyze();
+  expect(
+    results.violations.filter(({ impact }) =>
+      ["critical", "serious"].includes(impact ?? ""),
+    ),
+  ).toEqual([]);
 });

@@ -3,18 +3,19 @@ import {
   cancelPluginOperation,
   getPluginInventory,
   managePlugin,
-  readPluginPreview,
 } from "../api";
 import { filterPlugins } from "../plugins";
-import type {
-  PluginEntry,
-  PluginInventory,
-  PluginRequest,
-  PluginResource,
-  PluginSkill,
-} from "../plugins";
+import type { PluginEntry, PluginInventory, PluginRequest } from "../plugins";
 import { PluginOperationForm } from "./PluginOperationForm";
-import { PluginMcpControls } from "./PluginMcpControls";
+import { PluginDetail } from "./PluginDetail";
+import { PluginIcon } from "./PluginIcon";
+import {
+  IconSearch,
+  IconPlus,
+  IconRefresh,
+  IconPuzzle,
+  IconChevronRight,
+} from "@tabler/icons-react";
 import type { PluginAction } from "./PluginOperationForm";
 import "./plugins.css";
 
@@ -41,6 +42,9 @@ export function PluginsSurface({
   const [inventoryError, setInventoryError] = useState("");
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "available" | "unavailable">(
+    "all",
+  );
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [operation, setOperation] = useState<{
@@ -121,60 +125,97 @@ export function PluginsSurface({
         </p>
       </section>
     );
-  const plugin = inventory?.plugins.find((entry) => entry.digest === selected);
+  const plugins = inventory?.plugins ?? [];
+  const visible = filterPlugins(plugins, query).filter(
+    (entry) =>
+      filter === "all" ||
+      (filter === "available" ? entry.available : !entry.available),
+  );
+  const plugin =
+    visible.find((entry) => entry.digest === selected) ?? visible[0];
+  const availableCount = plugins.filter((entry) => entry.available).length;
   return (
     <section className="overview-scroll plugin-surface" aria-label="Plugins">
-      <header>
-        <h2>Plugins</h2>
-        <p>
-          Skills ship with Colossus and installed Agent Plugins. Browsing never
-          activates skills or MCP servers.
-        </p>
+      <header className="plugin-page-header">
+        <div>
+          <span className="plugin-eyebrow">Your workspace</span>
+          <h2>Plugins</h2>
+          <p>Give Colossus skills and connections for the way you work.</p>
+        </div>
+        {inventory?.managementAvailable && (
+          <button
+            className="button primary"
+            disabled={busy !== null}
+            onClick={() => setOperation({ action: "install" })}
+          >
+            <IconPlus size={17} aria-hidden="true" />
+            Install
+          </button>
+        )}
       </header>
-      <div className="plugin-actions">
-        <label>
-          Search plugins and skills
+      <div className="plugin-toolbar">
+        <label className="plugin-search">
+          <span className="sr-only">Search plugins and skills</span>
+          <IconSearch size={18} aria-hidden="true" />
           <input
             type="search"
+            placeholder="Search plugins and skills…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
         <button
           className="button secondary"
+          aria-label="Refresh plugins"
+          title="Refresh plugins"
           disabled={loading}
           onClick={() => void refresh()}
         >
-          Refresh plugins
+          <IconRefresh size={17} aria-hidden="true" />
         </button>
+        {inventory?.managementAvailable && (
+          <details className="plugin-tools">
+            <summary>Developer tools</summary>
+            <div className="plugin-actions" aria-label="Plugin management">
+              {(
+                ["validate", "verify", "package", "pull", "push", "gc"] as const
+              ).map((action) => (
+                <button
+                  className="button secondary"
+                  disabled={busy !== null}
+                  key={action}
+                  onClick={() => setOperation({ action })}
+                >
+                  {action === "gc"
+                    ? "Garbage collect"
+                    : action[0]!.toUpperCase() + action.slice(1)}
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
-      {inventory?.managementAvailable ? (
-        <div className="plugin-actions" aria-label="Plugin management">
-          {(
-            [
-              "install",
-              "validate",
-              "verify",
-              "package",
-              "pull",
-              "push",
-              "gc",
-            ] as const
-          ).map((action) => (
-            <button
-              className="button secondary"
-              disabled={busy !== null}
-              key={action}
-              onClick={() => setOperation({ action })}
-            >
-              {action === "gc"
-                ? "Garbage collect"
-                : action[0]!.toUpperCase() + action.slice(1)}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p>
+      <div className="plugin-filters" aria-label="Filter plugins">
+        {(
+          [
+            ["all", "All plugins", plugins.length],
+            ["available", "Available", availableCount],
+            ["unavailable", "Unavailable", plugins.length - availableCount],
+          ] as const
+        ).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}
+          >
+            {label}
+            <span>{count}</span>
+          </button>
+        ))}
+      </div>
+      {inventory && !inventory.managementAvailable && (
+        <p className="plugin-notice">
           Read-only discovery. Lifecycle management is available on Managed
           Local.
         </p>
@@ -211,262 +252,92 @@ export function PluginsSurface({
           onClose={() => setOperation(null)}
         />
       )}
-      {inventory && filterPlugins(inventory.plugins, query).length === 0 && (
-        <p>No plugins match this view.</p>
+      {inventory && visible.length === 0 && (
+        <div className="plugin-empty" role="status">
+          <IconPuzzle size={32} stroke={1.4} aria-hidden="true" />
+          <h3>
+            {plugins.length === 0
+              ? "Your plugins will appear here"
+              : "No matching plugins"}
+          </h3>
+          <p>
+            {plugins.length === 0
+              ? "Install a plugin to add skills and connections to Colossus."
+              : "Try another search or show all plugins."}
+          </p>
+          {plugins.length > 0 && (
+            <button
+              className="button secondary"
+              onClick={() => {
+                setQuery("");
+                setFilter("all");
+              }}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
       )}
       <div className="plugin-layout">
-        <div className="plugin-inventory">
-          {filterPlugins(inventory?.plugins ?? [], query).map((entry) => (
+        <div className="plugin-inventory" aria-label="Installed plugins">
+          {visible.map((entry) => (
             <button
               type="button"
               className="plugin-card"
               key={entry.digest}
-              aria-pressed={selected === entry.digest}
+              aria-pressed={plugin?.digest === entry.digest}
               onClick={() => setSelected(entry.digest)}
             >
-              <strong>{entry.manifest.name}</strong>
-              <span>{entry.manifest.version ?? "Unversioned"}</span>
-              <span>
-                {entry.origin === "bundled"
-                  ? "Bundled with Colossus"
-                  : entry.source}
+              <div className="plugin-card-heading">
+                <PluginIcon
+                  name={entry.manifest.name}
+                  icon={entry.icon_data_url}
+                />
+                <span className="plugin-card-title">
+                  <strong>{entry.manifest.name}</strong>
+                  <span className="plugin-version">
+                    {entry.manifest.version ?? "Unversioned"}
+                  </span>
+                </span>
+                <IconChevronRight size={16} aria-hidden="true" />
+              </div>
+              <span className="plugin-card-description">
+                {entry.manifest.description}
               </span>
-              <span>
-                Global: {entry.status} · Workspace:{" "}
-                {entry.available ? "available" : "unavailable"}
+              <span className="plugin-card-capabilities">
+                {entry.skills.length}{" "}
+                {entry.skills.length === 1 ? "skill" : "skills"} ·{" "}
+                {entry.mcp_servers.length}{" "}
+                {entry.mcp_servers.length === 1 ? "connection" : "connections"}
               </span>
-              <small>{entry.manifest.description}</small>
+              <span className="plugin-card-footer">
+                <span
+                  className={`plugin-status ${entry.available ? "is-available" : ""}`}
+                >
+                  {entry.available ? "Available" : "Unavailable"}
+                </span>
+                <span>
+                  {entry.origin === "bundled"
+                    ? "Bundled with Colossus"
+                    : "Installed"}
+                </span>
+              </span>
             </button>
           ))}
         </div>
         {plugin ? (
-          <article
-            className="plugin-detail"
-            aria-label={`${plugin.manifest.name} details`}
-          >
-            <h3>{plugin.manifest.name}</h3>
-            <p>{plugin.manifest.description}</p>
-            <p className="plugin-digest">{plugin.digest}</p>
-            <p>
-              {plugin.origin === "bundled"
-                ? "Bundled with Colossus. Version managed by the executable; this is not a Cosign signature."
-                : `${plugin.trust.trusted ? "Signature verified" : "Untrusted"} · ${plugin.trust.method} · ${plugin.trust.profile ?? "No trust profile"}`}
-            </p>
-            {plugin.trust.signer && <p>Signer: {plugin.trust.signer}</p>}
-            {!plugin.available && (
-              <p role="status">
-                {plugin.unavailable_reason ?? "Unavailable in this workspace"}
-              </p>
-            )}
-            {inventory?.managementAvailable && (
-              <div className="plugin-actions">
-                {plugin.actions
-                  .filter(
-                    (action) =>
-                      action !== "inspect" &&
-                      (action !== "enable" || plugin.status !== "enabled") &&
-                      (action !== "disable" || plugin.status === "enabled"),
-                  )
-                  .map((action) => (
-                    <button
-                      className="button secondary"
-                      key={action}
-                      disabled={busy !== null}
-                      onClick={() =>
-                        setOperation({
-                          action: (action === "verify"
-                            ? "verify_installed"
-                            : action) as PluginAction,
-                          plugin,
-                        })
-                      }
-                    >
-                      {action === "enable"
-                        ? "Activate this digest"
-                        : action[0]!.toUpperCase() + action.slice(1)}
-                    </button>
-                  ))}
-              </div>
-            )}
-            <h4>Skills</h4>
-            {plugin.skills.length === 0 && (
-              <p>No valid skills in this plugin.</p>
-            )}
-            {plugin.skills.map((skill) => (
-              <SkillPreview
-                key={`${plugin.digest}:${skill.id}`}
-                targetId={targetId}
-                plugin={plugin}
-                skill={skill}
-                selected={selections.includes(skill.id)}
-                onUseSkill={onUseSkill}
-              />
-            ))}
-            <h4>MCP servers</h4>
-            {plugin.mcp_servers.length === 0 ? (
-              <p>No MCP servers.</p>
-            ) : (
-              plugin.mcp_servers.map((server) => (
-                <div key={`${plugin.digest}:${server.id}`}>
-                  <p>
-                    <strong>{server.id}</strong> · {server.transport} ·{" "}
-                    {server.status}
-                  </p>
-                  {inventory?.managementAvailable && (
-                    <PluginMcpControls
-                      targetId={targetId}
-                      server={server.id}
-                      enabled={plugin.available && server.enabled}
-                      http={
-                        server.transport === "http" ||
-                        server.transport === "streamable_http"
-                      }
-                    />
-                  )}
-                </div>
-              ))
-            )}
-            <p>
-              Enable individual MCP servers explicitly in plugin settings.
-              Credential configuration does not enable them.
-            </p>
-            {plugin.diagnostics.map((diagnostic, index) => (
-              <p role="status" key={`${diagnostic.code}:${index}`}>
-                <strong>
-                  {diagnostic.name ?? diagnostic.kind}: {diagnostic.code}
-                </strong>{" "}
-                — {diagnostic.detail}
-              </p>
-            ))}
-          </article>
-        ) : (
-          <p>Select a plugin to inspect its skills and resources.</p>
-        )}
+          <PluginDetail
+            key={plugin.digest}
+            plugin={plugin}
+            targetId={targetId}
+            managementAvailable={inventory?.managementAvailable === true}
+            selections={selections}
+            onUseSkill={onUseSkill}
+            busy={busy !== null}
+            onOperation={setOperation}
+          />
+        ) : null}
       </div>
-    </section>
-  );
-}
-
-function SkillPreview({
-  targetId,
-  plugin,
-  skill,
-  selected,
-  onUseSkill,
-}: {
-  targetId: string;
-  plugin: PluginEntry;
-  skill: PluginSkill;
-  selected: boolean;
-  onUseSkill?: ((id: string) => void) | undefined;
-}) {
-  const [instructions, setInstructions] = useState<string | null>(null);
-  const [resources, setResources] = useState<PluginResource[] | null>(null);
-  const [preview, setPreview] = useState<{
-    path: string;
-    content: string;
-  } | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  async function load(kind: "skill" | "resources" | "resource", path?: string) {
-    if (loading) return;
-    setLoading(true);
-    setError("");
-    try {
-      const request = {
-        kind,
-        skillId: skill.id,
-        digest: plugin.digest,
-        ...(path === undefined ? {} : { path }),
-      };
-      if (kind === "skill")
-        setInstructions(
-          (await readPluginPreview<{ instructions: string }>(targetId, request))
-            .instructions,
-        );
-      else if (kind === "resources")
-        setResources(
-          await readPluginPreview<PluginResource[]>(targetId, request),
-        );
-      else
-        setPreview(
-          await readPluginPreview<{ path: string; content: string }>(
-            targetId,
-            request,
-          ),
-        );
-    } catch (error) {
-      setError(failure(error));
-    } finally {
-      setLoading(false);
-    }
-  }
-  return (
-    <section className="plugin-skill">
-      <h5>{skill.id}</h5>
-      <p>{skill.description}</p>
-      <div className="plugin-actions">
-        <button
-          className="button secondary"
-          disabled={loading}
-          onClick={() => void load("skill")}
-        >
-          Preview instructions
-        </button>
-        <button
-          className="button secondary"
-          disabled={loading}
-          onClick={() => void load("resources")}
-        >
-          Browse resources
-        </button>
-        <button
-          className="button primary"
-          disabled={!plugin.available || selected || !onUseSkill}
-          onClick={() => onUseSkill?.(skill.id)}
-        >
-          {selected
-            ? "Selected for this conversation"
-            : "Use in this conversation"}
-        </button>
-      </div>
-      <small>One message: @{skill.id}</small>
-      {loading && <p role="status">Loading bounded preview…</p>}
-      {error && <p role="alert">{error}</p>}
-      {instructions !== null && (
-        <details open>
-          <summary>Instructions</summary>
-          <pre>{instructions}</pre>
-        </details>
-      )}
-      {resources !== null && (
-        <ul aria-label={`${skill.id} resources`}>
-          {resources.length === 0 && <li>No resources.</li>}
-          {resources.map((resource) => (
-            <li key={resource.path}>
-              {resource.text ? (
-                <button
-                  className="button secondary"
-                  disabled={loading}
-                  onClick={() => void load("resource", resource.path)}
-                >
-                  {resource.path}
-                </button>
-              ) : (
-                <code>{resource.path}</code>
-              )}{" "}
-              · {resource.size} bytes
-              {!resource.text && " · Binary or oversized; path only"}
-            </li>
-          ))}
-        </ul>
-      )}
-      {preview && (
-        <details open>
-          <summary>{preview.path}</summary>
-          <pre>{preview.content}</pre>
-        </details>
-      )}
     </section>
   );
 }

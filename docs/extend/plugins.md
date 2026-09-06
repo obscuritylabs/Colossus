@@ -66,6 +66,49 @@ instructions or configuring credentials never enables MCP servers.
 
 ## Portable layout
 
+### Plugin icons
+
+Agent Plugins v1 has no portable icon field. Colossus uses the specification's
+[client extension mechanism](https://agent-plugins.org/specification#8-client-extensions)
+so the manifest remains compatible with other clients:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "example-plugin",
+  "extensions": {
+    "com.obscuritylabs.colossus": {
+      "icon": "com.obscuritylabs.colossus/icon.png"
+    }
+  }
+}
+```
+
+Add the `extensions` object to `plugin.json` and put the PNG at the indicated path inside the
+plugin directory. Use a square image, ideally 128 × 128 pixels. The path is relative
+to the plugin root and must stay beneath `com.obscuritylabs.colossus/`. Absolute paths,
+URLs, traversal, links, and SVG are not supported. Both the source and normalized PNG
+must fit within 64 KiB, with dimensions no larger than 512 × 512 pixels.
+
+Icons travel with the immutable OCI package and work offline. Colossus decodes and
+re-encodes the image to remove ancillary content, then includes a bounded PNG data URL
+in authorized discovery (`icon_data_url`). An absent or invalid icon uses a monogram;
+icons that fail validation produce `invalid_plugin_icon` diagnostics without disabling valid skills
+or MCP components. The existing package-wide rejection of links still applies.
+Catalogs retain at most 2 MiB of icon data and limit normalization to 64 images and
+8 Mi decoded pixels per discovery. Local inventory and snapshots reserve capacity for
+the bundled icon. Additional icons use the monogram fallback while their plugins and
+skills remain discoverable. Once a budget is exhausted, remaining display images are
+not decoded; validating one plugin directly still checks its icon independently.
+
+Desktop shows the icon in the plugin library, plugin details, `@` suggestions and
+conversation selections. Type `@` to choose a plugin, then select one of its skills.
+You can still type a qualified `@plugin/skill` directly. The library supports search
+and availability filters; **Developer tools** contains validation, packaging and registry
+operations, and **Installation details** contains provenance, trust and the exact digest.
+
+### Components
+
 ```text
 example-plugin/
 ├── plugin.json

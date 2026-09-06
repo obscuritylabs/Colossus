@@ -1,5 +1,5 @@
 import { DropdownSelect } from "./DropdownSelect";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { PluginEntry, PluginRequest, PluginSource } from "../plugins";
 
@@ -31,6 +31,15 @@ export function PluginOperationForm({
   onSubmit: (request: PluginRequest, verifyArchive: boolean) => void;
   onClose: () => void;
 }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const trigger = document.activeElement;
+    formRef.current?.focus();
+    return () => {
+      if (trigger instanceof HTMLElement && trigger.isConnected)
+        trigger.focus({ preventScroll: true });
+    };
+  }, []);
   const [source, setSource] = useState<PluginSource["kind"]>("directory");
   const [digest, setDigest] = useState("");
   const [registry, setRegistry] = useState("");
@@ -114,6 +123,8 @@ export function PluginOperationForm({
   }
   return (
     <form
+      ref={formRef}
+      tabIndex={-1}
       className="plugin-operation"
       onSubmit={submit}
       aria-label={`${action.replaceAll("_", " ")} plugin`}

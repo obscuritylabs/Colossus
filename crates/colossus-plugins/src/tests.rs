@@ -4,14 +4,14 @@ use flate2::{Compression, GzBuilder};
 use tar::{EntryType, Header};
 use tempfile::TempDir;
 
-fn actor() -> Actor {
+pub(crate) fn actor() -> Actor {
     Actor {
         actor_type: ActorType::User,
         id: "user:test".into(),
     }
 }
 
-fn write_plugin(root: &Path) {
+pub(crate) fn write_plugin(root: &Path) {
     fs::create_dir_all(root.join("skills/review/references")).expect("skill directories");
     fs::write(
         root.join("plugin.json"),

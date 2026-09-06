@@ -63,6 +63,7 @@ use contained::{ReadRoot, read_contained};
 mod filesystem;
 use filesystem::*;
 mod discovery;
+mod icons;
 mod schema;
 use discovery::*;
 pub use discovery::{load_plugin, validate_plugin};

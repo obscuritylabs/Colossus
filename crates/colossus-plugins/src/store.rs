@@ -679,6 +679,7 @@ impl PluginStore {
         let include = include.iter().map(String::as_str).collect::<BTreeSet<_>>();
         let exclude = exclude.iter().map(String::as_str).collect::<BTreeSet<_>>();
         let mut records = Vec::new();
+        let mut icons = crate::icons::CatalogIconBudget::default();
         for installation in self
             .open_repository()?
             .list_plugins(MAX_PLUGIN_INSTALLATIONS)?
@@ -689,7 +690,9 @@ impl PluginStore {
             {
                 continue;
             }
-            match self.load_verified_installation(&installation) {
+            match self
+                .load_verified_installation(&installation, icons.for_origin(installation.origin))
+            {
                 Ok(record) => records.push(record),
                 Err(_) if omit_unavailable => {} // Live inventory retains the component diagnostic.
                 Err(error) => return Err(error),
@@ -734,6 +737,7 @@ impl PluginStore {
             .open_repository()?
             .list_plugins(MAX_PLUGIN_INSTALLATIONS)?;
         let mut records = Vec::with_capacity(digests.len());
+        let mut icons = crate::icons::CatalogIconBudget::default();
         for (name, digest) in digests {
             validate_lease_digest(digest)?;
             let installation = installed
@@ -744,7 +748,8 @@ impl PluginStore {
                         "captured plugin {name}@{digest} is unavailable; start a new run"
                     ))
                 })?;
-            let mut record = self.load_verified_installation(installation)?;
+            let mut record = self
+                .load_verified_installation(installation, icons.for_origin(installation.origin))?;
             // Activation was captured by the caller before this immutable snapshot was
             // persisted. Later lifecycle changes do not rewrite that run's catalog.
             record.installation.status = PluginStatus::Enabled;

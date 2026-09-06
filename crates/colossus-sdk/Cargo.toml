@@ -11,8 +11,10 @@ description = "Stable Rust SDK and secure lifecycle abstractions for Colossus ap
 [features]
 default = ["daemon"]
 daemon = [
+    "dep:base64",
     "dep:colossus-api-proto",
     "dep:colossus-grpc",
+    "dep:image",
     "dep:prost",
     "dep:prost-types",
     "dep:rustls",
@@ -37,12 +39,14 @@ embedded = []
 
 [dependencies]
 async-trait.workspace = true
+base64 = { workspace = true, optional = true }
 colossus-api.workspace = true
 colossus-api-proto = { workspace = true, optional = true }
 colossus-grpc = { workspace = true, optional = true }
 colossus-sidecar-protocol.workspace = true
 futures.workspace = true
 hex.workspace = true
+image = { workspace = true, optional = true }
 keyring = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

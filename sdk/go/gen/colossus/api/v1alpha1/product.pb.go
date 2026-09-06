@@ -2388,7 +2388,9 @@ type AgentPlugin struct {
 	// mcp_servers contains only credential-free status.
 	McpServers []*PluginMcpServer `protobuf:"bytes,12,rep,name=mcp_servers,json=mcpServers,proto3" json:"mcp_servers,omitempty"`
 	// diagnostics contains independent component failures.
-	Diagnostics   []*PluginDiagnostic `protobuf:"bytes,13,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
+	Diagnostics []*PluginDiagnostic `protobuf:"bytes,13,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
+	// icon_data_url is a bounded PNG data URL; empty when no valid icon is available.
+	IconDataUrl   string `protobuf:"bytes,14,opt,name=icon_data_url,json=iconDataUrl,proto3" json:"icon_data_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2512,6 +2514,13 @@ func (x *AgentPlugin) GetDiagnostics() []*PluginDiagnostic {
 		return x.Diagnostics
 	}
 	return nil
+}
+
+func (x *AgentPlugin) GetIconDataUrl() string {
+	if x != nil {
+		return x.IconDataUrl
+	}
+	return ""
 }
 
 // PluginTrust keeps executable provenance distinct from signature verification.
@@ -3735,7 +3744,7 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"extensions\x18\x01 \x03(\v2'.colossus.api.v1alpha1.ExtensionSummaryR\n" +
 	"extensions\x127\n" +
 	"\x04page\x18\x02 \x01(\v2#.colossus.api.v1alpha1.PageResponseR\x04page\x12<\n" +
-	"\aplugins\x18\x03 \x03(\v2\".colossus.api.v1alpha1.AgentPluginR\aplugins\"\xa7\x04\n" +
+	"\aplugins\x18\x03 \x03(\v2\".colossus.api.v1alpha1.AgentPluginR\aplugins\"\xcb\x04\n" +
 	"\vAgentPlugin\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -3751,7 +3760,8 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\x06skills\x18\v \x03(\v2\".colossus.api.v1alpha1.PluginSkillR\x06skills\x12G\n" +
 	"\vmcp_servers\x18\f \x03(\v2&.colossus.api.v1alpha1.PluginMcpServerR\n" +
 	"mcpServers\x12I\n" +
-	"\vdiagnostics\x18\r \x03(\v2'.colossus.api.v1alpha1.PluginDiagnosticR\vdiagnostics\"q\n" +
+	"\vdiagnostics\x18\r \x03(\v2'.colossus.api.v1alpha1.PluginDiagnosticR\vdiagnostics\x12\"\n" +
+	"\ricon_data_url\x18\x0e \x01(\tR\viconDataUrl\"q\n" +
 	"\vPluginTrust\x12\x18\n" +
 	"\atrusted\x18\x01 \x01(\bR\atrusted\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12\x16\n" +

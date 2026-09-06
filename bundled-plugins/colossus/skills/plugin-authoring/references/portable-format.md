@@ -31,3 +31,14 @@ namespace. Colossus does not use `.codex-plugin/plugin.json` as its portable man
 An invalid root manifest rejects the plugin. Individual invalid skills or MCP servers
 produce diagnostics without disabling unrelated valid components. For authoring,
 resolve every unintended diagnostic before handing off the package.
+
+## Optional Colossus icon
+
+Agent Plugins v1 does not define a portable icon field. To display an icon in Colossus,
+use `extensions["com.obscuritylabs.colossus"].icon` in `plugin.json`, with the value
+`com.obscuritylabs.colossus/icon.png`, and include that file in the package. Use a square
+PNG (128 × 128 recommended), at most 64 KiB and 512 × 512 pixels. The normalized image
+must also fit within 64 KiB. URLs, absolute paths, traversal, links and SVG are rejected.
+Clients that do not implement this namespace ignore it. Missing or invalid icons fall
+back to a monogram in Colossus; validation reports invalid icons without disabling valid
+skills. Icons are bundled display assets and grant no runtime authority.

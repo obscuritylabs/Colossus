@@ -702,6 +702,29 @@ bodies are loaded progressively. Only explicitly selected qualified skills add t
 plugin root as a read/execute permit grant. `allowed-tools` is advisory and never grants
 authority.
 
+The `com.obscuritylabs.colossus` client extension may declare an icon beneath its own
+directory. Icon discovery uses the same no-follow contained reads, admits only PNGs
+within 64 KiB and 512 × 512 pixels, and decodes with an allocation limit before
+re-encoding pixels. Authorized inventory releases only the bounded normalized PNG data
+URL; raw client extensions remain excluded from live inventory. The renderer accepts
+only bounded PNG data URLs and cannot fetch remote or local icon paths. Invalid display
+assets produce a component diagnostic without granting authority or disabling skills.
+Inventory construction and active or restored snapshots share a cumulative budget of
+2 MiB retained icon data, 64 normalizations, and 8 Mi decoded pixels. One maximum-size
+image is reserved for the executable-owned plugin without changing catalog order. PNG
+headers are checked before decoder construction, and exhausted budgets skip display
+loading; remaining plugins retain their component metadata. OCI extraction validates
+content and identity without decoding display images outside that discovery budget.
+External gRPC discovery validates and normalizes icons again before constructing SDK
+records. Each page remains within 2 MiB, and the server includes at most 2 MiB of icon
+data across the sorted catalog. The SDK retains its 8 MiB aggregate metadata limit, a
+separate 2 MiB retained-icon budget, and a 10 MiB total transfer bound. Additional valid
+icons fall back to monograms without removing plugins from the catalog. A cumulative
+budget admits at most 64 image normalizations and 8 Mi decoded pixels per discovery.
+The SDK checks the fixed PNG header before decoder construction; icons past the work
+budget are discarded without decompressing image or ancillary data. Retained icons
+receive full codec validation, and malformed icon envelopes remain protocol errors.
+
 The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer lease for
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,
 uninstall, and garbage collection cannot invalidate a running snapshot. Stable writable

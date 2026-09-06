@@ -31,7 +31,7 @@ pub struct BuiltPluginArtifact {
 
 /// Build one deterministic OCI artifact without writing it.
 pub fn build_plugin_artifact(source: &Path) -> Result<BuiltPluginArtifact, StoreError> {
-    let record = load_plugin(source)?;
+    let record = load_plugin_with_icon_budget(source, &mut crate::icons::IconBudget::exhausted())?;
     let root = Path::new(&record.installation.root);
     let mut paths = Vec::new();
     collect_regular_files(root, root, 0, &mut paths)?;
@@ -458,7 +458,10 @@ pub fn extract_plugin_artifact(
             output.sync_all().map_err(adapter)?;
         }
     }
-    let record = load_plugin(destination)?;
+    // Extraction verifies component structure and identity; display normalization
+    // belongs to discovery and must share its cumulative catalog budget.
+    let record =
+        load_plugin_with_icon_budget(destination, &mut crate::icons::IconBudget::exhausted())?;
     if record.installation.manifest.name != config.name
         || record.installation.manifest.version != config.version
     {

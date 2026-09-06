@@ -90,6 +90,14 @@ test("browser → production native adapter → authenticated worker: offline co
   );
   const source = join(workspace, "example");
   await mkdir(join(source, "skills", "hello"), { recursive: true });
+  await mkdir(join(source, "com.obscuritylabs.colossus"));
+  await cp(
+    join(
+      repository,
+      "bundled-plugins/colossus/com.obscuritylabs.colossus/icon.png",
+    ),
+    join(source, "com.obscuritylabs.colossus/icon.png"),
+  );
   await writeFile(
     join(source, "plugin.json"),
     JSON.stringify({
@@ -97,6 +105,11 @@ test("browser → production native adapter → authenticated worker: offline co
       name: "example",
       version: "1.0.0",
       description: "Scratch workspace authoring acceptance",
+      extensions: {
+        "com.obscuritylabs.colossus": {
+          icon: "com.obscuritylabs.colossus/icon.png",
+        },
+      },
     }),
   );
   await writeFile(
@@ -266,6 +279,11 @@ test("browser → production native adapter → authenticated worker: offline co
     await expect(
       detail.getByRole("button", { name: "Disable", exact: true }),
     ).toBeVisible();
+    await expect(detail.locator(".plugin-icon img")).toHaveJSProperty(
+      "naturalWidth",
+      128,
+    );
+    await page.getByText("Developer tools", { exact: true }).click();
     nativePaths = [source];
     await page.getByRole("button", { name: "Validate", exact: true }).click();
     await continueOperation("validate");
@@ -288,6 +306,10 @@ test("browser → production native adapter → authenticated worker: offline co
     await continueOperation("install");
     await page.getByRole("button", { name: /example 1\.0/u }).click();
     const imported = page.getByRole("article", { name: "example details" });
+    await expect(imported.locator(".plugin-icon img")).toHaveJSProperty(
+      "naturalWidth",
+      128,
+    );
     await expect(
       imported.getByRole("button", { name: "Use in this conversation" }),
     ).toBeDisabled();
@@ -303,6 +325,10 @@ test("browser → production native adapter → authenticated worker: offline co
     await expect(
       imported.getByRole("button", { name: "Disable", exact: true }),
     ).toBeVisible();
+    await expect(imported.locator(".plugin-icon img")).toHaveJSProperty(
+      "naturalWidth",
+      128,
+    );
     const inventory = (await invoke("get_plugin_inventory", {
       targetId: "local",
     })) as { plugins: { manifest: { name: string }; digest: string }[] };

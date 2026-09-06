@@ -41,6 +41,12 @@ mod tests {
         let root = temporary.path().join("content");
         colossus_plugins::extract_plugin_artifact(&embedded, &root).expect("extract");
         let record = colossus_plugins::load_plugin(&root).expect("load");
+        assert!(
+            record
+                .icon_data_url
+                .as_deref()
+                .is_some_and(|icon| icon.starts_with("data:image/png;base64,"))
+        );
         assert!(record.diagnostics.is_empty(), "{:?}", record.diagnostics);
         assert_eq!(
             record

@@ -922,6 +922,7 @@ name = "colossus-sdk"
 version = "0.10.10-preview.10"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "colossus-api",
  "colossus-api-proto",
  "colossus-darwin-process",
@@ -930,6 +931,7 @@ dependencies = [
  "colossus-windows-native",
  "futures",
  "hex",
+ "image",
  "keyring",
  "nix 0.31.3",
  "prost",
