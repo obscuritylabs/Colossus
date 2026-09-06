@@ -11,7 +11,8 @@ const MAX_ICON_BYTES: u64 = 64 * 1024;
 const MAX_ICON_DIMENSION: u32 = 512;
 const MAX_INVENTORY_ICON_BYTES: usize = 2 * 1024 * 1024;
 
-const MAX_ENCODED_ICON_BYTES: usize = 21 + (MAX_ICON_BYTES as usize).div_ceil(3) * 4;
+const ICON_PREFIX: &str = "data:image/png;base64,";
+const MAX_ENCODED_ICON_BYTES: usize = ICON_PREFIX.len() + (MAX_ICON_BYTES as usize).div_ceil(3) * 4;
 
 pub(crate) struct IconBudget {
     bytes: usize,
@@ -160,7 +161,7 @@ fn read_icon(
     if output.len() as u64 > MAX_ICON_BYTES {
         return Err(adapter("normalized icon exceeds display limit"));
     }
-    let url = format!("data:image/png;base64,{}", STANDARD.encode(output));
+    let url = format!("{ICON_PREFIX}{}", STANDARD.encode(output));
     if url.len() > budget.bytes {
         budget.bytes = 0;
         return Ok(None);

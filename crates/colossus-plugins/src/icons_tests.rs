@@ -137,6 +137,12 @@ fn png_bytes(image: &image::DynamicImage) -> Vec<u8> {
 
 #[test]
 fn local_discovery_bounds_pixels_images_and_retained_bytes_before_loading() {
+    let maximum_url = format!("data:image/png;base64,{}", STANDARD.encode(vec![0; 65_536]));
+    assert_eq!(maximum_url.len(), 87_406);
+    assert_eq!(
+        CatalogIconBudget::default().bundled.bytes,
+        maximum_url.len()
+    );
     let mut random = 1_u32;
     let pixels = (0..127 * 127 * 4)
         .map(|_| {
