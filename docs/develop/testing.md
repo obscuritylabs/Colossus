@@ -140,6 +140,10 @@ bound before checking the rendered result. This tier disables scenario retries s
 passing CI result cannot conceal a failed first attempt.
 
 Ordinary `npm run test:browser` runs mocked interface interaction cases separately.
+It also enters Plugins through the production Workspace sidebar at desktop and compact
+widths, using keyboard navigation and checking the explicit unavailable state for a
+target without discovery support. A standalone plugin-component fixture cannot prove
+that the management screen is reachable from the application shell.
 The macOS Desktop and Windows runtime pre-merge lanes also run the real-worker tier.
 Browser traces are retained on failure; plugin screenshots are written under
 `output/playwright`. Native adapter unit tests cover path replacement and cancellation.

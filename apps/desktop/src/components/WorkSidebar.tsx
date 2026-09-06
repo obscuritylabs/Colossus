@@ -130,6 +130,7 @@ interface WorkSidebarProps {
 const DESTINATIONS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
   { id: "fleet", label: "Capabilities", Icon: IconTopologyStar3 },
+  { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
   { id: "library", label: "Library", Icon: IconLibrary },
   { id: "connections", label: "Connections", Icon: IconPlugConnected },
   { id: "settings", label: "Settings", Icon: IconSettings },

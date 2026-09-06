@@ -2491,6 +2491,56 @@ test("responsive Workspace navigation remains reachable from catalog surfaces", 
   await expect(navigationTrigger).toBeFocused();
 });
 
+test("production Workspace navigation opens Plugins by keyboard at desktop and compact widths", async ({
+  page,
+}) => {
+  for (const width of [1280, 880]) {
+    await page.setViewportSize({ width, height: 760 });
+    await page.goto(FIXTURE);
+    if (width === 880) {
+      await page.getByRole("button", { name: "Open work navigation" }).click();
+    }
+    const destinations = page.getByRole("navigation", {
+      name: "Workspace destinations",
+    });
+    const plugins = destinations.getByRole("button", {
+      name: "Plugins",
+      exact: true,
+    });
+    await plugins.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Plugins", exact: true }),
+    ).toBeVisible();
+    // This fixture deliberately lacks plugin discovery. Keep navigation present
+    // so older targets report the supported unavailable state, not a missing UI.
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "This target does not advertise authorized plugin discovery.",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Workspace navigation" }),
+    ).toHaveCount(0);
+    if (width === 880) {
+      await page
+        .getByRole("button", { name: "Open Workspace navigation" })
+        .click();
+    }
+    await expect(plugins).toHaveAttribute("aria-current", "page");
+    const work = destinations.getByRole("button", {
+      name: "Work",
+      exact: true,
+    });
+    await work.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("textbox", { name: "Prompt" })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+  }
+});
+
 test("desktop Workspace sidebar resizes and remembers its width", async ({
   page,
 }) => {
