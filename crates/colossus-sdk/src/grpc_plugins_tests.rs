@@ -27,11 +27,15 @@ fn example(icon: String) -> proto::AgentPlugin {
     }
 }
 
+fn decode_plugin(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntry> {
+    plugin_from_proto(value, &mut icons::NormalizationBudget::default())
+}
+
 #[test]
 fn discovery_preserves_valid_icons_and_accepts_older_servers_without_them() {
     let icon = png_url(&DynamicImage::new_rgba8(16, 16));
     for icon in [String::new(), icon] {
-        let entry = plugin_from_proto(example(icon.clone())).expect("discovery");
+        let entry = decode_plugin(example(icon.clone())).expect("discovery");
         assert_eq!(entry.icon_data_url, (!icon.is_empty()).then_some(icon));
     }
 }
@@ -47,7 +51,7 @@ fn external_icons_reject_remote_sources_malformed_images_and_unbounded_payloads(
         format!("data:image/png;base64,{}", "A".repeat(87_388)),
         png_url(&DynamicImage::new_rgba8(513, 1)),
     ] {
-        assert!(plugin_from_proto(example(icon)).is_err());
+        assert!(decode_plugin(example(icon)).is_err());
     }
 }
 
@@ -60,7 +64,7 @@ fn external_pngs_are_normalized_before_sdk_release() {
     bytes.extend_from_slice(b"private trailing metadata");
     let source = format!("data:image/png;base64,{}", STANDARD.encode(&bytes));
     assert_eq!(
-        plugin_from_proto(example(source))
+        decode_plugin(example(source))
             .expect("normalized")
             .icon_data_url,
         Some(icon)
@@ -68,7 +72,7 @@ fn external_pngs_are_normalized_before_sdk_release() {
     bytes.resize(64 * 1024 + 1, 0);
     let oversized = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
     assert!(oversized.len() <= 87_406);
-    assert!(plugin_from_proto(example(oversized)).is_err());
+    assert!(decode_plugin(example(oversized)).is_err());
 }
 
 #[test]
@@ -101,6 +105,44 @@ fn discovery_keeps_the_aggregate_metadata_limit() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn compressed_catalogs_bound_pixel_and_image_work_across_pages() {
+    for (side, expected_icons) in [(512, 32), (1, 64)] {
+        let icon = png_url(&DynamicImage::new_rgba8(side, side));
+        assert!(icon.len() * 1000 < MAX_CATALOG_RESPONSE_BYTES);
+        let mut budget = InventoryBudget::default();
+        let mut output = Vec::new();
+        for page in 0..50 {
+            budget
+                .append(
+                    &mut output,
+                    proto::ListExtensionsResponse {
+                        plugins: (0..20)
+                            .map(|index| {
+                                let mut plugin = example(icon.clone());
+                                plugin.name = format!("plugin-{}", page * 20 + index);
+                                plugin
+                            })
+                            .collect(),
+                        ..Default::default()
+                    },
+                )
+                .expect("metadata survives exhausted normalization budget");
+        }
+        assert_eq!(output.len(), 1000);
+        assert_eq!(
+            output
+                .iter()
+                .filter(|plugin| plugin.icon_data_url.is_some())
+                .count(),
+            expected_icons
+        );
+        for (index, plugin) in output.iter().enumerate() {
+            assert_eq!(plugin.manifest.name, format!("plugin-{index}"));
+        }
+    }
 }
 
 struct Catalog {
@@ -192,7 +234,7 @@ async fn grpc_sdk_discovers_large_icon_catalogs_across_real_transport_pages() {
     let icon = large_icon();
     let entries = (0..100)
         .map(|index| {
-            let mut plugin = plugin_from_proto(example(icon.clone())).expect("valid icon");
+            let mut plugin = decode_plugin(example(icon.clone())).expect("valid icon");
             plugin.manifest.name = format!("plugin-{index:03}");
             plugin.available = true;
             plugin.status = PluginStatus::Enabled;

@@ -715,8 +715,11 @@ External gRPC discovery validates and normalizes icons again before constructing
 records. Each page remains within 2 MiB, and the server includes at most 2 MiB of icon
 data across the sorted catalog. The SDK retains its 8 MiB aggregate metadata limit, a
 separate 2 MiB retained-icon budget, and a 10 MiB total transfer bound. Additional valid
-icons fall back to monograms without removing plugins from the catalog. Malformed
-external icons remain protocol errors.
+icons fall back to monograms without removing plugins from the catalog. A cumulative
+budget admits at most 64 image normalizations and 8 Mi decoded pixels per discovery.
+The SDK checks the fixed PNG header before decoder construction; icons past the work
+budget are discarded without decompressing image or ancillary data. Retained icons
+receive full codec validation, and malformed icon envelopes remain protocol errors.
 
 The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer lease for
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,

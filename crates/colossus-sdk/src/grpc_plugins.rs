@@ -18,6 +18,7 @@ const MAX_CATALOG_RESPONSE_BYTES: usize = MAX_CATALOG_METADATA_BYTES + MAX_CATAL
 
 #[derive(Default)]
 struct InventoryBudget {
+    normalization: icons::NormalizationBudget,
     response_bytes: usize,
     metadata_bytes: usize,
     icon_bytes: usize,
@@ -45,7 +46,7 @@ impl InventoryBudget {
             return Err(protocol_error());
         }
         for plugin in response.plugins {
-            let mut plugin = plugin_from_proto(plugin)?;
+            let mut plugin = plugin_from_proto(plugin, &mut self.normalization)?;
             if let Some(icon) = &plugin.icon_data_url {
                 if self.icon_bytes.saturating_add(icon.len()) > MAX_CATALOG_ICON_BYTES {
                     // Display assets must not make an otherwise bounded catalog unreadable.
@@ -226,7 +227,10 @@ fn resource_from_proto(value: proto::PluginResource) -> ApiResult<PluginResource
     })
 }
 
-fn plugin_from_proto(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntry> {
+fn plugin_from_proto(
+    value: proto::AgentPlugin,
+    budget: &mut icons::NormalizationBudget,
+) -> ApiResult<PluginInventoryEntry> {
     let trust = required(value.trust)?;
     let skills = value
         .skills
@@ -237,7 +241,7 @@ fn plugin_from_proto(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntr
         return Err(protocol_error());
     }
     Ok(PluginInventoryEntry {
-        icon_data_url: icons::validated(value.icon_data_url)?,
+        icon_data_url: icons::validated(value.icon_data_url, budget)?,
         origin: if value.bundled {
             PluginOrigin::Bundled
         } else {

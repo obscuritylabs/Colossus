@@ -97,6 +97,8 @@ invalid icons produce `invalid_plugin_icon` diagnostics without disabling valid 
 or MCP components. The existing package-wide rejection of links still applies.
 Catalogs retain at most 2 MiB of icon data, prioritizing bundled plugins. Additional
 icons use the monogram fallback while their plugins and skills remain discoverable.
+External catalogs also limit icon normalization to 64 images and 8 Mi decoded pixels
+per discovery; icons beyond those limits use the same fallback.
 
 Desktop shows the icon in the plugin library, plugin details, `@` suggestions and
 conversation selections. Type `@` to choose a plugin, then select one of its skills.
