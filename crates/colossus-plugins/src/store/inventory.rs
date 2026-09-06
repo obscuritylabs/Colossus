@@ -42,6 +42,7 @@ impl PluginStore {
             entry.manifest.extensions.clear();
             entries.push(entry);
         }
+        crate::icons::bound_inventory_icons(&mut entries);
         Ok(entries)
     }
 

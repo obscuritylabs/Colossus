@@ -120,3 +120,35 @@ fn absent_icon_keeps_legacy_plugins_loadable() {
             .any(|d| d.code == "invalid_plugin_icon")
     );
 }
+
+#[test]
+fn inventory_bounds_icons_without_losing_plugins_or_the_bundled_identity() {
+    let temp = fixture(json!(format!("{NAMESPACE}/icon.png")));
+    let template = load_plugin(temp.path()).expect("plugin").inventory();
+    let mut entries = (0..100)
+        .map(|index| {
+            let mut entry = template.clone();
+            entry.manifest.name = format!("plugin-{index}");
+            entry.icon_data_url = Some(format!("data:image/png;base64,{}", "A".repeat(87_384)));
+            entry
+        })
+        .collect::<Vec<_>>();
+    entries[99].origin = PluginOrigin::Bundled;
+    bound_inventory_icons(&mut entries);
+    assert_eq!(entries.len(), 100);
+    assert!(entries[99].icon_data_url.is_some());
+    assert!(entries.iter().any(|entry| entry.icon_data_url.is_none()));
+    assert!(
+        entries
+            .iter()
+            .filter_map(|entry| entry.icon_data_url.as_ref())
+            .map(String::len)
+            .sum::<usize>()
+            <= MAX_INVENTORY_ICON_BYTES
+    );
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(entry.manifest.name, format!("plugin-{index}"));
+        assert_eq!(entry.skills.len(), 1);
+        assert_eq!(entry.mcp_servers.len(), 1);
+    }
+}

@@ -9,6 +9,57 @@ use colossus_api::{
 };
 use proto::extension_service_client::ExtensionServiceClient;
 
+#[path = "grpc_plugin_icons.rs"]
+mod icons;
+
+const MAX_CATALOG_METADATA_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CATALOG_ICON_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CATALOG_RESPONSE_BYTES: usize = MAX_CATALOG_METADATA_BYTES + MAX_CATALOG_ICON_BYTES;
+
+#[derive(Default)]
+struct InventoryBudget {
+    response_bytes: usize,
+    metadata_bytes: usize,
+    icon_bytes: usize,
+}
+
+impl InventoryBudget {
+    fn append(
+        &mut self,
+        output: &mut Vec<PluginInventoryEntry>,
+        response: proto::ListExtensionsResponse,
+    ) -> ApiResult<String> {
+        self.response_bytes = self.response_bytes.saturating_add(response.encoded_len());
+        let icon_payload_bytes = response
+            .plugins
+            .iter()
+            .map(|plugin| plugin.icon_data_url.len())
+            .sum::<usize>();
+        self.metadata_bytes = self
+            .metadata_bytes
+            .saturating_add(response.encoded_len().saturating_sub(icon_payload_bytes));
+        if self.response_bytes > MAX_CATALOG_RESPONSE_BYTES
+            || self.metadata_bytes > MAX_CATALOG_METADATA_BYTES
+            || output.len().saturating_add(response.plugins.len()) > 10_000
+        {
+            return Err(protocol_error());
+        }
+        for plugin in response.plugins {
+            let mut plugin = plugin_from_proto(plugin)?;
+            if let Some(icon) = &plugin.icon_data_url {
+                if self.icon_bytes.saturating_add(icon.len()) > MAX_CATALOG_ICON_BYTES {
+                    // Display assets must not make an otherwise bounded catalog unreadable.
+                    plugin.icon_data_url = None;
+                } else {
+                    self.icon_bytes += icon.len();
+                }
+            }
+            output.push(plugin);
+        }
+        Ok(response.page.unwrap_or_default().next_page_token)
+    }
+}
+
 pub(super) struct GrpcPluginClient {
     pub(super) transport: Arc<GrpcArtifactClient>,
 }
@@ -27,7 +78,7 @@ impl PluginClient for GrpcPluginClient {
         let mut output = Vec::new();
         let mut token = String::new();
         let mut seen = std::collections::BTreeSet::new();
-        let mut bytes = 0_usize;
+        let mut budget = InventoryBudget::default();
         for _ in 0..1_000 {
             let request = self
                 .transport
@@ -46,20 +97,7 @@ impl PluginClient for GrpcPluginClient {
                 .await
                 .map_err(api_error_from_status)?
                 .into_inner();
-            bytes = bytes.saturating_add(prost::Message::encoded_len(&response));
-            if bytes > 8 * 1024 * 1024
-                || output.len().saturating_add(response.plugins.len()) > 10_000
-            {
-                return Err(protocol_error());
-            }
-            output.extend(
-                response
-                    .plugins
-                    .into_iter()
-                    .map(plugin_from_proto)
-                    .collect::<ApiResult<Vec<_>>>()?,
-            );
-            token = response.page.unwrap_or_default().next_page_token;
+            token = budget.append(&mut output, response)?;
             if token.is_empty() {
                 return Ok(output);
             }
@@ -199,7 +237,7 @@ fn plugin_from_proto(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntr
         return Err(protocol_error());
     }
     Ok(PluginInventoryEntry {
-        icon_data_url: (!value.icon_data_url.is_empty()).then_some(value.icon_data_url),
+        icon_data_url: icons::validated(value.icon_data_url)?,
         origin: if value.bundled {
             PluginOrigin::Bundled
         } else {
@@ -274,23 +312,5 @@ fn plugin_from_proto(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntr
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn discovery_preserves_icons_and_accepts_older_servers_without_them() {
-        for icon in ["", "data:image/png;base64,iVBORw0KGgo="] {
-            let value = proto::AgentPlugin {
-                name: "example".into(),
-                icon_data_url: icon.into(),
-                trust: Some(proto::PluginTrust::default()),
-                ..Default::default()
-            };
-            let entry = plugin_from_proto(value).expect("discovery");
-            assert_eq!(
-                entry.icon_data_url.as_deref(),
-                (!icon.is_empty()).then_some(icon)
-            );
-        }
-    }
-}
+#[path = "grpc_plugins_tests.rs"]
+mod tests;

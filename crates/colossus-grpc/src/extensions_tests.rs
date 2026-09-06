@@ -166,6 +166,7 @@ async fn icon_heavy_discovery_pages_stay_bounded_without_skipping_plugins() {
             let mut entry = plugin(&format!("plugin-{index:03}"), true);
             // A normalized 64 KiB icon produces 87,384 base64 characters.
             entry.icon_data_url = Some(format!("data:image/png;base64,{}", "A".repeat(87_384)));
+            entry.manifest.description = Some("x".repeat(4096));
             entry
         })
         .collect::<Vec<_>>();
@@ -180,6 +181,7 @@ async fn icon_heavy_discovery_pages_stay_bounded_without_skipping_plugins() {
     let mut token = String::new();
     let mut names = Vec::new();
     let mut page_count = 0;
+    let mut icon_bytes = 0;
     loop {
         let mut request = request(vec![], false);
         request.get_mut().page = Some(proto::PageRequest {
@@ -197,7 +199,8 @@ async fn icon_heavy_discovery_pages_stay_bounded_without_skipping_plugins() {
         assert_eq!(response.extensions.len(), response.plugins.len());
         for (summary, plugin) in response.extensions.iter().zip(&response.plugins) {
             assert_eq!(summary.name, plugin.name);
-            assert_eq!(plugin.icon_data_url.len(), 87_406);
+            assert!(matches!(plugin.icon_data_url.len(), 0 | 87_406));
+            icon_bytes += plugin.icon_data_url.len();
         }
         names.extend(response.plugins.into_iter().map(|plugin| plugin.name));
         token = response.page.expect("continuation").next_page_token;
@@ -207,7 +210,8 @@ async fn icon_heavy_discovery_pages_stay_bounded_without_skipping_plugins() {
         }
         assert!(page_count < 4, "discovery must make progress");
     }
-    assert_eq!(page_count, 3);
+    assert_eq!(page_count, 2);
+    assert!(icon_bytes > 0 && icon_bytes <= MAX_CATALOG_ICON_BYTES);
     assert_eq!(names, expected);
 }
 

@@ -95,6 +95,8 @@ re-encodes the image to remove ancillary content, then includes a bounded PNG da
 in authorized discovery (`icon_data_url`). An absent or invalid icon uses a monogram;
 invalid icons produce `invalid_plugin_icon` diagnostics without disabling valid skills
 or MCP components. The existing package-wide rejection of links still applies.
+Catalogs retain at most 2 MiB of icon data, prioritizing bundled plugins. Additional
+icons use the monogram fallback while their plugins and skills remain discoverable.
 
 Desktop shows the icon in the plugin library, plugin details, `@` suggestions and
 conversation selections. Type `@` to choose a plugin, then select one of its skills.

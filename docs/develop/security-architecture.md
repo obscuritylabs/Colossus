@@ -709,6 +709,14 @@ re-encoding pixels. Authorized inventory releases only the bounded normalized PN
 URL; raw client extensions remain excluded from live inventory. The renderer accepts
 only bounded PNG data URLs and cannot fetch remote or local icon paths. Invalid display
 assets produce a component diagnostic without granting authority or disabling skills.
+The store bounds total inventory icon data to 2 MiB before any worker or API release,
+prioritizing bundled identity without discarding plugins or changing catalog order.
+External gRPC discovery validates and normalizes icons again before constructing SDK
+records. Each page remains within 2 MiB, and the server includes at most 2 MiB of icon
+data across the sorted catalog. The SDK retains its 8 MiB aggregate metadata limit, a
+separate 2 MiB retained-icon budget, and a 10 MiB total transfer bound. Additional valid
+icons fall back to monograms without removing plugins from the catalog. Malformed
+external icons remain protocol errors.
 
 The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer lease for
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,

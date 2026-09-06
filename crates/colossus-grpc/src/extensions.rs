@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 const MAX_DISCOVERY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CATALOG_ICON_BYTES: usize = 2 * 1024 * 1024;
 
 #[cfg(test)]
 #[path = "extensions_tests.rs"]
@@ -88,6 +89,16 @@ impl ExtensionService for ExtensionServiceAdapter {
         plugins.sort_by(|left, right| {
             (&left.manifest.name, &left.digest).cmp(&(&right.manifest.name, &right.digest))
         });
+        let mut icon_bytes = 0_usize;
+        for plugin in &mut plugins {
+            if let Some(icon) = &plugin.icon_data_url {
+                if icon_bytes.saturating_add(icon.len()) > MAX_CATALOG_ICON_BYTES {
+                    plugin.icon_data_url = None;
+                } else {
+                    icon_bytes += icon.len();
+                }
+            }
+        }
         // A continuation is bound to the exact catalog, so an activation between pages
         // cannot silently skip or duplicate entries.
         let identity: String = plugins

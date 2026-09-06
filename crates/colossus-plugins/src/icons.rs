@@ -2,12 +2,34 @@
 
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use colossus_contracts::{PluginInventoryEntry, PluginOrigin};
 use image::{ImageFormat, ImageReader, Limits};
 use std::io::Cursor;
 
 const NAMESPACE: &str = "com.obscuritylabs.colossus";
 const MAX_ICON_BYTES: u64 = 64 * 1024;
 const MAX_ICON_DIMENSION: u32 = 512;
+const MAX_INVENTORY_ICON_BYTES: usize = 2 * 1024 * 1024;
+
+pub(super) fn bound_inventory_icons(entries: &mut [PluginInventoryEntry]) {
+    let mut bytes = 0_usize;
+    // Keep the first-party identity even when many installed plugins consume the
+    // display budget. Do not change catalog order or remove component metadata.
+    for bundled in [true, false] {
+        for entry in entries
+            .iter_mut()
+            .filter(|entry| (entry.origin == PluginOrigin::Bundled) == bundled)
+        {
+            if let Some(icon) = &entry.icon_data_url {
+                if bytes.saturating_add(icon.len()) > MAX_INVENTORY_ICON_BYTES {
+                    entry.icon_data_url = None;
+                } else {
+                    bytes += icon.len();
+                }
+            }
+        }
+    }
+}
 
 pub(super) fn load_icon(
     root: &Path,
