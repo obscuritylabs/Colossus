@@ -2,12 +2,21 @@ use super::*;
 
 /// Permit-bound filesystem adapter.
 #[derive(Default)]
-pub struct FilesystemExecutor;
+pub struct FilesystemExecutor {
+    workspace_search_exclusions: Vec<PathBuf>,
+}
 
 impl FilesystemExecutor {
     /// Construct the filesystem adapter. Authorization still requires a permit.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Omit host-owned control content from workspace-scoped discovery. This
+    /// does not change explicit filesystem access or widen any permit.
+    pub fn with_workspace_search_exclusions(mut self, paths: Vec<PathBuf>) -> Self {
+        self.workspace_search_exclusions = paths;
+        self
     }
 }
 
@@ -73,6 +82,7 @@ impl EffectExecutor for FilesystemExecutor {
                 &request.content,
                 max_output,
                 permit.obligations().resource_authority == ResourceAuthority::Ambient,
+                &self.workspace_search_exclusions,
             ),
             "filesystem.write" | "audit.export.write" => {
                 write_file(&target, &request.content, max_output)
@@ -108,6 +118,7 @@ pub(super) fn search_files(
     content: &Value,
     max_output: usize,
     ambient: bool,
+    workspace_search_exclusions: &[PathBuf],
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
     if !root.is_dir() {
         return Err(adapter_failure(
@@ -169,8 +180,14 @@ pub(super) fn search_files(
     let mut matches = Vec::new();
     let mut truncated = false;
     let mut walker = WalkBuilder::new(root);
+    let exclusions = if workspace_scoped {
+        workspace_search_exclusions.to_vec()
+    } else {
+        Vec::new()
+    };
     walker
         .follow_links(false)
+        .filter_entry(move |entry| !exclusions.iter().any(|root| entry.path().starts_with(root)))
         .hidden(false)
         .ignore(respect_repository_ignores)
         .git_ignore(respect_repository_ignores)

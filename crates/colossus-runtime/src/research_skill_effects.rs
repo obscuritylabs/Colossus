@@ -4,86 +4,55 @@ pub(super) struct ResearchEffectExecutor {
     pub(super) service: Arc<ResearchService>,
 }
 
-pub(super) struct SkillEffectExecutor {
-    pub(super) resources: Arc<SkillResourceService>,
-    pub(super) authoring: Arc<SkillAuthoringService>,
+pub(super) struct PluginEffectExecutor {
+    pub(super) catalog: Arc<PluginCatalogSource>,
 }
 
 #[async_trait]
-impl EffectExecutor for SkillEffectExecutor {
+impl EffectExecutor for PluginEffectExecutor {
     async fn execute(
         &self,
         request: &EffectRequest,
-        permit: ExecutionPermit,
+        _permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        let operation: SkillOperation = serde_json::from_value(request.content.clone())
+        let operation: PluginOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         if request.action != operation.action() || request.resource != operation.resource() {
             return Err(ExecutionError::Failed(
-                "skill request does not match authorized content".into(),
+                "plugin request does not match authorized content".into(),
             ));
         }
+        let catalog = self
+            .catalog
+            .capture()
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let plugins = &catalog.records;
         let value = match operation {
-            SkillOperation::Scaffold {
-                name,
-                description,
-                instructions,
-                resource_dirs,
-            } => serde_json::to_value(
-                self.authoring
-                    .scaffold(&permit, &name, &description, &instructions, &resource_dirs)
+            PluginOperation::List => {
+                serde_json::to_value(super::plugin_catalog::narrow_plugin_inventory(
+                    plugins
+                        .iter()
+                        .map(AgentPluginRecord::inventory)
+                        .collect::<Vec<_>>(),
+                    &self.catalog.configuration,
+                ))
+            }
+            PluginOperation::Inspect { plugin_name } => serde_json::to_value(
+                super::plugin_catalog::narrow_plugin_inventory(
+                    vec![find_plugin(plugins, &plugin_name)?.inventory()],
+                    &self.catalog.configuration,
+                )
+                .pop(),
+            ),
+            PluginOperation::SkillRead { skill_id } => {
+                serde_json::to_value(find_skill(plugins, &skill_id)?)
+            }
+            PluginOperation::ListResources { skill_id } => serde_json::to_value(
+                list_plugin_resources(find_skill(plugins, &skill_id)?)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?,
             ),
-            SkillOperation::Inspect { name } => serde_json::to_value(
-                self.authoring
-                    .inspect_installed(&permit, &name)
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::ReadFile { name, path } => serde_json::to_value(
-                self.authoring
-                    .read_installed(&permit, &name, &path)
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::WriteFile {
-                name,
-                path,
-                content,
-                expected_sha256,
-            } => serde_json::to_value(
-                self.authoring
-                    .write_installed(&permit, &name, &path, &content, expected_sha256.as_deref())
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::ValidateInstalled { name } => serde_json::to_value(
-                self.authoring
-                    .validate_installed(&permit, &name)
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::ValidateLocal { path } => serde_json::to_value(
-                self.authoring
-                    .validate_local(&permit, Path::new(&path))
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::InstallLocal { path } => serde_json::to_value(
-                self.authoring
-                    .install_local(&permit, Path::new(&path))
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::ListResources {
-                skill_name,
-                active_skills,
-            } => serde_json::to_value(
-                self.resources
-                    .list_resources(&permit, &skill_name, &active_skills)
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
-            SkillOperation::ReadResource {
-                skill_name,
-                path,
-                active_skills,
-            } => serde_json::to_value(
-                self.resources
-                    .read_resource(&permit, &skill_name, &path, &active_skills)
+            PluginOperation::ReadResource { skill_id, path } => serde_json::to_value(
+                read_plugin_resource(find_skill(plugins, &skill_id)?, &path)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?,
             ),
         }
@@ -95,6 +64,27 @@ impl EffectExecutor for SkillEffectExecutor {
             effect_succeeded: true,
         })
     }
+}
+
+fn find_plugin<'a>(
+    plugins: &'a [AgentPluginRecord],
+    name: &str,
+) -> Result<&'a AgentPluginRecord, ExecutionError> {
+    plugins
+        .iter()
+        .find(|plugin| plugin.installation.manifest.name == name)
+        .ok_or_else(|| ExecutionError::Failed(format!("plugin is not active: {name}")))
+}
+
+fn find_skill<'a>(
+    plugins: &'a [AgentPluginRecord],
+    id: &str,
+) -> Result<&'a colossus_contracts::PluginSkillRecord, ExecutionError> {
+    plugins
+        .iter()
+        .flat_map(|plugin| &plugin.skills)
+        .find(|skill| skill.id == id)
+        .ok_or_else(|| ExecutionError::Failed(format!("plugin skill is not active: {id}")))
 }
 
 #[async_trait]

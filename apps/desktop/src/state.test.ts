@@ -40,7 +40,6 @@ const baseRun: Run = {
   pendingInteractionCount: 0,
   terminal: null,
   etag: "run-etag",
-  selectedSkills: [],
   archived: false,
 };
 

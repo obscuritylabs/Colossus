@@ -73,8 +73,12 @@ fn requests_cannot_claim_identity_or_server_execution_inputs() {
             }
             for field in message.field {
                 let field_name = field.name.as_deref().unwrap_or_default();
+                // This is a contained skill-relative resource identifier, never a
+                // host path. Runtime tests enforce digest binding and traversal denial.
+                let contained_plugin_resource =
+                    message_name == "ReadPluginResourceRequest" && field_name == "path";
                 assert!(
-                    !FORBIDDEN_INGRESS_FIELDS.contains(&field_name),
+                    contained_plugin_resource || !FORBIDDEN_INGRESS_FIELDS.contains(&field_name),
                     "{message_name}.{field_name} crosses a forbidden public boundary"
                 );
             }

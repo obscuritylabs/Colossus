@@ -6,8 +6,7 @@ use async_trait::async_trait;
 use colossus_contracts::{
     Actor, CredentialReference, EffectRequest, EventClassification, ExecutionContext,
     IntegrationAuth, IntegrationConnection, IntegrationKind, IntegrationOperation,
-    IntegrationStatus, IntegrationSummary, NewEvent, PackInstallation, PackStatus, PublisherTrust,
-    QuarantinedEffectResult, ToolSpec,
+    IntegrationStatus, IntegrationSummary, NewEvent, QuarantinedEffectResult, ToolSpec,
 };
 use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
@@ -15,7 +14,7 @@ use colossus_policy::{
     http_transport_authority_match, non_public_network_address,
 };
 use colossus_ports::{
-    AggregateRepository, EventJournal, ExtensionRepository, StoreError, collect_stream_ids,
+    AggregateRepository, EventJournal, IntegrationRepository, StoreError, collect_stream_ids,
 };
 use futures::StreamExt as _;
 use reqwest::header::{HeaderName, HeaderValue};

@@ -43,21 +43,7 @@ pub(super) fn doctor_profile<'a>(
 }
 
 pub(super) fn resolve_skill_mentions(input: &str, skill_names: &[String]) -> (String, Vec<String>) {
-    let mut explicit = Vec::new();
-    let mut prompt = input.trim_start();
-    while let Some(token) = prompt.split_whitespace().next() {
-        let Some(name) = token.strip_prefix('@') else {
-            break;
-        };
-        if name.is_empty() || !skill_names.iter().any(|candidate| candidate == name) {
-            break;
-        }
-        if !explicit.iter().any(|candidate| candidate == name) {
-            explicit.push(name.into());
-        }
-        prompt = prompt[token.len()..].trim_start();
-    }
-    (prompt.into(), explicit)
+    colossus_contracts::parse_leading_plugin_mentions(input, skill_names)
 }
 
 pub(super) fn remember_history_entry(history_entries: &mut Vec<String>, entry: &str) {
@@ -228,25 +214,6 @@ pub(super) fn handle_presentation_command(
 
 pub(super) fn cli_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
-}
-
-pub(super) fn registry_slash_args<'a>(
-    input: &'a str,
-    usage: &str,
-) -> Result<(&'a str, &'a str, Option<&'a str>), std::io::Error> {
-    let parts = input.split_whitespace().collect::<Vec<_>>();
-    if !(2..=3).contains(&parts.len()) {
-        return Err(cli_error(usage));
-    }
-    if parts
-        .get(2)
-        .is_some_and(|reference| !reference.starts_with("env:"))
-    {
-        return Err(cli_error(format!(
-            "{usage}; credential reference must use env:VARIABLE"
-        )));
-    }
-    Ok((parts[0], parts[1], parts.get(2).copied()))
 }
 
 pub(super) fn parse_environment(

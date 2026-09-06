@@ -78,13 +78,13 @@ impl IntegrationRequest {
 
 /// Permit-bound connection management and HTTP operation adapter.
 pub struct IntegrationExecutor {
-    repository: Arc<dyn ExtensionRepository>,
+    repository: Arc<dyn IntegrationRepository>,
     tls_roots: AdditionalRootCertificates,
 }
 
 impl IntegrationExecutor {
     /// Construct an adapter. Every effectful method still requires an opaque permit.
-    pub fn new(repository: Arc<dyn ExtensionRepository>) -> Result<Self, StoreError> {
+    pub fn new(repository: Arc<dyn IntegrationRepository>) -> Result<Self, StoreError> {
         Ok(Self {
             repository,
             tls_roots: AdditionalRootCertificates::default(),

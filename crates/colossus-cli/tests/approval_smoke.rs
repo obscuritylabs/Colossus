@@ -372,7 +372,7 @@ fn write_tool_config(
         .unwrap_or_default();
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -450,7 +450,7 @@ fn write_network_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -535,7 +535,7 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
     };
     let sandbox_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -672,7 +672,7 @@ fn terminal_modes_deny_prompt_or_auto_prove_the_same_policy_obligation() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

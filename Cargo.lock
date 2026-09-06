@@ -938,6 +938,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "image",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -973,6 +974,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-bundled-plugins"
+version = "0.10.10-preview.10"
+dependencies = [
+ "colossus-plugins",
+ "colossus-ports",
+ "tempfile",
+]
+
+[[package]]
+name = "colossus-bundles"
+version = "0.10.10-preview.10"
+dependencies = [
+ "async-trait",
+ "base64",
+ "colossus-contracts",
+ "colossus-policy",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "colossus-cli"
 version = "0.10.10-preview.10"
 dependencies = [
@@ -981,13 +1010,14 @@ dependencies = [
  "clap",
  "colossus-access",
  "colossus-api",
+ "colossus-bundles",
  "colossus-codex-auth",
  "colossus-contracts",
  "colossus-darwin-process",
  "colossus-grpc",
  "colossus-home",
  "colossus-observability",
- "colossus-packs",
+ "colossus-plugins",
  "colossus-policy",
  "colossus-ports",
  "colossus-presentation",
@@ -1015,6 +1045,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
+ "shell-words",
  "tempfile",
  "time",
  "tokio",
@@ -1355,33 +1386,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "colossus-packs"
+name = "colossus-plugins"
 version = "0.10.10-preview.10"
 dependencies = [
- "async-trait",
  "base64",
  "colossus-contracts",
- "colossus-integrations",
+ "colossus-journal-redb",
  "colossus-network",
- "colossus-policy",
  "colossus-ports",
- "colossus-skills",
- "colossus-testkit",
- "ed25519-dalek",
+ "colossus-windows-native",
  "flate2",
+ "fs4",
  "futures",
  "hex",
+ "http",
+ "jsonschema",
  "reqwest 0.12.28",
+ "rustix 1.1.4",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
+ "sigstore-verify",
  "tar",
  "tempfile",
- "thiserror 2.0.18",
  "time",
  "tokio",
- "tokio-util",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1507,6 +1539,8 @@ dependencies = [
  "colossus-access",
  "colossus-agent",
  "colossus-audit",
+ "colossus-bundled-plugins",
+ "colossus-bundles",
  "colossus-context",
  "colossus-contracts",
  "colossus-home",
@@ -1519,7 +1553,7 @@ dependencies = [
  "colossus-memory-chroma",
  "colossus-network",
  "colossus-observability",
- "colossus-packs",
+ "colossus-plugins",
  "colossus-policy",
  "colossus-ports",
  "colossus-presentation",
@@ -1529,7 +1563,6 @@ dependencies = [
  "colossus-sandbox",
  "colossus-search",
  "colossus-session",
- "colossus-skills",
  "colossus-telemetry",
  "colossus-testkit",
  "colossus-tools",
@@ -1705,21 +1738,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "colossus-skills"
-version = "0.10.10-preview.10"
-dependencies = [
- "colossus-contracts",
- "colossus-policy",
- "colossus-ports",
- "nix 0.31.3",
- "rustix 1.1.4",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "uuid",
-]
-
-[[package]]
 name = "colossus-telemetry"
 version = "0.10.10-preview.10"
 dependencies = [
@@ -1839,6 +1857,7 @@ dependencies = [
  "colossus-api-runtime",
  "colossus-contracts",
  "colossus-grpc",
+ "colossus-plugins",
  "colossus-policy",
  "colossus-ports",
  "colossus-runtime",
@@ -1866,6 +1885,7 @@ name = "colossus-worker-protocol"
 version = "0.10.10-preview.10"
 dependencies = [
  "base64",
+ "colossus-contracts",
  "getrandom 0.4.3",
  "hex",
  "hmac 0.12.1",

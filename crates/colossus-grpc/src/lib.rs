@@ -10,6 +10,7 @@ mod agent_run;
 mod artifact;
 mod auth;
 mod endpoint;
+mod extensions;
 mod journal_credentials;
 mod request_guard;
 mod server;
@@ -31,6 +32,7 @@ pub use endpoint::{
     read_endpoint_descriptor_with, validate_endpoint_certificate_pem, write_endpoint_certificate,
     write_endpoint_certificate_with, write_endpoint_descriptor, write_endpoint_descriptor_with,
 };
+pub use extensions::ExtensionServiceAdapter;
 pub use journal_credentials::JournalCredentialRepository;
 pub use server::{BoundPublicGrpcServer, PublicGrpcServerError, RESERVED_UNARY_REQUEST_HEADROOM};
 pub use status::api_status;

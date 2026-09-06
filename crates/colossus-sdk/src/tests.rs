@@ -97,6 +97,7 @@ async fn plan_continuation_requires_an_advertised_runtime_capability() {
     let client = Colossus::from_backend(TestBackend::new(BackendKind::Daemon));
     let error = client
         .create_run(CreateRunRequest {
+            plugin_skill_ids: Vec::new(),
             input: vec![InputContentPart::Text("Run the approved Plan".into())],
             session_id: Some("session-1".into()),
             end_user_id: None,
@@ -104,7 +105,6 @@ async fn plan_continuation_requires_an_advertised_runtime_capability() {
             mode: RunMode::Execute,
             research_depth: None,
             research_sources: Vec::new(),
-            selected_skills: Vec::new(),
             plan_action: Some(PlanRunAction::Execute {
                 source_run_id: "run-plan-source".into(),
                 expected_revision: 3,
@@ -559,6 +559,7 @@ impl AgentRunClient for CheckedSnapshotClient {
         self.gets.fetch_add(1, Ordering::AcqRel);
         Ok(GetRunResponse {
             run: Run {
+                plugin_skill_ids: Vec::new(),
                 run_id: self.run_id.clone(),
                 session_id: "session-1".into(),
                 title: "Checked snapshot".into(),
@@ -586,7 +587,6 @@ impl AgentRunClient for CheckedSnapshotClient {
                     })
                 }),
                 etag: "snapshot-etag".into(),
-                selected_skills: Vec::new(),
                 archived: false,
             },
             pending_interactions: Vec::new(),
@@ -908,6 +908,7 @@ impl AgentRunClient for TerminalSnapshotWatchClient {
         self.gets.fetch_add(1, Ordering::AcqRel);
         Ok(GetRunResponse {
             run: Run {
+                plugin_skill_ids: Vec::new(),
                 run_id: self.run_id.clone(),
                 session_id: "session-1".into(),
                 title: "Terminal snapshot".into(),
@@ -929,7 +930,6 @@ impl AgentRunClient for TerminalSnapshotWatchClient {
                     goal_id: None,
                 })),
                 etag: "terminal-etag".into(),
-                selected_skills: Vec::new(),
                 archived: false,
             },
             pending_interactions: Vec::new(),

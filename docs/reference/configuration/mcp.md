@@ -33,7 +33,7 @@ For a step-by-step connection workflow, see [MCP](../../extend/mcp.md).
 | Remote Splunk endpoint with an unattended token | `streamable_http` with `credentialHeaders` | Explicit names for production |
 | Remote service requiring interactive authorization | `streamable_http` with OAuth | Explicit names for production |
 | Trusted development server whose tools change frequently | Either transport | `allowedTools: ["*"]` after reviewing the broader trust |
-| MCP server distributed inside a signed pack | Pack-provided stdio only | Explicit names only |
+| MCP server distributed inside an Agent Plugin | Plugin-provided stdio or Streamable HTTP | Explicit names only |
 
 Prefer explicit tool names for stable deployments. Use the wildcard only when the
 configured server itself is trusted to publish future callable tools.
@@ -380,8 +380,9 @@ using an isolating boundary, grant a
 credential, or approve `mcp.call`. Those remain separate trust boundaries; see
 [Access configuration](access.md#wildcard-boundary).
 
-Wildcard mode applies only to top-level server configuration. Signed-pack MCP
-declarations remain stdio/process-only and require explicit tool names.
+Wildcard mode applies only to standalone server configuration. Agent Plugin MCP
+declarations require an explicit `plugins.mcpServers["PLUGIN/SERVER"]` overlay and
+explicit tool names.
 
 ### Fresh schema binding
 
@@ -536,7 +537,7 @@ or unexpectedly upgraded server; wildcard selection intentionally broadens that 
 | `auth status` is true but calls return unauthorized | Status checks local token presence only; log in again or review remote revocation/scopes |
 | OAuth login times out | Confirm the registered callback is the exact configured loopback URL, or use `--manual` |
 | A tool is absent from discovery | Add the exact name, or deliberately select `allowedTools: ["*"]` |
-| Wildcard configuration is rejected | `"*"` must be the sole entry and is not accepted in signed-pack declarations |
+| Wildcard configuration is rejected | `"*"` must be the sole entry and is not accepted in Agent Plugin declarations |
 | A call fails argument validation | Rediscover the live schema and send a JSON object matching it |
 | Discovery fails after a server update | Inspect invalid names, duplicate tools, schemas, descriptions, pagination, or limit overruns |
 | A server-specific bound is rejected | It may only narrow the sandbox timeout/output cap; output must remain at least 1,024 bytes |

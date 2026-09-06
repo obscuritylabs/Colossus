@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Minimal authenticated control protocol for Colossus workers"
 
 [dependencies]
+colossus-contracts.workspace = true
 base64.workspace = true
 getrandom.workspace = true
 hex.workspace = true

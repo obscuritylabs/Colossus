@@ -177,6 +177,8 @@ pub struct RunBranch {
 /// Request to create one durable run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateRunRequest {
+    /// Qualified Agent Plugin skills selected for this message; never a tool grant.
+    pub plugin_skill_ids: Vec<String>,
     /// Ordered initial visible content.
     pub input: Vec<InputContentPart>,
     /// Existing canonical session, or absent to allocate a durable run-owned identity.
@@ -193,8 +195,6 @@ pub struct CreateRunRequest {
     pub research_depth: Option<ResearchDepth>,
     /// Explicit Research evidence lanes.
     pub research_sources: Vec<ResearchSourceKind>,
-    /// Declarative skill identities; these do not grant capabilities.
-    pub selected_skills: Vec<String>,
     /// Exact Plan continuation anchored to a caller-owned source run.
     pub plan_action: Option<PlanRunAction>,
     /// Optional point-in-time canonical context for a separate child session.
@@ -278,6 +278,8 @@ pub enum RunTerminal {
 /// Durable bounded run summary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
+    /// Qualified Agent Plugin skills requested for this run.
+    pub plugin_skill_ids: Vec<String>,
     /// Stable run identifier.
     pub run_id: String,
     /// Durable session identity associated with the run.
@@ -306,8 +308,6 @@ pub struct Run {
     pub terminal: Option<RunTerminal>,
     /// Opaque optimistic-concurrency token.
     pub etag: String,
-    /// Reserved skill identities; always empty for public v1alpha1 runs.
-    pub selected_skills: Vec<String>,
     /// Whether the containing thread is hidden from normal listings.
     pub archived: bool,
 }

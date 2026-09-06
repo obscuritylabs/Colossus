@@ -1,12 +1,13 @@
 use crate::{
     AgentRunServiceAdapter, ArtifactServiceAdapter, AuthenticationInterceptor,
-    CredentialAuthenticator, MAX_ACTIVE_WATCH_STREAMS, SystemServiceAdapter, TlsIdentity,
-    request_guard::RequestCardinalityLayer,
+    CredentialAuthenticator, ExtensionServiceAdapter, MAX_ACTIVE_WATCH_STREAMS,
+    SystemServiceAdapter, TlsIdentity, request_guard::RequestCardinalityLayer,
 };
-use colossus_api::{AgentRunApi, ArtifactApi};
+use colossus_api::{AgentRunApi, ArtifactApi, ExtensionApi};
 use colossus_api_proto::v1alpha1::{
     agent_run_service_server::AgentRunServiceServer,
-    artifact_service_server::ArtifactServiceServer, system_service_server::SystemServiceServer,
+    artifact_service_server::ArtifactServiceServer,
+    extension_service_server::ExtensionServiceServer, system_service_server::SystemServiceServer,
 };
 use futures::{StreamExt as _, task::AtomicWaker};
 use std::{
@@ -255,6 +256,7 @@ pub struct BoundPublicGrpcServer {
     system: SystemServiceAdapter,
     agent_runs: Arc<dyn AgentRunApi>,
     artifacts: Arc<dyn ArtifactApi>,
+    extensions: Option<Arc<dyn ExtensionApi>>,
 }
 
 impl BoundPublicGrpcServer {
@@ -283,7 +285,16 @@ impl BoundPublicGrpcServer {
             system,
             agent_runs,
             artifacts,
+            extensions: None,
         })
+    }
+
+    /// Enable authorized plugin discovery without adding public lifecycle mutations.
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Arc<dyn ExtensionApi>) -> Self {
+        self.extensions = Some(extensions);
+        self.system = self.system.with_plugin_discovery();
+        self
     }
 
     /// Exact bound loopback socket, including an assigned ephemeral port.
@@ -335,7 +346,11 @@ impl BoundPublicGrpcServer {
         let artifacts = ArtifactServiceServer::new(ArtifactServiceAdapter::new(self.artifacts))
             .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
-        let artifacts = InterceptedService::new(artifacts, authentication);
+        let artifacts = InterceptedService::new(artifacts, authentication.clone());
+        let extensions = ExtensionServiceServer::new(ExtensionServiceAdapter::new(self.extensions))
+            .max_decoding_message_size(16 * 1024)
+            .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
+        let extensions = InterceptedService::new(extensions, authentication);
         let tls = self
             .tls_identity
             .into_rustls_server_config()
@@ -398,6 +413,7 @@ impl BoundPublicGrpcServer {
             .add_service(system)
             .add_service(agent_runs)
             .add_service(artifacts)
+            .add_service(extensions)
             .serve_with_incoming_shutdown(incoming, graceful);
         tokio::pin!(server);
         tokio::pin!(shutdown);

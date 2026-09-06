@@ -139,5 +139,5 @@ due-time behavior without changing the system clock.
 
 ## Next step
 
-Use [Skills](../skills.md) for reusable instructions or
+Use [Agent Plugins](../plugins.md) for reusable Agent Skills or
 [Integrations](../integrations.md) for strict external operations.

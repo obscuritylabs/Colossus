@@ -10,7 +10,7 @@ type: how-to
 ## Goal
 
 Select and verify the intended execution boundary for repository work. Sparse
-schema-version-2 configuration intentionally defaults to acknowledged
+schema-version-3 configuration intentionally defaults to acknowledged
 `danger_full_access`; use this guide to opt down to named resources and platform
 isolation whenever ambient host authority is inappropriate.
 
@@ -63,7 +63,7 @@ isolation whenever ambient host authority is inappropriate.
       --approval-mode ask tui
     ```
 
-   Relative config, state, workflow, skill, pack, and tool paths resolve against the
+   Relative config, state, workflow, standalone MCP, and tool paths resolve against the
    canonical selected workspace.
 
 2. Keep explicit `filesystem`, `executables`, and environment variable *names* as
@@ -181,10 +181,9 @@ OCI containment, a Windows Job Object, or an `external` host boundary that conta
 entire process namespace/job when strict descendant cleanup and resource enforcement
 are required.
 
-`danger_full_access` also cannot enforce pack-manifest permission ceilings. An enabled
-pack that declares executable tools or stdio MCP servers is rejected during runtime
-composition under this backend. Select an isolating boundary for executable packs;
-ambient acknowledgement does not widen their manifests.
+`danger_full_access` cannot provide Colossus-owned isolation for scripts referenced by
+Agent Skills or plugin stdio MCP servers. Select an isolating boundary when those
+components require enforced process containment; plugin metadata never widens authority.
 
 ## Expected result
 

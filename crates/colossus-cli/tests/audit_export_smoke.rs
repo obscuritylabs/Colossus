@@ -46,7 +46,7 @@ fn configured_audit_export_is_queued_policy_bound_redacted_and_replayable() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

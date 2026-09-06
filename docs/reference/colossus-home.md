@@ -11,7 +11,7 @@ Colossus keeps per-user control state in one owner-private home while treating t
 selected workspace as repository context and state-partition identity. These are
 separate concepts: `-w, --workspace` changes the repository, relative-path anchor, and
 partition; it does not move the Colossus home. Under an isolating sandbox it also
-anchors configured filesystem scope. Under the schema-version-2 full-access default it
+anchors configured filesystem scope. Under the schema-version-3 full-access default it
 is not a maximum security boundary: authorized tools may reach ambient host paths and
 HTTP(S) origins outside it.
 

@@ -158,6 +158,9 @@ pub struct ExecutionContext {
     /// Declarative active skill identities; these do not grant capabilities.
     #[serde(default)]
     pub skill_ids: Vec<String>,
+    /// Immutable OCI manifest identities visible to the run; never capability grants.
+    #[serde(default)]
+    pub plugin_digests: std::collections::BTreeMap<String, String>,
     /// Exact model-visible tool ceiling for the current turn.
     ///
     /// This is an in-process dispatch hint rather than durable provenance. It is skipped

@@ -23,7 +23,6 @@ function viewFixture(): RunView {
       pendingInteractionCount: 0,
       terminal: null,
       etag: "etag-child",
-      selectedSkills: [],
       archived: false,
     },
     localPrompt: null,

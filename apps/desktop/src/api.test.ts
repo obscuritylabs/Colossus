@@ -59,6 +59,7 @@ import {
   removeExternalTarget,
   readWorkspaceFile,
   respondInteraction,
+  resolvePluginSelection,
   runManagedSelfTest,
   selectTarget,
   setApprovalMode,
@@ -92,6 +93,19 @@ describe("desktop API target routing", () => {
     tauri.invoke.mockReset();
     tauri.invoke.mockResolvedValue(undefined);
     tauri.channels.length = 0;
+  });
+
+  it("captures queued mentions through the native shared parser before delivery", async () => {
+    await resolvePluginSelection("space-1", "@colossus/coding work", [
+      "colossus/security-review",
+    ]);
+    expect(tauri.invoke).toHaveBeenCalledWith("resolve_plugin_selection", {
+      targetId: "space-1",
+      request: {
+        prompt: "@colossus/coding work",
+        pluginSkillIds: ["colossus/security-review"],
+      },
+    });
   });
 
   it("routes MCP diagnostics and OAuth through native commands", async () => {

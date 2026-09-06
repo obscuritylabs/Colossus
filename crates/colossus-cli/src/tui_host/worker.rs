@@ -878,54 +878,148 @@ impl WorkerInteractiveHost {
                 };
                 self.document(operation, Some("Telemetry")).await
             }
-            "skills" => {
-                let mut value = self.value(WorkerOperation::SkillList).await?;
-                if let Some(skills) = value.as_array_mut() {
-                    for skill in skills {
-                        let active = skill
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .is_some_and(|name| sticky_skills.iter().any(|active| active == name));
-                        if let Some(skill) = skill.as_object_mut() {
-                            skill.insert("active".into(), Value::Bool(active));
-                        }
+            "plugins" => {
+                let plugins = serde_json::from_value::<Vec<PluginInventoryEntry>>(
+                    self.value(WorkerOperation::PluginsInventory).await?,
+                )
+                .map_err(|error| error.to_string())?;
+                let document = match parse_plugins_command(arguments)? {
+                    PluginsCommand::Manage(request) => {
+                        let mut observer = WorkerChannelObserver {
+                            sender: events.clone(),
+                        };
+                        let prompts = TuiWorkerPromptHandler {
+                            sender: events.clone(),
+                        };
+                        let result = self
+                            .client
+                            .call_interactive::<Value>(
+                                WorkerOperation::RunInteractive {
+                                    request: InteractiveWorkerRequest::PluginManage { request },
+                                    approval_mode: self.interactive_approval_mode()?,
+                                    sandbox_boundary_acknowledgement: self
+                                        .sandbox_boundary_acknowledgement(session_id)?,
+                                },
+                                &mut observer,
+                                &prompts,
+                                control,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let inventory: Vec<PluginInventoryEntry> = serde_json::from_value(
+                            self.value(WorkerOperation::PluginsInventory).await?,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let skills = inventory
+                            .iter()
+                            .filter(|plugin| plugin.available)
+                            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
+                            .collect::<Vec<_>>();
+                        return Ok(HostCommandResult {
+                            completions: Some(terminal_completion_values(&skills, &self.themes)),
+                            ..HostCommandResult::document(document_from_json(
+                                &result,
+                                Some("Plugins"),
+                            ))
+                        });
                     }
-                }
-                Ok(HostCommandResult::document(document_from_json(
-                    &value,
-                    Some("Skills"),
-                )))
+                    PluginsCommand::List => plugins_document(&plugins),
+                    PluginsCommand::Show(name) => plugin_document(
+                        plugins
+                            .iter()
+                            .find(|plugin| plugin.manifest.name == name)
+                            .ok_or_else(|| format!("plugin not found: {name}"))?,
+                    ),
+                };
+                Ok(HostCommandResult::document(document))
             }
-            "skill" => {
+            "plugin" => {
                 let mut sticky = sticky_skills.to_vec();
-                let value = if arguments == "active" {
-                    serde_json::to_value(&sticky).map_err(|error| error.to_string())?
-                } else if arguments == "clear" {
-                    sticky.clear();
-                    serde_json::to_value(&sticky).map_err(|error| error.to_string())?
-                } else if let Some(name) = arguments.strip_prefix("use ") {
-                    let skill = self
-                        .value(WorkerOperation::SkillGet {
-                            name: name.trim().into(),
-                        })
-                        .await?;
-                    if skill.is_null() {
-                        return Err(format!("skill not found: {}", name.trim()));
+                let document = match parse_plugin_command(arguments)? {
+                    PluginCommand::Skills => {
+                        let plugins = serde_json::from_value::<Vec<PluginInventoryEntry>>(
+                            self.value(WorkerOperation::PluginsInventory).await?,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        plugin_skills_document(&plugins, &sticky)
                     }
-                    if !sticky.iter().any(|active| active == name.trim()) {
-                        sticky.push(name.trim().into());
+                    PluginCommand::Active => document_from_json(
+                        &serde_json::to_value(&sticky).map_err(|error| error.to_string())?,
+                        Some("Active plugin skills"),
+                    ),
+                    PluginCommand::Clear => {
+                        sticky.clear();
+                        document_from_json(
+                            &serde_json::to_value(&sticky).map_err(|error| error.to_string())?,
+                            Some("Active plugin skills"),
+                        )
                     }
-                    serde_json::to_value(&sticky).map_err(|error| error.to_string())?
-                } else if let Some(name) = arguments.strip_prefix("show ") {
-                    self.value(WorkerOperation::SkillGet {
-                        name: name.trim().into(),
-                    })
-                    .await?
-                } else {
-                    return Err("/skill expects active, clear, use, or show".into());
+                    PluginCommand::Use(name) => {
+                        if !name.contains('/') {
+                            let plugins: Vec<PluginInventoryEntry> = serde_json::from_value(
+                                self.value(WorkerOperation::PluginsInventory).await?,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            let plugin = plugins
+                                .iter()
+                                .find(|plugin| plugin.manifest.name == name)
+                                .ok_or_else(|| format!("plugin not found: {name}"))?;
+                            return Ok(HostCommandResult::document(plugin_skills_document(
+                                std::slice::from_ref(plugin),
+                                &sticky,
+                            )));
+                        }
+                        let skill = self
+                            .value(WorkerOperation::PluginSkillRead {
+                                skill_id: name.into(),
+                            })
+                            .await?;
+                        if skill.is_null() {
+                            return Err(format!("skill not found: {name}"));
+                        }
+                        if !sticky.iter().any(|active| active == name) {
+                            sticky.push(name.into());
+                        }
+                        document_from_json(
+                            &serde_json::to_value(&sticky).map_err(|error| error.to_string())?,
+                            Some("Active plugin skills"),
+                        )
+                    }
+                    PluginCommand::Show(name) => document_from_json(
+                        &self
+                            .value(WorkerOperation::PluginSkillRead {
+                                skill_id: name.into(),
+                            })
+                            .await?,
+                        Some("Plugin skill"),
+                    ),
+                    PluginCommand::Remove(name) => {
+                        sticky.retain(|skill| skill != name);
+                        document_from_json(
+                            &serde_json::to_value(&sticky).map_err(|error| error.to_string())?,
+                            Some("Active plugin skills"),
+                        )
+                    }
+                    PluginCommand::Resources(name) => document_from_json(
+                        &self
+                            .value(WorkerOperation::PluginResourceList {
+                                skill_id: name.into(),
+                            })
+                            .await?,
+                        Some("Skill resources"),
+                    ),
+                    PluginCommand::Read { skill, path } => document_from_json(
+                        &self
+                            .value(WorkerOperation::PluginResourceRead {
+                                skill_id: skill.into(),
+                                path: path.into(),
+                            })
+                            .await?,
+                        Some("Skill resource"),
+                    ),
                 };
                 Ok(HostCommandResult {
-                    document: document_from_json(&value, Some("Skill")),
+                    document,
                     session: None,
                     preferences: None,
                     completions: None,
@@ -1019,18 +1113,6 @@ impl WorkerInteractiveHost {
             "projection" if arguments == "status" => {
                 self.document(WorkerOperation::ProjectionStatus, Some("Projection status"))
                     .await
-            }
-            "packs" => {
-                let operation = if arguments.trim().is_empty() || arguments == "list" {
-                    WorkerOperation::PackList { limit: 100 }
-                } else if let Some(name) = arguments.strip_prefix("show ") {
-                    WorkerOperation::PackGet {
-                        name: name.trim().into(),
-                    }
-                } else {
-                    return Err("worker TUI supports /packs list|show".into());
-                };
-                self.document(operation, Some("Packs")).await
             }
             "integrations" => {
                 self.document(
@@ -1302,12 +1384,20 @@ impl InteractiveHost for WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
-        let skills = self.value(WorkerOperation::SkillList).await?;
+        let skills = self.value(WorkerOperation::PluginsInventory).await?;
         let skill_names = skills
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|skill| skill.get("name").and_then(Value::as_str))
+            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
+            .flat_map(|plugin| {
+                plugin
+                    .get("skills")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
             .map(str::to_owned)
             .collect::<Vec<_>>();
         let status = self.value(WorkerOperation::Ping).await?;
@@ -1491,21 +1581,30 @@ impl InteractiveHost for WorkerInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostRunResult, String> {
-        let skills = self.value(WorkerOperation::SkillList).await?;
+        let skills = self.value(WorkerOperation::PluginsInventory).await?;
         let skill_names = skills
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|skill| skill.get("name").and_then(Value::as_str))
+            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
+            .flat_map(|plugin| {
+                plugin
+                    .get("skills")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
             .map(str::to_owned)
             .collect::<Vec<_>>();
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
         if prompt.is_empty() {
-            return Err("add a message after the @skill name".into());
+            return Err("add a message after the qualified @PLUGIN/SKILL name".into());
         }
         request.prompt = prompt;
-        request.explicit_skills = explicit_skills;
+        request.explicit_skills =
+            colossus_contracts::merge_plugin_selections(&explicit_skills, &request.explicit_skills);
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
         };

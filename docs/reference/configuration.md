@@ -34,7 +34,7 @@ Operational procedures remain in [Configuration recipes](../admin/configuration.
 Ordinary `config init` writes only the choices that cannot be inferred safely:
 
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 storage:
   location: home_workspace
   path: state.redb
@@ -52,7 +52,7 @@ This credential-free baseline is parser-backed by the documentation contract:
 
 <!-- rust-config-example:start -->
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 access:
   profile: allow_all
   tools:
@@ -140,15 +140,20 @@ search:
 mcp:
   oauthCredentialStore: auto
   servers: {}
-skills:
+plugins:
   enabled: true
-  allowUserOverrides: false
-  bundled: bundled-skills
-  repository: .colossus/skills
-  user: skills
-  disabled: []
-packs:
-  installRoot: .colossus/packs
+  include: []
+  exclude: []
+  trustProfiles:
+    default:
+      mode: required
+      publicKeys: []
+      identities: []
+      trustRootPath: null
+  registries: {}
+  mcpServers: {}
+bundles:
+  trustedPublishers: {}
 sandbox:
   backend: danger_full_access
   profile: offline-default
@@ -187,7 +192,7 @@ process launch. YAML contains names and identities, never the values.
 | `storage` | Yes | Journal adapter, key provider, and anchor | [Storage](configuration/storage.md) |
 | `network` | No | Runtime-wide additional CA certificate bundle | [Network trust](configuration/network.md) |
 | `policy` | No | Built-in or OPA action decisions; defaults to built-in | [Policy and audit](configuration/policy-audit.md) |
-| `workflows` | No | Repository and user workflow roots | [Skills, packs, and workflows](configuration/extensions.md) |
+| `workflows` | No | Repository and user workflow roots | [Plugins and workflows](configuration/extensions.md) |
 | `providers` | No | Named provider connections; defaults to `echo` | [Providers and models](configuration/providers-models.md) |
 | `models` | No | Named model limits, capabilities, and role routes; defaults to `echo` | [Providers and models](configuration/providers-models.md) |
 | `agent` | No | Agent turn bound; defaults to `100` | [Runtime limits](configuration/limits.md) |
@@ -197,16 +202,17 @@ process launch. YAML contains names and identities, never the values.
 | `memory` | No | Lexical and optional semantic indexes | [Context, memory, and research](configuration/context-memory-research.md) |
 | `research` | No | Research bounds and compatibility search settings | [Context, memory, and research](configuration/context-memory-research.md) |
 | `search` | No | Named provider-neutral search profiles and routes | [Search](configuration/search.md) |
-| `skills` | No | Skill roots, overrides, and disabled names | [Skills, packs, and workflows](configuration/extensions.md) |
-| `packs` | No | Pack installation root | [Skills, packs, and workflows](configuration/extensions.md) |
+| `plugins` | No | Workspace narrowing, trust profiles, OCI registries, and plugin MCP overlays | [Plugins and workflows](configuration/extensions.md) |
+| `bundles` | No | Trusted publisher keys for retained release/offline bundles | [Release bundle format](bundle-format.md) |
 | `mcp` | No | Exact stdio and stateful Streamable HTTP server declarations | [MCP servers](configuration/mcp.md) |
 | `audit` | No | External evidence exporter | [Policy and audit](configuration/policy-audit.md) |
 | `observability` | No | Opt-in OTLP traces, metrics, logs, and journal log disclosure | [Live observability](configuration/observability.md) |
 
 ## Shared rules
 
-- Relative explicit configuration paths and workspace-owned workflow, skill, pack, and
-  configured sandbox paths resolve from the canonical selected workspace. Relative storage paths
+- Relative explicit configuration paths and workspace-owned workflow and configured sandbox
+  paths resolve from the canonical selected workspace. Plugin trust and registry paths are
+  absolute; plugin content is machine-scoped below `$COLOSSUS_HOME`. Relative storage paths
   use `storage.location`; `home_workspace` confines them to the current CLI workspace
   partition. See [Storage](configuration/storage.md). Security-sensitive explicit
   sandbox roots and executables use the constraints in

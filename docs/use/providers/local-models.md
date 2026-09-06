@@ -40,7 +40,7 @@ overlay, then replace `local-model` and its limits with the exact selected catal
 
 <!-- provider-guide-config:start -->
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 providers:
   profiles:
     local-provider:

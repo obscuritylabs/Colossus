@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn native_plugin_requests_preserve_the_exact_authenticated_wire_document() {
+    for operation in [
+        json!({"operation": "plugin_manage", "request": {"operation": "skill_read", "skill_id": "colossus/coding", "digest": format!("sha256:{}", "a".repeat(64))}}),
+        json!({"operation": "run_interactive", "request": {"kind": "plugin_manage", "request": {"operation": "disable", "name": "colossus"}}, "approval_mode": "ask"}),
+    ] {
+        let parsed: WorkerOperation =
+            serde_json::from_value(operation.clone()).expect("native request contract");
+        assert_eq!(
+            canonical_authentication_bytes(&parsed).expect("parsed bytes"),
+            canonical_authentication_bytes(&operation).expect("native bytes")
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_pipe_saturation_is_classified_as_busy() {
@@ -916,6 +931,13 @@ impl HostedWorkerFixture {
 async fn hosted_worker_fixture_with_configure(
     configure: impl FnOnce(&mut RuntimeConfig),
 ) -> HostedWorkerFixture {
+    hosted_worker_fixture_with_home(false, configure).await
+}
+
+async fn hosted_worker_fixture_with_home(
+    home_backed: bool,
+    configure: impl FnOnce(&mut RuntimeConfig),
+) -> HostedWorkerFixture {
     let directory = tempfile::tempdir().expect("worker fixture directory");
     let root = directory
         .path()
@@ -924,28 +946,25 @@ async fn hosted_worker_fixture_with_configure(
     let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
     config.workflows.repository = root.join("workflows-bundled");
     config.workflows.user = root.join("workflows-user");
-    config.skills.bundled = root.join("skills-bundled");
-    config.skills.repository = root.join("skills-repository");
-    config.skills.user = root.join("skills-user");
-    config.packs.install_root = root.join("packs");
     configure(&mut config);
-    for path in [
-        &config.workflows.repository,
-        &config.workflows.user,
-        &config.skills.bundled,
-        &config.skills.repository,
-        &config.skills.user,
-        &config.packs.install_root,
-    ] {
+    for path in [&config.workflows.repository, &config.workflows.user] {
         std::fs::create_dir_all(path).expect("worker fixture library directory");
     }
 
+    let options = RuntimeOpenOptions::for_workspace(&root).expect("worker fixture options");
+    let options = if home_backed {
+        options
+            .with_colossus_home(root.join("home"))
+            .expect("explicit home")
+    } else {
+        options
+    };
     let server = WorkerServer::open_at_workspace(
         &config,
         Arc::new(AllowApproval {
             approved_by: "worker-stack-regression".into(),
         }),
-        RuntimeOpenOptions::for_workspace(&root).expect("worker fixture options"),
+        options,
     )
     .expect("worker fixture server")
     .prepare_worker_ipc()
@@ -970,6 +989,76 @@ async fn hosted_worker_fixture_with_configure(
 
 async fn hosted_worker_fixture() -> HostedWorkerFixture {
     hosted_worker_fixture_with_configure(|_| {}).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_core_previews_and_lifecycle_fit_the_standard_worker_stack() {
+    use colossus_contracts::PluginManagementRequest as Op;
+    let fixture = hosted_worker_fixture_with_home(true, |_| {}).await;
+    let inventory = fixture
+        .client
+        .call(WorkerOperation::PluginsInventory)
+        .await
+        .expect("inventory");
+    assert_eq!(inventory[0]["manifest"]["name"], "colossus");
+    assert_eq!(inventory[0]["skills"].as_array().expect("skills").len(), 4);
+    assert!(!inventory.to_string().contains("instructions"));
+    let digest = inventory[0]["digest"].as_str().expect("digest").to_owned();
+    let preview = fixture
+        .client
+        .call(WorkerOperation::PluginManage {
+            request: Op::SkillRead {
+                skill_id: "colossus/plugin-authoring".into(),
+                digest: digest.clone(),
+            },
+        })
+        .await
+        .expect("instruction preview on normal Tokio stack");
+    assert!(
+        preview["instructions"]
+            .as_str()
+            .expect("instructions")
+            .contains("plugin.json")
+    );
+    let resources = fixture
+        .client
+        .call(WorkerOperation::PluginManage {
+            request: Op::ResourceList {
+                skill_id: "colossus/plugin-authoring".into(),
+                digest,
+            },
+        })
+        .await
+        .expect("resources");
+    assert!(
+        resources
+            .as_array()
+            .expect("resources")
+            .iter()
+            .any(|entry| entry["path"] == "references/oci-distribution.md")
+    );
+    fixture
+        .client
+        .call(WorkerOperation::PluginManage {
+            request: Op::Disable {
+                name: "colossus".into(),
+            },
+        })
+        .await
+        .expect("disable");
+    let inventory = fixture
+        .client
+        .call(WorkerOperation::PluginsInventory)
+        .await
+        .expect("live disabled inventory");
+    assert_eq!(inventory[0]["status"], "disabled");
+    assert_eq!(inventory[0]["available"], false);
+    fixture
+        .client
+        .ping()
+        .await
+        .expect("worker remains responsive");
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1716,7 +1805,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 18);
+    assert_eq!(PROTOCOL_VERSION, 21);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

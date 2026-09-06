@@ -792,7 +792,7 @@ impl RuntimeAgentRunApi {
         );
         tokio::spawn(async move {
             let run_id = run.id.clone();
-            let task = service.execute(
+            let task = Box::pin(service.execute(
                 caller,
                 run,
                 request,
@@ -801,7 +801,7 @@ impl RuntimeAgentRunApi {
                 Arc::clone(&writer),
                 panic_after_start,
                 fail_terminal_append,
-            );
+            ));
             let mut terminal_persisted = match AssertUnwindSafe(task).catch_unwind().await {
                 Ok(persisted) => persisted,
                 Err(_) => writer.append(unknown_outcome_failure()).is_ok(),
@@ -1214,7 +1214,7 @@ impl RuntimeAgentRunApi {
                     PublicResearchSourceKind::Mcp => ResearchSourceKind::Mcp,
                 })
                 .collect();
-            let execution = self.runtime.run_research_as(
+            let execution = Box::pin(self.runtime.run_research_as(
                 &run.session_id,
                 prompt.as_text().unwrap_or_default(),
                 depth,
@@ -1224,10 +1224,14 @@ impl RuntimeAgentRunApi {
                     allowed_tools,
                     message_run_id: Some(run.id.clone()),
                 },
-            );
+            ));
             let kind = match self
                 .interactions
-                .scope(Arc::clone(&writer), execution)
+                .scope(
+                    Arc::clone(&writer),
+                    self.runtime
+                        .with_plugin_skills(&request.skill_ids, execution),
+                )
                 .await
             {
                 Ok(_research) if control.is_cancelled() => RunUpdateKind::Cancellation {
@@ -1291,24 +1295,29 @@ impl RuntimeAgentRunApi {
                         }
                     }
                 };
-                let execution = self
-                    .runtime
-                    .approve_and_execute_public_plan_stream_controlled(
-                        &run.role,
-                        &run.session_id,
-                        &selection.plan.id,
-                        selection.plan.revision,
-                        strategy,
-                        max_turns,
-                        &run.id,
-                        request.end_user_id.as_deref(),
-                        caller.remote_trace_context(),
-                        &mut observer,
-                        &control,
-                    );
+                let execution = Box::pin(
+                    self.runtime
+                        .approve_and_execute_public_plan_stream_controlled(
+                            &run.role,
+                            &run.session_id,
+                            &selection.plan.id,
+                            selection.plan.revision,
+                            strategy,
+                            max_turns,
+                            &run.id,
+                            request.end_user_id.as_deref(),
+                            caller.remote_trace_context(),
+                            &mut observer,
+                            &control,
+                        ),
+                );
                 match self
                     .interactions
-                    .scope(Arc::clone(&writer), execution)
+                    .scope(
+                        Arc::clone(&writer),
+                        self.runtime
+                            .with_plugin_skills(&request.skill_ids, execution),
+                    )
                     .await
                 {
                     Ok(outcome) => public_plan_execution(outcome),
@@ -1332,28 +1341,33 @@ impl RuntimeAgentRunApi {
                         return true;
                     }
                 };
-                let execution = self
-                    .runtime
-                    .run_public_model_with_mode_and_skills_stream_controlled_content(
-                        &run.role,
-                        &self.instructions,
-                        &prompt,
-                        max_turns,
-                        &run.id,
-                        &run.session_id,
-                        create_session,
-                        &request.skill_ids,
-                        &allowed_tools,
-                        mode,
-                        request.end_user_id.as_deref(),
-                        caller.remote_trace_context(),
-                        caller.actor(),
-                        &mut observer,
-                        &control,
-                    );
+                let execution = Box::pin(
+                    self.runtime
+                        .run_public_model_with_mode_and_skills_stream_controlled_content(
+                            &run.role,
+                            &self.instructions,
+                            &prompt,
+                            max_turns,
+                            &run.id,
+                            &run.session_id,
+                            create_session,
+                            &request.skill_ids,
+                            &allowed_tools,
+                            mode,
+                            request.end_user_id.as_deref(),
+                            caller.remote_trace_context(),
+                            caller.actor(),
+                            &mut observer,
+                            &control,
+                        ),
+                );
                 match self
                     .interactions
-                    .scope(Arc::clone(&writer), execution)
+                    .scope(
+                        Arc::clone(&writer),
+                        self.runtime
+                            .with_plugin_skills(&request.skill_ids, execution),
+                    )
                     .await
                 {
                     Ok(AgentRunOutcome::Completed { result }) => public_result(result),

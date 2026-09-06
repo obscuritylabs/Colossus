@@ -30,7 +30,7 @@ pub enum CapabilitySource {
     Integration,
     /// Explicitly configured and allowlisted MCP capability.
     Mcp,
-    /// Enabled and reverified signed pack capability.
+    /// Enabled and verified Agent Plugin capability.
     SignedPack,
 }
 

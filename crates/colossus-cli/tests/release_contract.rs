@@ -271,7 +271,6 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
             "access",
             "pinned",
             "bundle.key.inspect",
-            "pack.trust.add",
             "bundle build",
             "bundle verify",
             "bundle install",
@@ -285,18 +284,14 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
         assert!(!source.contains("approval_actions"));
     }
     assert!(unix.contains("allow: [bundle.verify]"));
-    assert!(unix.contains(
-        "requireApproval: [bundle.key.inspect, pack.trust.add, bundle.build, bundle.install]"
-    ));
-    assert!(unix.contains("schemaVersion: 2"));
-    assert!(!unix.contains("schemaVersion: 1"));
+    assert!(unix.contains("requireApproval: [bundle.key.inspect, bundle.build, bundle.install]"));
+    assert!(unix.contains("schemaVersion: 3"));
     assert!(unix.contains("providerProfile: echo"));
     assert!(windows.contains("allow = @(\"bundle.verify\")"));
     assert!(windows.contains(
-        "requireApproval = @(\"bundle.key.inspect\", \"pack.trust.add\", \"bundle.build\", \"bundle.install\")"
+        "requireApproval = @(\"bundle.key.inspect\", \"bundle.build\", \"bundle.install\")"
     ));
-    assert!(windows.contains("schemaVersion = 2"));
-    assert!(!windows.contains("schemaVersion = 1"));
+    assert!(windows.contains("schemaVersion = 3"));
     assert!(windows.contains("providerProfile = \"echo\""));
     assert!(windows.contains("[IO.File]::WriteAllText("));
     assert!(windows.contains("$hash  $package.zip`n"));

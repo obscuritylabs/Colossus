@@ -11,6 +11,9 @@ const forbiddenFixtureStrings = [
   "fixture-managed-local",
   "Sentinel completed a read-only security pass",
   "Stopped in the UI showcase",
+  "nativePluginAcceptance",
+  "Test settings value",
+  "plugin-test-bridge",
 ];
 
 async function files(directory) {

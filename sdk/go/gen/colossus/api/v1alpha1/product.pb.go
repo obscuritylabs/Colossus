@@ -291,14 +291,12 @@ const (
 	ExtensionKind_EXTENSION_KIND_UNSPECIFIED ExtensionKind = 0
 	// EXTENSION_KIND_TOOL is a model-visible strict tool.
 	ExtensionKind_EXTENSION_KIND_TOOL ExtensionKind = 1
-	// EXTENSION_KIND_SKILL is a declarative skill.
-	ExtensionKind_EXTENSION_KIND_SKILL ExtensionKind = 2
 	// EXTENSION_KIND_MCP_SERVER is a configured MCP server.
 	ExtensionKind_EXTENSION_KIND_MCP_SERVER ExtensionKind = 3
-	// EXTENSION_KIND_PACK is a verified extension pack.
-	ExtensionKind_EXTENSION_KIND_PACK ExtensionKind = 4
 	// EXTENSION_KIND_INTEGRATION is a native integration.
 	ExtensionKind_EXTENSION_KIND_INTEGRATION ExtensionKind = 5
+	// EXTENSION_KIND_AGENT_PLUGIN is an installed Agent Plugins v1 payload.
+	ExtensionKind_EXTENSION_KIND_AGENT_PLUGIN ExtensionKind = 6
 )
 
 // Enum value maps for ExtensionKind.
@@ -306,18 +304,16 @@ var (
 	ExtensionKind_name = map[int32]string{
 		0: "EXTENSION_KIND_UNSPECIFIED",
 		1: "EXTENSION_KIND_TOOL",
-		2: "EXTENSION_KIND_SKILL",
 		3: "EXTENSION_KIND_MCP_SERVER",
-		4: "EXTENSION_KIND_PACK",
 		5: "EXTENSION_KIND_INTEGRATION",
+		6: "EXTENSION_KIND_AGENT_PLUGIN",
 	}
 	ExtensionKind_value = map[string]int32{
-		"EXTENSION_KIND_UNSPECIFIED": 0,
-		"EXTENSION_KIND_TOOL":        1,
-		"EXTENSION_KIND_SKILL":       2,
-		"EXTENSION_KIND_MCP_SERVER":  3,
-		"EXTENSION_KIND_PACK":        4,
-		"EXTENSION_KIND_INTEGRATION": 5,
+		"EXTENSION_KIND_UNSPECIFIED":  0,
+		"EXTENSION_KIND_TOOL":         1,
+		"EXTENSION_KIND_MCP_SERVER":   3,
+		"EXTENSION_KIND_INTEGRATION":  5,
+		"EXTENSION_KIND_AGENT_PLUGIN": 6,
 	}
 )
 
@@ -415,27 +411,23 @@ type DistributionArtifactKind int32
 const (
 	// DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED indicates an unrecognized artifact.
 	DistributionArtifactKind_DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED DistributionArtifactKind = 0
-	// DISTRIBUTION_ARTIFACT_KIND_PACK is a verified extension pack.
-	DistributionArtifactKind_DISTRIBUTION_ARTIFACT_KIND_PACK DistributionArtifactKind = 1
 	// DISTRIBUTION_ARTIFACT_KIND_WORKFLOW is a workflow bundle.
 	DistributionArtifactKind_DISTRIBUTION_ARTIFACT_KIND_WORKFLOW DistributionArtifactKind = 2
-	// DISTRIBUTION_ARTIFACT_KIND_COLLECTION is a signed artifact collection.
-	DistributionArtifactKind_DISTRIBUTION_ARTIFACT_KIND_COLLECTION DistributionArtifactKind = 3
+	// DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN is one whole-plugin OCI artifact.
+	DistributionArtifactKind_DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN DistributionArtifactKind = 4
 )
 
 // Enum value maps for DistributionArtifactKind.
 var (
 	DistributionArtifactKind_name = map[int32]string{
 		0: "DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED",
-		1: "DISTRIBUTION_ARTIFACT_KIND_PACK",
 		2: "DISTRIBUTION_ARTIFACT_KIND_WORKFLOW",
-		3: "DISTRIBUTION_ARTIFACT_KIND_COLLECTION",
+		4: "DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN",
 	}
 	DistributionArtifactKind_value = map[string]int32{
-		"DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED": 0,
-		"DISTRIBUTION_ARTIFACT_KIND_PACK":        1,
-		"DISTRIBUTION_ARTIFACT_KIND_WORKFLOW":    2,
-		"DISTRIBUTION_ARTIFACT_KIND_COLLECTION":  3,
+		"DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED":  0,
+		"DISTRIBUTION_ARTIFACT_KIND_WORKFLOW":     2,
+		"DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN": 4,
 	}
 )
 
@@ -2189,7 +2181,9 @@ func (x *GetExtensionRequest) GetExtensionId() string {
 type GetExtensionResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// extension is credential-free catalog metadata.
-	Extension     *ExtensionSummary `protobuf:"bytes,1,opt,name=extension,proto3" json:"extension,omitempty"`
+	Extension *ExtensionSummary `protobuf:"bytes,1,opt,name=extension,proto3" json:"extension,omitempty"`
+	// plugin contains typed details when the selected extension is an Agent Plugin.
+	Plugin        *AgentPlugin `protobuf:"bytes,2,opt,name=plugin,proto3" json:"plugin,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2227,6 +2221,13 @@ func (*GetExtensionResponse) Descriptor() ([]byte, []int) {
 func (x *GetExtensionResponse) GetExtension() *ExtensionSummary {
 	if x != nil {
 		return x.Extension
+	}
+	return nil
+}
+
+func (x *GetExtensionResponse) GetPlugin() *AgentPlugin {
+	if x != nil {
+		return x.Plugin
 	}
 	return nil
 }
@@ -2301,7 +2302,9 @@ type ListExtensionsResponse struct {
 	// extensions contains the current page.
 	Extensions []*ExtensionSummary `protobuf:"bytes,1,rep,name=extensions,proto3" json:"extensions,omitempty"`
 	// page identifies the next page.
-	Page          *PageResponse `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	Page *PageResponse `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	// plugins contains typed metadata for Agent Plugins on this page.
+	Plugins       []*AgentPlugin `protobuf:"bytes,3,rep,name=plugins,proto3" json:"plugins,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2350,6 +2353,898 @@ func (x *ListExtensionsResponse) GetPage() *PageResponse {
 	return nil
 }
 
+func (x *ListExtensionsResponse) GetPlugins() []*AgentPlugin {
+	if x != nil {
+		return x.Plugins
+	}
+	return nil
+}
+
+// AgentPlugin is bounded discovery metadata without instructions or credentials.
+type AgentPlugin struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the canonical portable name.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// version is the author-declared version, when present.
+	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	// description explains the plugin's purpose.
+	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// digest is the exact OCI manifest identity.
+	Digest string `protobuf:"bytes,4,opt,name=digest,proto3" json:"digest,omitempty"`
+	// source contains credential-free provenance.
+	Source string `protobuf:"bytes,5,opt,name=source,proto3" json:"source,omitempty"`
+	// bundled means ownership belongs to the executable, not Cosign verification.
+	Bundled bool `protobuf:"varint,6,opt,name=bundled,proto3" json:"bundled,omitempty"`
+	// globally_active describes home-wide activation.
+	GloballyActive bool `protobuf:"varint,7,opt,name=globally_active,json=globallyActive,proto3" json:"globally_active,omitempty"`
+	// available describes availability in this workspace.
+	Available bool `protobuf:"varint,8,opt,name=available,proto3" json:"available,omitempty"`
+	// unavailable_reason explains a workspace exclusion or invalid component.
+	UnavailableReason string `protobuf:"bytes,9,opt,name=unavailable_reason,json=unavailableReason,proto3" json:"unavailable_reason,omitempty"`
+	// trust is retained verification evidence.
+	Trust *PluginTrust `protobuf:"bytes,10,opt,name=trust,proto3" json:"trust,omitempty"`
+	// skills contains metadata only.
+	Skills []*PluginSkill `protobuf:"bytes,11,rep,name=skills,proto3" json:"skills,omitempty"`
+	// mcp_servers contains only credential-free status.
+	McpServers []*PluginMcpServer `protobuf:"bytes,12,rep,name=mcp_servers,json=mcpServers,proto3" json:"mcp_servers,omitempty"`
+	// diagnostics contains independent component failures.
+	Diagnostics   []*PluginDiagnostic `protobuf:"bytes,13,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentPlugin) Reset() {
+	*x = AgentPlugin{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentPlugin) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentPlugin) ProtoMessage() {}
+
+func (x *AgentPlugin) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentPlugin.ProtoReflect.Descriptor instead.
+func (*AgentPlugin) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *AgentPlugin) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *AgentPlugin) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *AgentPlugin) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *AgentPlugin) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *AgentPlugin) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *AgentPlugin) GetBundled() bool {
+	if x != nil {
+		return x.Bundled
+	}
+	return false
+}
+
+func (x *AgentPlugin) GetGloballyActive() bool {
+	if x != nil {
+		return x.GloballyActive
+	}
+	return false
+}
+
+func (x *AgentPlugin) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *AgentPlugin) GetUnavailableReason() string {
+	if x != nil {
+		return x.UnavailableReason
+	}
+	return ""
+}
+
+func (x *AgentPlugin) GetTrust() *PluginTrust {
+	if x != nil {
+		return x.Trust
+	}
+	return nil
+}
+
+func (x *AgentPlugin) GetSkills() []*PluginSkill {
+	if x != nil {
+		return x.Skills
+	}
+	return nil
+}
+
+func (x *AgentPlugin) GetMcpServers() []*PluginMcpServer {
+	if x != nil {
+		return x.McpServers
+	}
+	return nil
+}
+
+func (x *AgentPlugin) GetDiagnostics() []*PluginDiagnostic {
+	if x != nil {
+		return x.Diagnostics
+	}
+	return nil
+}
+
+// PluginTrust keeps executable provenance distinct from signature verification.
+type PluginTrust struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// trusted reports a successful configured verification.
+	Trusted bool `protobuf:"varint,1,opt,name=trusted,proto3" json:"trusted,omitempty"`
+	// profile names the selected local trust policy.
+	Profile string `protobuf:"bytes,2,opt,name=profile,proto3" json:"profile,omitempty"`
+	// method identifies the verification method.
+	Method string `protobuf:"bytes,3,opt,name=method,proto3" json:"method,omitempty"`
+	// signer is a verified identity, if present.
+	Signer        string `protobuf:"bytes,4,opt,name=signer,proto3" json:"signer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginTrust) Reset() {
+	*x = PluginTrust{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginTrust) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginTrust) ProtoMessage() {}
+
+func (x *PluginTrust) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginTrust.ProtoReflect.Descriptor instead.
+func (*PluginTrust) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *PluginTrust) GetTrusted() bool {
+	if x != nil {
+		return x.Trusted
+	}
+	return false
+}
+
+func (x *PluginTrust) GetProfile() string {
+	if x != nil {
+		return x.Profile
+	}
+	return ""
+}
+
+func (x *PluginTrust) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *PluginTrust) GetSigner() string {
+	if x != nil {
+		return x.Signer
+	}
+	return ""
+}
+
+// PluginSkill contains progressive discovery metadata, never instructions.
+type PluginSkill struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// id is the qualified plugin/skill identifier.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// name is the portable skill name.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// description states purpose and triggering context.
+	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// compatibility contains optional author guidance.
+	Compatibility string `protobuf:"bytes,4,opt,name=compatibility,proto3" json:"compatibility,omitempty"`
+	// allowed_tools is advisory and never grants tool authority.
+	AllowedTools  string `protobuf:"bytes,5,opt,name=allowed_tools,json=allowedTools,proto3" json:"allowed_tools,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginSkill) Reset() {
+	*x = PluginSkill{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginSkill) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginSkill) ProtoMessage() {}
+
+func (x *PluginSkill) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginSkill.ProtoReflect.Descriptor instead.
+func (*PluginSkill) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *PluginSkill) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PluginSkill) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PluginSkill) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *PluginSkill) GetCompatibility() string {
+	if x != nil {
+		return x.Compatibility
+	}
+	return ""
+}
+
+func (x *PluginSkill) GetAllowedTools() string {
+	if x != nil {
+		return x.AllowedTools
+	}
+	return ""
+}
+
+// PluginMcpServer reports explicit enablement without command or secret data.
+type PluginMcpServer struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// id is the qualified plugin/server identifier.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// name is the portable server name.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// transport is stdio, streamable-http, or unsupported sse.
+	Transport string `protobuf:"bytes,3,opt,name=transport,proto3" json:"transport,omitempty"`
+	// enabled requires an explicit runtime configuration entry.
+	Enabled bool `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// status describes effective availability.
+	Status        string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginMcpServer) Reset() {
+	*x = PluginMcpServer{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginMcpServer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginMcpServer) ProtoMessage() {}
+
+func (x *PluginMcpServer) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginMcpServer.ProtoReflect.Descriptor instead.
+func (*PluginMcpServer) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *PluginMcpServer) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PluginMcpServer) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PluginMcpServer) GetTransport() string {
+	if x != nil {
+		return x.Transport
+	}
+	return ""
+}
+
+func (x *PluginMcpServer) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *PluginMcpServer) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+// PluginDiagnostic is an independent component failure.
+type PluginDiagnostic struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// kind identifies plugin, skill, or MCP scope.
+	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	// name is the optional component name.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// code is a stable machine-readable reason.
+	Code string `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
+	// detail is bounded and credential-free.
+	Detail        string `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginDiagnostic) Reset() {
+	*x = PluginDiagnostic{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginDiagnostic) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginDiagnostic) ProtoMessage() {}
+
+func (x *PluginDiagnostic) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginDiagnostic.ProtoReflect.Descriptor instead.
+func (*PluginDiagnostic) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *PluginDiagnostic) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *PluginDiagnostic) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PluginDiagnostic) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *PluginDiagnostic) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+// ReadPluginSkillRequest selects a skill in the current authorized catalog.
+type ReadPluginSkillRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// skill_id is the exact qualified identifier.
+	SkillId string `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	// digest pins the OCI manifest observed during discovery.
+	Digest        string `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadPluginSkillRequest) Reset() {
+	*x = ReadPluginSkillRequest{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadPluginSkillRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadPluginSkillRequest) ProtoMessage() {}
+
+func (x *ReadPluginSkillRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadPluginSkillRequest.ProtoReflect.Descriptor instead.
+func (*ReadPluginSkillRequest) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ReadPluginSkillRequest) GetSkillId() string {
+	if x != nil {
+		return x.SkillId
+	}
+	return ""
+}
+
+func (x *ReadPluginSkillRequest) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// ReadPluginSkillResponse contains explicitly loaded instructions.
+type ReadPluginSkillResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// skill identifies the selected skill.
+	Skill *PluginSkill `protobuf:"bytes,1,opt,name=skill,proto3" json:"skill,omitempty"`
+	// digest identifies the immutable content.
+	Digest string `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	// instructions is bounded skill Markdown without a server-local path.
+	Instructions  string `protobuf:"bytes,3,opt,name=instructions,proto3" json:"instructions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadPluginSkillResponse) Reset() {
+	*x = ReadPluginSkillResponse{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadPluginSkillResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadPluginSkillResponse) ProtoMessage() {}
+
+func (x *ReadPluginSkillResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadPluginSkillResponse.ProtoReflect.Descriptor instead.
+func (*ReadPluginSkillResponse) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ReadPluginSkillResponse) GetSkill() *PluginSkill {
+	if x != nil {
+		return x.Skill
+	}
+	return nil
+}
+
+func (x *ReadPluginSkillResponse) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *ReadPluginSkillResponse) GetInstructions() string {
+	if x != nil {
+		return x.Instructions
+	}
+	return ""
+}
+
+// ListPluginResourcesRequest selects one exact skill version.
+type ListPluginResourcesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// skill_id is the qualified identifier.
+	SkillId string `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	// digest pins the plugin manifest.
+	Digest        string `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPluginResourcesRequest) Reset() {
+	*x = ListPluginResourcesRequest{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPluginResourcesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPluginResourcesRequest) ProtoMessage() {}
+
+func (x *ListPluginResourcesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPluginResourcesRequest.ProtoReflect.Descriptor instead.
+func (*ListPluginResourcesRequest) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ListPluginResourcesRequest) GetSkillId() string {
+	if x != nil {
+		return x.SkillId
+	}
+	return ""
+}
+
+func (x *ListPluginResourcesRequest) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// PluginResource contains metadata for a contained resource.
+type PluginResource struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// skill_id owns the resource.
+	SkillId string `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	// path is relative to the skill root, never a server-local path.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// size_bytes is the exact file size.
+	SizeBytes uint64 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	// text_preview_available distinguishes text from addressable binary content.
+	TextPreviewAvailable bool `protobuf:"varint,4,opt,name=text_preview_available,json=textPreviewAvailable,proto3" json:"text_preview_available,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *PluginResource) Reset() {
+	*x = PluginResource{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginResource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginResource) ProtoMessage() {}
+
+func (x *PluginResource) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginResource.ProtoReflect.Descriptor instead.
+func (*PluginResource) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *PluginResource) GetSkillId() string {
+	if x != nil {
+		return x.SkillId
+	}
+	return ""
+}
+
+func (x *PluginResource) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *PluginResource) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *PluginResource) GetTextPreviewAvailable() bool {
+	if x != nil {
+		return x.TextPreviewAvailable
+	}
+	return false
+}
+
+// ListPluginResourcesResponse does not include resource contents.
+type ListPluginResourcesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// resources are sorted contained paths.
+	Resources     []*PluginResource `protobuf:"bytes,1,rep,name=resources,proto3" json:"resources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPluginResourcesResponse) Reset() {
+	*x = ListPluginResourcesResponse{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPluginResourcesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPluginResourcesResponse) ProtoMessage() {}
+
+func (x *ListPluginResourcesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPluginResourcesResponse.ProtoReflect.Descriptor instead.
+func (*ListPluginResourcesResponse) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ListPluginResourcesResponse) GetResources() []*PluginResource {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+// ReadPluginResourceRequest selects an exact bounded text resource.
+type ReadPluginResourceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// skill_id is the qualified skill identifier.
+	SkillId string `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	// digest pins the plugin manifest.
+	Digest string `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	// path is a contained skill-relative path.
+	Path          string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadPluginResourceRequest) Reset() {
+	*x = ReadPluginResourceRequest{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadPluginResourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadPluginResourceRequest) ProtoMessage() {}
+
+func (x *ReadPluginResourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadPluginResourceRequest.ProtoReflect.Descriptor instead.
+func (*ReadPluginResourceRequest) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *ReadPluginResourceRequest) GetSkillId() string {
+	if x != nil {
+		return x.SkillId
+	}
+	return ""
+}
+
+func (x *ReadPluginResourceRequest) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *ReadPluginResourceRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+// ReadPluginResourceResponse contains an explicit bounded preview.
+type ReadPluginResourceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// resource identifies the content.
+	Resource *PluginResource `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	// digest identifies the immutable plugin.
+	Digest string `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	// content is bounded UTF-8 text; binary content is never coerced to text.
+	Content       string `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadPluginResourceResponse) Reset() {
+	*x = ReadPluginResourceResponse{}
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadPluginResourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadPluginResourceResponse) ProtoMessage() {}
+
+func (x *ReadPluginResourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadPluginResourceResponse.ProtoReflect.Descriptor instead.
+func (*ReadPluginResourceResponse) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ReadPluginResourceResponse) GetResource() *PluginResource {
+	if x != nil {
+		return x.Resource
+	}
+	return nil
+}
+
+func (x *ReadPluginResourceResponse) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *ReadPluginResourceResponse) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
 // DiagnosticSummary is a credential-free scoped operational check.
 type DiagnosticSummary struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2365,7 +3260,7 @@ type DiagnosticSummary struct {
 
 func (x *DiagnosticSummary) Reset() {
 	*x = DiagnosticSummary{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[30]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2377,7 +3272,7 @@ func (x *DiagnosticSummary) String() string {
 func (*DiagnosticSummary) ProtoMessage() {}
 
 func (x *DiagnosticSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[30]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2390,7 +3285,7 @@ func (x *DiagnosticSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiagnosticSummary.ProtoReflect.Descriptor instead.
 func (*DiagnosticSummary) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{30}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DiagnosticSummary) GetArea() string {
@@ -2425,7 +3320,7 @@ type ListDiagnosticsRequest struct {
 
 func (x *ListDiagnosticsRequest) Reset() {
 	*x = ListDiagnosticsRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[31]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2437,7 +3332,7 @@ func (x *ListDiagnosticsRequest) String() string {
 func (*ListDiagnosticsRequest) ProtoMessage() {}
 
 func (x *ListDiagnosticsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[31]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2450,7 +3345,7 @@ func (x *ListDiagnosticsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDiagnosticsRequest.ProtoReflect.Descriptor instead.
 func (*ListDiagnosticsRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{31}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ListDiagnosticsRequest) GetAreas() []string {
@@ -2471,7 +3366,7 @@ type ListDiagnosticsResponse struct {
 
 func (x *ListDiagnosticsResponse) Reset() {
 	*x = ListDiagnosticsResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[32]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2483,7 +3378,7 @@ func (x *ListDiagnosticsResponse) String() string {
 func (*ListDiagnosticsResponse) ProtoMessage() {}
 
 func (x *ListDiagnosticsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[32]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2496,7 +3391,7 @@ func (x *ListDiagnosticsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDiagnosticsResponse.ProtoReflect.Descriptor instead.
 func (*ListDiagnosticsResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{32}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ListDiagnosticsResponse) GetDiagnostics() []*DiagnosticSummary {
@@ -2527,7 +3422,7 @@ type DistributionInspection struct {
 
 func (x *DistributionInspection) Reset() {
 	*x = DistributionInspection{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[33]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2539,7 +3434,7 @@ func (x *DistributionInspection) String() string {
 func (*DistributionInspection) ProtoMessage() {}
 
 func (x *DistributionInspection) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[33]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2552,7 +3447,7 @@ func (x *DistributionInspection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DistributionInspection.ProtoReflect.Descriptor instead.
 func (*DistributionInspection) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{33}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *DistributionInspection) GetArtifact() *ArtifactReference {
@@ -2608,7 +3503,7 @@ type InspectDistributionArtifactRequest struct {
 
 func (x *InspectDistributionArtifactRequest) Reset() {
 	*x = InspectDistributionArtifactRequest{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[34]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2620,7 +3515,7 @@ func (x *InspectDistributionArtifactRequest) String() string {
 func (*InspectDistributionArtifactRequest) ProtoMessage() {}
 
 func (x *InspectDistributionArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[34]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2633,7 +3528,7 @@ func (x *InspectDistributionArtifactRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use InspectDistributionArtifactRequest.ProtoReflect.Descriptor instead.
 func (*InspectDistributionArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{34}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *InspectDistributionArtifactRequest) GetArtifactId() string {
@@ -2654,7 +3549,7 @@ type InspectDistributionArtifactResponse struct {
 
 func (x *InspectDistributionArtifactResponse) Reset() {
 	*x = InspectDistributionArtifactResponse{}
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[35]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2666,7 +3561,7 @@ func (x *InspectDistributionArtifactResponse) String() string {
 func (*InspectDistributionArtifactResponse) ProtoMessage() {}
 
 func (x *InspectDistributionArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[35]
+	mi := &file_colossus_api_v1alpha1_product_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2679,7 +3574,7 @@ func (x *InspectDistributionArtifactResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use InspectDistributionArtifactResponse.ProtoReflect.Descriptor instead.
 func (*InspectDistributionArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{35}
+	return file_colossus_api_v1alpha1_product_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *InspectDistributionArtifactResponse) GetInspection() *DistributionInspection {
@@ -2827,18 +3722,84 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\atrusted\x18\x06 \x01(\bR\atrusted\x12'\n" +
 	"\x0frequired_scopes\x18\a \x03(\tR\x0erequiredScopes\"8\n" +
 	"\x13GetExtensionRequest\x12!\n" +
-	"\fextension_id\x18\x01 \x01(\tR\vextensionId\"]\n" +
+	"\fextension_id\x18\x01 \x01(\tR\vextensionId\"\x99\x01\n" +
 	"\x14GetExtensionResponse\x12E\n" +
-	"\textension\x18\x01 \x01(\v2'.colossus.api.v1alpha1.ExtensionSummaryR\textension\"\xb6\x01\n" +
+	"\textension\x18\x01 \x01(\v2'.colossus.api.v1alpha1.ExtensionSummaryR\textension\x12:\n" +
+	"\x06plugin\x18\x02 \x01(\v2\".colossus.api.v1alpha1.AgentPluginR\x06plugin\"\xb6\x01\n" +
 	"\x15ListExtensionsRequest\x12:\n" +
 	"\x05kinds\x18\x01 \x03(\x0e2$.colossus.api.v1alpha1.ExtensionKindR\x05kinds\x12)\n" +
 	"\x10include_disabled\x18\x02 \x01(\bR\x0fincludeDisabled\x126\n" +
-	"\x04page\x18\x03 \x01(\v2\".colossus.api.v1alpha1.PageRequestR\x04page\"\x9a\x01\n" +
+	"\x04page\x18\x03 \x01(\v2\".colossus.api.v1alpha1.PageRequestR\x04page\"\xd8\x01\n" +
 	"\x16ListExtensionsResponse\x12G\n" +
 	"\n" +
 	"extensions\x18\x01 \x03(\v2'.colossus.api.v1alpha1.ExtensionSummaryR\n" +
 	"extensions\x127\n" +
-	"\x04page\x18\x02 \x01(\v2#.colossus.api.v1alpha1.PageResponseR\x04page\"\x80\x01\n" +
+	"\x04page\x18\x02 \x01(\v2#.colossus.api.v1alpha1.PageResponseR\x04page\x12<\n" +
+	"\aplugins\x18\x03 \x03(\v2\".colossus.api.v1alpha1.AgentPluginR\aplugins\"\xa7\x04\n" +
+	"\vAgentPlugin\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x16\n" +
+	"\x06digest\x18\x04 \x01(\tR\x06digest\x12\x16\n" +
+	"\x06source\x18\x05 \x01(\tR\x06source\x12\x18\n" +
+	"\abundled\x18\x06 \x01(\bR\abundled\x12'\n" +
+	"\x0fglobally_active\x18\a \x01(\bR\x0egloballyActive\x12\x1c\n" +
+	"\tavailable\x18\b \x01(\bR\tavailable\x12-\n" +
+	"\x12unavailable_reason\x18\t \x01(\tR\x11unavailableReason\x128\n" +
+	"\x05trust\x18\n" +
+	" \x01(\v2\".colossus.api.v1alpha1.PluginTrustR\x05trust\x12:\n" +
+	"\x06skills\x18\v \x03(\v2\".colossus.api.v1alpha1.PluginSkillR\x06skills\x12G\n" +
+	"\vmcp_servers\x18\f \x03(\v2&.colossus.api.v1alpha1.PluginMcpServerR\n" +
+	"mcpServers\x12I\n" +
+	"\vdiagnostics\x18\r \x03(\v2'.colossus.api.v1alpha1.PluginDiagnosticR\vdiagnostics\"q\n" +
+	"\vPluginTrust\x12\x18\n" +
+	"\atrusted\x18\x01 \x01(\bR\atrusted\x12\x18\n" +
+	"\aprofile\x18\x02 \x01(\tR\aprofile\x12\x16\n" +
+	"\x06method\x18\x03 \x01(\tR\x06method\x12\x16\n" +
+	"\x06signer\x18\x04 \x01(\tR\x06signer\"\x9e\x01\n" +
+	"\vPluginSkill\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12$\n" +
+	"\rcompatibility\x18\x04 \x01(\tR\rcompatibility\x12#\n" +
+	"\rallowed_tools\x18\x05 \x01(\tR\fallowedTools\"\x85\x01\n" +
+	"\x0fPluginMcpServer\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
+	"\ttransport\x18\x03 \x01(\tR\ttransport\x12\x18\n" +
+	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\"f\n" +
+	"\x10PluginDiagnostic\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04code\x18\x03 \x01(\tR\x04code\x12\x16\n" +
+	"\x06detail\x18\x04 \x01(\tR\x06detail\"K\n" +
+	"\x16ReadPluginSkillRequest\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\"\x8f\x01\n" +
+	"\x17ReadPluginSkillResponse\x128\n" +
+	"\x05skill\x18\x01 \x01(\v2\".colossus.api.v1alpha1.PluginSkillR\x05skill\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\x12\"\n" +
+	"\finstructions\x18\x03 \x01(\tR\finstructions\"O\n" +
+	"\x1aListPluginResourcesRequest\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\"\x94\x01\n" +
+	"\x0ePluginResource\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\x124\n" +
+	"\x16text_preview_available\x18\x04 \x01(\bR\x14textPreviewAvailable\"b\n" +
+	"\x1bListPluginResourcesResponse\x12C\n" +
+	"\tresources\x18\x01 \x03(\v2%.colossus.api.v1alpha1.PluginResourceR\tresources\"b\n" +
+	"\x19ReadPluginResourceRequest\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\"\x91\x01\n" +
+	"\x1aReadPluginResourceResponse\x12A\n" +
+	"\bresource\x18\x01 \x01(\v2%.colossus.api.v1alpha1.PluginResourceR\bresource\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\"\x80\x01\n" +
 	"\x11DiagnosticSummary\x12\x12\n" +
 	"\x04area\x18\x01 \x01(\tR\x04area\x12?\n" +
 	"\x06status\x18\x02 \x01(\x0e2'.colossus.api.v1alpha1.DiagnosticStatusR\x06status\x12\x16\n" +
@@ -2889,25 +3850,23 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\x1aWORKFLOW_RUN_STATUS_FAILED\x10\x05\x12!\n" +
 	"\x1dWORKFLOW_RUN_STATUS_CANCELLED\x10\x06\x12#\n" +
 	"\x1fWORKFLOW_RUN_STATUS_INTERRUPTED\x10\a\x12'\n" +
-	"#WORKFLOW_RUN_STATUS_OUTCOME_UNKNOWN\x10\b*\xba\x01\n" +
+	"#WORKFLOW_RUN_STATUS_OUTCOME_UNKNOWN\x10\b*\xdf\x01\n" +
 	"\rExtensionKind\x12\x1e\n" +
 	"\x1aEXTENSION_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13EXTENSION_KIND_TOOL\x10\x01\x12\x18\n" +
-	"\x14EXTENSION_KIND_SKILL\x10\x02\x12\x1d\n" +
-	"\x19EXTENSION_KIND_MCP_SERVER\x10\x03\x12\x17\n" +
-	"\x13EXTENSION_KIND_PACK\x10\x04\x12\x1e\n" +
-	"\x1aEXTENSION_KIND_INTEGRATION\x10\x05*\xac\x01\n" +
+	"\x13EXTENSION_KIND_TOOL\x10\x01\x12\x1d\n" +
+	"\x19EXTENSION_KIND_MCP_SERVER\x10\x03\x12\x1e\n" +
+	"\x1aEXTENSION_KIND_INTEGRATION\x10\x05\x12\x1f\n" +
+	"\x1bEXTENSION_KIND_AGENT_PLUGIN\x10\x06\"\x04\b\x02\x10\x02\"\x04\b\x04\x10\x04*\x14EXTENSION_KIND_SKILL*\x13EXTENSION_KIND_PACK*\xac\x01\n" +
 	"\x10DiagnosticStatus\x12!\n" +
 	"\x1dDIAGNOSTIC_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16DIAGNOSTIC_STATUS_PASS\x10\x01\x12\x1a\n" +
 	"\x16DIAGNOSTIC_STATUS_WARN\x10\x02\x12\x1a\n" +
 	"\x16DIAGNOSTIC_STATUS_FAIL\x10\x03\x12!\n" +
-	"\x1dDIAGNOSTIC_STATUS_NOT_CHECKED\x10\x04*\xbf\x01\n" +
+	"\x1dDIAGNOSTIC_STATUS_NOT_CHECKED\x10\x04*\xf0\x01\n" +
 	"\x18DistributionArtifactKind\x12*\n" +
-	"&DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED\x10\x00\x12#\n" +
-	"\x1fDISTRIBUTION_ARTIFACT_KIND_PACK\x10\x01\x12'\n" +
-	"#DISTRIBUTION_ARTIFACT_KIND_WORKFLOW\x10\x02\x12)\n" +
-	"%DISTRIBUTION_ARTIFACT_KIND_COLLECTION\x10\x032\xdf\x01\n" +
+	"&DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED\x10\x00\x12'\n" +
+	"#DISTRIBUTION_ARTIFACT_KIND_WORKFLOW\x10\x02\x12+\n" +
+	"'DISTRIBUTION_ARTIFACT_KIND_AGENT_PLUGIN\x10\x04\"\x04\b\x01\x10\x01\"\x04\b\x03\x10\x03*\x1fDISTRIBUTION_ARTIFACT_KIND_PACK*%DISTRIBUTION_ARTIFACT_KIND_COLLECTION2\xdf\x01\n" +
 	"\vWorkService\x12d\n" +
 	"\vGetWorkItem\x12).colossus.api.v1alpha1.GetWorkItemRequest\x1a*.colossus.api.v1alpha1.GetWorkItemResponse\x12j\n" +
 	"\rListWorkItems\x12+.colossus.api.v1alpha1.ListWorkItemsRequest\x1a,.colossus.api.v1alpha1.ListWorkItemsResponse2\xcd\x02\n" +
@@ -2920,10 +3879,13 @@ const file_colossus_api_v1alpha1_product_proto_rawDesc = "" +
 	"\rListWorkflows\x12+.colossus.api.v1alpha1.ListWorkflowsRequest\x1a,.colossus.api.v1alpha1.ListWorkflowsResponse\x12s\n" +
 	"\x10StartWorkflowRun\x12..colossus.api.v1alpha1.StartWorkflowRunRequest\x1a/.colossus.api.v1alpha1.StartWorkflowRunResponse\x12m\n" +
 	"\x0eGetWorkflowRun\x12,.colossus.api.v1alpha1.GetWorkflowRunRequest\x1a-.colossus.api.v1alpha1.GetWorkflowRunResponse\x12u\n" +
-	"\x10WatchWorkflowRun\x12..colossus.api.v1alpha1.WatchWorkflowRunRequest\x1a/.colossus.api.v1alpha1.WatchWorkflowRunResponse0\x012\xea\x01\n" +
+	"\x10WatchWorkflowRun\x12..colossus.api.v1alpha1.WatchWorkflowRunRequest\x1a/.colossus.api.v1alpha1.WatchWorkflowRunResponse0\x012\xd5\x04\n" +
 	"\x10ExtensionService\x12g\n" +
 	"\fGetExtension\x12*.colossus.api.v1alpha1.GetExtensionRequest\x1a+.colossus.api.v1alpha1.GetExtensionResponse\x12m\n" +
-	"\x0eListExtensions\x12,.colossus.api.v1alpha1.ListExtensionsRequest\x1a-.colossus.api.v1alpha1.ListExtensionsResponse2\x85\x01\n" +
+	"\x0eListExtensions\x12,.colossus.api.v1alpha1.ListExtensionsRequest\x1a-.colossus.api.v1alpha1.ListExtensionsResponse\x12p\n" +
+	"\x0fReadPluginSkill\x12-.colossus.api.v1alpha1.ReadPluginSkillRequest\x1a..colossus.api.v1alpha1.ReadPluginSkillResponse\x12|\n" +
+	"\x13ListPluginResources\x121.colossus.api.v1alpha1.ListPluginResourcesRequest\x1a2.colossus.api.v1alpha1.ListPluginResourcesResponse\x12y\n" +
+	"\x12ReadPluginResource\x120.colossus.api.v1alpha1.ReadPluginResourceRequest\x1a1.colossus.api.v1alpha1.ReadPluginResourceResponse2\x85\x01\n" +
 	"\x11OperationsService\x12p\n" +
 	"\x0fListDiagnostics\x12-.colossus.api.v1alpha1.ListDiagnosticsRequest\x1a..colossus.api.v1alpha1.ListDiagnosticsResponse2\xac\x01\n" +
 	"\x13DistributionService\x12\x94\x01\n" +
@@ -2943,7 +3905,7 @@ func file_colossus_api_v1alpha1_product_proto_rawDescGZIP() []byte {
 }
 
 var file_colossus_api_v1alpha1_product_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_colossus_api_v1alpha1_product_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_colossus_api_v1alpha1_product_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
 var file_colossus_api_v1alpha1_product_proto_goTypes = []any{
 	(WorkItemKind)(0),                           // 0: colossus.api.v1alpha1.WorkItemKind
 	(WorkItemStatus)(0),                         // 1: colossus.api.v1alpha1.WorkItemStatus
@@ -2982,100 +3944,127 @@ var file_colossus_api_v1alpha1_product_proto_goTypes = []any{
 	(*GetExtensionResponse)(nil),                // 34: colossus.api.v1alpha1.GetExtensionResponse
 	(*ListExtensionsRequest)(nil),               // 35: colossus.api.v1alpha1.ListExtensionsRequest
 	(*ListExtensionsResponse)(nil),              // 36: colossus.api.v1alpha1.ListExtensionsResponse
-	(*DiagnosticSummary)(nil),                   // 37: colossus.api.v1alpha1.DiagnosticSummary
-	(*ListDiagnosticsRequest)(nil),              // 38: colossus.api.v1alpha1.ListDiagnosticsRequest
-	(*ListDiagnosticsResponse)(nil),             // 39: colossus.api.v1alpha1.ListDiagnosticsResponse
-	(*DistributionInspection)(nil),              // 40: colossus.api.v1alpha1.DistributionInspection
-	(*InspectDistributionArtifactRequest)(nil),  // 41: colossus.api.v1alpha1.InspectDistributionArtifactRequest
-	(*InspectDistributionArtifactResponse)(nil), // 42: colossus.api.v1alpha1.InspectDistributionArtifactResponse
-	(*timestamppb.Timestamp)(nil),               // 43: google.protobuf.Timestamp
-	(*PageRequest)(nil),                         // 44: colossus.api.v1alpha1.PageRequest
-	(*PageResponse)(nil),                        // 45: colossus.api.v1alpha1.PageResponse
-	(*structpb.Struct)(nil),                     // 46: google.protobuf.Struct
-	(*ArtifactReference)(nil),                   // 47: colossus.api.v1alpha1.ArtifactReference
+	(*AgentPlugin)(nil),                         // 37: colossus.api.v1alpha1.AgentPlugin
+	(*PluginTrust)(nil),                         // 38: colossus.api.v1alpha1.PluginTrust
+	(*PluginSkill)(nil),                         // 39: colossus.api.v1alpha1.PluginSkill
+	(*PluginMcpServer)(nil),                     // 40: colossus.api.v1alpha1.PluginMcpServer
+	(*PluginDiagnostic)(nil),                    // 41: colossus.api.v1alpha1.PluginDiagnostic
+	(*ReadPluginSkillRequest)(nil),              // 42: colossus.api.v1alpha1.ReadPluginSkillRequest
+	(*ReadPluginSkillResponse)(nil),             // 43: colossus.api.v1alpha1.ReadPluginSkillResponse
+	(*ListPluginResourcesRequest)(nil),          // 44: colossus.api.v1alpha1.ListPluginResourcesRequest
+	(*PluginResource)(nil),                      // 45: colossus.api.v1alpha1.PluginResource
+	(*ListPluginResourcesResponse)(nil),         // 46: colossus.api.v1alpha1.ListPluginResourcesResponse
+	(*ReadPluginResourceRequest)(nil),           // 47: colossus.api.v1alpha1.ReadPluginResourceRequest
+	(*ReadPluginResourceResponse)(nil),          // 48: colossus.api.v1alpha1.ReadPluginResourceResponse
+	(*DiagnosticSummary)(nil),                   // 49: colossus.api.v1alpha1.DiagnosticSummary
+	(*ListDiagnosticsRequest)(nil),              // 50: colossus.api.v1alpha1.ListDiagnosticsRequest
+	(*ListDiagnosticsResponse)(nil),             // 51: colossus.api.v1alpha1.ListDiagnosticsResponse
+	(*DistributionInspection)(nil),              // 52: colossus.api.v1alpha1.DistributionInspection
+	(*InspectDistributionArtifactRequest)(nil),  // 53: colossus.api.v1alpha1.InspectDistributionArtifactRequest
+	(*InspectDistributionArtifactResponse)(nil), // 54: colossus.api.v1alpha1.InspectDistributionArtifactResponse
+	(*timestamppb.Timestamp)(nil),               // 55: google.protobuf.Timestamp
+	(*PageRequest)(nil),                         // 56: colossus.api.v1alpha1.PageRequest
+	(*PageResponse)(nil),                        // 57: colossus.api.v1alpha1.PageResponse
+	(*structpb.Struct)(nil),                     // 58: google.protobuf.Struct
+	(*ArtifactReference)(nil),                   // 59: colossus.api.v1alpha1.ArtifactReference
 }
 var file_colossus_api_v1alpha1_product_proto_depIdxs = []int32{
 	0,  // 0: colossus.api.v1alpha1.WorkItem.kind:type_name -> colossus.api.v1alpha1.WorkItemKind
 	1,  // 1: colossus.api.v1alpha1.WorkItem.status:type_name -> colossus.api.v1alpha1.WorkItemStatus
-	43, // 2: colossus.api.v1alpha1.WorkItem.created_at:type_name -> google.protobuf.Timestamp
-	43, // 3: colossus.api.v1alpha1.WorkItem.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 2: colossus.api.v1alpha1.WorkItem.created_at:type_name -> google.protobuf.Timestamp
+	55, // 3: colossus.api.v1alpha1.WorkItem.updated_at:type_name -> google.protobuf.Timestamp
 	7,  // 4: colossus.api.v1alpha1.GetWorkItemResponse.work_item:type_name -> colossus.api.v1alpha1.WorkItem
 	0,  // 5: colossus.api.v1alpha1.ListWorkItemsRequest.kinds:type_name -> colossus.api.v1alpha1.WorkItemKind
 	1,  // 6: colossus.api.v1alpha1.ListWorkItemsRequest.statuses:type_name -> colossus.api.v1alpha1.WorkItemStatus
-	44, // 7: colossus.api.v1alpha1.ListWorkItemsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	56, // 7: colossus.api.v1alpha1.ListWorkItemsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	7,  // 8: colossus.api.v1alpha1.ListWorkItemsResponse.work_items:type_name -> colossus.api.v1alpha1.WorkItem
-	45, // 9: colossus.api.v1alpha1.ListWorkItemsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	57, // 9: colossus.api.v1alpha1.ListWorkItemsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	2,  // 10: colossus.api.v1alpha1.MemorySummary.scope_kind:type_name -> colossus.api.v1alpha1.MemoryScopeKind
-	43, // 11: colossus.api.v1alpha1.MemorySummary.created_at:type_name -> google.protobuf.Timestamp
-	43, // 12: colossus.api.v1alpha1.MemorySummary.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 11: colossus.api.v1alpha1.MemorySummary.created_at:type_name -> google.protobuf.Timestamp
+	55, // 12: colossus.api.v1alpha1.MemorySummary.updated_at:type_name -> google.protobuf.Timestamp
 	12, // 13: colossus.api.v1alpha1.GetMemoryResponse.memory:type_name -> colossus.api.v1alpha1.MemorySummary
 	2,  // 14: colossus.api.v1alpha1.ListMemoriesRequest.scope_kind:type_name -> colossus.api.v1alpha1.MemoryScopeKind
-	44, // 15: colossus.api.v1alpha1.ListMemoriesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	56, // 15: colossus.api.v1alpha1.ListMemoriesRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	12, // 16: colossus.api.v1alpha1.ListMemoriesResponse.memories:type_name -> colossus.api.v1alpha1.MemorySummary
-	45, // 17: colossus.api.v1alpha1.ListMemoriesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	57, // 17: colossus.api.v1alpha1.ListMemoriesResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	2,  // 18: colossus.api.v1alpha1.SearchKnowledgeRequest.scope_kind:type_name -> colossus.api.v1alpha1.MemoryScopeKind
-	44, // 19: colossus.api.v1alpha1.SearchKnowledgeRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	56, // 19: colossus.api.v1alpha1.SearchKnowledgeRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	12, // 20: colossus.api.v1alpha1.KnowledgeSearchResult.memory:type_name -> colossus.api.v1alpha1.MemorySummary
 	18, // 21: colossus.api.v1alpha1.SearchKnowledgeResponse.results:type_name -> colossus.api.v1alpha1.KnowledgeSearchResult
-	45, // 22: colossus.api.v1alpha1.SearchKnowledgeResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	43, // 23: colossus.api.v1alpha1.WorkflowSummary.created_at:type_name -> google.protobuf.Timestamp
-	43, // 24: colossus.api.v1alpha1.WorkflowSummary.updated_at:type_name -> google.protobuf.Timestamp
+	57, // 22: colossus.api.v1alpha1.SearchKnowledgeResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	55, // 23: colossus.api.v1alpha1.WorkflowSummary.created_at:type_name -> google.protobuf.Timestamp
+	55, // 24: colossus.api.v1alpha1.WorkflowSummary.updated_at:type_name -> google.protobuf.Timestamp
 	3,  // 25: colossus.api.v1alpha1.WorkflowRun.status:type_name -> colossus.api.v1alpha1.WorkflowRunStatus
-	43, // 26: colossus.api.v1alpha1.WorkflowRun.created_at:type_name -> google.protobuf.Timestamp
-	43, // 27: colossus.api.v1alpha1.WorkflowRun.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 26: colossus.api.v1alpha1.WorkflowRun.created_at:type_name -> google.protobuf.Timestamp
+	55, // 27: colossus.api.v1alpha1.WorkflowRun.updated_at:type_name -> google.protobuf.Timestamp
 	20, // 28: colossus.api.v1alpha1.GetWorkflowResponse.workflow:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	44, // 29: colossus.api.v1alpha1.ListWorkflowsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	56, // 29: colossus.api.v1alpha1.ListWorkflowsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	20, // 30: colossus.api.v1alpha1.ListWorkflowsResponse.workflows:type_name -> colossus.api.v1alpha1.WorkflowSummary
-	45, // 31: colossus.api.v1alpha1.ListWorkflowsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	46, // 32: colossus.api.v1alpha1.StartWorkflowRunRequest.input:type_name -> google.protobuf.Struct
+	57, // 31: colossus.api.v1alpha1.ListWorkflowsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	58, // 32: colossus.api.v1alpha1.StartWorkflowRunRequest.input:type_name -> google.protobuf.Struct
 	21, // 33: colossus.api.v1alpha1.StartWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
 	21, // 34: colossus.api.v1alpha1.GetWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
-	43, // 35: colossus.api.v1alpha1.WatchWorkflowRunResponse.created_at:type_name -> google.protobuf.Timestamp
+	55, // 35: colossus.api.v1alpha1.WatchWorkflowRunResponse.created_at:type_name -> google.protobuf.Timestamp
 	21, // 36: colossus.api.v1alpha1.WatchWorkflowRunResponse.workflow_run:type_name -> colossus.api.v1alpha1.WorkflowRun
 	4,  // 37: colossus.api.v1alpha1.ExtensionSummary.kind:type_name -> colossus.api.v1alpha1.ExtensionKind
 	32, // 38: colossus.api.v1alpha1.GetExtensionResponse.extension:type_name -> colossus.api.v1alpha1.ExtensionSummary
-	4,  // 39: colossus.api.v1alpha1.ListExtensionsRequest.kinds:type_name -> colossus.api.v1alpha1.ExtensionKind
-	44, // 40: colossus.api.v1alpha1.ListExtensionsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
-	32, // 41: colossus.api.v1alpha1.ListExtensionsResponse.extensions:type_name -> colossus.api.v1alpha1.ExtensionSummary
-	45, // 42: colossus.api.v1alpha1.ListExtensionsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	5,  // 43: colossus.api.v1alpha1.DiagnosticSummary.status:type_name -> colossus.api.v1alpha1.DiagnosticStatus
-	37, // 44: colossus.api.v1alpha1.ListDiagnosticsResponse.diagnostics:type_name -> colossus.api.v1alpha1.DiagnosticSummary
-	47, // 45: colossus.api.v1alpha1.DistributionInspection.artifact:type_name -> colossus.api.v1alpha1.ArtifactReference
-	6,  // 46: colossus.api.v1alpha1.DistributionInspection.kind:type_name -> colossus.api.v1alpha1.DistributionArtifactKind
-	40, // 47: colossus.api.v1alpha1.InspectDistributionArtifactResponse.inspection:type_name -> colossus.api.v1alpha1.DistributionInspection
-	8,  // 48: colossus.api.v1alpha1.WorkService.GetWorkItem:input_type -> colossus.api.v1alpha1.GetWorkItemRequest
-	10, // 49: colossus.api.v1alpha1.WorkService.ListWorkItems:input_type -> colossus.api.v1alpha1.ListWorkItemsRequest
-	13, // 50: colossus.api.v1alpha1.KnowledgeService.GetMemory:input_type -> colossus.api.v1alpha1.GetMemoryRequest
-	15, // 51: colossus.api.v1alpha1.KnowledgeService.ListMemories:input_type -> colossus.api.v1alpha1.ListMemoriesRequest
-	17, // 52: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:input_type -> colossus.api.v1alpha1.SearchKnowledgeRequest
-	22, // 53: colossus.api.v1alpha1.AutomationService.GetWorkflow:input_type -> colossus.api.v1alpha1.GetWorkflowRequest
-	24, // 54: colossus.api.v1alpha1.AutomationService.ListWorkflows:input_type -> colossus.api.v1alpha1.ListWorkflowsRequest
-	26, // 55: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:input_type -> colossus.api.v1alpha1.StartWorkflowRunRequest
-	28, // 56: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:input_type -> colossus.api.v1alpha1.GetWorkflowRunRequest
-	30, // 57: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:input_type -> colossus.api.v1alpha1.WatchWorkflowRunRequest
-	33, // 58: colossus.api.v1alpha1.ExtensionService.GetExtension:input_type -> colossus.api.v1alpha1.GetExtensionRequest
-	35, // 59: colossus.api.v1alpha1.ExtensionService.ListExtensions:input_type -> colossus.api.v1alpha1.ListExtensionsRequest
-	38, // 60: colossus.api.v1alpha1.OperationsService.ListDiagnostics:input_type -> colossus.api.v1alpha1.ListDiagnosticsRequest
-	41, // 61: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:input_type -> colossus.api.v1alpha1.InspectDistributionArtifactRequest
-	9,  // 62: colossus.api.v1alpha1.WorkService.GetWorkItem:output_type -> colossus.api.v1alpha1.GetWorkItemResponse
-	11, // 63: colossus.api.v1alpha1.WorkService.ListWorkItems:output_type -> colossus.api.v1alpha1.ListWorkItemsResponse
-	14, // 64: colossus.api.v1alpha1.KnowledgeService.GetMemory:output_type -> colossus.api.v1alpha1.GetMemoryResponse
-	16, // 65: colossus.api.v1alpha1.KnowledgeService.ListMemories:output_type -> colossus.api.v1alpha1.ListMemoriesResponse
-	19, // 66: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:output_type -> colossus.api.v1alpha1.SearchKnowledgeResponse
-	23, // 67: colossus.api.v1alpha1.AutomationService.GetWorkflow:output_type -> colossus.api.v1alpha1.GetWorkflowResponse
-	25, // 68: colossus.api.v1alpha1.AutomationService.ListWorkflows:output_type -> colossus.api.v1alpha1.ListWorkflowsResponse
-	27, // 69: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:output_type -> colossus.api.v1alpha1.StartWorkflowRunResponse
-	29, // 70: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:output_type -> colossus.api.v1alpha1.GetWorkflowRunResponse
-	31, // 71: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:output_type -> colossus.api.v1alpha1.WatchWorkflowRunResponse
-	34, // 72: colossus.api.v1alpha1.ExtensionService.GetExtension:output_type -> colossus.api.v1alpha1.GetExtensionResponse
-	36, // 73: colossus.api.v1alpha1.ExtensionService.ListExtensions:output_type -> colossus.api.v1alpha1.ListExtensionsResponse
-	39, // 74: colossus.api.v1alpha1.OperationsService.ListDiagnostics:output_type -> colossus.api.v1alpha1.ListDiagnosticsResponse
-	42, // 75: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:output_type -> colossus.api.v1alpha1.InspectDistributionArtifactResponse
-	62, // [62:76] is the sub-list for method output_type
-	48, // [48:62] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	37, // 39: colossus.api.v1alpha1.GetExtensionResponse.plugin:type_name -> colossus.api.v1alpha1.AgentPlugin
+	4,  // 40: colossus.api.v1alpha1.ListExtensionsRequest.kinds:type_name -> colossus.api.v1alpha1.ExtensionKind
+	56, // 41: colossus.api.v1alpha1.ListExtensionsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	32, // 42: colossus.api.v1alpha1.ListExtensionsResponse.extensions:type_name -> colossus.api.v1alpha1.ExtensionSummary
+	57, // 43: colossus.api.v1alpha1.ListExtensionsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	37, // 44: colossus.api.v1alpha1.ListExtensionsResponse.plugins:type_name -> colossus.api.v1alpha1.AgentPlugin
+	38, // 45: colossus.api.v1alpha1.AgentPlugin.trust:type_name -> colossus.api.v1alpha1.PluginTrust
+	39, // 46: colossus.api.v1alpha1.AgentPlugin.skills:type_name -> colossus.api.v1alpha1.PluginSkill
+	40, // 47: colossus.api.v1alpha1.AgentPlugin.mcp_servers:type_name -> colossus.api.v1alpha1.PluginMcpServer
+	41, // 48: colossus.api.v1alpha1.AgentPlugin.diagnostics:type_name -> colossus.api.v1alpha1.PluginDiagnostic
+	39, // 49: colossus.api.v1alpha1.ReadPluginSkillResponse.skill:type_name -> colossus.api.v1alpha1.PluginSkill
+	45, // 50: colossus.api.v1alpha1.ListPluginResourcesResponse.resources:type_name -> colossus.api.v1alpha1.PluginResource
+	45, // 51: colossus.api.v1alpha1.ReadPluginResourceResponse.resource:type_name -> colossus.api.v1alpha1.PluginResource
+	5,  // 52: colossus.api.v1alpha1.DiagnosticSummary.status:type_name -> colossus.api.v1alpha1.DiagnosticStatus
+	49, // 53: colossus.api.v1alpha1.ListDiagnosticsResponse.diagnostics:type_name -> colossus.api.v1alpha1.DiagnosticSummary
+	59, // 54: colossus.api.v1alpha1.DistributionInspection.artifact:type_name -> colossus.api.v1alpha1.ArtifactReference
+	6,  // 55: colossus.api.v1alpha1.DistributionInspection.kind:type_name -> colossus.api.v1alpha1.DistributionArtifactKind
+	52, // 56: colossus.api.v1alpha1.InspectDistributionArtifactResponse.inspection:type_name -> colossus.api.v1alpha1.DistributionInspection
+	8,  // 57: colossus.api.v1alpha1.WorkService.GetWorkItem:input_type -> colossus.api.v1alpha1.GetWorkItemRequest
+	10, // 58: colossus.api.v1alpha1.WorkService.ListWorkItems:input_type -> colossus.api.v1alpha1.ListWorkItemsRequest
+	13, // 59: colossus.api.v1alpha1.KnowledgeService.GetMemory:input_type -> colossus.api.v1alpha1.GetMemoryRequest
+	15, // 60: colossus.api.v1alpha1.KnowledgeService.ListMemories:input_type -> colossus.api.v1alpha1.ListMemoriesRequest
+	17, // 61: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:input_type -> colossus.api.v1alpha1.SearchKnowledgeRequest
+	22, // 62: colossus.api.v1alpha1.AutomationService.GetWorkflow:input_type -> colossus.api.v1alpha1.GetWorkflowRequest
+	24, // 63: colossus.api.v1alpha1.AutomationService.ListWorkflows:input_type -> colossus.api.v1alpha1.ListWorkflowsRequest
+	26, // 64: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:input_type -> colossus.api.v1alpha1.StartWorkflowRunRequest
+	28, // 65: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:input_type -> colossus.api.v1alpha1.GetWorkflowRunRequest
+	30, // 66: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:input_type -> colossus.api.v1alpha1.WatchWorkflowRunRequest
+	33, // 67: colossus.api.v1alpha1.ExtensionService.GetExtension:input_type -> colossus.api.v1alpha1.GetExtensionRequest
+	35, // 68: colossus.api.v1alpha1.ExtensionService.ListExtensions:input_type -> colossus.api.v1alpha1.ListExtensionsRequest
+	42, // 69: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:input_type -> colossus.api.v1alpha1.ReadPluginSkillRequest
+	44, // 70: colossus.api.v1alpha1.ExtensionService.ListPluginResources:input_type -> colossus.api.v1alpha1.ListPluginResourcesRequest
+	47, // 71: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:input_type -> colossus.api.v1alpha1.ReadPluginResourceRequest
+	50, // 72: colossus.api.v1alpha1.OperationsService.ListDiagnostics:input_type -> colossus.api.v1alpha1.ListDiagnosticsRequest
+	53, // 73: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:input_type -> colossus.api.v1alpha1.InspectDistributionArtifactRequest
+	9,  // 74: colossus.api.v1alpha1.WorkService.GetWorkItem:output_type -> colossus.api.v1alpha1.GetWorkItemResponse
+	11, // 75: colossus.api.v1alpha1.WorkService.ListWorkItems:output_type -> colossus.api.v1alpha1.ListWorkItemsResponse
+	14, // 76: colossus.api.v1alpha1.KnowledgeService.GetMemory:output_type -> colossus.api.v1alpha1.GetMemoryResponse
+	16, // 77: colossus.api.v1alpha1.KnowledgeService.ListMemories:output_type -> colossus.api.v1alpha1.ListMemoriesResponse
+	19, // 78: colossus.api.v1alpha1.KnowledgeService.SearchKnowledge:output_type -> colossus.api.v1alpha1.SearchKnowledgeResponse
+	23, // 79: colossus.api.v1alpha1.AutomationService.GetWorkflow:output_type -> colossus.api.v1alpha1.GetWorkflowResponse
+	25, // 80: colossus.api.v1alpha1.AutomationService.ListWorkflows:output_type -> colossus.api.v1alpha1.ListWorkflowsResponse
+	27, // 81: colossus.api.v1alpha1.AutomationService.StartWorkflowRun:output_type -> colossus.api.v1alpha1.StartWorkflowRunResponse
+	29, // 82: colossus.api.v1alpha1.AutomationService.GetWorkflowRun:output_type -> colossus.api.v1alpha1.GetWorkflowRunResponse
+	31, // 83: colossus.api.v1alpha1.AutomationService.WatchWorkflowRun:output_type -> colossus.api.v1alpha1.WatchWorkflowRunResponse
+	34, // 84: colossus.api.v1alpha1.ExtensionService.GetExtension:output_type -> colossus.api.v1alpha1.GetExtensionResponse
+	36, // 85: colossus.api.v1alpha1.ExtensionService.ListExtensions:output_type -> colossus.api.v1alpha1.ListExtensionsResponse
+	43, // 86: colossus.api.v1alpha1.ExtensionService.ReadPluginSkill:output_type -> colossus.api.v1alpha1.ReadPluginSkillResponse
+	46, // 87: colossus.api.v1alpha1.ExtensionService.ListPluginResources:output_type -> colossus.api.v1alpha1.ListPluginResourcesResponse
+	48, // 88: colossus.api.v1alpha1.ExtensionService.ReadPluginResource:output_type -> colossus.api.v1alpha1.ReadPluginResourceResponse
+	51, // 89: colossus.api.v1alpha1.OperationsService.ListDiagnostics:output_type -> colossus.api.v1alpha1.ListDiagnosticsResponse
+	54, // 90: colossus.api.v1alpha1.DistributionService.InspectDistributionArtifact:output_type -> colossus.api.v1alpha1.InspectDistributionArtifactResponse
+	74, // [74:91] is the sub-list for method output_type
+	57, // [57:74] is the sub-list for method input_type
+	57, // [57:57] is the sub-list for extension type_name
+	57, // [57:57] is the sub-list for extension extendee
+	0,  // [0:57] is the sub-list for field type_name
 }
 
 func init() { file_colossus_api_v1alpha1_product_proto_init() }
@@ -3091,14 +4080,14 @@ func file_colossus_api_v1alpha1_product_proto_init() {
 	file_colossus_api_v1alpha1_product_proto_msgTypes[8].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_product_proto_msgTypes[10].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_product_proto_msgTypes[14].OneofWrappers = []any{}
-	file_colossus_api_v1alpha1_product_proto_msgTypes[33].OneofWrappers = []any{}
+	file_colossus_api_v1alpha1_product_proto_msgTypes[45].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_colossus_api_v1alpha1_product_proto_rawDesc), len(file_colossus_api_v1alpha1_product_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   36,
+			NumMessages:   48,
 			NumExtensions: 0,
 			NumServices:   6,
 		},

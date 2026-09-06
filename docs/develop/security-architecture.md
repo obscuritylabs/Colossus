@@ -245,7 +245,7 @@ post-effect policy, and durable evidence remain mandatory. HTTPS still receives 
 certificate and hostname validation. Ambient authority also accepts canonical
 non-loopback plaintext HTTP, which has no TLS confidentiality or server authentication
 and can expose request content and credentials in transit. Provider routes,
-MCP servers and tool allowlists, integrations, credentials, pack trust, and all other
+MCP servers and tool allowlists, integrations, credentials, plugin trust, and all other
 capability declarations remain configured-only.
 
 Direct Unix process supervision is not a kernel containment boundary. The effect
@@ -257,10 +257,21 @@ effect's audit record. Strict descendant containment requires native or OCI isol
 a Windows Job Object, or an asserted external host boundary that owns the complete
 process namespace/job.
 
-For the same reason, runtime composition rejects enabled pack tools and pack-declared
-stdio MCP servers under `danger_full_access`. Direct ambient execution cannot preserve
-their manifest resource and credential ceilings. Pack signatures, trust, and
-declarations remain necessary under every boundary and never grant ambient authority.
+Agent Plugin scripts run only through ordinary process tools, and plugin MCP servers
+require explicit runtime enablement. Their signatures, trust state, portable declarations,
+and selected-root grants remain necessary under every boundary and never grant ambient
+authority.
+
+Plugin registry effects identify the exact registry origin as their network resource;
+local layout paths are separately checked against the transfer permit. Docker config
+is parsed only after that authorization and an explicit file grant. Selected credential
+helpers require a nested process permit, and only an opaque credential handle crosses
+their result-release boundary. Verification and installation also check every selected
+trust-profile key and local trust-root path before reading it, including re-verification
+of installed content. Outside-workspace trust paths require explicit operator approval
+under the built-in policy; external policy must supply the corresponding file grants.
+Public discovery may request unavailable installation metadata, but this does not expand
+the active run catalog or authorize instruction/resource reads for those installations.
 
 Ambient destination authority does not weaken dedicated security-channel contracts.
 Remote OPA remains HTTPS with pinned CA trust and mTLS identity. WORM audit export
@@ -358,7 +369,7 @@ namespace, a domain-separated XChaCha20-Poly1305 redb sidecar, or an explicitly 
 owner-only plaintext sidecar selected by keyless `auto`; client secrets remain behind
 their configured references. Stateful sessions remain the default. A strict,
 request-bound `allowStateless` opt-in permits one top-level remote declaration to omit
-`Mcp-Session-Id`; stdio and pack-provided servers reject that field. Each discovery page
+`Mcp-Session-Id`; stdio and plugin-provided servers reject that field. Each discovery page
 and tool call uses a fresh initialized transport, disables request and expired-session
 retries, accepts empty success responses only for one-way JSON-RPC frames, and treats an
 uncertain tool call as `OutcomeUnknown`. For stdio, the authenticated process job may
@@ -418,7 +429,7 @@ plain names.
 MCP descriptions and annotations are untrusted evaluator hints, not authority or hard
 preconditions. Explicit and wildcard tool selection share the same review rule because
 the proof binds one invocation, and stdio and Streamable HTTP share eligibility while
-retaining their different process and network obligations. Pack-provided MCP action
+retaining their different process and network obligations. Plugin-provided MCP action
 prefixes, unsupported metadata, non-read-only network methods, workspace mutations,
 dynamic integrations, workflows, system actors, and every non-low-risk assessment
 preserve explicit approval or denial. Ineligible reviews record a bounded reason that an
@@ -682,20 +693,25 @@ while a managed run is active. This control changes only satisfaction of later a
 obligations; policy denials, tool grants, permits, and sandbox boundaries remain
 unchanged.
 
-Skill discovery is part of model input and therefore uses the same object-bound
-discipline. On Unix, repository skill roots are traversed relative to the retained
-workspace descriptor. App-private user and installed-pack roots receive independent
-no-follow directory capabilities opened one component at a time; a not-yet-created
-root is accepted only beneath a retained owner-private directory. Instruction,
-manifest, and resource files are opened descriptor-relative, bounded, nonblocking,
-and accepted only after their opened type is verified. Aggregate discovery roots are
-capped at 128 before root descriptors are acquired, leaving conservative macOS file
-descriptor headroom; each verified pack may contribute at most 64 skill references,
-with the aggregate runtime ceiling remaining authoritative across packs. Runtime
-pre/post identity checks still reject stable workspace drift, but path checks are not
-treated as protection against an A-to-B-to-A swap.
+Agent Plugin discovery is part of model input and therefore follows the same object-bound
+discipline. Portable paths resolve within an immutable content root selected by an OCI
+manifest digest. Fixed discovery admits only root `plugin.json`, immediate
+`skills/NAME/SKILL.md`, and root `mcp.json`; invalid skills and MCP entries fail at their
+component boundary. Metadata is bounded for discovery, while instruction and resource
+bodies are loaded progressively. Only explicitly selected qualified skills add their
+plugin root as a read/execute permit grant. `allowed-tools` is advisory and never grants
+authority.
 
-The retained descriptor makes state selection, lease ownership, skill context, and TUI
+The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer lease for
+lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,
+uninstall, and garbage collection cannot invalidate a running snapshot. Stable writable
+`PLUGIN_DATA` is separate from read-only content and is preserved unless purge is explicit.
+Registry transfers validate exact origins, independently pin DNS and CA policy for registry,
+token, and blob redirect services, strip authorization on redirects, and verify every
+descriptor before extraction. Runtime pre/post identity checks still reject stable
+workspace drift, but path checks are not treated as protection against an A-to-B-to-A swap.
+
+The retained descriptor makes state selection, lease ownership, plugin skill context, and TUI
 attachment object-bound. Existing filesystem and sandbox effect adapters still consume
 policy-authorized absolute paths after an immediate identity check; POSIX does not make
 that multi-lookup handoff atomic against another native process with the same UID that

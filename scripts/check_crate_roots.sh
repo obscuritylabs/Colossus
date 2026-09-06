@@ -5,6 +5,7 @@ maximum_lines="${COLOSSUS_MAX_CRATE_ROOT_LINES:-250}"
 failed=0
 
 while IFS= read -r crate_root; do
+  [[ -f "$crate_root" ]] || continue
   line_count="$(wc -l < "$crate_root")"
   line_count="${line_count//[[:space:]]/}"
   if (( line_count > maximum_lines )); then
@@ -13,7 +14,7 @@ while IFS= read -r crate_root; do
     failed=1
   fi
 done < <(
-  git ls-files \
+  git ls-files --cached --others --exclude-standard \
     'crates/*/src/lib.rs' \
     'crates/*/src/main.rs' \
     'xtask/src/lib.rs' \

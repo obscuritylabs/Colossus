@@ -13,6 +13,8 @@ const MAX_AUTHORIZATION_ITEMS: usize = 512;
 
 /// Exact public API scope names.
 pub mod scopes {
+    /// Discover effective Agent Plugins and explicitly read their bounded content.
+    pub const EXTENSIONS_READ: &str = "extensions:read";
     /// Create and execute agent runs.
     pub const RUNS_EXECUTE: &str = "runs:execute";
     /// Read runs and released run updates.

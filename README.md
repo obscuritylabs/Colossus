@@ -56,7 +56,7 @@ See [Colossus home and workspace resolution](docs/reference/colossus-home.md) fo
 configuration load order, state layout, and repository instruction boundary.
 
 > [!IMPORTANT]
-> Fresh schema-version-2 configurations currently default to `allow_all` with the
+> Fresh schema-version-3 configurations currently default to `allow_all` with the
 > acknowledged `danger_full_access` execution boundary. Authorized tools can therefore
 > reach host resources outside the selected workspace. If that is not appropriate,
 > initialize with `--sandbox-profile workspace-development` or
@@ -88,7 +88,7 @@ colossus update
   prepare controlled and air-gapped environments without changing the authorization
   path.
 - **Enterprise integration.** Add application clients, search routes, integrations,
-  MCP servers, skills, signed packs, and versioned YAML workflows through declared
+  standalone MCP servers, OCI-distributed Agent Plugins, and versioned YAML workflows through declared
   boundaries.
 
 ## Choose an interface
@@ -106,8 +106,8 @@ colossus update
 
 - [Get started](docs/get-started/index.md): installation, first run, and model setup
 - [Use Colossus](docs/use/index.md): sessions, plans, goals, memory, and research
-- [Automate and extend](docs/extend/index.md): workflows, skills, integrations, MCP,
-  packs, and registries
+- [Automate and extend](docs/extend/index.md): workflows, Agent Plugins, integrations,
+  standalone MCP, OCI registries, and supply-chain trust
 - [Administer and secure](docs/admin/index.md): configuration, access, sandboxing,
   storage, audit, and troubleshooting
 - [Reference](docs/reference/index.md): CLI, TUI, schemas, formats, and limits

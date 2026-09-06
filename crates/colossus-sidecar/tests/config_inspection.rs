@@ -34,7 +34,7 @@ async fn verified_sidecar_inspects_canonical_configuration_without_opening_runti
 async fn verified_sidecar_returns_only_a_sanitized_validation_code() {
     let response = inspect_sidecar_configuration(
         &sidecar(),
-        "schemaVersion: 2\nunknownSecret: never-return-this\n".into(),
+        "schemaVersion: 3\nunknownSecret: never-return-this\n".into(),
     )
     .await
     .expect("inspection response");

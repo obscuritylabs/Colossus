@@ -135,9 +135,13 @@ pub struct GrpcBackend {
     kind: BackendKind,
     agent_runs: Arc<GrpcAgentRunClient>,
     artifacts: Arc<GrpcArtifactClient>,
+    plugins: Arc<plugins::GrpcPluginClient>,
     capabilities: ServerCapabilities,
     closed: watch::Sender<bool>,
 }
+
+#[path = "grpc_plugins.rs"]
+mod plugins;
 
 impl GrpcBackend {
     /// Establish a real bounded gRPC channel from already security-validated material.
@@ -175,6 +179,7 @@ impl GrpcBackend {
             channel,
             credential_provider,
             closed: closed.clone(),
+            plugin_selection: std::sync::atomic::AtomicBool::new(false),
         });
         let capabilities = verify_server_identity(
             agent_runs.as_ref(),
@@ -183,9 +188,16 @@ impl GrpcBackend {
             options.backend_kind,
         )
         .await?;
+        agent_runs.plugin_selection.store(
+            capabilities.contains("plugins.skill_selection"),
+            std::sync::atomic::Ordering::Release,
+        );
         Ok(Self {
             kind: options.backend_kind,
             agent_runs,
+            plugins: Arc::new(plugins::GrpcPluginClient {
+                transport: Arc::clone(&artifacts),
+            }),
             artifacts,
             capabilities,
             closed,
@@ -243,6 +255,12 @@ impl Backend for GrpcBackend {
         .then(|| self.artifacts.clone() as Arc<dyn ArtifactClient>)
     }
 
+    fn plugins(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        self.capabilities
+            .contains("plugins.discovery")
+            .then(|| self.plugins.clone() as Arc<dyn crate::PluginClient>)
+    }
+
     async fn close(&self) -> SdkResult<()> {
         self.closed.send_replace(true);
         Ok(())
@@ -253,6 +271,7 @@ struct GrpcAgentRunClient {
     channel: Channel,
     credential_provider: Arc<dyn CredentialProvider>,
     closed: watch::Sender<bool>,
+    plugin_selection: std::sync::atomic::AtomicBool,
 }
 
 struct GrpcArtifactClient {
@@ -522,6 +541,16 @@ fn cancel_watch_on_close(
 #[async_trait]
 impl AgentRunClient for GrpcAgentRunClient {
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
+        if !request.plugin_skill_ids.is_empty()
+            && !self
+                .plugin_selection
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(ApiError::failed_precondition(
+                ApiErrorReason::InvalidRunTransition,
+                "the connected target does not support Agent Plugin skill selection",
+            ));
+        }
         let request = proto_create_request(request)?;
         let request = self.request(request).await?;
         let response = self
@@ -1028,12 +1057,6 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
             }
         })
         .collect::<ApiResult<Vec<_>>>()?;
-    if value.selected_skills.len() > MAX_COLLECTION_ITEMS {
-        return Err(invalid_request(
-            "selected_skills",
-            "too many skills were selected",
-        ));
-    }
     let plan_action = value
         .plan_action
         .map(|action| {
@@ -1110,12 +1133,12 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
         })
         .transpose()?;
     Ok(proto::CreateRunRequest {
+        plugin_skill_ids: value.plugin_skill_ids,
         input,
         session_id: value.session_id,
         end_user_id: value.end_user_id,
         role: value.role,
         mode: proto_run_mode(value.mode) as i32,
-        selected_skills: value.selected_skills,
         max_turns: value.max_turns,
         idempotency_key: value.idempotency_key.as_str().into(),
         plan_action,
@@ -1151,11 +1174,8 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
         value.title
     };
     validate_opaque(&value.etag)?;
-    if value.selected_skills.len() > MAX_COLLECTION_ITEMS || value.pending_interaction_count > 1 {
+    if value.pending_interaction_count > 1 {
         return Err(protocol_error());
-    }
-    for skill in &value.selected_skills {
-        validate_identifier(skill)?;
     }
     let status = run_status_from_proto(value.status)?;
     let terminal = value.terminal.map(terminal_from_proto).transpose()?;
@@ -1174,6 +1194,7 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
     }
     Ok(Run {
         run_id: value.run_id,
+        plugin_skill_ids: value.plugin_skill_ids,
         session_id: value.session_id,
         title,
         role: value.role,
@@ -1187,7 +1208,6 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
         pending_interaction_count: value.pending_interaction_count,
         terminal,
         etag: value.etag,
-        selected_skills: value.selected_skills,
         archived: value.archived,
     })
 }
@@ -2312,6 +2332,7 @@ mod tests {
     #[test]
     fn proto_run_rejects_terminal_payload_mismatch() {
         let run = proto::Run {
+            plugin_skill_ids: Vec::new(),
             run_id: "run-1".into(),
             session_id: "session-1".into(),
             title: "Test run".into(),
@@ -2337,7 +2358,6 @@ mod tests {
                 elapsed_seconds: 1.0,
             })),
             etag: "etag".into(),
-            selected_skills: Vec::new(),
             archived: false,
         };
         assert_eq!(
@@ -2349,6 +2369,7 @@ mod tests {
     #[test]
     fn proto_run_uses_role_when_an_older_server_omits_title() {
         let run = proto::Run {
+            plugin_skill_ids: Vec::new(),
             run_id: "run-1".into(),
             session_id: "session-1".into(),
             title: String::new(),
@@ -2363,7 +2384,6 @@ mod tests {
             pending_interaction_count: 0,
             terminal: None,
             etag: "etag".into(),
-            selected_skills: Vec::new(),
             archived: false,
         };
 
@@ -2628,7 +2648,6 @@ mod tests {
             .await
             .expect("authenticated get");
         assert_eq!(response.run.run_id, "run-1");
-        assert_eq!(response.run.selected_skills, ["rust"]);
         assert!(backend.capabilities().contains("artifacts.read"));
         assert!(backend.capabilities().contains("artifacts.upload"));
         let artifact = backend

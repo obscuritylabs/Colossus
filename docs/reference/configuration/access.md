@@ -27,7 +27,7 @@ Colossus resolves the effective tool surface in this order:
 
 | Stage | Result |
 | --- | --- |
-| Trusted catalog | Built-in tools plus operations from configured integrations and enabled, reverified packs |
+| Trusted catalog | Built-in tools plus configured integration operations and explicitly enabled plugin MCP tools |
 | Profile | Selects the baseline tools and built-in action decisions |
 | Tool overrides | Adds exact includes, then removes exact excludes |
 | Prerequisites | Hides tools whose required declared-or-ambient filesystem, executable, network, search, UI, or MCP authority is absent |
@@ -249,7 +249,7 @@ operator assertion: an unmet non-interactive prerequisite fails runtime composit
 instead of silently ignoring the selection. `user.ask` may remain hidden when an
 otherwise valid process has no interactive interface.
 
-An unknown exact name also fails closed. Configure and trust an integration or pack
+An unknown exact name also fails closed. Configure and trust an integration or plugin
 before referring to one of its dynamic tool names.
 
 ### Wildcard boundary
@@ -320,8 +320,9 @@ Most effectful built-ins use the same tool and action name. Important exceptions
 | `mcp.tools` | `mcp.tools` |
 | `mcp.call` | `mcp.call` |
 
-Connected integrations and signed packs add action identities from their active trusted
-declarations. Use `tools list` and `config effective` for the exact runtime catalog.
+Connected integrations and explicitly enabled plugin MCP servers add action identities
+from the active plugin snapshot and workspace allowlists. Use `tools list` and
+`config effective` for the exact runtime catalog.
 
 ## Action classes and profile defaults
 
@@ -332,7 +333,7 @@ Every trusted action has one stable behavior class:
 | Provider | Model generation and provider catalog calls | Allow | Allow | Allow | Deny except `provider.echo` |
 | Read | Filesystem, Git, repository, memory, context | Allow | Deny | Allow | Deny |
 | Local state | Tasks, decisions, plans, goals, snapshots | Allow | Deny | Allow | Deny |
-| Workspace mutation | File writes, patching, skill writes | Approval | Deny | Allow | Deny |
+| Workspace mutation | File writes and patching | Approval | Deny | Allow | Deny |
 | Execution | Shell, processes, workflows, plan execution | Approval | Deny | Allow | Deny |
 | External network | HTTP, search, integrations, MCP calls | Approval | Deny | Allow | Deny |
 | Administration | Installation, trust, registry, protected export | Approval | Deny | Allow | Deny |
@@ -394,7 +395,7 @@ See [Policy and audit configuration](policy-audit.md) and
 | Reach a service | Ambient HTTP(S) authority under acknowledged full access, otherwise `sandbox.networkDestinations`; the owning provider, search, MCP, or integration declaration always remains required |
 | Read an environment variable in a subprocess | Ambient environment authority under acknowledged full access; otherwise `sandbox.environment` and the effect's own declaration |
 | Use provider, MCP, or integration credentials | Credential references in the owning adapter configuration |
-| Load a pack or integration operation | Its installation, trust, enablement, connection, and declaration lifecycle |
+| Load a plugin or integration operation | Its installation, trust, enablement, connection, and declaration lifecycle |
 | Make a tool available in Plan Mode | Nothing can widen Plan Mode; it applies a fixed subset after access resolution |
 
 Review [Sandbox configuration](sandbox.md), [Network configuration](network.md), and

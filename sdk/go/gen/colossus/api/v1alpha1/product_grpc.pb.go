@@ -627,8 +627,11 @@ var AutomationService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ExtensionService_GetExtension_FullMethodName   = "/colossus.api.v1alpha1.ExtensionService/GetExtension"
-	ExtensionService_ListExtensions_FullMethodName = "/colossus.api.v1alpha1.ExtensionService/ListExtensions"
+	ExtensionService_GetExtension_FullMethodName        = "/colossus.api.v1alpha1.ExtensionService/GetExtension"
+	ExtensionService_ListExtensions_FullMethodName      = "/colossus.api.v1alpha1.ExtensionService/ListExtensions"
+	ExtensionService_ReadPluginSkill_FullMethodName     = "/colossus.api.v1alpha1.ExtensionService/ReadPluginSkill"
+	ExtensionService_ListPluginResources_FullMethodName = "/colossus.api.v1alpha1.ExtensionService/ListPluginResources"
+	ExtensionService_ReadPluginResource_FullMethodName  = "/colossus.api.v1alpha1.ExtensionService/ReadPluginResource"
 )
 
 // ExtensionServiceClient is the client API for ExtensionService service.
@@ -641,6 +644,12 @@ type ExtensionServiceClient interface {
 	GetExtension(ctx context.Context, in *GetExtensionRequest, opts ...grpc.CallOption) (*GetExtensionResponse, error)
 	// ListExtensions returns a stable filtered page.
 	ListExtensions(ctx context.Context, in *ListExtensionsRequest, opts ...grpc.CallOption) (*ListExtensionsResponse, error)
+	// ReadPluginSkill explicitly loads instructions from an exact manifest digest.
+	ReadPluginSkill(ctx context.Context, in *ReadPluginSkillRequest, opts ...grpc.CallOption) (*ReadPluginSkillResponse, error)
+	// ListPluginResources lists contained paths and binary metadata without reading contents.
+	ListPluginResources(ctx context.Context, in *ListPluginResourcesRequest, opts ...grpc.CallOption) (*ListPluginResourcesResponse, error)
+	// ReadPluginResource returns a bounded UTF-8 preview, never server-local paths.
+	ReadPluginResource(ctx context.Context, in *ReadPluginResourceRequest, opts ...grpc.CallOption) (*ReadPluginResourceResponse, error)
 }
 
 type extensionServiceClient struct {
@@ -671,6 +680,36 @@ func (c *extensionServiceClient) ListExtensions(ctx context.Context, in *ListExt
 	return out, nil
 }
 
+func (c *extensionServiceClient) ReadPluginSkill(ctx context.Context, in *ReadPluginSkillRequest, opts ...grpc.CallOption) (*ReadPluginSkillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadPluginSkillResponse)
+	err := c.cc.Invoke(ctx, ExtensionService_ReadPluginSkill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *extensionServiceClient) ListPluginResources(ctx context.Context, in *ListPluginResourcesRequest, opts ...grpc.CallOption) (*ListPluginResourcesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPluginResourcesResponse)
+	err := c.cc.Invoke(ctx, ExtensionService_ListPluginResources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *extensionServiceClient) ReadPluginResource(ctx context.Context, in *ReadPluginResourceRequest, opts ...grpc.CallOption) (*ReadPluginResourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadPluginResourceResponse)
+	err := c.cc.Invoke(ctx, ExtensionService_ReadPluginResource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ExtensionServiceServer is the server API for ExtensionService service.
 // All implementations must embed UnimplementedExtensionServiceServer
 // for forward compatibility.
@@ -681,6 +720,12 @@ type ExtensionServiceServer interface {
 	GetExtension(context.Context, *GetExtensionRequest) (*GetExtensionResponse, error)
 	// ListExtensions returns a stable filtered page.
 	ListExtensions(context.Context, *ListExtensionsRequest) (*ListExtensionsResponse, error)
+	// ReadPluginSkill explicitly loads instructions from an exact manifest digest.
+	ReadPluginSkill(context.Context, *ReadPluginSkillRequest) (*ReadPluginSkillResponse, error)
+	// ListPluginResources lists contained paths and binary metadata without reading contents.
+	ListPluginResources(context.Context, *ListPluginResourcesRequest) (*ListPluginResourcesResponse, error)
+	// ReadPluginResource returns a bounded UTF-8 preview, never server-local paths.
+	ReadPluginResource(context.Context, *ReadPluginResourceRequest) (*ReadPluginResourceResponse, error)
 	mustEmbedUnimplementedExtensionServiceServer()
 }
 
@@ -696,6 +741,15 @@ func (UnimplementedExtensionServiceServer) GetExtension(context.Context, *GetExt
 }
 func (UnimplementedExtensionServiceServer) ListExtensions(context.Context, *ListExtensionsRequest) (*ListExtensionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListExtensions not implemented")
+}
+func (UnimplementedExtensionServiceServer) ReadPluginSkill(context.Context, *ReadPluginSkillRequest) (*ReadPluginSkillResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadPluginSkill not implemented")
+}
+func (UnimplementedExtensionServiceServer) ListPluginResources(context.Context, *ListPluginResourcesRequest) (*ListPluginResourcesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPluginResources not implemented")
+}
+func (UnimplementedExtensionServiceServer) ReadPluginResource(context.Context, *ReadPluginResourceRequest) (*ReadPluginResourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadPluginResource not implemented")
 }
 func (UnimplementedExtensionServiceServer) mustEmbedUnimplementedExtensionServiceServer() {}
 func (UnimplementedExtensionServiceServer) testEmbeddedByValue()                          {}
@@ -754,6 +808,60 @@ func _ExtensionService_ListExtensions_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExtensionService_ReadPluginSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadPluginSkillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExtensionServiceServer).ReadPluginSkill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExtensionService_ReadPluginSkill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExtensionServiceServer).ReadPluginSkill(ctx, req.(*ReadPluginSkillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExtensionService_ListPluginResources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPluginResourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExtensionServiceServer).ListPluginResources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExtensionService_ListPluginResources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExtensionServiceServer).ListPluginResources(ctx, req.(*ListPluginResourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExtensionService_ReadPluginResource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadPluginResourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExtensionServiceServer).ReadPluginResource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExtensionService_ReadPluginResource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExtensionServiceServer).ReadPluginResource(ctx, req.(*ReadPluginResourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ExtensionService_ServiceDesc is the grpc.ServiceDesc for ExtensionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -768,6 +876,18 @@ var ExtensionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListExtensions",
 			Handler:    _ExtensionService_ListExtensions_Handler,
+		},
+		{
+			MethodName: "ReadPluginSkill",
+			Handler:    _ExtensionService_ReadPluginSkill_Handler,
+		},
+		{
+			MethodName: "ListPluginResources",
+			Handler:    _ExtensionService_ListPluginResources_Handler,
+		},
+		{
+			MethodName: "ReadPluginResource",
+			Handler:    _ExtensionService_ReadPluginResource_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -325,14 +325,13 @@ fn workspace_mutation_tools_share_the_write_capability_and_reject_loose_argument
 }
 
 #[test]
-fn skill_authoring_tools_are_strict_and_keep_distinct_policy_identities() {
+fn plugin_disclosure_tools_are_strict_and_keep_distinct_policy_identities() {
     let registry = StaticToolRegistry::builtins(&[
-        "skill.scaffold".into(),
-        "skill.inspect".into(),
-        "skill.read".into(),
-        "skill.write".into(),
-        "skill.validate".into(),
-        "skill.install".into(),
+        "plugin.list".into(),
+        "plugin.inspect".into(),
+        "plugin.skill.read".into(),
+        "plugin.resource.list".into(),
+        "plugin.resource.read".into(),
     ])
     .expect("catalog");
     for spec in registry.list_specs() {
@@ -342,35 +341,27 @@ fn skill_authoring_tools_are_strict_and_keep_distinct_policy_identities() {
     assert!(
         registry
             .validate(&ToolCall {
-                call_id: "validate-name".into(),
-                name: "skill.validate".into(),
-                arguments: json!({"name": "demo"}),
+                call_id: "inspect".into(),
+                name: "plugin.inspect".into(),
+                arguments: json!({"plugin": "dev.example.demo"}),
             })
             .is_ok()
     );
-    for arguments in [json!({}), json!({"name": "demo", "path": "skills/demo"})] {
-        assert!(matches!(
-            registry.validate(&ToolCall {
-                call_id: "invalid".into(),
-                name: "skill.validate".into(),
-                arguments,
-            }),
-            Err(ToolError::InvalidArguments { .. })
-        ));
-    }
     assert!(matches!(
         registry.validate(&ToolCall {
-            call_id: "write".into(),
-            name: "skill.write".into(),
+            call_id: "unqualified".into(),
+            name: "plugin.skill.read".into(),
             arguments: json!({
-                "name": "demo",
-                "path": "SKILL.md",
-                "content": "new",
-                "expected_sha256": "not-a-hash",
+                "skill": "demo",
             }),
         }),
         Err(ToolError::InvalidArguments { .. })
     ));
+    assert!(registry.validate(&ToolCall {
+        call_id: "resource".into(),
+        name: "plugin.resource.read".into(),
+        arguments: json!({"skill": "dev.example.demo/review", "path": "references/checklist.md"}),
+    }).is_ok());
 }
 
 #[test]

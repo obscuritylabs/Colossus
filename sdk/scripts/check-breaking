@@ -37,7 +37,22 @@ if ! git cat-file -e "$base_revision:api/buf.yaml" 2>/dev/null; then
 fi
 
 baseline_dir=$(mktemp -d "${TMPDIR:-/tmp}/colossus-api-baseline.XXXXXX")
-trap 'rm -rf "$baseline_dir"' EXIT HUP INT TERM
+breaking_report=$(mktemp "${TMPDIR:-/tmp}/colossus-api-breaking.XXXXXX")
+trap 'rm -rf "$baseline_dir"; rm -f "$breaking_report"' EXIT HUP INT TERM
 git archive "$base_revision" api | tar -xf - -C "$baseline_dir"
-"$buf_command" breaking api --against "$baseline_dir/api"
+if ! "$buf_command" breaking api --against "$baseline_dir/api" >"$breaking_report" 2>&1; then
+  unexpected=$(sed \
+    -e '/agent_run\.proto:.*Previously present field "16" with name "selected_skills" on message "Run" was deleted\./d' \
+    -e '/agent_run\.proto:.*Previously present field "5" with name "selected_skills" on message "CreateRunRequest" was deleted\./d' \
+    -e '/product\.proto:.*Previously present enum value "2" on enum "ExtensionKind" was deleted\./d' \
+    -e '/product\.proto:.*Previously present enum value "4" on enum "ExtensionKind" was deleted\./d' \
+    -e '/product\.proto:.*Previously present enum value "1" on enum "DistributionArtifactKind" was deleted\./d' \
+    -e '/product\.proto:.*Previously present enum value "3" on enum "DistributionArtifactKind" was deleted\./d' \
+    "$breaking_report")
+  if [ -n "$unexpected" ]; then
+    cat "$breaking_report" >&2
+    exit 100
+  fi
+  echo "accepted the exact reserved Agent Plugin hard-cutover removals"
+fi
 echo "public API is compatible with $base_revision"

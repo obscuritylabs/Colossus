@@ -102,6 +102,9 @@ pub struct McpServerConfig {
     /// Child environment name to `env:HOST_VARIABLE` credential reference.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// Runtime-only non-secret literal environment from an immutable Agent Plugin.
+    #[serde(skip)]
+    pub literal_environment: BTreeMap<String, String>,
     /// Exact Streamable HTTP endpoint.
     #[serde(default)]
     pub url: Option<String>,
@@ -129,10 +132,10 @@ pub struct McpServerConfig {
     /// Optional server-specific output cap bounded by sandbox policy.
     #[serde(default)]
     pub max_output_bytes: Option<u64>,
-    /// Runtime-only action prefix for verified pack-provided servers.
+    /// Runtime-only action prefix for plugin-provided servers.
     #[serde(skip)]
     pub effect_action_prefix: Option<String>,
-    /// Runtime-only verified pack provenance disclosed to policy.
+    /// Runtime-only verified plugin provenance disclosed to policy.
     #[serde(skip)]
     pub provenance: Option<Value>,
 }
@@ -327,6 +330,7 @@ pub(super) struct McpEffectInput {
     pub(super) cwd: Option<PathBuf>,
     pub(super) args: Vec<String>,
     pub(super) environment: BTreeMap<String, String>,
+    pub(super) literal_environment: BTreeMap<String, String>,
     pub(super) url: Option<String>,
     pub(super) headers: BTreeMap<String, String>,
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
@@ -394,6 +398,7 @@ pub(super) struct ConfiguredServer {
     pub(super) args: Vec<String>,
     pub(super) cwd: Option<PathBuf>,
     pub(super) environment: BTreeMap<String, String>,
+    pub(super) literal_environment: BTreeMap<String, String>,
     pub(super) url: Option<String>,
     pub(super) headers: BTreeMap<String, String>,
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
@@ -462,9 +467,29 @@ pub fn validate_config(
     }
     let allowed_environment = context.sandbox_environment.iter().collect::<BTreeSet<_>>();
     for (name, server) in &config.servers {
-        validate_name(name, "server")?;
+        if let Some((plugin, component)) = name.split_once('/') {
+            validate_name(component, "server component")?;
+            if !colossus_contracts::valid_plugin_skill_id(&format!("{plugin}/component"))
+                || server.effect_action_prefix.as_deref()
+                    != Some(
+                        colossus_contracts::plugin_mcp_action_prefix(plugin, component).as_str(),
+                    )
+                || server.provenance.is_none()
+            {
+                return Err(McpError::Invalid(
+                    "qualified MCP server names require runtime-bound plugin provenance".into(),
+                ));
+            }
+        } else {
+            validate_name(name, "server")?;
+            if server.effect_action_prefix.is_some() || server.provenance.is_some() {
+                return Err(McpError::Invalid(
+                    "plugin MCP provenance requires a qualified server name".into(),
+                ));
+            }
+        }
         if server.effect_action_prefix.as_ref().is_some_and(|prefix| {
-            !prefix.starts_with("pack.mcp.")
+            !prefix.starts_with("plugin.mcp.")
                 || prefix.len() > 384
                 || !prefix
                     .bytes()
@@ -596,7 +621,12 @@ fn validate_stdio_server(
             "server {name} working directory requires a containing sandbox read or write grant"
         )));
     }
-    if server.environment.len() > 128 {
+    if server
+        .environment
+        .len()
+        .saturating_add(server.literal_environment.len())
+        > 128
+    {
         return Err(McpError::Invalid(format!(
             "server {name} environment exceeds 128 entries"
         )));
@@ -608,6 +638,17 @@ fn validate_stdio_server(
         {
             return Err(McpError::Invalid(format!(
                 "server {name} environment requires allowed child names and credential references"
+            )));
+        }
+    }
+    for (child_name, value) in &server.literal_environment {
+        if !valid_environment_name(child_name)
+            || matches!(child_name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA")
+            || value.len() > 64 * 1024
+            || value.contains('\0')
+        {
+            return Err(McpError::Invalid(format!(
+                "server {name} contains an invalid literal plugin environment entry"
             )));
         }
     }
@@ -624,11 +665,10 @@ fn validate_streamable_http_server(
         || !server.args.is_empty()
         || server.working_directory.is_some()
         || !server.environment.is_empty()
-        || server.effect_action_prefix.is_some()
-        || server.provenance.is_some()
+        || !server.literal_environment.is_empty()
     {
         return Err(McpError::Invalid(format!(
-            "Streamable HTTP server {name} cannot configure stdio or pack fields"
+            "Streamable HTTP server {name} cannot configure stdio fields"
         )));
     }
     let raw_url = server.url.as_deref().ok_or_else(|| {

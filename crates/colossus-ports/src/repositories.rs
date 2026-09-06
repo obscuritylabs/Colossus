@@ -403,8 +403,8 @@ pub trait ResearchRepository: Send + Sync {
     /// List claims in durable append order.
     fn list_claims(&self, run_id: &str) -> Result<Vec<ResearchClaim>, StoreError>;
 }
-/// Canonical integration, pack, resource, and publisher-trust repository.
-pub trait ExtensionRepository: AggregateRepository {
+/// Canonical native-integration repository, independent of portable plugin state.
+pub trait IntegrationRepository: AggregateRepository {
     /// Reconstruct one integration connection.
     fn get_integration(&self, name: &str) -> Result<Option<IntegrationConnection>, StoreError>;
 
@@ -425,72 +425,47 @@ pub trait ExtensionRepository: AggregateRepository {
         actor: Actor,
         updated_at: &str,
     ) -> Result<IntegrationConnection, StoreError>;
-
-    /// Reconstruct one installed pack lifecycle.
-    fn get_pack(&self, name: &str) -> Result<Option<PackInstallation>, StoreError>;
-
-    /// List installed and historically uninstalled packs in deterministic name order.
-    fn list_packs(&self, limit: usize) -> Result<Vec<PackInstallation>, StoreError>;
-
-    /// Append one fully verified pack installation event.
-    fn install_pack(
-        &self,
-        installation: PackInstallation,
-        actor: Actor,
-    ) -> Result<PackInstallation, StoreError>;
-
-    /// Atomically append a verified no-clobber collection of pack installations.
-    fn install_packs(
-        &self,
-        installations: Vec<PackInstallation>,
-        actor: Actor,
-    ) -> Result<Vec<PackInstallation>, StoreError>;
-
-    /// Append an enable, disable, or uninstall lifecycle transition.
-    fn set_pack_status(
-        &self,
-        name: &str,
-        status: PackStatus,
-        actor: Actor,
-        updated_at: &str,
-    ) -> Result<PackInstallation, StoreError>;
-
-    /// Persist a publisher/key binding as an explicit trust decision.
-    fn add_publisher_trust(
-        &self,
-        trust: PublisherTrust,
-        actor: Actor,
-    ) -> Result<PublisherTrust, StoreError>;
-
-    /// Resolve one exact publisher/key binding.
-    fn get_publisher_trust(
-        &self,
-        publisher: &str,
-        key_id: &str,
-    ) -> Result<Option<PublisherTrust>, StoreError>;
-
-    /// List bounded publisher/key bindings in deterministic order.
-    fn list_publisher_trust(&self, limit: usize) -> Result<Vec<PublisherTrust>, StoreError>;
 }
 
-/// Deterministic discovery for declarative data-only skills.
-pub trait SkillRepository: Send + Sync {
-    /// List selected skills in deterministic name order.
-    fn list_skills(&self) -> Result<Vec<SkillRecord>, StoreError>;
+/// Machine-scoped Agent Plugin lifecycle repository.
+pub trait PluginRepository: Send + Sync {
+    /// Return every installed lifecycle record in deterministic name/digest order.
+    fn list_plugins(&self, limit: usize) -> Result<Vec<PluginInstallation>, StoreError>;
 
-    /// Load one selected skill.
-    fn get_skill(&self, name: &str) -> Result<Option<SkillRecord>, StoreError>;
+    /// Return one exact installed digest.
+    fn get_plugin(
+        &self,
+        name: &str,
+        digest: &str,
+    ) -> Result<Option<PluginInstallation>, StoreError>;
 
-    /// Report every duplicate and the configured winner.
-    fn duplicate_names(&self) -> Result<Vec<SkillDuplicate>, StoreError>;
+    /// Return the active digest for one plugin name.
+    fn active_plugin(&self, name: &str) -> Result<Option<PluginInstallation>, StoreError>;
 
-    /// List bounded resources for one selected skill through the repository's own
-    /// filesystem capability. Implementations must not reconstruct a path from
-    /// `SkillRecord::resource_root` after selection.
-    fn list_skill_resources(&self, name: &str) -> Result<Vec<SkillResourceEntry>, StoreError>;
+    /// Append one validated installation.
+    fn install_plugin(
+        &self,
+        installation: PluginInstallation,
+        actor: Actor,
+    ) -> Result<PluginInstallation, StoreError>;
 
-    /// Read one bounded resource through the same capability that selected the skill.
-    fn read_skill_resource(&self, name: &str, path: &str) -> Result<SkillResourceRead, StoreError>;
+    /// Atomically select or clear the active digest for one plugin name.
+    fn set_active_plugin(
+        &self,
+        name: &str,
+        digest: Option<&str>,
+        actor: Actor,
+        updated_at: &str,
+    ) -> Result<Option<PluginInstallation>, StoreError>;
+
+    /// Append an uninstall transition for one exact digest.
+    fn uninstall_plugin(
+        &self,
+        name: &str,
+        digest: &str,
+        actor: Actor,
+        updated_at: &str,
+    ) -> Result<PluginInstallation, StoreError>;
 }
 
 /// Workflow definitions and run projections.

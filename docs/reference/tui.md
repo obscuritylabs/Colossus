@@ -107,8 +107,9 @@ native scrollback byte-for-byte.
 | `Enter` | Plan execution dock | Confirm the explicitly selected strategy; no strategy is preselected |
 
 Typing `/` at the beginning of a draft opens slash-command completion. Typing `@` at a
-skill-token boundary opens skill completion. Suggestions are bounded and dismiss until
-the draft changes after `Esc`.
+skill-token boundary opens completion for qualified active-plugin skills
+(`@PLUGIN/SKILL`). Suggestions are bounded and dismiss until the draft changes after
+`Esc`.
 
 The completion surface shows up to six suggestions in compact terminals. When at least
 96 columns and enough vertical space are available, it expands to 96 columns and up to
@@ -139,8 +140,8 @@ current runtime.
 | Plan workflow | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Memory and research | `/memories`, `/memory search`, `/research`, `/research list` |
 | Telemetry | `/telemetry`, `/telemetry metrics` |
-| Skills | `/skills`, `/skill active`, `/skill use`, `/skill clear`, `/skill show`, `/skill resources`, `/skill read` |
-| Packs and distribution | `/packs list`, `/packs show`, `/packs verify`, `/packs install`, `/packs enable`, `/packs disable`, `/packs uninstall`, `/packs call`, `/packs trust list`, `/packs trust add`, `/collections verify`, `/collections install`, `/registry pull`, `/registry push`, `/bundle verify` |
+| Agent Plugins | `/plugins`, `/plugins show`, `/plugin skills`, `/plugin active`, `/plugin use`, `/plugin clear`, `/plugin show`, `/plugin resources`, `/plugin read` |
+| Release distribution | `/bundle verify` |
 | Integrations and MCP | `/integrations`, `/integration show`, `/integration call`, `/integration disconnect`, `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |

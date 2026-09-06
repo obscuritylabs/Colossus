@@ -288,7 +288,7 @@ fn process_stdin_completion_is_additive_strict_and_mcp_only() {
         abort_error_ids: vec![1],
     });
     validate_stdin_completion(&process, "mcp.call").expect("configured MCP completion");
-    validate_stdin_completion(&process, "pack.mcp.fixture").expect("pack MCP completion");
+    validate_stdin_completion(&process, "plugin.mcp.fixture").expect("plugin MCP completion");
     assert!(validate_stdin_completion(&process, "process.spawn").is_err());
     assert_eq!(
         serde_json::to_value(&process).expect("serialize completion")["stdin_completion"],
@@ -1234,6 +1234,10 @@ fn ambient_workspace_search_respects_repository_ignores_and_releases_context() {
         .expect("ignored fixture");
     std::fs::write(directory.path().join(".colossus/secret"), "unique needle")
         .expect("control fixture");
+    let application_home = directory.path().join("custom-home");
+    std::fs::create_dir(&application_home).expect("application home");
+    std::fs::write(application_home.join("plugin.md"), "unique needle")
+        .expect("bundled content must not become repository evidence");
 
     let result = search_files(
         directory.path(),
@@ -1247,6 +1251,7 @@ fn ambient_workspace_search_respects_repository_ignores_and_releases_context() {
         }),
         1024 * 1024,
         true,
+        &[application_home],
     )
     .expect("workspace-scoped ambient search");
     let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");

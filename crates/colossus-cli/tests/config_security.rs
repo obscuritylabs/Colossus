@@ -34,7 +34,7 @@ fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
 
 fn config_document(root: &Path) -> Value {
     json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": root.join("state.redb"),
             "keys": {
@@ -254,7 +254,7 @@ fn noninteractive_tui_emits_the_default_danger_warning_without_polluting_stdout(
     fs::write(
         &config,
         serde_json::to_vec_pretty(&json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "storage": {"path": directory.path().join("state.redb")}
         }))
         .expect("minimal config JSON"),
@@ -288,7 +288,7 @@ fn json_effective_config_keeps_the_danger_warning_on_stderr_and_reports_resoluti
     fs::write(
         &config,
         serde_json::to_vec_pretty(&json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "storage": {"path": directory.path().join("state.redb")}
         }))
         .expect("minimal config JSON"),

@@ -44,7 +44,7 @@ values.
 
 <!-- provider-guide-config:start -->
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 network:
   caBundlePath: .colossus/certs/provider-ca-bundle.pem
 providers:

@@ -722,163 +722,17 @@ pub(super) async fn dispatch_to_worker_if_active(
             print_json(&result)?;
             Ok(true)
         }
-        Command::Skills(command) => {
-            let operation = match &command.command {
-                SkillsAction::List => WorkerOperation::SkillList,
-                SkillsAction::Show { name } => WorkerOperation::SkillGet { name: name.clone() },
-                SkillsAction::Duplicates => WorkerOperation::SkillDuplicates,
-                SkillsAction::Compose { prompt, skills } => WorkerOperation::SkillCompose {
-                    prompt: prompt.clone(),
-                    skills: skills.clone(),
-                },
-                SkillsAction::Scaffold {
-                    name,
-                    description,
-                    instructions,
-                    resource_dirs,
-                } => WorkerOperation::SkillScaffold {
-                    name: name.clone(),
-                    description: description.clone(),
-                    instructions: instructions.clone().unwrap_or_else(|| {
-                        format!("# {name}\n\nAdd data-only instructions here.\n")
-                    }),
-                    resource_dirs: resource_dirs.clone(),
-                },
-                SkillsAction::Inspect { name } => {
-                    WorkerOperation::SkillInspect { name: name.clone() }
-                }
-                SkillsAction::FileRead { name, path } => WorkerOperation::SkillFileRead {
-                    name: name.clone(),
-                    path: path.clone(),
-                },
-                SkillsAction::Write {
-                    name,
-                    path,
-                    content,
-                    expected_sha256,
-                } => WorkerOperation::SkillWrite {
-                    name: name.clone(),
-                    path: path.clone(),
-                    content: content.clone(),
-                    expected_sha256: expected_sha256.clone(),
-                },
-                SkillsAction::Validate { target, local } => WorkerOperation::SkillValidate {
-                    target: target.clone(),
-                    local: *local,
-                },
-                SkillsAction::Install { path } => {
-                    WorkerOperation::SkillInstall { path: path.clone() }
-                }
-                SkillsAction::Resources { name } => {
-                    WorkerOperation::SkillResources { name: name.clone() }
-                }
-                SkillsAction::Read { name, path } => WorkerOperation::SkillResourceRead {
-                    name: name.clone(),
-                    path: path.clone(),
-                },
+        Command::Plugins(command) => {
+            let operation = WorkerOperation::PluginManage {
+                request: command.command.request().map_err(cli_error)?,
             };
-            let result = client.call(operation).await?;
-            if matches!(&command.command, SkillsAction::Show { .. }) && result.is_null() {
-                return Err("skill not found".into());
+            let mut result = client.call(operation).await?;
+            if let PluginsAction::List { limit } = &command.command
+                && let Some(entries) = result.as_array_mut()
+            {
+                entries.truncate(*limit);
             }
             print_json(&result)?;
-            Ok(true)
-        }
-        Command::Packs(command) => {
-            let operation = match &command.command {
-                PacksAction::List { limit } => WorkerOperation::PackList { limit: *limit },
-                PacksAction::Show { name } => WorkerOperation::PackGet { name: name.clone() },
-                PacksAction::Verify { path } | PacksAction::Validate { path } => {
-                    WorkerOperation::PackVerify {
-                        path: path.to_string_lossy().into_owned(),
-                    }
-                }
-                PacksAction::Install {
-                    path,
-                    allow_untrusted,
-                } => WorkerOperation::PackInstall {
-                    path: path.to_string_lossy().into_owned(),
-                    allow_untrusted: *allow_untrusted,
-                },
-                PacksAction::Enable { name } => WorkerOperation::PackEnable { name: name.clone() },
-                PacksAction::Disable { name } => {
-                    WorkerOperation::PackDisable { name: name.clone() }
-                }
-                PacksAction::Uninstall { name } => {
-                    WorkerOperation::PackUninstall { name: name.clone() }
-                }
-                PacksAction::Call { tool } => WorkerOperation::PackCall { tool: tool.clone() },
-                PacksAction::Trust(command) => match &command.command {
-                    PackTrustAction::List { limit } => {
-                        WorkerOperation::PackTrustList { limit: *limit }
-                    }
-                    PackTrustAction::Add {
-                        publisher,
-                        public_key,
-                    } => WorkerOperation::PackTrustAdd {
-                        publisher: publisher.clone(),
-                        public_key: public_key.clone(),
-                    },
-                },
-            };
-            let result = client.call(operation).await?;
-            if matches!(&command.command, PacksAction::Show { .. }) && result.is_null() {
-                return Err("pack not found".into());
-            }
-            print_json(&result)?;
-            Ok(true)
-        }
-        Command::Collections(command) => {
-            let operation = match &command.command {
-                CollectionsAction::Verify { path } => WorkerOperation::CollectionVerify {
-                    path: path.to_string_lossy().into_owned(),
-                },
-                CollectionsAction::Build {
-                    source,
-                    destination,
-                    name,
-                    version,
-                    publisher,
-                    created_at,
-                    signing_key_reference,
-                } => WorkerOperation::CollectionBuild {
-                    source: source.to_string_lossy().into_owned(),
-                    destination: destination.to_string_lossy().into_owned(),
-                    name: name.clone(),
-                    version: version.clone(),
-                    publisher: publisher.clone(),
-                    created_at: created_at.clone(),
-                    signing_key_reference: signing_key_reference.clone(),
-                },
-                CollectionsAction::Install { path } => WorkerOperation::CollectionInstall {
-                    path: path.to_string_lossy().into_owned(),
-                },
-            };
-            print_json(&client.call(operation).await?)?;
-            Ok(true)
-        }
-        Command::Registry(command) => {
-            let operation = match &command.command {
-                RegistryAction::Pull {
-                    url,
-                    destination,
-                    credential_reference,
-                } => WorkerOperation::RegistryPull {
-                    url: url.clone(),
-                    destination: destination.to_string_lossy().into_owned(),
-                    credential_reference: credential_reference.clone(),
-                },
-                RegistryAction::Push {
-                    path,
-                    url,
-                    credential_reference,
-                } => WorkerOperation::RegistryPush {
-                    path: path.to_string_lossy().into_owned(),
-                    url: url.clone(),
-                    credential_reference: credential_reference.clone(),
-                },
-            };
-            print_json(&client.call(operation).await?)?;
             Ok(true)
         }
         Command::Bundle(command) => {

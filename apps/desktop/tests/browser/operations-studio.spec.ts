@@ -123,6 +123,49 @@ test("slash commands complete and change Desktop modes without becoming prompts"
   ).toHaveAttribute("aria-current", "page");
 });
 
+test("plugin mentions complete with keyboard controls without submitting a message", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    (
+      window as unknown as { __TAURI_INTERNALS__: unknown }
+    ).__TAURI_INTERNALS__ = {
+      invoke: async (command: string) => {
+        if (command !== "get_plugin_inventory")
+          throw new Error(`Unexpected command ${command}`);
+        return {
+          managementAvailable: true,
+          plugins: [
+            {
+              available: true,
+              skills: ["coding", "plugin-authoring"].map((name) => ({
+                id: `colossus/${name}`,
+                name,
+                plugin: "colossus",
+                description: `Help with ${name}`,
+                compatibility: null,
+                allowed_tools: null,
+              })),
+            },
+          ],
+        };
+      },
+    };
+  });
+  const prompt = page.getByRole("textbox", { name: "Prompt" });
+  await prompt.fill("@colossus/");
+  const menu = page.getByRole("listbox", { name: "Plugin skills" });
+  await expect(menu.getByRole("option")).toHaveCount(2);
+  await prompt.press("ArrowDown");
+  await prompt.press("Tab");
+  await expect(prompt).toHaveValue("@colossus/plugin-authoring ");
+  await expect(menu).toBeHidden();
+  await prompt.fill("@someone @colossus/co");
+  await expect(menu).toBeHidden();
+  await prompt.fill("Email @colossus/co");
+  await expect(menu).toBeHidden();
+});
+
 test("slash-command palette remains contained, scrollable, and accessible at compact width", async ({
   page,
 }) => {
@@ -2446,6 +2489,56 @@ test("responsive Workspace navigation remains reachable from catalog surfaces", 
   await close.click();
   await expect(navigation).toHaveCount(0);
   await expect(navigationTrigger).toBeFocused();
+});
+
+test("production Workspace navigation opens Plugins by keyboard at desktop and compact widths", async ({
+  page,
+}) => {
+  for (const width of [1280, 880]) {
+    await page.setViewportSize({ width, height: 760 });
+    await page.goto(FIXTURE);
+    if (width === 880) {
+      await page.getByRole("button", { name: "Open work navigation" }).click();
+    }
+    const destinations = page.getByRole("navigation", {
+      name: "Workspace destinations",
+    });
+    const plugins = destinations.getByRole("button", {
+      name: "Plugins",
+      exact: true,
+    });
+    await plugins.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Plugins", exact: true }),
+    ).toBeVisible();
+    // This fixture deliberately lacks plugin discovery. Keep navigation present
+    // so older targets report the supported unavailable state, not a missing UI.
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "This target does not advertise authorized plugin discovery.",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Workspace navigation" }),
+    ).toHaveCount(0);
+    if (width === 880) {
+      await page
+        .getByRole("button", { name: "Open Workspace navigation" })
+        .click();
+    }
+    await expect(plugins).toHaveAttribute("aria-current", "page");
+    const work = destinations.getByRole("button", {
+      name: "Work",
+      exact: true,
+    });
+    await work.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("textbox", { name: "Prompt" })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+  }
 });
 
 test("desktop Workspace sidebar resizes and remembers its width", async ({

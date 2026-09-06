@@ -615,12 +615,12 @@ fn config_init_yaml(
             .then(|| isolated_development_keys(source_config.storage.keys, &target.anchor_path));
         (document, inherited)
     } else {
-        (json!({"schemaVersion": 2}), None)
+        (json!({"schemaVersion": 3}), None)
     };
     let root = document
         .as_object_mut()
         .ok_or_else(|| cli_error("configuration root must be a YAML mapping"))?;
-    root.insert("schemaVersion".into(), json!(2));
+    root.insert("schemaVersion".into(), json!(3));
 
     let mut storage = serde_json::Map::new();
     storage.insert(

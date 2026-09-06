@@ -287,17 +287,14 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("goal.")
             || request.action.starts_with("subagent.")
             || request.action.starts_with("memory.")
-            || request.action.starts_with("skill.")
+            || request.action.starts_with("plugin.")
             || request.action.starts_with("research.")
             || request.action.starts_with("integration.")
             || request.action.starts_with("openapi.")
             || request.action.starts_with("github.")
             || request.action.starts_with("searxng.")
             || request.action.starts_with("mcp.")
-            || request.action.starts_with("pack.")
             || request.action.starts_with("bundle.")
-            || request.action.starts_with("collection.")
-            || request.action.starts_with("registry.")
             || matches!(
                 request.action.as_str(),
                 "network.http" | "web.search" | "audit.export.worm.write"

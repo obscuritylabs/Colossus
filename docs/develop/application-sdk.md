@@ -221,8 +221,9 @@ path. Desktop hashes the device, inode, and birth timestamp obtained from a secu
 opened directory descriptor and includes that versioned identity in its private state
 partition. The SDK parent and sidecar child independently reproduce it before launch
 or runtime composition; preview-era path-only or inode-only settings require explicit
-folder reselection. Unix skill discovery and resource reads then stay relative to the
-retained workspace or independently retained app-private root descriptors.
+folder reselection. Unix workspace reads then stay relative to the retained workspace;
+Agent Plugin discovery and resources use the separately retained owner-private Colossus
+home and immutable plugin roots.
 
 Desktop uses two same-application credentials delivered and activated as one bootstrap
 set. The primary credential has exactly `runs:execute`, `runs:read`, `runs:control`, and
@@ -436,12 +437,10 @@ capability. SDK `ContentPart::Artifact` calls remain unchanged and caller orderi
 preserved, but servers reject image artifacts unless the selected model profile has
 explicitly enabled image inputs.
 
-Public v1alpha1 runs also cannot activate installed skills. `selected_skills` must be
-empty, and prompt text such as `@skill-name` does not trigger skill discovery or
-composition. Skill activation remains disabled until the durable application grant has
-an explicit allowed-skill ceiling and recovery can prove that the same ceiling is
-preserved. This prevents an application from discovering private installed skill
-metadata or expanding its instructions and tool context indirectly.
+Public v1alpha1 runs cannot select plugin skills. The removed `selected_skills` field
+numbers and names are reserved, and a streaming protobuf wire guard rejects those fields
+before allocation. Plugin selection remains a local runtime surface until an application
+grant can express and durably preserve an exact qualified-skill ceiling.
 
 `CreateRunRequest.end_user_id` is optional caller-asserted correlation data. It uses
 the bounded public token grammar, may contain PII, and is neither an authenticated

@@ -11,6 +11,7 @@ name = "colossus"
 path = "src/main.rs"
 
 [dependencies]
+shell-words.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 clap.workspace = true
@@ -22,6 +23,7 @@ colossus-grpc.workspace = true
 colossus-home.workspace = true
 colossus-observability = { workspace = true, features = ["host-exporters"] }
 colossus-policy.workspace = true
+colossus-plugins.workspace = true
 colossus-presentation.workspace = true
 colossus-ports.workspace = true
 colossus-runtime.workspace = true
@@ -61,7 +63,7 @@ hmac.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 time.workspace = true
-colossus-packs.workspace = true
+colossus-bundles.workspace = true
 colossus-tools.workspace = true
 colossus-worker-protocol.workspace = true
 portable-pty.workspace = true

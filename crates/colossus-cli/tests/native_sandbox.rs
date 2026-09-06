@@ -74,7 +74,7 @@ fn workspace_development_shell_writes_workspace_but_not_colossus_control_state()
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 access:
   profile: development
   tools:
@@ -230,7 +230,7 @@ fn native_helper_enforces_filesystem_environment_and_process_tree_boundaries() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

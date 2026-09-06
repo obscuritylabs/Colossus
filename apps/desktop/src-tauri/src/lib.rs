@@ -12,6 +12,9 @@ mod managed_configuration;
 mod managed_configuration_commands;
 mod managed_diagnostics;
 mod managed_runtime;
+mod plugin_adapter;
+mod plugin_commands;
+mod plugin_selection;
 mod provider_enrollment;
 mod run_list;
 mod space_search;
@@ -50,6 +53,10 @@ use managed_diagnostics::{
     diagnose_managed_telemetry, get_managed_extension_inventory, logout_managed_mcp_oauth,
     managed_mcp_oauth_status,
 };
+use plugin_commands::{
+    cancel_plugin_operation, get_plugin_inventory, manage_plugin, read_plugin_preview,
+};
+use plugin_selection::resolve_plugin_selection;
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -63,6 +70,8 @@ use workspace_files::{list_workspace_directory, read_workspace_file};
 /// # Panics
 ///
 /// Panics when Tauri cannot initialize or run the application event loop.
+// Composition-only registration list: native command implementations stay in modules.
+#[allow(clippy::too_many_lines)]
 pub fn run() {
     if let Err(error) = desktop_settings::SettingsStore::open_application() {
         eprintln!("Colossus Desktop could not start: {}", error.message);
@@ -76,6 +85,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
+            get_plugin_inventory,
+            resolve_plugin_selection,
+            read_plugin_preview,
+            manage_plugin,
+            cancel_plugin_operation,
             desktop_release_channel,
             desktop_release_metadata,
             check_desktop_update,

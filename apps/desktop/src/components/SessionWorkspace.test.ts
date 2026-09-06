@@ -31,7 +31,6 @@ function runView(runId: string, title: string, minute: number): RunView {
     pendingInteractionCount: 0,
     terminal: null,
     etag: `etag-${runId}`,
-    selectedSkills: [],
     archived: false,
   };
   return {

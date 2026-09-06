@@ -3,15 +3,18 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+#[path = "support/plugin_provider.rs"]
+mod plugin_provider;
+
 use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{Read as _, Write as _},
+    io::{BufRead as _, BufReader, Read as _, Write as _},
     net::{TcpListener, TcpStream},
     path::Path,
     process::{Child, Command, Stdio},
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -58,7 +61,7 @@ fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -277,7 +280,7 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -360,7 +363,7 @@ fn write_provider_timeout_config(
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -509,7 +512,7 @@ fn request_body(request: &str) -> Value {
     serde_json::from_str(body).expect("provider request JSON")
 }
 
-fn subagent_server() -> (String, thread::JoinHandle<Vec<String>>) {
+fn subagent_server(completed: mpsc::Receiver<()>) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
     let address = listener.local_addr().expect("provider address");
     let task = thread::spawn(move || {
@@ -558,10 +561,12 @@ fn subagent_server() -> (String, thread::JoinHandle<Vec<String>>) {
 
 "#;
         respond_sse(&mut child, child_answer);
-        // The child transport completing precedes durable child-run settlement. Hold the
-        // parent model response briefly so its explicit agent.result call observes terminal
-        // state rather than the valid intermediate `running` snapshot.
-        thread::sleep(Duration::from_millis(250));
+        // Transport completion precedes durable child-run settlement. Synchronize on
+        // the CLI's released lifecycle event instead of assuming a scheduling delay;
+        // agent.result deliberately permits an intermediate `running` snapshot.
+        completed
+            .recv_timeout(Duration::from_secs(10))
+            .expect("CLI reports durable child completion before result lookup");
 
         let body = request_body(&parent_result_request);
         let child_id = body["messages"]
@@ -734,7 +739,7 @@ fn write_subagent_config(
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1316,7 +1321,7 @@ fn compatible_provider_streams_tool_use_and_tui_output_through_terminal_surfaces
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1523,11 +1528,12 @@ fn model_delegation_runs_the_child_before_agent_result_in_the_same_turn() {
     let workflows = directory.path().join("workflows");
     fs::create_dir(&workflows).expect("workflows");
     let config = directory.path().join("config.yaml");
-    let (origin, server) = subagent_server();
+    let (completed, completion) = mpsc::sync_channel(1);
+    let (origin, server) = subagent_server(completion);
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1557,7 +1563,7 @@ providers:
       kind: open_ai_compatible
       baseUrl: {origin}/v1
       credentialReference: null
-      timeoutMs: 10000
+      timeoutMs: 30000
 models:
   profiles:
     delegated:
@@ -1600,7 +1606,10 @@ sandbox:
     )
     .expect("config");
 
-    let output = command(binary, &config)
+    // Keep the isolated home alive while the child and stderr reader run, including
+    // on Windows where the command owns a separate temporary user profile.
+    let mut delegated_command = command(binary, &config);
+    let mut delegated = delegated_command
         .current_dir(directory.path())
         .args([
             "run",
@@ -1609,8 +1618,30 @@ sandbox:
             "--max-turns",
             "4",
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("delegated run");
+    let stderr = delegated.stderr.take().expect("delegated stderr");
+    let captured_stderr = thread::spawn(move || {
+        const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+        let mut reader = BufReader::new(stderr.take((OUTPUT_LIMIT + 1) as u64));
+        let mut output = Vec::new();
+        let mut line = Vec::new();
+        let mut reported = false;
+        while reader.read_until(b'\n', &mut line).expect("stderr line") != 0 {
+            assert!(output.len() + line.len() <= OUTPUT_LIMIT, "bounded stderr");
+            if !reported && String::from_utf8_lossy(&line).contains("Child agent completed") {
+                completed.send(()).expect("provider completion receiver");
+                reported = true;
+            }
+            output.extend_from_slice(&line);
+            line.clear();
+        }
+        output
+    });
+    let mut output = delegated.wait_with_output().expect("delegated run exit");
+    output.stderr = captured_stderr.join().expect("delegated stderr reader");
     assert!(
         output.status.success(),
         "stdout={}\nstderr={}",
@@ -1711,7 +1742,7 @@ fn responses_provider_keeps_credentials_out_of_streamed_tool_terminal_output() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -1875,7 +1906,7 @@ fn malformed_provider_tool_arguments_retry_twice_without_executing_the_tool() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:

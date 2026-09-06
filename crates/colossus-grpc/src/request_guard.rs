@@ -16,6 +16,7 @@ const LIST_RUNS_PATH: &str = "/colossus.api.v1alpha1.AgentRunService/ListRuns";
 const GRPC_HEADER_BYTES: usize = 5;
 const INPUT_FIELD_NUMBER: u64 = 1;
 const CREATE_SELECTED_SKILLS_FIELD_NUMBER: u64 = 5;
+const CREATE_PLUGIN_SKILLS_FIELD_NUMBER: u64 = 13;
 const LIST_STATUSES_FIELD_NUMBER: u64 = 2;
 
 /// Reject semantically oversized repeated request fields while gRPC frames are read.
@@ -120,6 +121,7 @@ struct RequestWireGuard {
     grpc: GrpcState,
     policy: RequestPolicy,
     inputs: usize,
+    plugin_skills: usize,
     statuses: usize,
 }
 
@@ -129,6 +131,7 @@ impl RequestWireGuard {
             grpc: GrpcState::default(),
             policy,
             inputs: 0,
+            plugin_skills: 0,
             statuses: 0,
         }
     }
@@ -253,6 +256,7 @@ impl RequestWireGuard {
                         remaining,
                         self.policy,
                         &mut self.inputs,
+                        &mut self.plugin_skills,
                         &mut self.statuses,
                     )?;
                     *remaining -= consumed;
@@ -278,6 +282,7 @@ fn consume_protobuf(
     frame_remaining: &usize,
     policy: RequestPolicy,
     inputs: &mut usize,
+    plugin_skills: &mut usize,
     statuses: &mut usize,
 ) -> Result<usize, Status> {
     let mut offset = 0;
@@ -303,6 +308,16 @@ fn consume_protobuf(
                     }
                     1 => *state = ProtobufState::Fixed(8),
                     2 => {
+                        if policy == RequestPolicy::CreateRun
+                            && field_number == CREATE_PLUGIN_SKILLS_FIELD_NUMBER
+                        {
+                            *plugin_skills = plugin_skills.saturating_add(1);
+                            if *plugin_skills > 64 {
+                                return Err(Status::resource_exhausted(
+                                    "at most 64 qualified plugin skills may be selected",
+                                ));
+                            }
+                        }
                         if policy == RequestPolicy::CreateRun
                             && field_number == CREATE_SELECTED_SKILLS_FIELD_NUMBER
                         {
@@ -501,6 +516,22 @@ mod tests {
         }
         let rejected = rejected.expect("selected_skills must be rejected");
         assert_eq!(rejected.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn bounds_plugin_skill_cardinality_before_prost_allocation() {
+        let mut accepted = create_guard();
+        accepted
+            .consume(&grpc_frame(&[0x6a, 0x00].repeat(64)))
+            .expect("bounded fields");
+        let mut rejected = create_guard();
+        assert_eq!(
+            rejected
+                .consume(&grpc_frame(&[0x6a, 0x00].repeat(65)))
+                .expect_err("cardinality")
+                .code(),
+            tonic::Code::ResourceExhausted
+        );
     }
 
     #[test]

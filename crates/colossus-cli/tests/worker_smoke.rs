@@ -217,7 +217,7 @@ fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -232,7 +232,7 @@ access:
     include: [echo]
     exclude: []
   actions:
-    allow: [filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, workflow.webhook.ingest, presentation.preferences.update, presentation.history.append, context.show, context.snapshots]
+    allow: [plugin.list, filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, workflow.webhook.ingest, presentation.preferences.update, presentation.history.append, context.show, context.snapshots]
     requireApproval: [plan.approve_request]
     deny: []
 policy:
@@ -684,14 +684,21 @@ sandbox:
     let mcp: Value = serde_json::from_slice(&mcp.stdout).expect("MCP JSON");
     assert_eq!(mcp.as_array().map(Vec::len), Some(0));
 
-    let skills = run(binary, &config, &["skills", "list"]);
-    assert!(skills.status.success());
-    let skills: Value = serde_json::from_slice(&skills.stdout).expect("skills JSON");
-    assert!(skills.is_array());
-    let packs = run(binary, &config, &["packs", "list"]);
-    assert!(packs.status.success());
-    let packs: Value = serde_json::from_slice(&packs.stdout).expect("packs JSON");
-    assert_eq!(packs.as_array().map(Vec::len), Some(0));
+    let plugins = run(binary, &config, &["plugins", "list"]);
+    assert!(
+        plugins.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plugins.stderr)
+    );
+    let plugins: Value = serde_json::from_slice(&plugins.stdout).expect("plugins JSON");
+    let core = plugins
+        .as_array()
+        .expect("inventory")
+        .iter()
+        .find(|plugin| plugin["manifest"]["name"] == "colossus")
+        .expect("bundled core");
+    assert_eq!(core["origin"], "bundled");
+    assert_eq!(core["skills"].as_array().map(Vec::len), Some(4));
     let integrations = run(binary, &config, &["integrations", "list"]);
     assert!(integrations.status.success());
     let integrations: Value =
@@ -702,7 +709,7 @@ sandbox:
         binary,
         &config,
         &["tui", "--session", session_id],
-        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme validate\n/theme scaffold midnight\n/theme ocean\n/theme\np 5\n\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/tui prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n/session\n/session resume\n1\n/session show\n/exit\n",
+        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme validate\n/theme scaffold midnight\n/theme ocean\n/theme\np 5\n\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/tui prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/plugins\n/plugin skills\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n/session\n/session resume\n1\n/session show\n/exit\n",
     );
     assert!(
         terminal.status.success(),

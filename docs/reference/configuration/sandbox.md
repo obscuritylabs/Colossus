@@ -180,14 +180,14 @@ are never inherited.
 
 Ambient authority does not invent a capability. Provider/model routing, credential
 references, configured MCP servers and `allowedTools`, connected integration schemas,
-pack signatures and trust, known action identities, strict request validation,
+plugin signatures and trust, known action identities, strict request validation,
 authenticated one-use permits, durable audit, quarantine and post-effect release,
 transport validation, and configured resource bounds remain mandatory. Configured `*`
 retains its public-only meaning; ambient authority is represented separately.
 
-Enabled pack tools and pack-declared stdio MCP servers are rejected under
-`danger_full_access`. Direct ambient execution cannot enforce their manifest resource
-and credential ceilings; select an isolating boundary instead.
+Agent Plugin scripts and MCP servers remain configured-only under `danger_full_access`.
+They use ordinary process or MCP effects, explicit server overlays, and the same policy,
+permit, limits, quarantine, and audit boundaries as standalone effects.
 
 For HTTPS, certificate and hostname validation still apply. Ambient authority also
 accepts canonical plaintext HTTP outside loopback. That transport provides no TLS

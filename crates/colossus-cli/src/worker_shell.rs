@@ -51,12 +51,19 @@ pub(super) async fn worker_line_runner(
             .await?,
     )?;
     let skill_names = client
-        .call(WorkerOperation::SkillList)
+        .call(WorkerOperation::PluginsInventory)
         .await?
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|skill| skill.get("name").and_then(Value::as_str))
+        .flat_map(|plugin| {
+            plugin
+                .get("skills")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|skill| skill.get("id").and_then(Value::as_str))
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let stdin = io::stdin();
@@ -361,138 +368,21 @@ pub(super) async fn worker_line_runner(
                     })
                     .await?,
             )?;
-        } else if line == "/packs" || line == "/packs list" {
+        } else if line == "/plugins" || line == "/plugins list" {
             print_json(
                 &client
-                    .call(WorkerOperation::PackList { limit: 100 })
+                    .call(WorkerOperation::PluginList { limit: 100 })
                     .await?,
             )?;
-        } else if let Some(name) = line.strip_prefix("/packs show ") {
+        } else if let Some(name) = line.strip_prefix("/plugins show ") {
             let name = name.trim();
-            let pack = client
-                .call(WorkerOperation::PackGet { name: name.into() })
+            let plugin = client
+                .call(WorkerOperation::PluginShow { name: name.into() })
                 .await?;
-            if pack.is_null() {
-                return Err(cli_error(format!("pack not found: {name}")).into());
+            if plugin.as_array().is_none_or(Vec::is_empty) {
+                return Err(cli_error(format!("plugin not found: {name}")).into());
             }
-            print_json(&pack)?;
-        } else if let Some(path) = line
-            .strip_prefix("/packs verify ")
-            .or_else(|| line.strip_prefix("/packs validate "))
-        {
-            print_json(
-                &client
-                    .call(WorkerOperation::PackVerify {
-                        path: path.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(value) = line.strip_prefix("/packs install ") {
-            let value = value.trim();
-            let (path, allow_untrusted) = value
-                .strip_suffix(" --allow-untrusted")
-                .map_or((value, false), |path| (path.trim(), true));
-            print_json(
-                &client
-                    .call(WorkerOperation::PackInstall {
-                        path: path.into(),
-                        allow_untrusted,
-                    })
-                    .await?,
-            )?;
-        } else if let Some(name) = line.strip_prefix("/packs enable ") {
-            print_json(
-                &client
-                    .call(WorkerOperation::PackEnable {
-                        name: name.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(name) = line.strip_prefix("/packs disable ") {
-            print_json(
-                &client
-                    .call(WorkerOperation::PackDisable {
-                        name: name.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
-            print_json(
-                &client
-                    .call(WorkerOperation::PackUninstall {
-                        name: name.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(tool) = line.strip_prefix("/packs call ") {
-            print_json(
-                &client
-                    .call(WorkerOperation::PackCall {
-                        tool: tool.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if line == "/packs trust" || line == "/packs trust list" {
-            print_json(
-                &client
-                    .call(WorkerOperation::PackTrustList { limit: 100 })
-                    .await?,
-            )?;
-        } else if let Some(value) = line.strip_prefix("/packs trust add ") {
-            let (publisher, public_key) = value
-                .trim()
-                .split_once(' ')
-                .ok_or_else(|| cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY"))?;
-            print_json(
-                &client
-                    .call(WorkerOperation::PackTrustAdd {
-                        publisher: publisher.into(),
-                        public_key: public_key.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(path) = line.strip_prefix("/collections verify ") {
-            print_json(
-                &client
-                    .call(WorkerOperation::CollectionVerify {
-                        path: path.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(path) = line.strip_prefix("/collections install ") {
-            print_json(
-                &client
-                    .call(WorkerOperation::CollectionInstall {
-                        path: path.trim().into(),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(arguments) = line.strip_prefix("/registry pull ") {
-            let (url, destination, credential_reference) = registry_slash_args(
-                arguments,
-                "usage: /registry pull URL DESTINATION [env:VARIABLE]",
-            )?;
-            print_json(
-                &client
-                    .call(WorkerOperation::RegistryPull {
-                        url: url.into(),
-                        destination: destination.into(),
-                        credential_reference: credential_reference.map(str::to_owned),
-                    })
-                    .await?,
-            )?;
-        } else if let Some(arguments) = line.strip_prefix("/registry push ") {
-            let (path, url, credential_reference) =
-                registry_slash_args(arguments, "usage: /registry push PATH URL [env:VARIABLE]")?;
-            print_json(
-                &client
-                    .call(WorkerOperation::RegistryPush {
-                        path: path.into(),
-                        url: url.into(),
-                        credential_reference: credential_reference.map(str::to_owned),
-                    })
-                    .await?,
-            )?;
+            print_json(&plugin)?;
         } else if let Some(path) = line.strip_prefix("/bundle verify ") {
             print_json(
                 &client
@@ -575,75 +465,66 @@ pub(super) async fn worker_line_runner(
                     })
                     .await?,
             )?;
-        } else if line == "/skills" {
-            let mut skills = client.call(WorkerOperation::SkillList).await?;
-            if let Some(skills) = skills.as_array_mut() {
-                for skill in skills {
-                    let is_active = skill
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|name| sticky_skills.iter().any(|item| item == name));
-                    if let Some(skill) = skill.as_object_mut() {
-                        skill.insert("active".into(), Value::Bool(is_active));
-                    }
-                }
-            }
-            print_json(&skills)?;
-        } else if line == "/skill active" {
+        } else if line == "/plugin skills" {
+            print_json(&client.call(WorkerOperation::PluginsInventory).await?)?;
+        } else if line == "/plugin active" {
             if sticky_skills.is_empty() {
                 println!("No skills are active.");
             } else {
                 println!("Active skills: {}", sticky_skills.join(", "));
             }
-        } else if line == "/skill clear" {
+        } else if line == "/plugin clear" {
             sticky_skills.clear();
             println!("active skills cleared");
-        } else if let Some(name) = line.strip_prefix("/skill use ") {
+        } else if let Some(name) = line.strip_prefix("/plugin use ") {
             let name = name.trim();
             if name.is_empty() {
                 return Err("skill name is required".into());
             }
-            let skill = client
-                .call(WorkerOperation::SkillGet { name: name.into() })
+            let _skill = client
+                .call(WorkerOperation::PluginSkillRead {
+                    skill_id: name.into(),
+                })
                 .await?;
-            if skill.is_null() {
-                return Err(cli_error(format!("skill not found: {name}")).into());
-            }
             if !sticky_skills.iter().any(|active| active == name) {
                 sticky_skills.push(name.into());
             }
             println!("active skill={name}");
-        } else if let Some(name) = line.strip_prefix("/skill show ") {
+        } else if let Some(name) = line.strip_prefix("/plugin skill show ") {
             let name = name.trim();
             let skill = client
-                .call(WorkerOperation::SkillGet { name: name.into() })
+                .call(WorkerOperation::PluginSkillRead {
+                    skill_id: name.into(),
+                })
                 .await?;
             if skill.is_null() {
                 return Err(cli_error(format!("skill not found: {name}")).into());
             }
             print_json(&skill)?;
-        } else if let Some(name) = line.strip_prefix("/skill resources ") {
+        } else if let Some(name) = line.strip_prefix("/plugin resources ") {
             let name = name.trim();
             if !sticky_skills.iter().any(|active| active == name) {
                 return Err(cli_error(format!("skill is not active: {name}")).into());
             }
             print_json(
                 &client
-                    .call(WorkerOperation::SkillResources { name: name.into() })
+                    .call(WorkerOperation::PluginResourceList {
+                        skill_id: name.into(),
+                    })
                     .await?,
             )?;
-        } else if let Some(arguments) = line.strip_prefix("/skill read ") {
+        } else if let Some(arguments) = line.strip_prefix("/plugin read ") {
             let (name, path) = arguments
                 .trim()
                 .split_once(' ')
-                .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
+                .ok_or_else(|| cli_error("usage: /plugin read PLUGIN/SKILL PATH"))?;
             if !sticky_skills.iter().any(|active| active == name) {
                 return Err(cli_error(format!("skill is not active: {name}")).into());
             }
             print_json(
                 &client
-                    .call(WorkerOperation::SkillResourceRead {
-                        name: name.into(),
+                    .call(WorkerOperation::PluginResourceRead {
+                        skill_id: name.into(),
                         path: path.trim().into(),
                     })
                     .await?,
@@ -750,7 +631,7 @@ pub(super) async fn worker_line_runner(
         } else {
             let (prompt, explicit_skills) = resolve_skill_mentions(line, &skill_names);
             if prompt.is_empty() {
-                println!("Add a message after the @skill name.");
+                println!("Add a message after the qualified @PLUGIN/SKILL name.");
                 continue;
             }
             let mode = match plan_state.agent_mode() {

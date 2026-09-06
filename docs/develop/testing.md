@@ -54,7 +54,8 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-memory` | Keep canonical lifecycle, scope, Tantivy projection, and fallback tests. |
 | `colossus-network` | Keep DNS pinning, redirects, trust roots, response bounds, and authority tests. |
 | `colossus-observability` | Keep disabled-by-default, redaction, payload-mode, and exporter tests. |
-| `colossus-packs` | Keep signature, permission-ceiling, archive, dependency, and no-clobber tests. |
+| `colossus-plugins` | Keep upstream schema/frontmatter, component isolation, OCI archive, registry auth/origin, Sigstore trust, lifecycle lease, MCP overlay, and confinement tests. |
+| `colossus-bundles` | Keep retained release-bundle signature, inventory, no-clobber, and installation tests. |
 | `colossus-policy` | Keep built-in and OPA decision tests, including opt-in live and mTLS targets. |
 | `colossus-ports` | Keep reusable port-conformance helpers; avoid adapter behavior here. |
 | `colossus-presentation` | Keep pure document/theme/rendering tests; the obsolete Python theme-import test was removed. |
@@ -68,7 +69,6 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-session` | Keep message, branch, restore, and context-view repository tests. |
 | `colossus-sidecar-protocol` | Keep authenticated framing and workspace-identity compatibility tests; they protect deployed sidecars. |
 | `colossus-sidecar` | Keep native and Windows bootstrap/lifecycle acceptance targets. |
-| `colossus-skills` | Keep discovery, precedence, validation, confinement, and authoring tests. |
 | `colossus-telemetry` | Keep durable event, query, retention, and bounded-export tests. |
 | `colossus-testkit` | Keep shared conformance tests and fixtures used by adapter crates. |
 | `colossus-tools` | Keep schema-first validation, gateway adapters, confinement, output, and mutation tests. |
@@ -84,7 +84,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 The CLI integration directory contains intentionally separate suites for agent,
 approval, audit export, authentication, bootstrap/install, bundles, configuration,
 context, documentation examples, integrations, MCP, native/OCI/Windows sandboxing,
-packs, plans, providers, release installation, research, search, skills, rejection,
+plugins, plans, providers, release installation, research, search, rejection,
 worker, and workflow behavior. Their separation lets CI select expensive prerequisites
 without weakening the public-boundary assertions.
 
@@ -121,3 +121,51 @@ During iteration, run the changed crate's library tests and directly affected ta
 Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
+
+### Desktop plugin runtime acceptance
+
+From `apps/desktop`, run `npm run test:browser:install` once, then
+`npm run test:plugin-runtime`. The command builds the CLI and the explicitly opt-in
+`plugin-test-bridge` example. The test copies the CLI out of the checkout, creates a
+private temporary home, and drives production React components through the production
+native plugin adapter into an authenticated worker. Test-owned paths and approval
+responses replace only OS dialogs; runtime policy, journal, OCI packaging, trust, and
+IPC authentication stay real. The test has no registry prerequisite.
+The tier first checks that the bridge derives the worker's canonical state endpoint
+(including Windows verbatim paths), and tests bounded subprocess shutdown. Browser
+refresh is stopped and every owned process is closed before deleting the private
+fixture; cleanup diagnostics must not replace the original scenario failure.
+Management assertions wait for the matching native request to finish within its IPC
+bound before checking the rendered result. This tier disables scenario retries so a
+passing CI result cannot conceal a failed first attempt.
+
+Ordinary `npm run test:browser` runs mocked interface interaction cases separately.
+It also enters Plugins through the production Workspace sidebar at desktop and compact
+widths, using keyboard navigation and checking the explicit unavailable state for a
+target without discovery support. A standalone plugin-component fixture cannot prove
+that the management screen is reachable from the application shell.
+The macOS Desktop and Windows runtime pre-merge lanes also run the real-worker tier.
+Browser traces are retained on failure; plugin screenshots are written under
+`output/playwright`. Native adapter unit tests cover path replacement and cancellation.
+The driver is a feature-gated Cargo example, not a production binary or command;
+production renderer checks reject development bridge markers.
+
+### Embedded plugin and selection acceptance
+
+`cargo test -p colossus-cli --test plugins_tui_smoke` exercises a real PTY against
+both embedded and authenticated-worker hosts with private offline homes. It covers
+completion, rendered core names (including the former `Item 1` regression), skill and
+resource inspection, conversation selection removal, lifecycle refresh, errors, and
+terminal resizing.
+
+`cargo test -p colossus-cli --test provider_terminal_smoke worker_plugin_inputs`
+uses a deterministic loopback provider to observe the actual requests. It checks
+metadata-only discovery, selected instruction loading, unchanged tool definitions,
+snapshot-bound reads during a global disable, rejected stale selections on later runs,
+and selected IDs plus exact manifest digests in audit evidence.
+
+Native Desktop checks need an unlocked platform credential store. A credential-store
+failure is a blocked native check, not an offline-runtime pass; do not replace encryption
+or platform credentials to hide it. Use a fresh explicit `COLOSSUS_HOME` and a scratch
+workspace for manual acceptance. The browser-to-worker bridge is separate evidence and
+does not substitute for native dialogs or operating-system integration.

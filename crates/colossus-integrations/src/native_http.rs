@@ -14,7 +14,7 @@ pub(super) fn resolve_environment(reference: &str) -> Result<String, ExecutionEr
 pub(super) fn validate_request_credentials(
     operation: &IntegrationRequest,
     disclosed: &[CredentialReference],
-    repository: &dyn ExtensionRepository,
+    repository: &dyn IntegrationRepository,
 ) -> Result<(), ExecutionError> {
     let mut expected = match operation {
         IntegrationRequest::ImportOpenApi {

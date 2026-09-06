@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "example-review",
+  "version": "0.1.0",
+  "description": "Review a scoped software change using repository evidence."
+}

@@ -747,8 +747,8 @@ impl SafetyKernel {
                     | "provider.openai.codex"
                     | "provider.openai.chat"
                     | "provider.models"
-                    | "registry.pull"
-                    | "registry.push"
+                    | "plugin.pull"
+                    | "plugin.push"
             ) || is_streamable_http_mcp(request))
         {
             let origin = canonical_network_origin(&request.resource)?;
@@ -771,11 +771,11 @@ pub(super) fn valid_environment_name(name: &str) -> bool {
 }
 
 pub(super) fn is_process_action(action: &str) -> bool {
-    action.starts_with("pack.tool.")
-        || action.starts_with("pack.mcp.")
+    action.starts_with("plugin.mcp.")
         || matches!(
             action,
             "process.spawn"
+                | "plugin.registry.credential_helper"
                 | "shell.run"
                 | "git.status"
                 | "git.diff"

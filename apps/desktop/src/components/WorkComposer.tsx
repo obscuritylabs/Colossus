@@ -18,6 +18,8 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
 
 import { desktopSlashCommandSuggestions } from "../slash-commands";
+import { pluginMentionSuggestions } from "../plugins";
+import type { PluginSkill } from "../plugins";
 import type {
   ApprovalMode,
   ArtifactReference,
@@ -59,6 +61,9 @@ const RESEARCH_SOURCE_OPTIONS = [
 ] as const;
 
 interface WorkComposerProps {
+  pluginSkills?: readonly PluginSkill[] | null;
+  pluginSelections?: readonly string[];
+  onRemovePluginSkill?: (id: string) => void;
   formRef: RefObject<HTMLFormElement | null>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   prompt: string;
@@ -108,6 +113,9 @@ interface WorkComposerProps {
 }
 
 export function WorkComposer({
+  pluginSkills = null,
+  pluginSelections = [],
+  onRemovePluginSkill,
   formRef,
   textareaRef,
   prompt,
@@ -163,7 +171,16 @@ export function WorkComposer({
   );
   const roleMissing = role.trim().length === 0;
   const slashCommandDraft = prompt.trimStart().startsWith("/");
-  const slashCommandSuggestions = desktopSlashCommandSuggestions(prompt);
+  const mentioningSkill = prompt.trimStart().startsWith("@");
+  const slashCommandSuggestions = mentioningSkill
+    ? pluginMentionSuggestions(prompt, pluginSkills ?? [])
+    : desktopSlashCommandSuggestions(prompt);
+  const staleSelections =
+    pluginSkills === null
+      ? []
+      : pluginSelections.filter(
+          (id) => !pluginSkills.some((skill) => skill.id === id),
+        );
   const slashMenuOpen =
     slashCommandSuggestions.length > 0 && dismissedSlashDraft !== prompt;
   const selectedSlashIndex = slashCommandSuggestions.findIndex(
@@ -256,6 +273,28 @@ export function WorkComposer({
       aria-label="Send a prompt"
       onSubmit={onSubmit}
     >
+      {pluginSelections.length > 0 && (
+        <div className="plugin-selections" aria-label="Conversation skills">
+          <span>Conversation skills:</span>
+          {pluginSelections.map((id) => (
+            <button
+              className="button secondary compact"
+              type="button"
+              key={id}
+              onClick={() => onRemovePluginSkill?.(id)}
+              aria-label={`Remove ${id}`}
+            >
+              {id} ×
+            </button>
+          ))}
+        </div>
+      )}
+      {staleSelections.length > 0 && (
+        <p role="alert" className="inline-error">
+          Unavailable conversation skills: {staleSelections.join(", ")}. Remove
+          them or re-enable their plugin before sending.
+        </p>
+      )}
       {planRevision === null ? null : (
         <div className="composer-plan-revision" role="status">
           <div>
@@ -486,8 +525,14 @@ export function WorkComposer({
                 <IconCommand size={16} stroke={1.9} />
               </span>
               <span>
-                <strong>Commands</strong>
-                <small>Run a local Desktop action</small>
+                <strong>
+                  {mentioningSkill ? "Plugin skills" : "Commands"}
+                </strong>
+                <small>
+                  {mentioningSkill
+                    ? "Use for this message only"
+                    : "Run a local Desktop action"}
+                </small>
               </span>
             </span>
             <span className="slash-command-count" aria-live="polite">
@@ -498,7 +543,7 @@ export function WorkComposer({
             className="slash-command-options"
             id="desktop-slash-command-menu"
             role="listbox"
-            aria-label="Slash commands"
+            aria-label={mentioningSkill ? "Plugin skills" : "Slash commands"}
           >
             {slashCommandSuggestions.map((suggestion, index) => {
               const selected = index === activeSlashIndex;
@@ -595,7 +640,7 @@ export function WorkComposer({
         aria-describedby={
           promptOverLimit ? "prompt-byte-limit-error" : undefined
         }
-        disabled={!canCompose}
+        disabled={!canCompose || submitting}
         onKeyDown={handleKeyDown}
         onBlur={(event) => {
           const nextTarget = event.relatedTarget as Node | null;

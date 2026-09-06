@@ -27,7 +27,7 @@ Use this section when you need an exact name, field, default, limit, or wire sha
 ## Extension schemas
 
 - [Workflow schema](workflow-schema.md)
-- [Extension manifests](extension-formats.md)
+- [Agent Plugin formats](extension-formats.md)
 - [Bundle format](bundle-format.md)
 
 ## Shared terminology

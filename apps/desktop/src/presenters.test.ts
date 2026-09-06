@@ -27,7 +27,6 @@ const BASE_RUN: Run = {
   pendingInteractionCount: 0,
   terminal: null,
   etag: "private-etag",
-  selectedSkills: [],
   archived: false,
 };
 

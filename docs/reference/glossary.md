@@ -16,7 +16,7 @@ type: reference
 | Approval | Proof satisfying an existing policy obligation; it does not widen policy or sandbox authority |
 | Canonical state | Authoritative journal events from which application state is reconstructed |
 | Capability | Trusted metadata connecting a tool or operation to its action, effect identity, prerequisites, and source |
-| Collection | Signed inventory of immediate packs and data-only skills |
+| Agent Plugin | Portable v1 directory and whole-plugin OCI distribution unit containing Agent Skills, resources, and optional MCP configuration |
 | Decision | Either a policy authorization result or a durable user key decision, according to context |
 | Effect | External or sensitive operation that must cross the effect gateway |
 | Effect gateway | Application boundary that validates, authorizes, permits, quarantines, and journals effects |
@@ -27,7 +27,7 @@ type: reference
 | Memory | Durable, non-instructional background record with canonical lifecycle |
 | Obligation | Resource and behavior constraint attached to an authorized effect |
 | Outcome unknown | Effect may have escaped, but terminal success or failure is not established |
-| Pack | Signed installable boundary for executable capabilities, integrations, MCP declarations, skills, and assets |
+| Plugin snapshot | Immutable, leased set of globally active plugin digests narrowed by one workspace and retained for a top-level run |
 | Permit | Opaque, authenticated, short-lived, one-use authority bound to one authorized request |
 | Port | Application-owned interface implemented by replaceable adapters |
 | Projection | Disposable, rebuildable read model derived from canonical events |

@@ -195,6 +195,7 @@ impl EffectExecutor for WorkEffectExecutor {
             ));
         }
         self.validate_scope(request, &mutation)?;
+        let creating_subagent = matches!(&mutation, WorkOperation::SubagentCreate { .. });
         let actor = request.actor.clone();
         let value = match mutation {
             WorkOperation::TaskCreate {
@@ -458,6 +459,12 @@ impl EffectExecutor for WorkEffectExecutor {
                 work_result(self.service.requeue_subagent(&id, actor))
             }
         }?;
+        if creating_subagent
+            && let Some(catalog) = active_plugin_catalog()
+            && let Some(id) = value.get("id").and_then(Value::as_str)
+        {
+            self.instruction_snapshots.retain_job_catalog(id, catalog);
+        }
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
             bytes: serde_json::to_vec(&value)

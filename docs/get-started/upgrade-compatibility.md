@@ -52,7 +52,7 @@ Do not remove the prior executable until the new binary has passed diagnostics.
 ### 4. Regenerate configuration when its shape changed
 
 Colossus is pre-1.0, so configuration shapes may change without an automated migration
-command. Version 0.10.1 and later require `schemaVersion: 2`, which separates provider connection
+command. Version 0.10.1 and later require `schemaVersion: 3`, which separates provider connection
 profiles from model profiles and logical role routing. Schema version 1 is rejected
 instead of being silently reinterpreted.
 
@@ -94,14 +94,12 @@ replacement. Existing repository-local `.colossus/config.yaml` files still take
 precedence and omitted `storage.location` retains historical `workspace` behavior, so
 their state paths continue to work without silent relocation.
 
-This release intentionally changes the meaning of omitted schema-version-2 access and
-sandbox fields. An omitted or empty `access` group resolves to `allow_all`; an omitted
-or empty `sandbox` group resolves to acknowledged `danger_full_access`. That widening
-applies to existing sparse files without a schema-version bump, including workflows and
-background effects. Existing files that explicitly select a native, Windows, OCI,
-external, or custom sandbox retain that selection. Run `config show` and `config
-effective` before returning an upgraded host to service, and add an explicit isolating
-sandbox block if ambient host filesystem, process, and HTTP(S) authority is not intended.
+Schema-version-2 configuration is rejected because the legacy skills and packs fields
+have no migration into the Agent Plugin lifecycle. Generate a fresh schema-version-3
+file with `config init`, reapply supported provider, workflow, integration, standalone
+MCP, and sandbox settings, then run `config show` and `config effective` before returning
+an upgraded host to service. Add an explicit isolating sandbox block if ambient host
+filesystem, process, and HTTP(S) authority is not intended.
 
 Desktop Managed Local starts fresh in the selected workspace's isolated Desktop home
 partition. Earlier application-support data is preserved but ignored; Colossus neither

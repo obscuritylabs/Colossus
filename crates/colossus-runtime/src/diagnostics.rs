@@ -473,18 +473,27 @@ impl Runtime {
     }
 
     /// List safe metadata for explicitly configured MCP servers.
-    pub fn mcp_servers(&self) -> Vec<McpServerSummary> {
-        self.mcp_executor.servers()
+    pub fn mcp_servers(&self) -> Result<Vec<McpServerSummary>, RuntimeError> {
+        Ok(self.plugin_catalog.capture()?.mcp_executor()?.servers())
     }
 
     /// Return the configured loopback port for an interactive MCP OAuth login.
     pub fn mcp_oauth_callback_port(&self, server: &str) -> Result<u16, RuntimeError> {
-        Ok(self.mcp_executor.oauth_callback_port(server)?)
+        Ok(self
+            .plugin_catalog
+            .capture()?
+            .mcp_executor()?
+            .oauth_callback_port(server)?)
     }
 
     /// Begin an interactive MCP OAuth login and return its authorization URL.
     pub async fn mcp_oauth_login_begin(&self, server: &str) -> Result<McpOAuthLogin, RuntimeError> {
-        Ok(self.mcp_executor.oauth_login_begin(server).await?)
+        Ok(self
+            .plugin_catalog
+            .capture()?
+            .mcp_executor()?
+            .oauth_login_begin(server)
+            .await?)
     }
 
     /// Complete an interactive MCP OAuth login from the final redirect URL.
@@ -494,19 +503,31 @@ impl Runtime {
         callback_url: &str,
     ) -> Result<McpOAuthStatus, RuntimeError> {
         Ok(self
-            .mcp_executor
+            .plugin_catalog
+            .capture()?
+            .mcp_executor()?
             .oauth_login_complete(server, callback_url)
             .await?)
     }
 
     /// Inspect local MCP OAuth credential status.
     pub async fn mcp_oauth_status(&self, server: &str) -> Result<McpOAuthStatus, RuntimeError> {
-        Ok(self.mcp_executor.oauth_status(server).await?)
+        Ok(self
+            .plugin_catalog
+            .capture()?
+            .mcp_executor()?
+            .oauth_status(server)
+            .await?)
     }
 
     /// Clear local MCP OAuth credentials without remote revocation.
     pub async fn mcp_oauth_logout(&self, server: &str) -> Result<McpOAuthStatus, RuntimeError> {
-        Ok(self.mcp_executor.oauth_logout(server).await?)
+        Ok(self
+            .plugin_catalog
+            .capture()?
+            .mcp_executor()?
+            .oauth_logout(server)
+            .await?)
     }
 
     /// Discover all allowlisted MCP tools through separately authorized pages.
@@ -514,17 +535,26 @@ impl Runtime {
         &self,
         server: Option<&str>,
     ) -> Result<Vec<McpToolSummary>, RuntimeError> {
-        discover_mcp_tools(
-            self.gateway.as_ref(),
-            self.mcp_executor.as_ref(),
-            self.mcp_effect_executor.as_ref(),
-            Actor {
-                actor_type: ActorType::User,
-                id: "terminal-user".into(),
-            },
-            ExecutionContext::default(),
-            server,
-        )
+        let catalog = self.plugin_catalog.capture()?;
+        let executor = catalog.mcp_executor()?;
+        let bound = WorkspaceBoundEffectExecutor::new(
+            self._workspace_lease.identity(),
+            Arc::clone(&executor),
+        );
+        scope_plugin_catalog(catalog, async {
+            discover_mcp_tools(
+                self.gateway.as_ref(),
+                executor.as_ref(),
+                &bound,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "terminal-user".into(),
+                },
+                ExecutionContext::default(),
+                server,
+            )
+            .await
+        })
         .await
     }
 
@@ -535,19 +565,28 @@ impl Runtime {
         tool: &str,
         arguments: Value,
     ) -> Result<McpCallOutput, RuntimeError> {
-        invoke_mcp_tool(
-            self.gateway.as_ref(),
-            self.mcp_executor.as_ref(),
-            self.mcp_effect_executor.as_ref(),
-            Actor {
-                actor_type: ActorType::User,
-                id: "terminal-user".into(),
-            },
-            ExecutionContext::default(),
-            server,
-            tool,
-            arguments,
-        )
+        let catalog = self.plugin_catalog.capture()?;
+        let executor = catalog.mcp_executor()?;
+        let bound = WorkspaceBoundEffectExecutor::new(
+            self._workspace_lease.identity(),
+            Arc::clone(&executor),
+        );
+        scope_plugin_catalog(catalog, async {
+            invoke_mcp_tool(
+                self.gateway.as_ref(),
+                executor.as_ref(),
+                &bound,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "terminal-user".into(),
+                },
+                ExecutionContext::default(),
+                server,
+                tool,
+                arguments,
+            )
+            .await
+        })
         .await
     }
 

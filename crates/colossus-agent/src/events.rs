@@ -189,7 +189,7 @@ pub(super) fn plan_mode_tool(name: &str, target: &PlanDraftTarget) -> bool {
                 | "user.ask"
                 | "context.show"
                 | "context.snapshots"
-                | "skill.resource.read"
+                | "plugin.resource.read"
         )
 }
 

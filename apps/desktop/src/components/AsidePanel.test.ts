@@ -25,7 +25,6 @@ const HISTORY: Aside = {
     pendingInteractionCount: 0,
     terminal: null,
     etag: "aside-etag",
-    selectedSkills: [],
     archived: true,
   },
 };

@@ -91,10 +91,7 @@ model output.
 | `memories` | Create, search, archive, supersede, and index memories |
 | `research` | Run and inspect source-backed research |
 | `telemetry` | Inspect metadata-only run telemetry |
-| `skills` | Discover, compose, author, validate, and install data-only skills |
-| `packs` | Verify and lifecycle-manage signed capability packs |
-| `collections` | Build, verify, and install signed collections |
-| `registry` | Pull and push authenticated collection transports |
+| `plugins` | Validate, verify, install, activate, package, pull, push, export, and collect Agent Plugins |
 | `bundle` | Build, verify, and install signed offline bundles |
 | `integrations` | Manage persisted integrations and imported OpenAPI tools |
 | `mcp` | Discover and invoke configured MCP servers |
@@ -142,11 +139,7 @@ positional:
 | `memories index` | `status`, `sync`, `rebuild` |
 | `research` | `run QUESTION`, `list`, `show RUN_ID`, `sources RUN_ID`, `claims RUN_ID` |
 | `telemetry` | `runs`, `show RUN_ID`, `metrics` |
-| `skills` | `list`, `show NAME`, `duplicates`, `compose PROMPT`, `scaffold NAME DESCRIPTION`, `inspect NAME`, `file-read NAME PATH`, `write NAME PATH CONTENT`, `validate TARGET`, `install PATH`, `resources NAME`, `read NAME PATH` |
-| `packs` | `list`, `show NAME`, `verify PATH`, `validate PATH`, `install PATH`, `enable NAME`, `disable NAME`, `uninstall NAME`, `call TOOL` |
-| `packs trust` | `list`, `add PUBLISHER --public-key KEY` |
-| `collections` | `verify PATH`, `build SOURCE DESTINATION`, `install PATH` |
-| `registry` | `pull URL DESTINATION`, `push PATH URL` |
+| `plugins` | `list`, `show NAME`, `validate DIRECTORY`, `verify PATH`, `install (--directory|--reference|--layout|--archive)`, `enable NAME --digest DIGEST`, `disable NAME`, `update NAME REFERENCE`, `uninstall NAME --digest DIGEST [--purge-data]`, `gc`, `package DIRECTORY --output LAYOUT`, `push LAYOUT REFERENCE`, `pull REFERENCE --output LAYOUT`, `export NAME --output LAYOUT_TAR` |
 | `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
 | `mcp` | `servers`, `tools`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |

@@ -47,14 +47,11 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         "context.show" | "context.compact" | "context.snapshots" | "context.restore" => {
             simple_tool("context")
         }
-        "skill.scaffold"
-        | "skill.inspect"
-        | "skill.read"
-        | "skill.write"
-        | "skill.validate"
-        | "skill.install"
-        | "skill.resource.list"
-        | "skill.resource.read" => simple_tool("skills"),
+        "plugin.list"
+        | "plugin.inspect"
+        | "plugin.skill.read"
+        | "plugin.resource.list"
+        | "plugin.resource.read" => simple_tool("plugins"),
         "web.search" => ("web", vec![ToolPrerequisite::AgentSearchRoute]),
         "web.fetch" | "docs.fetch" | "network.http" => (
             "web",
@@ -121,15 +118,15 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "memory.list",
             "memory.search",
             "memory.index.status",
-            "skill.inspect",
-            "skill.read",
-            "skill.validate",
-            "skill.resource.list",
-            "skill.resource.read",
-            "pack.verify",
+            "plugin.list",
+            "plugin.inspect",
+            "plugin.skill.read",
+            "plugin.resource.list",
+            "plugin.resource.read",
+            "plugin.validate",
+            "plugin.verify",
             "bundle.verify",
             "bundle.key.inspect",
-            "collection.verify",
         ],
     );
     push_actions(
@@ -177,9 +174,6 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "patch.apply",
             "patch.reverse",
             "trace.export",
-            "skill.scaffold",
-            "skill.write",
-            "skill.install",
             "audit.export.write",
         ],
     );
@@ -187,6 +181,7 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &mut descriptors,
         ActionClass::Execution,
         &[
+            "plugin.registry.credential_helper",
             "process.spawn",
             "shell.run",
             "workflow.execute",
@@ -232,17 +227,18 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &[
             "plan.approve_request",
             "audit.export.worm.write",
-            "pack.install",
-            "pack.enable",
-            "pack.disable",
-            "pack.uninstall",
-            "pack.trust.add",
+            "plugin.install",
+            "plugin.enable",
+            "plugin.disable",
+            "plugin.update",
+            "plugin.uninstall",
+            "plugin.gc",
+            "plugin.package",
+            "plugin.push",
+            "plugin.pull",
+            "plugin.export",
             "bundle.build",
             "bundle.install",
-            "collection.build",
-            "collection.install",
-            "registry.pull",
-            "registry.push",
         ],
     );
     descriptors.sort_by(|left, right| left.name.cmp(&right.name));

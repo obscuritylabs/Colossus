@@ -132,6 +132,11 @@ pub enum WorkerError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractiveWorkerRequest {
+    /// Execute a typed plugin operation with connection-bound policy approvals.
+    PluginManage {
+        /// Exact operator request; no renderer field supplies approval evidence.
+        request: colossus_contracts::PluginManagementRequest,
+    },
     /// Prompt for and issue one client-scoped direct-execution acknowledgement.
     SandboxBoundaryAcknowledge {
         /// Exact durable session displayed by the attached client.
@@ -881,179 +886,89 @@ pub enum WorkerOperation {
         /// Exact configured server.
         server: String,
     },
-    /// List selected declarative skill summaries.
-    SkillList,
-    /// Read one selected declarative skill.
-    SkillGet {
-        /// Exact skill name.
-        name: String,
+    /// List machine-scoped Agent Plugin installations.
+    PluginsInventory,
+    /// Typed local plugin management through runtime authorization and approval.
+    PluginManage {
+        /// Closed, credential-reference-only operation payload.
+        request: colossus_contracts::PluginManagementRequest,
     },
-    /// Report duplicate skill names and winners.
-    SkillDuplicates,
-    /// Preview deterministic skill composition.
-    SkillCompose {
-        /// User prompt.
-        prompt: String,
-        /// Explicit skill names.
-        skills: Vec<String>,
-    },
-    /// Scaffold one installed user skill.
-    SkillScaffold {
-        /// Skill name.
-        name: String,
-        /// Skill description.
-        description: String,
-        /// Data-only instructions.
-        instructions: String,
-        /// Declared resource directories.
-        resource_dirs: Vec<String>,
-    },
-    /// Inspect installed skill metadata and hashes.
-    SkillInspect {
-        /// Exact skill name.
-        name: String,
-    },
-    /// Read one authorable skill file.
-    SkillFileRead {
-        /// Exact skill name.
-        name: String,
-        /// Relative authorable path.
-        path: String,
-    },
-    /// Write one authorable skill file.
-    SkillWrite {
-        /// Exact skill name.
-        name: String,
-        /// Relative authorable path.
-        path: String,
-        /// Replacement content.
-        content: String,
-        /// Optional optimistic content hash.
-        expected_sha256: Option<String>,
-    },
-    /// Validate an installed or workspace-local skill.
-    SkillValidate {
-        /// Installed name or local path.
-        target: String,
-        /// Whether target is a local path.
-        local: bool,
-    },
-    /// Install one validated workspace-local skill.
-    SkillInstall {
-        /// Server-local skill directory.
-        path: String,
-    },
-    /// List bounded resources for one explicitly active skill.
-    SkillResources {
-        /// Exact skill name.
-        name: String,
-    },
-    /// Read one bounded skill resource.
-    SkillResourceRead {
-        /// Exact skill name.
-        name: String,
-        /// Relative resource path.
-        path: String,
-    },
-    /// List canonical pack lifecycles.
-    PackList {
+    /// List machine-scoped Agent Plugin installations.
+    PluginList {
         /// Maximum records.
         limit: usize,
     },
-    /// Reconstruct one pack lifecycle.
-    PackGet {
-        /// Exact pack name.
+    /// List every installed digest for one plugin name.
+    PluginShow {
+        /// Exact plugin name.
         name: String,
     },
-    /// Verify one server-local pack.
-    PackVerify {
-        /// Server-local pack path.
+    /// Read one qualified Agent Skill from the active snapshot.
+    PluginSkillRead {
+        /// Qualified `<plugin>/<skill>` identifier.
+        skill_id: String,
+    },
+    /// List resources for one qualified Agent Skill.
+    PluginResourceList {
+        /// Qualified `<plugin>/<skill>` identifier.
+        skill_id: String,
+    },
+    /// Read one bounded text resource for a qualified Agent Skill.
+    PluginResourceRead {
+        /// Qualified `<plugin>/<skill>` identifier.
+        skill_id: String,
+        /// Relative resource path inside the skill root.
         path: String,
     },
-    /// Install one verified pack.
-    PackInstall {
-        /// Server-local pack path.
+    /// Validate one portable Agent Plugin directory.
+    PluginValidate {
+        /// Server-local portable plugin directory.
         path: String,
-        /// Explicit development override.
+    },
+    /// Install one local plugin directory as disabled.
+    PluginInstallDirectory {
+        /// Server-local portable plugin directory.
+        path: String,
+    },
+    /// Install one OCI layout candidate as disabled.
+    PluginInstallLayout {
+        /// Server-local OCI image-layout directory.
+        path: String,
+        /// Exact candidate digest when the layout contains multiple manifests.
+        digest: Option<String>,
+    },
+    /// Install one OCI layout tar candidate as disabled.
+    PluginInstallArchive {
+        /// Server-local deterministic OCI layout tar.
+        path: String,
+        /// Exact candidate digest when the layout contains multiple manifests.
+        digest: Option<String>,
+    },
+    /// Select one exact installed manifest digest globally.
+    PluginEnable {
+        /// Exact plugin name.
+        name: String,
+        /// Exact installed OCI manifest digest.
+        digest: String,
+        /// Whether the approval-gated operation may enable untrusted content.
         allow_untrusted: bool,
     },
-    /// Enable one installed pack.
-    PackEnable {
-        /// Exact pack name.
+    /// Disable one plugin globally.
+    PluginDisable {
+        /// Exact plugin name.
         name: String,
     },
-    /// Disable one installed pack.
-    PackDisable {
-        /// Exact pack name.
+    /// Uninstall one exact plugin digest.
+    PluginUninstall {
+        /// Exact plugin name.
         name: String,
+        /// Exact installed OCI manifest digest.
+        digest: String,
+        /// Whether the stable writable plugin data directory is also removed.
+        purge_data: bool,
     },
-    /// Uninstall one installed pack.
-    PackUninstall {
-        /// Exact pack name.
-        name: String,
-    },
-    /// Invoke one active fixed-argument pack tool.
-    PackCall {
-        /// Exact generated tool name.
-        tool: String,
-    },
-    /// List pack publisher trust bindings.
-    PackTrustList {
-        /// Maximum records.
-        limit: usize,
-    },
-    /// Add a pack publisher trust binding.
-    PackTrustAdd {
-        /// Publisher identifier.
-        publisher: String,
-        /// Base64 Ed25519 public key.
-        public_key: String,
-    },
-    /// Verify a signed server-local pack and skill collection.
-    CollectionVerify {
-        /// Server-local collection directory.
-        path: String,
-    },
-    /// Build and sign a deterministic server-local collection.
-    CollectionBuild {
-        /// Staged payload containing `packs/` and `skills/`.
-        source: String,
-        /// Clean destination directory.
-        destination: String,
-        /// Stable collection name.
-        name: String,
-        /// Immutable collection version.
-        version: String,
-        /// Trusted publisher identity.
-        publisher: String,
-        /// Explicit RFC3339 UTC timestamp.
-        created_at: String,
-        /// Environment reference for the signing seed.
-        signing_key_reference: String,
-    },
-    /// Install every artifact from a trusted collection without clobbering.
-    CollectionInstall {
-        /// Server-local collection directory.
-        path: String,
-    },
-    /// Pull an authenticated signed collection transport to a clean local directory.
-    RegistryPull {
-        /// Credential-free HTTPS URL or explicit loopback HTTP URL.
-        url: String,
-        /// Clean server-local destination directory.
-        destination: String,
-        /// Optional environment-backed bearer credential reference.
-        credential_reference: Option<String>,
-    },
-    /// Push a verified collection using a create-only authenticated request.
-    RegistryPush {
-        /// Server-local collection directory.
-        path: String,
-        /// Credential-free HTTPS URL or explicit loopback HTTP URL.
-        url: String,
-        /// Optional environment-backed bearer credential reference.
-        credential_reference: Option<String>,
-    },
+    /// Garbage collect unreferenced inactive plugin content.
+    PluginGc,
     /// Verify a signed offline release bundle.
     BundleVerify {
         /// Server-local bundle path.

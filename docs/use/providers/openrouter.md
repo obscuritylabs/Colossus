@@ -37,7 +37,7 @@ exact catalog identifier and its limits when you need a specific model.
 
 <!-- provider-guide-config:start -->
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 providers:
   profiles:
     openrouter-provider:

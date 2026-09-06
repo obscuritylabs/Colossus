@@ -443,8 +443,13 @@ fn run_output_is_response_only_for_humans_and_structured_for_automation() {
 #[test]
 fn terminal_completion_catalog_includes_commands_and_discovered_skills() {
     let themes = ThemeLibrary::default();
-    let values =
-        terminal_completion_values(&["skill-creator".into(), "repo-review".into()], &themes);
+    let values = terminal_completion_values(
+        &[
+            "colossus/coding".into(),
+            "dev.example.review/repo-review".into(),
+        ],
+        &themes,
+    );
     assert!(values.contains(&"/help".into()));
     assert!(values.contains(&"/tui prefs".into()));
     assert!(values.contains(&"/workflow status".into()));
@@ -454,17 +459,26 @@ fn terminal_completion_catalog_includes_commands_and_discovered_skills() {
     assert!(values.contains(&"/workflow subscription list".into()));
     assert!(values.contains(&"/theme hacker".into()));
     assert!(values.contains(&"/theme preview high_contrast".into()));
-    assert!(values.contains(&"@skill-creator".into()));
-    assert!(values.contains(&"@repo-review".into()));
+    assert!(values.contains(&"@colossus/coding".into()));
+    assert!(values.contains(&"@dev.example.review/repo-review".into()));
 
     let (prompt, skills) = resolve_skill_mentions(
-        "@skill-creator @repo-review Review this repository",
-        &["skill-creator".into(), "repo-review".into()],
+        "@colossus/coding @dev.example.review/repo-review Review this repository",
+        &[
+            "colossus/coding".into(),
+            "dev.example.review/repo-review".into(),
+        ],
     );
     assert_eq!(prompt, "Review this repository");
-    assert_eq!(skills, vec!["skill-creator", "repo-review"]);
-    let (prompt, skills) = resolve_skill_mentions("@someone hello", &["repo-review".into()]);
-    assert_eq!(prompt, "@someone hello");
+    assert_eq!(
+        skills,
+        vec!["colossus/coding", "dev.example.review/repo-review"]
+    );
+    let (prompt, skills) = resolve_skill_mentions(
+        "@repo-review hello",
+        &["dev.example.review/repo-review".into()],
+    );
+    assert_eq!(prompt, "@repo-review hello");
     assert!(skills.is_empty());
 }
 
@@ -517,7 +531,7 @@ fn development_init_preserves_sparse_source_origin_and_applies_only_explicit_ove
     fs::write(
         &source,
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: source.redb
 access:
@@ -629,7 +643,7 @@ fn development_init_preserves_encrypted_protection_with_fresh_storage_identity()
     let platform_source = directory.path().join("platform-source.yaml");
     fs::write(
         &platform_source,
-        r#"schemaVersion: 2
+        r#"schemaVersion: 3
 storage:
   path: source.redb
   keys:
@@ -667,7 +681,7 @@ storage:
     let environment_source = directory.path().join("environment-source.yaml");
     fs::write(
         &environment_source,
-        r#"schemaVersion: 2
+        r#"schemaVersion: 3
 storage:
   path: source.redb
   keys:
@@ -874,7 +888,7 @@ fn default_and_local_config_init_select_the_expected_storage_locations() {
     .expect("global source document");
     assert_eq!(
         fs::read_to_string(home.config_path()).expect("global source text"),
-        "schemaVersion: 2\nstorage:\n  location: home_workspace\n  path: state.redb\n"
+        "schemaVersion: 3\nstorage:\n  location: home_workspace\n  path: state.redb\n"
     );
     let global_root = global_source.as_object().expect("global source mapping");
     assert_eq!(
@@ -905,7 +919,7 @@ fn default_and_local_config_init_select_the_expected_storage_locations() {
     .expect("local source document");
     assert_eq!(
         fs::read_to_string(workspace.join(".colossus/config.yaml")).expect("local source text"),
-        "schemaVersion: 2\nstorage:\n  location: workspace\n  path: .colossus/state.redb\n"
+        "schemaVersion: 3\nstorage:\n  location: workspace\n  path: .colossus/state.redb\n"
     );
     let local_root = local_source.as_object().expect("local source mapping");
     assert_eq!(
@@ -1013,7 +1027,7 @@ fn development_config_init_rejects_dangling_state_and_anchor_entries() {
     let source = anchor_directory.path().join("source.yaml");
     fs::write(
         &source,
-        r#"schemaVersion: 2
+        r#"schemaVersion: 3
 storage:
   path: source.redb
   keys:
@@ -1739,42 +1753,6 @@ fn worker_public_api_modes_conflict_and_never_accept_bearer_material() {
         conflicting_retirement.kind(),
         clap::error::ErrorKind::ArgumentConflict
     );
-}
-
-#[test]
-fn registry_cli_and_tui_arguments_preserve_credential_references() {
-    let cli = Cli::try_parse_from([
-        "colossus",
-        "registry",
-        "pull",
-        "https://registry.example/v1/demo/1.0.0",
-        "./demo",
-        "--credential-reference",
-        "env:REGISTRY_TOKEN",
-    ])
-    .expect("registry pull command");
-    assert!(matches!(
-        cli.command,
-        Command::Registry(RegistryCommand {
-            command: RegistryAction::Pull {
-                credential_reference: Some(reference),
-                ..
-            }
-        }) if reference == "env:REGISTRY_TOKEN"
-    ));
-    assert_eq!(
-        registry_slash_args(
-            "./demo https://registry.example/v1/demo/1.0.0 env:REGISTRY_TOKEN",
-            "usage",
-        )
-        .expect("registry slash args"),
-        (
-            "./demo",
-            "https://registry.example/v1/demo/1.0.0",
-            Some("env:REGISTRY_TOKEN")
-        )
-    );
-    assert!(registry_slash_args("./demo https://registry.example token", "usage").is_err());
 }
 
 #[test]

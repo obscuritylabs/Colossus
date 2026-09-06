@@ -39,7 +39,7 @@ overlay, then replace
 
 <!-- provider-guide-config:start -->
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 providers:
   profiles:
     openai-provider:

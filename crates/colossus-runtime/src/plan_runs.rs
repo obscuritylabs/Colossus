@@ -44,22 +44,22 @@ impl Runtime {
         self.validate_plan_target(session_id, &target)?;
         let runtime_mode = plan_mode_instructions(&target);
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
-        let composition = self.skill_composer.compose(
+        let composition = compose_plugins(
+            &prepared.plugins.records,
             &prepared.base_text,
-            prompt,
             explicit_skills,
             sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
+            self.plugins_enabled,
         )?;
         let instructions = prepared.complete_composed_base(&composition.instructions);
         let active = composition
             .active_skills
             .iter()
-            .map(|skill| skill.name.clone())
+            .map(|skill| skill.id.clone())
             .collect::<Vec<_>>();
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             self.agent.run_plan_target_in_session_with_skills(
                 role,
                 &instructions,
@@ -118,22 +118,22 @@ impl Runtime {
         self.validate_plan_target(session_id, &target)?;
         let runtime_mode = plan_mode_instructions(&target);
         let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
-        let composition = self.skill_composer.compose(
+        let composition = compose_plugins(
+            &prepared.plugins.records,
             &prepared.base_text,
-            prompt,
             explicit_skills,
             sticky_skills,
-            self.skills_enabled,
-            &self.tools.list_specs(),
+            self.plugins_enabled,
         )?;
         let instructions = prepared.complete_composed_base(&composition.instructions);
         let active = composition
             .active_skills
             .iter()
-            .map(|skill| skill.name.clone())
+            .map(|skill| skill.id.clone())
             .collect::<Vec<_>>();
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             Box::pin(self.agent.run_plan_target_in_session_with_skills_stream(
                 role,
                 &instructions,
@@ -176,8 +176,9 @@ impl Runtime {
             .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        scope_instruction_snapshot(
+        scope_run_snapshots(
             prepared.snapshot,
+            prepared.plugins,
             Box::pin(
                 self.run_with_subagent_scheduling(self.agent.run_approved_plan(
                     role,
@@ -302,7 +303,7 @@ impl Runtime {
         }
         match strategy {
             PlanExecutionStrategy::Direct => {
-                let prepared = captured.finalize(APPROVED_PLAN_INSTRUCTIONS);
+                let prepared = captured.finalize(APPROVED_PLAN_INSTRUCTIONS)?;
                 let prompt = goal_objective_from_plan(&plan);
                 let run_id = public_run_id
                     .map(str::to_owned)
@@ -363,7 +364,7 @@ impl Runtime {
                     &mut buffered_observer,
                     control,
                 ));
-                let run = scope_instruction_snapshot(prepared.snapshot, run);
+                let run = scope_run_snapshots(prepared.snapshot, prepared.plugins, run);
                 let terminal = match self
                     .forward_run_with_subagent_scheduling(run, events, receiver, observer, control)
                     .await
@@ -479,7 +480,7 @@ impl Runtime {
                         }
                     };
                 let mode = approved_goal_mode_instructions(&goal);
-                let prepared = captured.finalize(&mode);
+                let prepared = captured.finalize(&mode)?;
                 let terminal = self
                     .run_existing_goal_stream_controlled(
                         role,

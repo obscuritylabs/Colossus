@@ -55,7 +55,7 @@ for the selected catalog entry.
 
 <!-- provider-guide-config:start -->
 ```yaml
-schemaVersion: 2
+schemaVersion: 3
 providers:
   profiles:
     codex-provider:

@@ -72,7 +72,7 @@ const STATUS: DesktopStatus = {
   capabilities: {
     research: true,
     delegation: true,
-    skills: true,
+    plugins: true,
     tui: true,
     shellTerminal: true,
     files: true,

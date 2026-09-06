@@ -647,14 +647,14 @@ mod tests {
         fs::create_dir(root.path().join(".colossus")).expect("control directory");
         fs::write(
             root.path().join(".colossus/config.yaml"),
-            "schemaVersion: 2\n",
+            "schemaVersion: 3\n",
         )
         .expect("configuration");
 
         let canonical = fs::canonicalize(root.path()).expect("canonical root");
         assert_eq!(
             read_repository_configuration(&canonical).expect("repository configuration"),
-            "schemaVersion: 2\n"
+            "schemaVersion: 3\n"
         );
         assert!(read_file(&canonical, ".colossus/config.yaml").is_err());
     }
@@ -674,7 +674,7 @@ mod tests {
     fn repository_configuration_reader_rejects_linked_control_paths() {
         let root = tempdir().expect("root");
         let outside = tempdir().expect("outside");
-        fs::write(outside.path().join("config.yaml"), "schemaVersion: 2\n").expect("configuration");
+        fs::write(outside.path().join("config.yaml"), "schemaVersion: 3\n").expect("configuration");
         std::os::unix::fs::symlink(outside.path(), root.path().join(".colossus"))
             .expect("control directory link");
 

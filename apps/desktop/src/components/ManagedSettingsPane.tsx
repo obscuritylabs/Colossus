@@ -25,6 +25,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { type InputHTMLAttributes, useEffect, useMemo, useState } from "react";
+import { PluginConfigurationEditor } from "./PluginConfigurationEditor";
 
 import {
   applyRepositoryConfiguration,
@@ -515,44 +516,52 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     { kind: "disabled" },
   ),
   toggleField(
-    "skills.enabled",
-    "Skills",
-    "Skills",
-    "Allow skills to provide reusable instructions and workflows.",
+    "plugins.enabled",
+    "Plugins",
+    "Agent Plugins",
+    "Allow globally active Agent Plugins after Workspace policy narrowing.",
     true,
     true,
   ),
-  toggleField(
-    "skills.allowUserOverrides",
-    "Skills",
-    "User skill overrides",
-    "Allow user-installed skills to override bundled or repository skills.",
-    false,
-    true,
-  ),
   advancedField(
-    "skills.bundled",
-    "Skills",
-    "Bundled skill library",
-    "Select the skill library included with Colossus.",
-    "text",
-    "bundled-skills",
-  ),
-  advancedField(
-    "skills.repository",
-    "Skills",
-    "Repository skill library",
-    "Set the workspace-relative directory that contains repository skills.",
-    "text",
-    ".colossus/skills",
-  ),
-  advancedField(
-    "skills.disabled",
-    "Skills",
-    "Disabled skills",
-    "List skill names that should not be loaded.",
+    "plugins.include",
+    "Plugins",
+    "Included plugins",
+    "Optionally allow only these globally active plugin names.",
     "string_list",
     [],
+  ),
+  advancedField(
+    "plugins.exclude",
+    "Plugins",
+    "Excluded plugins",
+    "Disable these globally active plugin names in this Workspace.",
+    "string_list",
+    [],
+  ),
+  advancedField(
+    "plugins.trustProfiles",
+    "Plugins",
+    "Trust profiles",
+    "Configure required, optional, or digest-only Sigstore verification profiles.",
+    "json",
+    { default: { mode: "required" } },
+  ),
+  advancedField(
+    "plugins.registries",
+    "Plugins",
+    "OCI registries",
+    "Configure exact registry, token-service, redirect, authentication, and trust origins.",
+    "json",
+    {},
+  ),
+  advancedField(
+    "plugins.mcpServers",
+    "Plugins",
+    "Plugin MCP servers",
+    "Explicitly enable and narrow individual plugin-provided MCP servers.",
+    "json",
+    {},
   ),
   advancedField(
     "workflows.repository",
@@ -4762,7 +4771,7 @@ export function SpaceSettingsBody({
         [
           ...new Set([
             ...filtered.map((descriptor) => descriptor.section),
-            "Packs",
+            "Plugins",
           ]),
         ]
           .sort()
@@ -4788,7 +4797,7 @@ export function SpaceSettingsBody({
                 <summary>
                   <span>{section}</span>
                   <small>
-                    {section === "Packs"
+                    {section === "Plugins"
                       ? "Live catalog"
                       : `${sectionDescriptors.length} settings`}
                   </small>
@@ -4857,11 +4866,9 @@ export function ExtensionCatalog({
 }) {
   if (!matchesExtensionSection(section)) return null;
   const count =
-    section === "Skills"
-      ? (inventory?.skills.length ?? 0)
-      : section === "Packs"
-        ? (inventory?.packs.length ?? 0)
-        : (inventory?.workflows.length ?? 0);
+    section === "Plugins"
+      ? (inventory?.plugins.length ?? 0)
+      : (inventory?.workflows.length ?? 0);
   return (
     <div className="managed-extension-catalog">
       <div className="managed-catalog-toolbar">
@@ -4900,56 +4907,33 @@ export function ExtensionCatalog({
       ) : null}
       {runtimeActive && inventory && count > 0 ? (
         <div className="managed-list">
-          {section === "Skills"
-            ? inventory.skills.map((skill) => (
+          {section === "Plugins"
+            ? inventory.plugins.map((plugin) => (
                 <div
                   className="managed-list-row"
-                  key={`${skill.name}:${skill.version}:${skill.source}`}
-                >
-                  <span className="resource-icon">
-                    <IconFileImport size={17} />
-                  </span>
-                  <div>
-                    <strong>
-                      {skill.name} · {skill.version}
-                    </strong>
-                    <small>{skill.description}</small>
-                  </div>
-                  <span className="status-chip tone-neutral">
-                    {skill.source}
-                  </span>
-                  <span
-                    className={`status-chip ${skill.offlineCompatible ? "tone-success" : "tone-warning"}`}
-                  >
-                    {skill.offlineCompatible ? "Offline" : "Network"}
-                  </span>
-                </div>
-              ))
-            : null}
-          {section === "Packs"
-            ? inventory.packs.map((pack) => (
-                <div
-                  className="managed-list-row"
-                  key={`${pack.name}:${pack.version}:${pack.manifestSha256}`}
+                  key={`${plugin.name}:${plugin.version}:${plugin.digest}`}
                 >
                   <span className="resource-icon">
                     <IconDatabase size={17} />
                   </span>
                   <div>
                     <strong>
-                      {pack.name} · {pack.version}
+                      {plugin.name} · {plugin.version}
                     </strong>
-                    <small>{pack.publisher}</small>
+                    <small>
+                      {plugin.description} · {plugin.skillIds.length} skills ·{" "}
+                      {plugin.mcpServerIds.length} MCP servers
+                    </small>
                   </div>
                   <span
-                    className={`status-chip ${pack.status === "enabled" ? "tone-success" : "tone-neutral"}`}
+                    className={`status-chip ${plugin.status === "enabled" ? "tone-success" : "tone-neutral"}`}
                   >
-                    {pack.status}
+                    {plugin.status}
                   </span>
                   <span
-                    className={`status-chip ${pack.trusted ? "tone-success" : "tone-warning"}`}
+                    className={`status-chip ${plugin.trusted ? "tone-success" : "tone-warning"}`}
                   >
-                    {pack.trusted ? "Trusted" : "Untrusted"}
+                    {plugin.trusted ? "Trusted" : "Untrusted"}
                   </span>
                 </div>
               ))
@@ -4982,7 +4966,7 @@ export function ExtensionCatalog({
 }
 
 function matchesExtensionSection(section: string) {
-  return section === "Skills" || section === "Packs" || section === "Workflows";
+  return section === "Plugins" || section === "Workflows";
 }
 
 function AuthorityControls({
@@ -5139,6 +5123,23 @@ function FieldControl({
   value: unknown;
   onChange: (value: unknown) => void;
 }) {
+  if (
+    [
+      "plugins.registries",
+      "plugins.trustProfiles",
+      "plugins.mcpServers",
+    ].includes(descriptor.id)
+  ) {
+    return (
+      <div role="group" aria-label={descriptor.title}>
+        <PluginConfigurationEditor
+          id={descriptor.id}
+          value={value}
+          onChange={onChange}
+        />
+      </div>
+    );
+  }
   if (descriptor.control === "toggle") {
     return (
       <input
@@ -8104,30 +8105,18 @@ function fixtureImportProposal(
 
 function fixtureExtensionInventory(): ManagedExtensionInventory {
   return {
-    skills: [
+    plugins: [
       {
-        name: "incident-response",
-        version: "1.3.0",
-        description: "Structured incident triage and evidence handling.",
-        source: "repository:incident-response",
-        offlineCompatible: true,
-      },
-      {
-        name: "release-review",
-        version: "2.1.0",
-        description: "Release readiness and regression review.",
-        source: "bundled:release-review",
-        offlineCompatible: true,
-      },
-    ],
-    packs: [
-      {
-        name: "engineering-tools",
+        name: "dev.colossus.engineering-tools",
         version: "4.2.1",
-        publisher: "Obscurity Labs",
+        description: "Engineering review skills and MCP integrations.",
+        source: "registry.example.test/engineering-tools@sha256:opaque",
         status: "enabled",
-        manifestSha256: "5d8c0f12f65de8a2a7e61a3b4a8dd204",
+        digest: "sha256:5d8c0f12f65de8a2a7e61a3b4a8dd204",
         trusted: true,
+        skillIds: ["dev.colossus.engineering-tools/release-review"],
+        mcpServerIds: ["dev.colossus.engineering-tools/github"],
+        diagnosticCount: 0,
       },
     ],
     workflows: [

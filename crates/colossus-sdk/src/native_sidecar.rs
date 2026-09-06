@@ -2418,6 +2418,7 @@ mod tests {
 
     fn approval_run() -> crate::Run {
         crate::Run {
+            plugin_skill_ids: Vec::new(),
             run_id: "run-approval".into(),
             session_id: "session-approval".into(),
             title: "Approval test".into(),
@@ -2432,7 +2433,6 @@ mod tests {
             pending_interaction_count: 1,
             terminal: None,
             etag: "approval-etag".into(),
-            selected_skills: Vec::new(),
             archived: false,
         }
     }

@@ -356,11 +356,6 @@ impl WorkspaceIdentity {
         &self.0.canonical_path
     }
 
-    #[cfg(unix)]
-    pub(super) fn directory(&self) -> Result<File, StoreError> {
-        self.0.directory.try_clone().map_err(|_| identity_changed())
-    }
-
     #[cfg(target_os = "linux")]
     fn matches_expected(&self, expected: &WorkspaceIdentityToken) -> Result<bool, StoreError> {
         let version = LinuxWorkspaceIdentityVersion::from_raw(self.0.linux_identity.version())

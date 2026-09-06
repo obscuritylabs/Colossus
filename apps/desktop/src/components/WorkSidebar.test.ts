@@ -21,7 +21,6 @@ const RUN: Run = {
   pendingInteractionCount: 0,
   terminal: null,
   etag: "etag-sidebar",
-  selectedSkills: [],
   archived: false,
 };
 
@@ -42,7 +41,7 @@ const SPACE: SpaceSummary = {
 
 const CAPABILITIES = {
   delegation: true,
-  skills: true,
+  plugins: true,
   tui: true,
   shellTerminal: true,
   files: true,
@@ -130,6 +129,7 @@ describe("WorkSidebar", () => {
     expect(markup).toContain('aria-label="New thread in Colossus"');
     expect(markup).not.toContain('class="button primary new-work"');
     expect(markup).toContain("Capabilities");
+    expect(markup).toContain('aria-label="Plugins"');
     expect(markup).toContain("Connections");
     expect(markup).not.toContain('aria-label="Activity"');
     expect(markup).toContain('aria-label="Resize Workspace sidebar"');
@@ -185,14 +185,26 @@ describe("WorkSidebar", () => {
       capabilities: {
         ...CAPABILITIES,
         delegation: false,
-        skills: false,
+        plugins: false,
         artifacts: false,
         agentWorkflows: false,
       },
     });
 
     expect(markup).toContain("Capabilities");
+    expect(markup).toContain('aria-label="Plugins"');
     expect(markup).toContain("Library");
+  });
+
+  it("marks the Plugins destination as the current page", () => {
+    const markup = renderSidebar({ surface: "plugins" });
+
+    expect(openingButtonTag(markup, 'aria-label="Plugins"')).toContain(
+      'aria-current="page"',
+    );
+    expect(openingButtonTag(markup, 'aria-label="Work"')).not.toContain(
+      'aria-current="page"',
+    );
   });
 
   it("keeps destination names stable when a visual attention count is present", () => {

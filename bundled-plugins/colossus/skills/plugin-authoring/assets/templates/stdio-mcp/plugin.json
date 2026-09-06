@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "example-stdio",
+  "version": "0.1.0",
+  "description": "Connect a separately installed stdio MCP server."
+}

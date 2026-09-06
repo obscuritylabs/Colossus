@@ -34,15 +34,18 @@ impl Runtime {
             None
         };
         serde_json::from_value(
-            self.execute_work_operation(WorkOperation::SubagentCreate {
-                session_id: session_id.into(),
-                parent_run_id: lineage.clone(),
-                parent_call_id: lineage,
-                task: task.into(),
-                role: role.into(),
-                allowed_tools: None,
-                instruction_snapshot_id,
-            })
+            scope_plugin_catalog(
+                prepared.plugins,
+                self.execute_work_operation(WorkOperation::SubagentCreate {
+                    session_id: session_id.into(),
+                    parent_run_id: lineage.clone(),
+                    parent_call_id: lineage,
+                    task: task.into(),
+                    role: role.into(),
+                    allowed_tools: None,
+                    instruction_snapshot_id,
+                }),
+            )
             .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))
@@ -81,6 +84,7 @@ impl Runtime {
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
         self.emit_subagent_update(&cancelled).await;
+        self.instruction_snapshots.take_job_catalog(id);
         Ok(cancelled)
     }
 
@@ -125,13 +129,49 @@ impl Runtime {
                 let job = started;
                 let agent = Arc::clone(&self.agent);
                 let max_turns = self.agent_max_turns;
-                let inherited_instructions =
-                    match self.work.subagent_instruction_snapshot_id(&job.id)? {
-                        Some(id) => self.instruction_snapshots.load(&id)?.compose(),
-                        None => String::new(),
+                let prepared = (|| -> Result<_, RuntimeError> {
+                    let retained = self.instruction_snapshots.take_job_catalog(&job.id);
+                    let snapshot = self
+                        .work
+                        .subagent_instruction_snapshot_id(&job.id)?
+                        .map(|id| self.instruction_snapshots.load(&id))
+                        .transpose()?
+                        .map(Arc::new);
+                    let catalog = match retained {
+                        Some(catalog) => catalog,
+                        None => match &snapshot {
+                            Some(snapshot) => {
+                                self.plugin_catalog.restore(snapshot.plugin_digests())?
+                            }
+                            None => self.plugin_catalog.restore(&BTreeMap::new())?,
+                        },
                     };
+                    let selections = snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.plugin_skill_ids().to_vec())
+                        .unwrap_or_default();
+                    let base = snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.compose())
+                        .unwrap_or_default();
+                    let inherited =
+                        compose_plugins(&catalog.records, &base, &selections, &[], true)?
+                            .instructions;
+                    Ok((snapshot, catalog, selections, inherited))
+                })();
+                let (snapshot, catalog, selections, inherited_instructions) = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        let terminal: SubagentJob = serde_json::from_value(self.execute_work_operation(WorkOperation::SubagentStop {
+                            id: job.id.clone(), status: SubagentStatus::Failed,
+                            error: bounded_tool_text(&format!("Captured plugin or instruction content is unavailable; start a new run. {error}"), 4096),
+                        }).await?).map_err(|error| RuntimeError::Config(error.to_string()))?;
+                        self.emit_subagent_update(&terminal).await;
+                        continue;
+                    }
+                };
                 set.spawn(
-                    async move {
+                    scope_run_snapshots(snapshot, catalog, async move {
                         let child_instructions = format!(
                             "You are a durable Colossus child agent for job {}. Complete only the assigned task. Nested delegation is disabled. Return a concise result for the parent.",
                             job.id
@@ -142,7 +182,7 @@ impl Runtime {
                             format!("{inherited_instructions}\n\n{child_instructions}")
                         };
                         let result = agent
-                            .run_subagent(
+                            .run_subagent_with_skills(
                                 &job.role,
                                 &instructions,
                                 &job.task,
@@ -150,10 +190,11 @@ impl Runtime {
                                 &job.child_session_id,
                                 &job.id,
                                 job.allowed_tools.as_deref(),
+                                &selections,
                             )
                             .await;
                         (job.id, result)
-                    }
+                    })
                     .instrument(tracing::Span::current()),
                 );
             }

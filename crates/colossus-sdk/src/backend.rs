@@ -323,6 +323,11 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Caller-bound plugin reads, available only with explicit capability support.
+    fn plugins(&self) -> Option<Arc<dyn crate::PluginClient>> {
+        None
+    }
+
     /// Close this client or isolated runtime idempotently.
     async fn close(&self) -> SdkResult<()>;
 }

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "colossus",
+  "version": "0.10.10-preview.10",
+  "description": "First-party Colossus development and security Agent Skills.",
+  "author": {
+    "name": "Colossus"
+  },
+  "license": "Apache-2.0"
+}

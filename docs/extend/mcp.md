@@ -85,7 +85,7 @@ grant; adding them does not constrain ambient authority. `allowedTools: ["*"]` i
 deliberately broad: every currently or subsequently published valid tool becomes
 eligible for normal schema validation, policy, approval, quarantine, and audit. An
 empty list, duplicate names, or a wildcard mixed with explicit names is rejected.
-Signed-pack MCP declarations remain explicit-only. Set `allowStateless: true` only when
+Agent Plugin MCP declarations remain explicit-only. Set `allowStateless: true` only when
 the reviewed remote server intentionally omits `Mcp-Session-Id`; omit it for stateful
 servers.
 
@@ -174,5 +174,6 @@ The maintainer-only live Splunk smoke-test command is documented in
 
 ## Next step
 
-Package a distributable executable capability with [Packs](packs.md). Exact MCP
-configuration fields live in [MCP server configuration](../reference/configuration/mcp.md).
+Package portable skills and MCP declarations with [Agent Plugins](plugins.md). Exact
+standalone MCP configuration fields live in
+[MCP server configuration](../reference/configuration/mcp.md).

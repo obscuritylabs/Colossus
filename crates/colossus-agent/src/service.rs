@@ -8,6 +8,7 @@ pub struct AgentService {
     pub(super) executor: Arc<dyn ToolExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) context_preparer: Option<Arc<dyn ContextPreparer>>,
+    pub(super) provenance: Option<Arc<dyn colossus_ports::RunProvenanceProvider>>,
 }
 
 impl AgentService {
@@ -26,12 +27,23 @@ impl AgentService {
             executor,
             sessions,
             context_preparer: None,
+            provenance: None,
         }
     }
 
     /// Attach the shared durable context boundary used before every provider turn.
     pub fn with_context_preparer(mut self, preparer: Arc<dyn ContextPreparer>) -> Self {
         self.context_preparer = Some(preparer);
+        self
+    }
+
+    /// Attach immutable host catalog evidence to each run and its effects.
+    #[must_use]
+    pub fn with_run_provenance(
+        mut self,
+        provider: Arc<dyn colossus_ports::RunProvenanceProvider>,
+    ) -> Self {
+        self.provenance = Some(provider);
         self
     }
 
@@ -713,6 +725,32 @@ impl AgentService {
         subagent_id: &str,
         allowed_tools: Option<&[String]>,
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_subagent_with_skills(
+            role,
+            instructions,
+            task,
+            max_turns,
+            child_session_id,
+            subagent_id,
+            allowed_tools,
+            &[],
+        )
+        .await
+    }
+
+    /// Execute a child with its parent's exact declarative skill selections.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_subagent_with_skills(
+        &self,
+        role: &str,
+        instructions: &str,
+        task: &str,
+        max_turns: u16,
+        child_session_id: &str,
+        subagent_id: &str,
+        allowed_tools: Option<&[String]>,
+        active_skills: &[String],
+    ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
             instructions,
@@ -722,6 +760,7 @@ impl AgentService {
             RunScope {
                 subagent_id: Some(subagent_id),
                 allowed_tools,
+                active_skills,
                 ..RunScope::default()
             },
             terminal_actor(),

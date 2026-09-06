@@ -110,7 +110,7 @@ this role. Automatic proof minting is restricted to model or child-agent `shell.
 outside workflow lineage, and only a valid low-risk `allow` assessment qualifies. MCP
 review is bound to the exact endpoint identity, server, tool, fresh schema hash, and
 validated arguments. Descriptions and annotations are evaluator inputs only and remain
-untrusted advisory hints. Other network methods, integrations, pack-provided MCP
+untrusted advisory hints. Other network methods, integrations, plugin-provided MCP
 actions, workspace mutations, unsupported metadata, and medium, high, malformed, or
 unavailable assessments fall back to explicit approval or denial. Effect output remains
 quarantined and post-effect authorized. Evaluator metadata omits resolved credentials

@@ -106,4 +106,4 @@ absent.
 ## Next step
 
 Use [MCP](mcp.md) for an exact configured stdio server. Exact integration and OpenAPI
-formats live in [Extension manifests](../reference/extension-formats.md).
+formats live in [Agent Plugin formats](../reference/extension-formats.md).

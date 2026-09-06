@@ -15,6 +15,7 @@ colossus-api-runtime.workspace = true
 colossus-contracts.workspace = true
 colossus-grpc.workspace = true
 colossus-policy.workspace = true
+colossus-plugins.workspace = true
 colossus-ports.workspace = true
 colossus-runtime.workspace = true
 colossus-workflow.workspace = true

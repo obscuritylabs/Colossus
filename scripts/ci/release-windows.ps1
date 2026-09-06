@@ -16,10 +16,14 @@ Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $smoke "workflows") | Out-Null
 Copy-Item release/smoke-config.yaml (Join-Path $smoke "config.yaml")
 Push-Location $smoke
+$previousPluginHome = $env:COLOSSUS_HOME
+$env:COLOSSUS_HOME = Join-Path $smoke "colossus-home"
 try {
     $versionOutput = (& $binary --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $versionOutput.StartsWith("colossus ")) { throw "version command failed" }
     & $binary --config config.yaml config show | Out-Null
+    $plugins = @(& $binary --config config.yaml plugins list | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "embedded core discovery failed" }
     & $binary --config config.yaml run connected | Set-Content -Encoding utf8 result.json
     $result = Get-Content -Raw result.json | ConvertFrom-Json
     if ($result.output -ne "connected" -or $result.profile -ne "echo" -or $result.event_count -lt 3) { throw "offline smoke failed" }
@@ -27,6 +31,7 @@ try {
     $audit = Get-Content -Raw audit.json | ConvertFrom-Json
     if ($audit.last_sequence -lt 1 -or $audit.checkpoint.global_sequence -ne $audit.last_sequence) { throw "audit smoke failed" }
 } finally {
+    $env:COLOSSUS_HOME = $previousPluginHome
     Pop-Location
 }
 
@@ -77,13 +82,18 @@ if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "installation
 Copy-Item release/smoke-config.yaml (Join-Path $installedSmoke "config.yaml")
 $installed = Join-Path $prefix "bin/colossus.exe"
 Push-Location $installedSmoke
+$previousPluginHome = $env:COLOSSUS_HOME
+$env:COLOSSUS_HOME = Join-Path $installedSmoke "colossus-home"
 try {
+    $plugins = @(& $installed --config config.yaml plugins list | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "installed embedded core discovery failed" }
     & $installed --config config.yaml run installed-offline | Set-Content -Encoding utf8 result.json
     $result = Get-Content -Raw result.json | ConvertFrom-Json
     if ($result.output -ne "installed-offline" -or $result.profile -ne "echo") { throw "installed smoke failed" }
     & $installed --config config.yaml audit verify | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "installed audit failed" }
 } finally {
+    $env:COLOSSUS_HOME = $previousPluginHome
     Pop-Location
 }
 
@@ -98,13 +108,13 @@ New-Item -ItemType Directory -Force $artifactDirectory, $workflows | Out-Null
 Copy-Item $binary (Join-Path $artifactDirectory "colossus.exe")
 Copy-Item LICENSE (Join-Path $bundleStage "LICENSE")
 $config = [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 3
     access = [ordered]@{
         profile = "pinned"
         tools = [ordered]@{ include = @("echo"); exclude = @() }
         actions = [ordered]@{
             allow = @("bundle.verify")
-            requireApproval = @("bundle.key.inspect", "pack.trust.add", "bundle.build", "bundle.install")
+            requireApproval = @("bundle.key.inspect", "bundle.build", "bundle.install")
             deny = @()
         }
     }
@@ -152,8 +162,12 @@ $configPath = Join-Path $bundleRoot "config.yaml"
 $config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
 $keyInfo = & $binary --config $configPath --approval-mode full-access bundle key-info `
     --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
-& $binary --config $configPath --approval-mode full-access packs trust add colossus `
-    --public-key $keyInfo.public_key | Out-Null
+$publisherKeys = [ordered]@{}
+$publisherKeys[$keyInfo.key_id] = $keyInfo.public_key
+$config["bundles"] = [ordered]@{
+    trustedPublishers = [ordered]@{ colossus = $publisherKeys }
+}
+$config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
 $build = & $binary --config $configPath --approval-mode full-access bundle build `
     $bundleStage $bundle --name colossus-offline --version $version --publisher colossus `
     --created-at 2026-07-11T00:00:00Z --source-revision $env:GITHUB_SHA `

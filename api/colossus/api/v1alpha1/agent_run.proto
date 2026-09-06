@@ -220,6 +220,9 @@ message RunCancellation {
 
 // Run is the durable public run projection.
 message Run {
+  reserved 16;
+  reserved "selected_skills";
+
   // run_id is the opaque stable run identifier.
   string run_id = 1;
 
@@ -268,18 +271,21 @@ message Run {
   // etag is an opaque optimistic-concurrency token.
   string etag = 15;
 
-  // selected_skills is empty in v1alpha1 because public skill activation is denied.
-  repeated string selected_skills = 16;
-
   // title is a bounded deterministic display label derived from the opening request.
   string title = 17;
 
   // archived is true when the containing thread is hidden from normal listings.
   bool archived = 18;
+
+  // plugin_skill_ids are the selected qualified Agent Plugin skills, not tool grants.
+  repeated string plugin_skill_ids = 19;
 }
 
 // CreateRunRequest allocates and starts one durable agent run.
 message CreateRunRequest {
+  reserved 5;
+  reserved "selected_skills";
+
   // input contains bounded visible text or authorized opaque artifact references.
   repeated ContentPart input = 1;
 
@@ -295,9 +301,6 @@ message CreateRunRequest {
   // mode selects execute or planning with no implementation/external mutation;
   // planning may create Colossus-local task and plan records.
   RunMode mode = 4;
-
-  // selected_skills is reserved in v1alpha1; public skill activation is denied.
-  repeated string selected_skills = 5;
 
   // max_turns is bounded by server policy; zero selects the configured default.
   uint32 max_turns = 6;
@@ -320,6 +323,9 @@ message CreateRunRequest {
 
   // research_sources contains the explicit evidence lanes for Research.
   repeated ResearchSourceKind research_sources = 12;
+
+  // plugin_skill_ids select available qualified plugin/skill identifiers for this run.
+  repeated string plugin_skill_ids = 13;
 }
 
 // RunBranch identifies a canonical prefix without accepting transcript text.

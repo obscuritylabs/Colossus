@@ -1,5 +1,5 @@
 use super::{
-    EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest, compile_native,
+    EventSourcedIntegrationRepository, IntegrationExecutor, IntegrationRequest, compile_native,
     compile_openapi, normalize_native_response, operation_url, prepare_native_request,
     redact_exact_secret,
 };
@@ -8,16 +8,16 @@ use colossus_contracts::{
     SandboxBoundaryMode,
 };
 use colossus_policy::{EffectExecutor, SandboxBoundaryGate, system_actor};
-use colossus_ports::{EventJournal, ExtensionRepository};
-use colossus_testkit::{InMemoryEventJournal, assert_extension_repository_conformance};
+use colossus_ports::{EventJournal, IntegrationRepository};
+use colossus_testkit::{InMemoryEventJournal, assert_integration_repository_conformance};
 use serde_json::json;
 use std::sync::Arc;
 
 #[test]
-fn event_sourced_extension_repository_passes_shared_conformance() {
+fn event_sourced_integration_repository_passes_shared_conformance() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::rejecting_global_reads());
-    assert_extension_repository_conformance(|| {
-        Box::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)))
+    assert_integration_repository_conformance(|| {
+        EventSourcedIntegrationRepository::new(Arc::clone(&journal))
     });
 }
 
@@ -131,7 +131,7 @@ fn openapi_operation_preserves_a_server_path_without_a_trailing_slash() {
 #[test]
 fn extension_repository_reconstructs_reconnect_and_disconnect_history() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-    let repository = EventSourcedExtensionRepository::new(journal);
+    let repository = EventSourcedIntegrationRepository::new(journal);
     let connection = compile_openapi(
         "demo",
         &document(),
@@ -208,8 +208,8 @@ fn exact_credential_values_are_removed_from_quarantined_responses() {
 #[tokio::test]
 async fn canonical_credential_reference_mismatch_fails_before_network_execution() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-    let repository: Arc<dyn ExtensionRepository> =
-        Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
+    let repository: Arc<dyn IntegrationRepository> =
+        Arc::new(EventSourcedIntegrationRepository::new(Arc::clone(&journal)));
     let connection = compile_openapi(
         "demo",
         &document(),
@@ -262,8 +262,8 @@ async fn canonical_credential_reference_mismatch_fails_before_network_execution(
 async fn remote_plaintext_integration_requires_ambient_authority_in_the_permit() {
     let credential = "env:COLOSSUS_TEST_MISSING_PLAINTEXT_INTEGRATION_KEY";
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-    let repository: Arc<dyn ExtensionRepository> =
-        Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
+    let repository: Arc<dyn IntegrationRepository> =
+        Arc::new(EventSourcedIntegrationRepository::new(Arc::clone(&journal)));
     let connection = compile_openapi(
         "plaintext",
         &document(),

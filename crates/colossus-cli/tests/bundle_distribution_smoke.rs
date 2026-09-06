@@ -3,7 +3,7 @@
 #[path = "support/process.rs"]
 mod process_support;
 
-use colossus_packs::current_release_target;
+use colossus_bundles::{bundle_signing_key_info, current_release_target};
 use process_support::tempdir;
 use serde_json::Value;
 use std::{
@@ -74,6 +74,11 @@ fn trusted_bundle_is_built_verified_installed_and_executed_without_network() {
     let bundle = root.join("bundle");
     let prefix = root.join("prefix");
     let target = current_release_target().expect("current release target");
+    let signing_seed: [u8; 32] = hex::decode(SIGNING_SEED)
+        .expect("seed hex")
+        .try_into()
+        .expect("seed size");
+    let expected_key = bundle_signing_key_info(signing_seed);
     let artifact = artifact_path(&staged, target);
     fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("artifact directory");
     fs::copy(source_binary, &artifact).expect("stage binary");
@@ -81,7 +86,7 @@ fn trusted_bundle_is_built_verified_installed_and_executed_without_network() {
     fs::write(
         root.join("config.yaml"),
         format!(
-            r#"schemaVersion: 2
+            r#"schemaVersion: 3
 storage:
   path: {state}
   keys:
@@ -97,7 +102,7 @@ access:
     exclude: []
   actions:
     allow: [bundle.verify]
-    requireApproval: [bundle.key.inspect, pack.trust.add, bundle.build, bundle.install]
+    requireApproval: [bundle.key.inspect, bundle.build, bundle.install]
     deny: []
 policy:
   kind: built_in
@@ -128,6 +133,10 @@ agent:
   maxTurns: 2
 subagents:
   maxConcurrent: 1
+bundles:
+  trustedPublishers:
+    colossus:
+      {key_id}: {public_key}
 sandbox:
   backend: native
   profile: bundle-distribution-smoke-v1
@@ -152,6 +161,8 @@ sandbox:
             anchor = root.join("anchor.json").display(),
             workflows = root.join("workflows").display(),
             root = root.display(),
+            key_id = expected_key.key_id,
+            public_key = expected_key.public_key,
         ),
     )
     .expect("config");
@@ -174,19 +185,7 @@ sandbox:
     let key_info = json(&key_info);
     let public_key = key_info["public_key"].as_str().expect("public key");
     assert_eq!(key_info["key_id"].as_str().expect("key id").len(), 64);
-    let trust = command(source_binary, &root)
-        .args([
-            "--approval-mode",
-            "full-access",
-            "packs",
-            "trust",
-            "add",
-            "colossus",
-        ])
-        .args(["--public-key", public_key])
-        .output()
-        .expect("add trust");
-    assert_success(&trust);
+    assert_eq!(public_key, expected_key.public_key);
 
     let blocked_root = tempdir().expect("blocked root");
     let blocked_destination = fs::canonicalize(blocked_root.path())
@@ -215,7 +214,9 @@ sandbox:
         .expect("blocked bundle build");
     assert!(!blocked.status.success());
     assert!(
-        String::from_utf8_lossy(&blocked.stderr).contains("outside policy-authorized write roots")
+        String::from_utf8_lossy(&blocked.stderr).contains("outside authorized roots"),
+        "stderr={}",
+        String::from_utf8_lossy(&blocked.stderr)
     );
     assert!(!blocked_destination.exists());
 
@@ -271,10 +272,7 @@ sandbox:
             .output()
             .expect("escaped bundle install");
         assert!(!escaped.status.success());
-        assert!(
-            String::from_utf8_lossy(&escaped.stderr)
-                .contains("outside policy-authorized write roots")
-        );
+        assert!(String::from_utf8_lossy(&escaped.stderr).contains("outside authorized roots"));
         assert!(!escape.join("install").exists());
     }
 

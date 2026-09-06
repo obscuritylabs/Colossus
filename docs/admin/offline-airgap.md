@@ -18,7 +18,7 @@ state, optionally with protected storage.
   key.
 - For protected storage only: a supported platform credential service, or two
   independently managed 32-byte keys injected at launch.
-- Any local model, workflows, skills, policies, or extensions required inside the
+- Any local model, workflows, Agent Plugin OCI layouts, policies, or extensions required inside the
   boundary, already reviewed and transferred.
 
 ## Steps

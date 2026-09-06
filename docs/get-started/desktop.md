@@ -192,7 +192,8 @@ primary credential has exactly the run and prompt scopes plus the reviewed built
 ceiling for that selection. That ceiling includes bounded, non-recursive delegation when
 `agent.delegate` is selected; it never creates undeclared tools or administrative authority.
 Approval responses use a separate native-only, tool-less credential after the operating-system
-confirmation. Neither credential grants administrative or unrestricted skill authority.
+confirmation. Neither credential grants administrative authority or bypasses Agent Plugin
+policy.
 
 The permission selector beside the Work composer changes how Managed Local handles
 approval-required effects for subsequent work without restarting the runtime. **Deny**

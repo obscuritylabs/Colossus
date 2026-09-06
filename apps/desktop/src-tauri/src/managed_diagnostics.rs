@@ -99,27 +99,40 @@ struct WorkerReadiness {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct WorkerSkillMetadata {
+struct WorkerPluginManifest {
     name: String,
-    version: String,
-    description: String,
+    version: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WorkerPluginTrust {
+    trusted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WorkerPluginSkill {
+    id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WorkerPluginMcpServer {
+    id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WorkerPluginInventory {
+    manifest: WorkerPluginManifest,
+    digest: String,
     source: String,
-    offline_compatible: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct WorkerPackManifest {
-    name: String,
-    version: String,
-    publisher: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct WorkerPackInstallation {
-    manifest: WorkerPackManifest,
     status: String,
-    manifest_sha256: String,
-    trust_key_id: Option<String>,
+    trust: WorkerPluginTrust,
+    #[serde(default)]
+    skills: Vec<WorkerPluginSkill>,
+    #[serde(default)]
+    mcp_servers: Vec<WorkerPluginMcpServer>,
+    #[serde(default)]
+    diagnostics: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -150,23 +163,17 @@ pub(crate) struct ManagedRuntimeDiagnosticDto {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ManagedSkillCatalogDto {
+pub(crate) struct ManagedPluginCatalogDto {
     name: String,
     version: String,
     description: String,
     source: String,
-    offline_compatible: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ManagedPackCatalogDto {
-    name: String,
-    version: String,
-    publisher: String,
     status: String,
-    manifest_sha256: String,
+    digest: String,
     trusted: bool,
+    skill_ids: Vec<String>,
+    mcp_server_ids: Vec<String>,
+    diagnostic_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -182,8 +189,7 @@ pub(crate) struct ManagedWorkflowCatalogDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManagedExtensionInventoryDto {
-    skills: Vec<ManagedSkillCatalogDto>,
-    packs: Vec<ManagedPackCatalogDto>,
+    plugins: Vec<ManagedPluginCatalogDto>,
     workflows: Vec<ManagedWorkflowCatalogDto>,
 }
 
@@ -349,10 +355,9 @@ pub(crate) async fn get_managed_extension_inventory(
 ) -> Result<ManagedExtensionInventoryDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let worker = worker_for(&state, &request.space_id).await?;
-    let (skills, packs, workflows) =
-        tokio::try_join!(worker.skills(), worker.packs(), worker.workflows(),)
-            .map_err(|_| diagnostic_error("The extension inventory could not be loaded."))?;
-    extension_inventory(skills, packs, workflows)
+    let (plugins, workflows) = tokio::try_join!(worker.plugins(), worker.workflows(),)
+        .map_err(|_| diagnostic_error("The extension inventory could not be loaded."))?;
+    extension_inventory(plugins, workflows)
 }
 
 async fn oauth_status(
@@ -367,7 +372,7 @@ async fn oauth_status(
         .map_err(|_| diagnostic_error("The MCP OAuth status response was invalid."))
 }
 
-async fn worker_for(
+pub(crate) async fn worker_for(
     state: &AppState,
     space_id: &str,
 ) -> Result<colossus_worker_protocol::WorkerControlClient, CommandErrorDto> {
@@ -426,36 +431,45 @@ fn readiness_diagnostic(
 }
 
 fn extension_inventory(
-    skills: serde_json::Value,
-    packs: serde_json::Value,
+    plugins: serde_json::Value,
     workflows: serde_json::Value,
 ) -> Result<ManagedExtensionInventoryDto, CommandErrorDto> {
-    let skills = serde_json::from_value::<Vec<WorkerSkillMetadata>>(skills)
-        .map_err(|_| diagnostic_error("The skill inventory response was invalid."))?
+    let plugins = serde_json::from_value::<Vec<WorkerPluginInventory>>(plugins)
+        .map_err(|_| diagnostic_error("The plugin inventory response was invalid."))?
         .into_iter()
         .take(256)
-        .map(|skill| ManagedSkillCatalogDto {
-            name: renderer_safe_text(&skill.name, 128),
-            version: renderer_safe_text(&skill.version, 64),
-            description: renderer_safe_text(&skill.description, 512),
-            source: renderer_safe_text(&skill.source, 160),
-            offline_compatible: skill.offline_compatible,
-        })
-        .collect();
-    let packs = serde_json::from_value::<Vec<WorkerPackInstallation>>(packs)
-        .map_err(|_| diagnostic_error("The pack inventory response was invalid."))?
-        .into_iter()
-        .take(256)
-        .map(|pack| ManagedPackCatalogDto {
-            name: renderer_safe_text(&pack.manifest.name, 128),
-            version: renderer_safe_text(&pack.manifest.version, 64),
-            publisher: renderer_safe_text(&pack.manifest.publisher, 160),
-            status: match pack.status.as_str() {
-                "enabled" | "disabled" | "uninstalled" => pack.status,
+        .map(|plugin| ManagedPluginCatalogDto {
+            name: renderer_safe_text(&plugin.manifest.name, 128),
+            version: renderer_safe_text(
+                plugin.manifest.version.as_deref().unwrap_or("portable"),
+                64,
+            ),
+            description: renderer_safe_text(
+                plugin
+                    .manifest
+                    .description
+                    .as_deref()
+                    .unwrap_or("Agent Plugin"),
+                512,
+            ),
+            source: renderer_safe_text(&plugin.source, 160),
+            status: match plugin.status.as_str() {
+                "enabled" | "disabled" | "uninstalled" => plugin.status,
                 _ => "unknown".into(),
             },
-            manifest_sha256: renderer_safe_text(&pack.manifest_sha256, 64),
-            trusted: pack.trust_key_id.is_some(),
+            digest: renderer_safe_text(&plugin.digest, 80),
+            trusted: plugin.trust.trusted,
+            skill_ids: plugin
+                .skills
+                .into_iter()
+                .map(|skill| renderer_safe_text(&skill.id, 160))
+                .collect(),
+            mcp_server_ids: plugin
+                .mcp_servers
+                .into_iter()
+                .map(|server| renderer_safe_text(&server.id, 160))
+                .collect(),
+            diagnostic_count: plugin.diagnostics.len(),
         })
         .collect();
     let workflows = serde_json::from_value::<Vec<WorkerWorkflowMetadata>>(workflows)
@@ -478,11 +492,7 @@ fn extension_inventory(
             })
         })
         .collect();
-    Ok(ManagedExtensionInventoryDto {
-        skills,
-        packs,
-        workflows,
-    })
+    Ok(ManagedExtensionInventoryDto { plugins, workflows })
 }
 
 fn renderer_safe_text(value: &str, max_chars: usize) -> String {
@@ -549,23 +559,31 @@ mod tests {
     fn extension_inventory_is_typed_bounded_and_path_free() {
         let inventory = extension_inventory(
             serde_json::json!([{
-                "name": "repository-skill",
-                "version": "1.0.0",
-                "description": "Repository guidance",
-                "source": "repository:repository-skill",
-                "offline_compatible": true,
-                "instructions": "must-not-cross-renderer"
-            }]),
-            serde_json::json!([{
                 "manifest": {
-                    "name": "build-tools",
+                    "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+                    "name": "dev.example.build-tools",
                     "version": "2.0.0",
-                    "publisher": "Obscurity Labs"
+                    "description": "Repository guidance"
                 },
                 "status": "enabled",
-                "manifest_sha256": "a".repeat(64),
-                "trust_key_id": "publisher-key",
-                "installed_path": "C:\\private\\packs\\build-tools"
+                "digest": format!("sha256:{}", "a".repeat(64)),
+                "source": "registry.example.test/build-tools@sha256:opaque",
+                "trust": {
+                    "trusted": true,
+                    "profile": "production",
+                    "signer": "build@example.test",
+                    "method": "sigstore-keyless"
+                },
+                "skills": [{
+                    "id": "dev.example.build-tools/repository-skill",
+                    "plugin": "dev.example.build-tools",
+                    "name": "repository-skill",
+                    "description": "Repository guidance",
+                    "compatibility": null,
+                    "allowed_tools": null
+                }],
+                "mcp_servers": [],
+                "diagnostics": []
             }]),
             serde_json::json!([{
                 "event_type": "workflow.definition.changed.v1",
@@ -577,13 +595,17 @@ mod tests {
         )
         .expect("extension inventory");
 
-        assert_eq!(inventory.skills[0].name, "repository-skill");
-        assert!(inventory.packs[0].trusted);
+        assert_eq!(inventory.plugins[0].name, "dev.example.build-tools");
+        assert!(inventory.plugins[0].trusted);
+        assert_eq!(
+            inventory.plugins[0].skill_ids,
+            ["dev.example.build-tools/repository-skill"]
+        );
         assert_eq!(inventory.workflows[0].name, "release");
         assert_eq!(inventory.workflows[0].version, "3.2.1");
         let serialized = serde_json::to_string(&inventory).expect("inventory JSON");
         assert!(!serialized.contains("must-not-cross-renderer"));
-        assert!(!serialized.contains("C:\\\\private"));
+        assert!(!serialized.contains("build@example.test"));
         assert!(!serialized.contains("installedPath"));
         assert!(!serialized.contains("instructions"));
         assert!(!serialized.contains("payload"));

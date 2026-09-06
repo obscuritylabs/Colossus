@@ -249,7 +249,8 @@ export interface CaBundleStatus {
 export interface DesktopCapabilities {
   research?: boolean;
   delegation: boolean;
-  skills: boolean;
+  plugins: boolean;
+  pluginSkillSelection?: boolean;
   tui: boolean;
   shellTerminal: boolean;
   files: boolean;
@@ -393,21 +394,17 @@ export interface ManagedRuntimeDiagnostic {
   resultCount: number | null;
 }
 
-export interface ManagedSkillCatalogEntry {
+export interface ManagedPluginCatalogEntry {
   name: string;
   version: string;
   description: string;
   source: string;
-  offlineCompatible: boolean;
-}
-
-export interface ManagedPackCatalogEntry {
-  name: string;
-  version: string;
-  publisher: string;
   status: "enabled" | "disabled" | "uninstalled" | "unknown";
-  manifestSha256: string;
+  digest: string;
   trusted: boolean;
+  skillIds: string[];
+  mcpServerIds: string[];
+  diagnosticCount: number;
 }
 
 export interface ManagedWorkflowCatalogEntry {
@@ -419,8 +416,7 @@ export interface ManagedWorkflowCatalogEntry {
 }
 
 export interface ManagedExtensionInventory {
-  skills: ManagedSkillCatalogEntry[];
-  packs: ManagedPackCatalogEntry[];
+  plugins: ManagedPluginCatalogEntry[];
   workflows: ManagedWorkflowCatalogEntry[];
 }
 
@@ -760,7 +756,6 @@ export interface Run {
   pendingInteractionCount: number;
   terminal: RunTerminal | null;
   etag: string;
-  selectedSkills: string[];
   archived: boolean;
 }
 
@@ -1130,6 +1125,8 @@ export const USE_CONFIGURED_MAX_TURNS = 0;
 
 export interface CreateRunRequest {
   prompt: string;
+  pluginMentionsResolved?: boolean;
+  pluginSkillIds?: string[];
   artifactIds?: string[];
   sessionId?: string;
   role: string;

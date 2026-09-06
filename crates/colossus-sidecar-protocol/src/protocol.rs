@@ -21,9 +21,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 /// Exact desktop-to-TUI inherited-channel protocol version.
-pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 2;
+pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 3;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
 pub const DESKTOP_TUI_AUTH_INPUT_FD: i32 = 3;
 /// Fixed child descriptor to which the bundled TUI writes authentication responses.
@@ -1114,11 +1114,12 @@ pub const MANAGED_EDITABLE_FIELD_IDS: &[&str] = &[
     "memory.semantic",
     "research.maxSources",
     "research.maxWorkers",
-    "skills.enabled",
-    "skills.allowUserOverrides",
-    "skills.bundled",
-    "skills.repository",
-    "skills.disabled",
+    "plugins.enabled",
+    "plugins.include",
+    "plugins.exclude",
+    "plugins.trustProfiles",
+    "plugins.registries",
+    "plugins.mcpServers",
     "workflows.repository",
     "sandbox.profile",
     "sandbox.allowBrokerFallback",
@@ -2149,7 +2150,7 @@ mod tests {
     fn configuration_inspection_frames_are_bounded_and_mutually_exclusive() {
         let request = ConfigurationInspectionRequest {
             protocol_version: PROTOCOL_VERSION,
-            yaml: "schemaVersion: 2\nstorage:\n  path: state.redb\n".into(),
+            yaml: "schemaVersion: 3\nstorage:\n  path: state.redb\n".into(),
         };
         request.validate().expect("inspection request");
 

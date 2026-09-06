@@ -43,7 +43,7 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
     },
     capabilities: {
       delegation: false,
-      skills: false,
+      plugins: false,
       tui: false,
       shellTerminal: false,
       files: false,

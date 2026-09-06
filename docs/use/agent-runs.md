@@ -58,7 +58,7 @@ colossus -w /absolute/path/to/repository \
 bodyless `network.http` GET, or configured top-level `mcp.call` outside workflow
 lineage. MCP review receives credential-free metadata for the exact freshly discovered
 call; descriptions and annotations remain untrusted hints. It does not apply to
-workspace mutations, non-read-only network methods, integrations, pack-provided MCP
+workspace mutations, non-read-only network methods, integrations, plugin-provided MCP
 actions, workflows, or system actors.
 When it grants a proof, Colossus emits an **Automatic approval review** notice with the
 reviewed action, resource, low-risk result, authorization mode, and reason.

@@ -62,14 +62,8 @@ pub(super) enum Command {
     Research(ResearchCommand),
     /// Inspect metadata-only persisted run telemetry.
     Telemetry(TelemetryCommand),
-    /// Discover, compose, and read declarative data-only skills.
-    Skills(SkillsCommand),
-    /// Verify and lifecycle-manage signed capability packs.
-    Packs(PacksCommand),
-    /// Build, verify, and install signed pack and skill collections.
-    Collections(CollectionsCommand),
-    /// Pull and push authenticated signed collection transports.
-    Registry(RegistryCommand),
+    /// Validate, distribute, and lifecycle-manage Agent Plugins over OCI.
+    Plugins(PluginsCommand),
     /// Build, verify, and install signed offline release bundles.
     Bundle(BundleCommand),
     /// Manage persisted integrations and imported OpenAPI tools.
@@ -107,7 +101,7 @@ pub(super) enum Command {
         /// Resume the most recently updated session.
         #[arg(long, conflicts_with = "session")]
         resume: bool,
-        /// Explicitly activate one declarative skill. Repeat as needed.
+        /// Explicitly activate one qualified `<plugin>/<skill>` Agent Skill. Repeat as needed.
         #[arg(long = "skill")]
         skills: Vec<String>,
         /// Attach one bounded UTF-8 file as private CLI run input. Repeat as needed.

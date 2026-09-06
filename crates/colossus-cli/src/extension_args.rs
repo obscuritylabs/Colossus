@@ -1,180 +1,112 @@
 use super::*;
 
 #[derive(Args)]
-pub(super) struct SkillsCommand {
+pub(super) struct PluginsCommand {
     #[command(subcommand)]
-    pub(super) command: SkillsAction,
+    pub(super) command: PluginsAction,
 }
 
 #[derive(Subcommand)]
-pub(super) enum SkillsAction {
-    /// List selected skill metadata in deterministic name order.
-    List,
-    /// Show one selected manifest and its data-only instructions.
+pub(super) enum PluginsAction {
+    /// List globally installed plugin digests and active state.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show every installed digest for one plugin name.
     Show { name: String },
-    /// Report duplicate names and configured precedence winners.
-    Duplicates,
-    /// Preview context composition and required-tool validation.
-    Compose {
-        prompt: String,
-        #[arg(long = "skill")]
-        skills: Vec<String>,
+    /// Validate an unpacked portable Agent Plugin directory.
+    Validate { directory: PathBuf },
+    /// Verify an OCI layout or deterministic layout tar.
+    Verify {
+        path: PathBuf,
+        #[arg(long)]
+        digest: Option<String>,
+        /// Configured trust profile used for offline Sigstore verification.
+        #[arg(long, default_value = "default")]
+        trust_profile: String,
     },
-    /// Create a new installed user skill (approval required).
-    Scaffold {
+    /// Install exactly one source as disabled.
+    Install {
+        #[arg(long, conflicts_with_all = ["reference", "layout", "archive"], required_unless_present_any = ["reference", "layout", "archive"])]
+        directory: Option<PathBuf>,
+        #[arg(long, conflicts_with_all = ["directory", "layout", "archive"])]
+        reference: Option<String>,
+        #[arg(long, conflicts_with_all = ["directory", "reference", "archive"])]
+        layout: Option<PathBuf>,
+        #[arg(long, conflicts_with_all = ["directory", "reference", "layout"])]
+        archive: Option<PathBuf>,
+        /// Required when an OCI layout contains multiple plugin manifests.
+        #[arg(long)]
+        digest: Option<String>,
+        /// Named registry profile used with --reference.
+        #[arg(long)]
+        registry: Option<String>,
+        /// Configured trust profile for local directory/layout/archive sources.
+        #[arg(long, default_value = "default")]
+        trust_profile: String,
+    },
+    /// Select one exact installed manifest digest globally.
+    Enable {
         name: String,
-        description: String,
         #[arg(long)]
-        instructions: Option<String>,
-        #[arg(long = "resource-dir")]
-        resource_dirs: Vec<String>,
+        digest: String,
+        /// Explicitly approve an optional/disabled-profile untrusted installation.
+        #[arg(long)]
+        allow_untrusted: bool,
     },
-    /// Inspect an installed user skill without returning file bodies.
-    Inspect { name: String },
-    /// Read one authorable installed user-skill file.
-    FileRead { name: String, path: String },
-    /// Write one authorable installed user-skill file (approval required).
-    Write {
+    /// Disable one plugin globally.
+    Disable { name: String },
+    /// Pull and install a newer explicit reference, leaving activation explicit.
+    Update {
         name: String,
-        path: String,
-        content: String,
+        reference: String,
         #[arg(long)]
-        expected_sha256: Option<String>,
+        registry: String,
     },
-    /// Validate an installed name or a workspace-local directory with --local.
-    Validate {
-        target: String,
+    /// Uninstall one exact digest; plugin data is preserved by default.
+    Uninstall {
+        name: String,
         #[arg(long)]
-        local: bool,
+        digest: String,
+        #[arg(long)]
+        purge_data: bool,
     },
-    /// Install a validated workspace-local skill (approval required).
-    Install { path: String },
-    /// List bounded regular resources for an explicitly active skill.
-    Resources { name: String },
-    /// Read one bounded UTF-8 resource through the effect gateway.
-    Read { name: String, path: String },
+    /// Remove only inactive content without installed references or run leases.
+    Gc,
+    /// Package one directory as a deterministic Agent Plugin OCI layout.
+    Package {
+        directory: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Push an OCI layout to an explicit registry reference.
+    Push {
+        layout: PathBuf,
+        reference: String,
+        #[arg(long)]
+        registry: String,
+    },
+    /// Pull one reference into an OCI layout without installing it.
+    Pull {
+        reference: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        registry: String,
+    },
+    /// Export an installed plugin plus OCI signature/referrer material for air gaps.
+    Export {
+        name: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Args)]
 pub(super) struct IntegrationsCommand {
     #[command(subcommand)]
     pub(super) command: IntegrationsAction,
-}
-
-#[derive(Args)]
-pub(super) struct PacksCommand {
-    #[command(subcommand)]
-    pub(super) command: PacksAction,
-}
-
-#[derive(Subcommand)]
-pub(super) enum PacksAction {
-    /// List canonical pack lifecycles.
-    List {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    /// Show one canonical pack lifecycle.
-    Show { name: String },
-    /// Verify a local pack without installing it.
-    Verify { path: PathBuf },
-    /// Alias for strict local pack verification.
-    Validate { path: PathBuf },
-    /// Install a verified local pack (approval required).
-    Install {
-        path: PathBuf,
-        /// Explicit development override for an unsigned pack.
-        #[arg(long)]
-        allow_untrusted: bool,
-    },
-    /// Reverify and enable an installed pack (approval required).
-    Enable { name: String },
-    /// Disable an installed pack (approval required).
-    Disable { name: String },
-    /// Uninstall a pack while retaining lifecycle history (approval required).
-    Uninstall { name: String },
-    /// Invoke one active verified fixed-argument pack tool (approval required).
-    Call { tool: String },
-    /// Manage publisher/key trust bindings.
-    Trust(PackTrustCommand),
-}
-
-#[derive(Args)]
-pub(super) struct PackTrustCommand {
-    #[command(subcommand)]
-    pub(super) command: PackTrustAction,
-}
-
-#[derive(Subcommand)]
-pub(super) enum PackTrustAction {
-    /// List publisher/key trust bindings.
-    List {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    /// Bind a publisher to a base64 Ed25519 public key (approval required).
-    Add {
-        publisher: String,
-        #[arg(long)]
-        public_key: String,
-    },
-}
-
-#[derive(Args)]
-pub(super) struct CollectionsCommand {
-    #[command(subcommand)]
-    pub(super) command: CollectionsAction,
-}
-
-#[derive(Subcommand)]
-pub(super) enum CollectionsAction {
-    /// Verify a signed collection and every nested artifact.
-    Verify { path: PathBuf },
-    /// Build and sign a deterministic collection from `packs/` and `skills/` directories.
-    Build {
-        source: PathBuf,
-        destination: PathBuf,
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        version: String,
-        #[arg(long)]
-        publisher: String,
-        /// Explicit RFC3339 UTC timestamp for reproducible output.
-        #[arg(long)]
-        created_at: String,
-        /// Environment credential reference containing an Ed25519 signing seed.
-        #[arg(long)]
-        signing_key_reference: String,
-    },
-    /// Install all trusted artifacts without replacing existing packs or skills.
-    Install { path: PathBuf },
-}
-
-#[derive(Args)]
-pub(super) struct RegistryCommand {
-    #[command(subcommand)]
-    pub(super) command: RegistryAction,
-}
-
-#[derive(Subcommand)]
-pub(super) enum RegistryAction {
-    /// Pull and verify a collection into a clean local directory.
-    Pull {
-        url: String,
-        destination: PathBuf,
-        /// Optional environment credential reference used as a bearer token.
-        #[arg(long)]
-        credential_reference: Option<String>,
-    },
-    /// Verify and push a collection using create-only registry semantics.
-    Push {
-        path: PathBuf,
-        url: String,
-        /// Optional environment credential reference used as a bearer token.
-        #[arg(long)]
-        credential_reference: Option<String>,
-    },
 }
 
 #[derive(Args)]
