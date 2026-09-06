@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 struct Inventory {
     calls: Mutex<Vec<bool>>,
+    entries: Vec<PluginInventoryEntry>,
 }
 
 fn plugin(name: &str, enabled: bool) -> PluginInventoryEntry {
@@ -48,11 +49,12 @@ impl ExtensionApi for Inventory {
         include_disabled: bool,
     ) -> ApiResult<Vec<PluginInventoryEntry>> {
         self.calls.lock().expect("calls").push(include_disabled);
-        let mut entries = vec![plugin("active", true)];
-        if include_disabled {
-            entries.push(plugin("disabled", false));
-        }
-        Ok(entries)
+        Ok(self
+            .entries
+            .iter()
+            .filter(|entry| include_disabled || entry.available)
+            .cloned()
+            .collect())
     }
     async fn skill(&self, _: &CallerContext, _: &str, _: &str) -> ApiResult<PluginSkillContent> {
         unreachable!("discovery never reads instructions")
@@ -103,6 +105,7 @@ fn request(kinds: Vec<i32>, include_disabled: bool) -> Request<proto::ListExtens
 async fn plugin_discovery_forwards_disabled_flag_and_treats_unspecified_as_unfiltered() {
     let inventory = Arc::new(Inventory {
         calls: Mutex::new(vec![]),
+        entries: vec![plugin("active", true), plugin("disabled", false)],
     });
     let adapter = ExtensionServiceAdapter::new(Some(inventory.clone()));
     for kinds in [
@@ -145,6 +148,7 @@ async fn plugin_discovery_forwards_disabled_flag_and_treats_unspecified_as_unfil
 async fn plugin_discovery_requires_an_authenticated_read_scope() {
     let inventory = Arc::new(Inventory {
         calls: Mutex::new(vec![]),
+        entries: vec![plugin("active", true), plugin("disabled", false)],
     });
     let adapter = ExtensionServiceAdapter::new(Some(inventory.clone()));
     let error = adapter
@@ -153,4 +157,71 @@ async fn plugin_discovery_requires_an_authenticated_read_scope() {
         .expect_err("authentication");
     assert_eq!(error.code(), tonic::Code::Unauthenticated);
     assert!(inventory.calls.lock().expect("calls").is_empty());
+}
+
+#[tokio::test]
+async fn icon_heavy_discovery_pages_stay_bounded_without_skipping_plugins() {
+    let entries = (0..48)
+        .map(|index| {
+            let mut entry = plugin(&format!("plugin-{index:03}"), true);
+            // A normalized 64 KiB icon produces 87,384 base64 characters.
+            entry.icon_data_url = Some(format!("data:image/png;base64,{}", "A".repeat(87_384)));
+            entry
+        })
+        .collect::<Vec<_>>();
+    let expected = entries
+        .iter()
+        .map(|entry| entry.manifest.name.clone())
+        .collect::<Vec<_>>();
+    let adapter = ExtensionServiceAdapter::new(Some(Arc::new(Inventory {
+        calls: Mutex::new(vec![]),
+        entries,
+    })));
+    let mut token = String::new();
+    let mut names = Vec::new();
+    let mut page_count = 0;
+    loop {
+        let mut request = request(vec![], false);
+        request.get_mut().page = Some(proto::PageRequest {
+            page_size: 32,
+            page_token: token,
+        });
+        let response = adapter
+            .list_extensions(request)
+            .await
+            .expect("bounded page")
+            .into_inner();
+        assert!(response.encoded_len() <= MAX_DISCOVERY_BYTES);
+        assert!(!response.plugins.is_empty());
+        assert!(response.plugins.len() < 32);
+        assert_eq!(response.extensions.len(), response.plugins.len());
+        for (summary, plugin) in response.extensions.iter().zip(&response.plugins) {
+            assert_eq!(summary.name, plugin.name);
+            assert_eq!(plugin.icon_data_url.len(), 87_406);
+        }
+        names.extend(response.plugins.into_iter().map(|plugin| plugin.name));
+        token = response.page.expect("continuation").next_page_token;
+        page_count += 1;
+        if token.is_empty() {
+            break;
+        }
+        assert!(page_count < 4, "discovery must make progress");
+    }
+    assert_eq!(page_count, 3);
+    assert_eq!(names, expected);
+}
+
+#[tokio::test]
+async fn a_single_oversized_plugin_fails_instead_of_returning_an_empty_continuation() {
+    let mut entry = plugin("oversized", true);
+    entry.manifest.description = Some("a".repeat(MAX_DISCOVERY_BYTES));
+    let adapter = ExtensionServiceAdapter::new(Some(Arc::new(Inventory {
+        calls: Mutex::new(vec![]),
+        entries: vec![entry],
+    })));
+    let error = adapter
+        .list_extensions(request(vec![], false))
+        .await
+        .expect_err("single oversized entry");
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
 }

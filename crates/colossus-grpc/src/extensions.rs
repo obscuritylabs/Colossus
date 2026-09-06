@@ -7,9 +7,12 @@ use colossus_contracts::{
     PluginComponentKind, PluginInventoryEntry, PluginMcpTransport, PluginOrigin,
     PluginResourceEntry, PluginSkillMetadata, PluginStatus,
 };
+use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+
+const MAX_DISCOVERY_BYTES: usize = 2 * 1024 * 1024;
 
 #[cfg(test)]
 #[path = "extensions_tests.rs"]
@@ -125,22 +128,35 @@ impl ExtensionService for ExtensionServiceAdapter {
         } else {
             page.page_size.clamp(1, 100) as usize
         };
-        let end = start.saturating_add(limit).min(plugins.len());
-        let next_page_token = if end < plugins.len() {
-            format!("{identity}:{end}")
-        } else {
-            String::new()
-        };
-        let selected = plugins
-            .into_iter()
-            .skip(start)
-            .take(end - start)
-            .collect::<Vec<_>>();
-        bounded(proto::ListExtensionsResponse {
-            extensions: selected.iter().map(summary).collect(),
-            plugins: selected.into_iter().map(plugin_to_proto).collect(),
-            page: Some(proto::PageResponse { next_page_token }),
-        })
+        let total = plugins.len();
+        let mut response = proto::ListExtensionsResponse::default();
+        for plugin in plugins.into_iter().skip(start).take(limit) {
+            response.extensions.push(summary(&plugin));
+            response.plugins.push(plugin_to_proto(plugin));
+            response.page = Some(continuation(
+                &identity,
+                start + response.plugins.len(),
+                total,
+            ));
+            // Icons and component metadata vary in size. Return a shorter page with
+            // a continuation instead of rejecting an otherwise readable catalog.
+            if response.encoded_len() > MAX_DISCOVERY_BYTES {
+                response.extensions.pop();
+                response.plugins.pop();
+                if response.plugins.is_empty() {
+                    return Err(Status::resource_exhausted(
+                        "a plugin exceeds the discovery response bound",
+                    ));
+                }
+                break;
+            }
+        }
+        response.page = Some(continuation(
+            &identity,
+            start + response.plugins.len(),
+            total,
+        ));
+        bounded(response)
     }
 
     async fn read_plugin_skill(
@@ -207,8 +223,18 @@ fn includes_plugins(kinds: &[i32]) -> bool {
         || kinds.contains(&(proto::ExtensionKind::AgentPlugin as i32))
 }
 
+fn continuation(identity: &str, end: usize, total: usize) -> proto::PageResponse {
+    proto::PageResponse {
+        next_page_token: if end < total {
+            format!("{identity}:{end}")
+        } else {
+            String::new()
+        },
+    }
+}
+
 fn bounded<T: prost::Message>(value: T) -> Result<Response<T>, Status> {
-    if value.encoded_len() > 2 * 1024 * 1024 {
+    if value.encoded_len() > MAX_DISCOVERY_BYTES {
         return Err(Status::resource_exhausted(
             "plugin discovery response exceeds its bound; request a smaller page",
         ));
