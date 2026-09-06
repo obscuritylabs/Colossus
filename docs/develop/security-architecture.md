@@ -709,8 +709,12 @@ re-encoding pixels. Authorized inventory releases only the bounded normalized PN
 URL; raw client extensions remain excluded from live inventory. The renderer accepts
 only bounded PNG data URLs and cannot fetch remote or local icon paths. Invalid display
 assets produce a component diagnostic without granting authority or disabling skills.
-The store bounds total inventory icon data to 2 MiB before any worker or API release,
-prioritizing bundled identity without discarding plugins or changing catalog order.
+Inventory construction and active or restored snapshots share a cumulative budget of
+2 MiB retained icon data, 64 normalizations, and 8 Mi decoded pixels. One maximum-size
+image is reserved for the executable-owned plugin without changing catalog order. PNG
+headers are checked before decoder construction, and exhausted budgets skip display
+loading; remaining plugins retain their component metadata. OCI extraction validates
+content and identity without decoding display images outside that discovery budget.
 External gRPC discovery validates and normalizes icons again before constructing SDK
 records. Each page remains within 2 MiB, and the server includes at most 2 MiB of icon
 data across the sorted catalog. The SDK retains its 8 MiB aggregate metadata limit, a

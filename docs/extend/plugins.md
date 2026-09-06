@@ -93,12 +93,13 @@ must fit within 64 KiB, with dimensions no larger than 512 × 512 pixels.
 Icons travel with the immutable OCI package and work offline. Colossus decodes and
 re-encodes the image to remove ancillary content, then includes a bounded PNG data URL
 in authorized discovery (`icon_data_url`). An absent or invalid icon uses a monogram;
-invalid icons produce `invalid_plugin_icon` diagnostics without disabling valid skills
+icons that fail validation produce `invalid_plugin_icon` diagnostics without disabling valid skills
 or MCP components. The existing package-wide rejection of links still applies.
-Catalogs retain at most 2 MiB of icon data, prioritizing bundled plugins. Additional
-icons use the monogram fallback while their plugins and skills remain discoverable.
-External catalogs also limit icon normalization to 64 images and 8 Mi decoded pixels
-per discovery; icons beyond those limits use the same fallback.
+Catalogs retain at most 2 MiB of icon data and limit normalization to 64 images and
+8 Mi decoded pixels per discovery. Local inventory and snapshots reserve capacity for
+the bundled icon. Additional icons use the monogram fallback while their plugins and
+skills remain discoverable. Once a budget is exhausted, remaining display images are
+not decoded; validating one plugin directly still checks its icon independently.
 
 Desktop shows the icon in the plugin library, plugin details, `@` suggestions and
 conversation selections. Type `@` to choose a plugin, then select one of its skills.

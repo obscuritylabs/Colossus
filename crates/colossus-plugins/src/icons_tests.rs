@@ -103,7 +103,15 @@ fn icon_reads_reject_links_even_within_the_plugin() {
         .expect("link");
     let (manifest, _) = load_manifest(temp.path()).expect("manifest");
     let mut diagnostics = Vec::new();
-    assert!(load_icon(temp.path(), &manifest, &mut diagnostics).is_none());
+    assert!(
+        load_icon(
+            temp.path(),
+            &manifest,
+            &mut diagnostics,
+            &mut IconBudget::default()
+        )
+        .is_none()
+    );
     assert_eq!(diagnostics[0].code, "invalid_plugin_icon");
 }
 
@@ -121,34 +129,180 @@ fn absent_icon_keeps_legacy_plugins_loadable() {
     );
 }
 
+fn png_bytes(image: &image::DynamicImage) -> Vec<u8> {
+    let mut output = Cursor::new(Vec::new());
+    image.write_to(&mut output, ImageFormat::Png).expect("PNG");
+    output.into_inner()
+}
+
 #[test]
-fn inventory_bounds_icons_without_losing_plugins_or_the_bundled_identity() {
-    let temp = fixture(json!(format!("{NAMESPACE}/icon.png")));
-    let template = load_plugin(temp.path()).expect("plugin").inventory();
-    let mut entries = (0..100)
-        .map(|index| {
-            let mut entry = template.clone();
-            entry.manifest.name = format!("plugin-{index}");
-            entry.icon_data_url = Some(format!("data:image/png;base64,{}", "A".repeat(87_384)));
-            entry
+fn local_discovery_bounds_pixels_images_and_retained_bytes_before_loading() {
+    let mut random = 1_u32;
+    let pixels = (0..127 * 127 * 4)
+        .map(|_| {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            random.to_le_bytes()[0]
         })
-        .collect::<Vec<_>>();
-    entries[99].origin = PluginOrigin::Bundled;
-    bound_inventory_icons(&mut entries);
-    assert_eq!(entries.len(), 100);
-    assert!(entries[99].icon_data_url.is_some());
-    assert!(entries.iter().any(|entry| entry.icon_data_url.is_none()));
-    assert!(
-        entries
-            .iter()
-            .filter_map(|entry| entry.icon_data_url.as_ref())
-            .map(String::len)
-            .sum::<usize>()
-            <= MAX_INVENTORY_ICON_BYTES
+        .collect();
+    let large = image::DynamicImage::ImageRgba8(
+        image::RgbaImage::from_raw(127, 127, pixels).expect("pixels"),
     );
-    for (index, entry) in entries.iter().enumerate() {
-        assert_eq!(entry.manifest.name, format!("plugin-{index}"));
-        assert_eq!(entry.skills.len(), 1);
-        assert_eq!(entry.mcp_servers.len(), 1);
+    for (image, expected) in [
+        (image::DynamicImage::new_rgba8(512, 512), 31),
+        (image::DynamicImage::new_rgba8(1, 1), 63),
+        (large, 23),
+    ] {
+        let temp = fixture(json!(format!("{NAMESPACE}/icon.png")));
+        fs::write(
+            temp.path().join(NAMESPACE).join("icon.png"),
+            png_bytes(&image),
+        )
+        .expect("icon");
+        let mut budget = CatalogIconBudget::default();
+        let mut retained = Vec::new();
+        for _ in 0..100 {
+            let record = load_plugin_with_icon_budget(
+                temp.path(),
+                budget.for_origin(PluginOrigin::Installed),
+            )
+            .expect("discovery");
+            assert_eq!(record.skills.len(), 1);
+            assert_eq!(record.mcp_servers.len(), 1);
+            assert!(
+                !record
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == "invalid_plugin_icon")
+            );
+            retained.extend(record.icon_data_url);
+        }
+        assert_eq!(retained.len(), expected);
+        let core =
+            load_plugin_with_icon_budget(temp.path(), budget.for_origin(PluginOrigin::Bundled))
+                .expect("reserved identity");
+        retained.push(core.icon_data_url.expect("bundled icon"));
+        assert!(retained.iter().map(String::len).sum::<usize>() <= MAX_INVENTORY_ICON_BYTES);
+    }
+    let temp = fixture(json!(format!("{NAMESPACE}/missing.png")));
+    let record = load_plugin_with_icon_budget(temp.path(), &mut IconBudget::exhausted())
+        .expect("no display I/O");
+    assert!(
+        !record
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "invalid_plugin_icon")
+    );
+    assert!(
+        load_plugin(temp.path())
+            .expect("full validation")
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "invalid_plugin_icon")
+    );
+}
+
+#[test]
+fn installed_catalogs_and_saved_snapshots_reserve_the_bundled_identity() {
+    let temp = fixture(json!(format!("{NAMESPACE}/icon.png")));
+    let home = TempDir::new().expect("home");
+    let store = PluginStore::new(home.path().join("plugins-home")).expect("store");
+    let manifest_path = temp.path().join("plugin.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("read")).expect("json");
+    let mut digests = BTreeMap::new();
+    for index in 0..70 {
+        manifest["name"] = json!(format!("a-plugin-{index:03}"));
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("manifest"),
+        )
+        .expect("write");
+        let installed = store
+            .install_directory(temp.path(), crate::tests::actor())
+            .expect("install");
+        store
+            .enable(
+                &installed.manifest.name,
+                &installed.digest,
+                true,
+                crate::tests::actor(),
+            )
+            .expect("enable");
+        digests.insert(installed.manifest.name, installed.digest);
+    }
+    manifest["name"] = json!("colossus");
+    manifest
+        .as_object_mut()
+        .expect("object")
+        .remove("clientSpecific");
+    let manifest = serde_json::to_vec(&manifest).expect("bundled manifest");
+    let artifact = build_plugin_artifact_from_files(&[
+        PluginFile {
+            path: "plugin.json",
+            bytes: &manifest,
+            executable: false,
+        },
+        PluginFile {
+            path: "com.obscuritylabs.colossus/icon.png",
+            bytes: ICON,
+            executable: false,
+        },
+        PluginFile {
+            path: "skills/review/SKILL.md",
+            bytes: b"---\nname: review\ndescription: Review safely.\n---\nReview.",
+            executable: false,
+        },
+    ])
+    .expect("bundled artifact");
+    let bundled = store
+        .bootstrap_bundled(artifact, crate::tests::actor())
+        .expect("bootstrap");
+    digests.insert(bundled.manifest.name, bundled.digest);
+    let inventory = store.inventory().expect("inventory");
+    let snapshot = store
+        .snapshot(&[], &[])
+        .expect("snapshot")
+        .iter()
+        .map(AgentPluginRecord::inventory)
+        .collect::<Vec<_>>();
+    let (restored, _lease) = store
+        .snapshot_digests_with_lease(&digests)
+        .expect("saved snapshot");
+    let restored = restored
+        .iter()
+        .map(AgentPluginRecord::inventory)
+        .collect::<Vec<_>>();
+    for entries in [inventory, snapshot, restored] {
+        assert_eq!(entries.len(), 71);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.icon_data_url.is_some())
+                .count(),
+            64
+        );
+        assert!(entries.iter().all(|entry| entry.skills.len() == 1));
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.manifest.name.clone())
+                .collect::<Vec<_>>(),
+            digests.keys().cloned().collect::<Vec<_>>()
+        );
+        let core = entries
+            .iter()
+            .find(|entry| entry.origin == PluginOrigin::Bundled)
+            .expect("core");
+        assert!(core.icon_data_url.is_some());
+        assert!(
+            entries
+                .iter()
+                .filter_map(|entry| entry.icon_data_url.as_ref())
+                .map(String::len)
+                .sum::<usize>()
+                <= MAX_INVENTORY_ICON_BYTES
+        );
     }
 }

@@ -8,6 +8,7 @@ impl PluginStore {
         let repository = self.open_repository()?;
         let current_core = repository.bundled_digest()?;
         let mut entries = Vec::new();
+        let mut icons = crate::icons::CatalogIconBudget::default();
         for installation in repository.list_plugins(MAX_PLUGIN_INSTALLATIONS)? {
             if installation.status == PluginStatus::Uninstalled
                 || (installation.origin == PluginOrigin::Bundled
@@ -15,7 +16,8 @@ impl PluginStore {
             {
                 continue;
             }
-            let discovered = self.load_verified_installation(&installation);
+            let discovered = self
+                .load_verified_installation(&installation, icons.for_origin(installation.origin));
             let mut entry = match discovered {
                 Ok(record) => record.inventory(),
                 Err(error) => {
@@ -42,13 +44,13 @@ impl PluginStore {
             entry.manifest.extensions.clear();
             entries.push(entry);
         }
-        crate::icons::bound_inventory_icons(&mut entries);
         Ok(entries)
     }
 
     pub(super) fn load_verified_installation(
         &self,
         installation: &PluginInstallation,
+        icons: &mut crate::icons::IconBudget,
     ) -> Result<AgentPluginRecord, StoreError> {
         validate_lease_digest(&installation.digest)?;
         let hex = installation
@@ -71,7 +73,7 @@ impl PluginStore {
             Some(&installation.digest),
         )?;
         self.publish_artifact(&artifact)?;
-        let mut record = load_plugin(&expected_root)?;
+        let mut record = load_plugin_with_icon_budget(&expected_root, icons)?;
         if record.installation.manifest != installation.manifest {
             return Err(StoreError::Verification(
                 "installed manifest differs from journal identity".into(),

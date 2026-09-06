@@ -2,9 +2,17 @@ use super::*;
 
 /// Load and validate a complete Agent Plugin directory.
 pub fn load_plugin(root: &Path) -> Result<AgentPluginRecord, StoreError> {
+    load_plugin_with_icon_budget(root, &mut crate::icons::IconBudget::default())
+}
+
+pub(crate) fn load_plugin_with_icon_budget(
+    root: &Path,
+    budget: &mut crate::icons::IconBudget,
+) -> Result<AgentPluginRecord, StoreError> {
     let canonical_root = canonical_plugin_root(root)?;
     let (manifest, mut diagnostics) = load_manifest(&canonical_root)?;
-    let icon_data_url = super::icons::load_icon(&canonical_root, &manifest, &mut diagnostics);
+    let icon_data_url =
+        super::icons::load_icon(&canonical_root, &manifest, &mut diagnostics, budget);
     let skills = load_skills(&canonical_root, &manifest.name, &mut diagnostics)?;
     let mcp_servers = load_mcp(&canonical_root, &manifest, &mut diagnostics)?;
     let content_sha256 = hash_plugin_tree(&canonical_root)?.2;
