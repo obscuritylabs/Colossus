@@ -230,6 +230,7 @@ fn summary(plugin: &PluginInventoryEntry) -> proto::ExtensionSummary {
 
 fn plugin_to_proto(plugin: PluginInventoryEntry) -> proto::AgentPlugin {
     proto::AgentPlugin {
+        icon_data_url: plugin.icon_data_url.unwrap_or_default(),
         name: plugin.manifest.name,
         version: plugin.manifest.version.unwrap_or_default(),
         description: plugin.manifest.description.unwrap_or_default(),

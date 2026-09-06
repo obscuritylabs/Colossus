@@ -32,6 +32,7 @@ import { USE_CONFIGURED_MAX_TURNS } from "../types";
 import type { QueuedMessage } from "../message-queue";
 import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
+import { PluginIcon } from "./PluginIcon";
 
 const RESEARCH_DEPTH_OPTIONS = [
   { value: "quick", label: "Quick" },
@@ -284,6 +285,13 @@ export function WorkComposer({
               onClick={() => onRemovePluginSkill?.(id)}
               aria-label={`Remove ${id}`}
             >
+              <PluginIcon
+                name={id.split("/")[0] ?? id}
+                icon={
+                  pluginSkills?.find((skill) => skill.id === id)?.icon_data_url
+                }
+                size="small"
+              />
               {id} ×
             </button>
           ))}
@@ -526,11 +534,17 @@ export function WorkComposer({
               </span>
               <span>
                 <strong>
-                  {mentioningSkill ? "Plugin skills" : "Commands"}
+                  {mentioningSkill
+                    ? slashCommandSuggestions[0]?.group === "Plugin"
+                      ? "Plugins"
+                      : "Plugin skills"
+                    : "Commands"}
                 </strong>
                 <small>
                   {mentioningSkill
-                    ? "Use for this message only"
+                    ? slashCommandSuggestions[0]?.group === "Plugin"
+                      ? "Choose a plugin to explore its skills"
+                      : "Use for this message only"
                     : "Run a local Desktop action"}
                 </small>
               </span>
@@ -554,10 +568,11 @@ export function WorkComposer({
                   }}
                   id={`desktop-slash-command-${index}`}
                   key={suggestion.command}
+                  title={suggestion.command.trim()}
                   type="button"
                   role="option"
                   aria-selected={selected}
-                  className={selected ? "is-selected" : undefined}
+                  className={`${selected ? "is-selected" : ""}${"plugin" in suggestion ? " is-plugin-suggestion" : ""}`}
                   onMouseDown={(event) => event.preventDefault()}
                   onMouseEnter={() =>
                     setSelectedSlashCommand(suggestion.command)
@@ -569,8 +584,18 @@ export function WorkComposer({
                     textareaRef.current?.focus();
                   }}
                 >
+                  {"plugin" in suggestion && (
+                    <PluginIcon
+                      name={suggestion.plugin}
+                      icon={suggestion.icon}
+                    />
+                  )}
                   <span className="slash-command-copy">
-                    <strong>{suggestion.command}</strong>
+                    <strong>
+                      {"label" in suggestion
+                        ? suggestion.label
+                        : suggestion.command}
+                    </strong>
                     <small>{suggestion.description}</small>
                   </span>
                   <span className="slash-command-trailing">
@@ -588,8 +613,12 @@ export function WorkComposer({
           </div>
           <footer className="slash-command-footer">
             <span className="slash-command-local">
-              <IconShieldCheck size={14} stroke={1.8} aria-hidden="true" />
-              Local to Desktop
+              {mentioningSkill ? (
+                <IconAt size={14} stroke={1.8} aria-hidden="true" />
+              ) : (
+                <IconShieldCheck size={14} stroke={1.8} aria-hidden="true" />
+              )}
+              {mentioningSkill ? "For this message" : "Local to Desktop"}
             </span>
             <span className="slash-command-keys" aria-hidden="true">
               <span>

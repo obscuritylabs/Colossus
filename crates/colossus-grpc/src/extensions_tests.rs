@@ -12,6 +12,7 @@ struct Inventory {
 
 fn plugin(name: &str, enabled: bool) -> PluginInventoryEntry {
     PluginInventoryEntry {
+        icon_data_url: Some("data:image/png;base64,iVBORw0KGgo=".into()),
         origin: PluginOrigin::Installed,
         available: enabled,
         unavailable_reason: (!enabled).then(|| "Disabled globally".into()),
@@ -120,6 +121,10 @@ async fn plugin_discovery_forwards_disabled_flag_and_treats_unspecified_as_unfil
                 .expect("discovery")
                 .into_inner();
             assert_eq!(response.plugins.len(), if include_disabled { 2 } else { 1 });
+            assert_eq!(
+                response.plugins[0].icon_data_url,
+                "data:image/png;base64,iVBORw0KGgo="
+            );
             assert_eq!(response.extensions.len(), response.plugins.len());
             assert_eq!(
                 inventory.calls.lock().expect("calls").last(),

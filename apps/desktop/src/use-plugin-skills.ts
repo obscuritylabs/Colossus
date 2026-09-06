@@ -26,7 +26,13 @@ export function usePluginSkills(
             target: targetId,
             skills: inventory.plugins
               .filter((plugin) => plugin.available)
-              .flatMap((plugin) => plugin.skills),
+              .flatMap((plugin) =>
+                plugin.skills.map((skill) => ({
+                  ...skill,
+                  icon_data_url: plugin.icon_data_url ?? null,
+                  plugin_description: plugin.manifest.description,
+                })),
+              ),
           });
       } catch {
         // Do not retain stale completion metadata after an authorization or transport failure.

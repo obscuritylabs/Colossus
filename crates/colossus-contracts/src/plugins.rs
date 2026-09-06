@@ -63,7 +63,7 @@ pub struct AgentPluginManifest {
     /// Optional discovery keywords.
     #[serde(default)]
     pub keywords: Vec<String>,
-    /// Client-specific data. Colossus does not assign semantics to these values.
+    /// Client-specific data, including the `com.obscuritylabs.colossus` icon extension.
     #[serde(default)]
     pub extensions: BTreeMap<String, Value>,
 }
@@ -252,6 +252,9 @@ pub struct PluginInstallation {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentPluginRecord {
+    /// Bounded PNG data URL resolved from the client extension; never a remote URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_data_url: Option<String>,
     /// Installed lifecycle metadata.
     pub installation: PluginInstallation,
     /// Valid Agent Skills in deterministic order.
@@ -282,6 +285,9 @@ pub struct PluginMcpInventoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginInventoryEntry {
+    /// Bounded PNG data URL for display, absent when no valid icon was supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_data_url: Option<String>,
     /// Trusted installation provenance.
     #[serde(default)]
     pub origin: PluginOrigin,
@@ -317,6 +323,7 @@ impl AgentPluginRecord {
     #[must_use]
     pub fn inventory(&self) -> PluginInventoryEntry {
         PluginInventoryEntry {
+            icon_data_url: self.icon_data_url.clone(),
             origin: self.installation.origin,
             available: self.installation.status == PluginStatus::Enabled,
             unavailable_reason: (self.installation.status != PluginStatus::Enabled)

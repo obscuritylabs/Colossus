@@ -204,6 +204,7 @@ mod tests {
 
     fn plugin() -> PluginInventoryEntry {
         PluginInventoryEntry {
+            icon_data_url: None,
             origin: colossus_contracts::PluginOrigin::Bundled,
             available: true,
             unavailable_reason: None,

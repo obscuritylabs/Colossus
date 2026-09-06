@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
 const FIXTURE = "/?fixture=operations-studio";
@@ -126,7 +127,8 @@ test("slash commands complete and change Desktop modes without becoming prompts"
 test("plugin mentions complete with keyboard controls without submitting a message", async ({
   page,
 }) => {
-  await page.evaluate(() => {
+  const icon = `data:image/png;base64,${readFileSync(new URL("../../../../bundled-plugins/colossus/com.obscuritylabs.colossus/icon.png", import.meta.url)).toString("base64")}`;
+  await page.evaluate((icon) => {
     (
       window as unknown as { __TAURI_INTERNALS__: unknown }
     ).__TAURI_INTERNALS__ = {
@@ -138,6 +140,8 @@ test("plugin mentions complete with keyboard controls without submitting a messa
           plugins: [
             {
               available: true,
+              manifest: { name: "colossus", description: "Core skills" },
+              icon_data_url: icon,
               skills: ["coding", "plugin-authoring"].map((name) => ({
                 id: `colossus/${name}`,
                 name,
@@ -151,10 +155,19 @@ test("plugin mentions complete with keyboard controls without submitting a messa
         };
       },
     };
-  });
+  }, icon);
   const prompt = page.getByRole("textbox", { name: "Prompt" });
-  await prompt.fill("@colossus/");
+  await prompt.fill("@");
   const menu = page.getByRole("listbox", { name: "Plugin skills" });
+  await expect(menu.getByRole("option")).toHaveCount(1);
+  await expect(menu.getByRole("option")).toContainText("colossus");
+  await expect(menu.locator("img")).toHaveJSProperty("naturalWidth", 128);
+  await page.locator(".slash-command-menu").screenshot({
+    path: "../../output/playwright/plugin-mentions.png",
+    animations: "disabled",
+  });
+  await prompt.press("Enter");
+  await expect(prompt).toHaveValue("@colossus/");
   await expect(menu.getByRole("option")).toHaveCount(2);
   await prompt.press("ArrowDown");
   await prompt.press("Tab");

@@ -702,6 +702,14 @@ bodies are loaded progressively. Only explicitly selected qualified skills add t
 plugin root as a read/execute permit grant. `allowed-tools` is advisory and never grants
 authority.
 
+The `com.obscuritylabs.colossus` client extension may declare an icon beneath its own
+directory. Icon discovery uses the same no-follow contained reads, admits only PNGs
+within 64 KiB and 512 × 512 pixels, and decodes with an allocation limit before
+re-encoding pixels. Authorized inventory releases only the bounded normalized PNG data
+URL; raw client extensions remain excluded from live inventory. The renderer accepts
+only bounded PNG data URLs and cannot fetch remote or local icon paths. Invalid display
+assets produce a component diagnostic without granting authority or disabling skills.
+
 The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer lease for
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,
 uninstall, and garbage collection cannot invalidate a running snapshot. Stable writable

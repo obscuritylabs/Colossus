@@ -1,5 +1,8 @@
 /** Credential-free runtime inventory. Field names intentionally match the shared contract. */
 export interface PluginSkill {
+  /** Display-only metadata attached from the owning inventory entry. */
+  icon_data_url?: string | null;
+  plugin_description?: string | null;
   id: string;
   plugin: string;
   name: string;
@@ -8,6 +11,7 @@ export interface PluginSkill {
   allowed_tools: string | null;
 }
 export interface PluginEntry {
+  icon_data_url?: string | null;
   manifest: {
     name: string;
     version: string | null;
@@ -125,6 +129,29 @@ export function pluginMentionSuggestions(
     .map((token) => token.slice(1));
   if (selected.some((id) => !known.has(id))) return [];
   const query = match[2] ?? "";
+  const remaining = skills.filter((skill) => !selected.includes(skill.id));
+  if (!query.includes("/")) {
+    const groups = new Map<string, PluginSkill[]>();
+    for (const skill of remaining) {
+      const group = groups.get(skill.plugin) ?? [];
+      group.push(skill);
+      groups.set(skill.plugin, group);
+    }
+    return [...groups.entries()]
+      .filter(([name]) => name.startsWith(query))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, 12)
+      .map(([name, available]) => ({
+        command: `${prefix}@${name}/`,
+        label: name,
+        plugin: name,
+        icon: available[0]?.icon_data_url,
+        description:
+          available[0]?.plugin_description ??
+          `${available.length} ${available.length === 1 ? "skill" : "skills"} available`,
+        group: "Plugin",
+      }));
+  }
   return skills
     .filter(
       (skill) => skill.id.startsWith(query) && !selected.includes(skill.id),
@@ -133,7 +160,23 @@ export function pluginMentionSuggestions(
     .slice(0, 12)
     .map((skill) => ({
       command: `${prefix}@${skill.id} `,
+      label: skill.name,
+      plugin: skill.plugin,
+      icon: skill.icon_data_url,
       description: skill.description,
       group: "Skill",
     }));
+}
+
+/** Only bounded, embedded PNGs may reach an img src, including from external runtimes. */
+export function pluginIconSource(
+  value: string | null | undefined,
+): string | undefined {
+  if (
+    !value ||
+    value.length > 87_406 ||
+    !/^data:image\/png;base64,iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/.test(value)
+  )
+    return undefined;
+  return value;
 }

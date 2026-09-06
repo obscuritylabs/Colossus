@@ -20,6 +20,7 @@ impl PluginStore {
                 Ok(record) => record.inventory(),
                 Err(error) => {
                     let mut entry = AgentPluginRecord {
+                        icon_data_url: None,
                         installation,
                         skills: Vec::new(),
                         mcp_servers: Vec::new(),

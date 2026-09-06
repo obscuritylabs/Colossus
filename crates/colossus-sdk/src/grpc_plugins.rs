@@ -199,6 +199,7 @@ fn plugin_from_proto(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntr
         return Err(protocol_error());
     }
     Ok(PluginInventoryEntry {
+        icon_data_url: (!value.icon_data_url.is_empty()).then_some(value.icon_data_url),
         origin: if value.bundled {
             PluginOrigin::Bundled
         } else {
@@ -270,4 +271,26 @@ fn plugin_from_proto(value: proto::AgentPlugin) -> ApiResult<PluginInventoryEntr
             })
             .collect::<ApiResult<Vec<_>>>()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_preserves_icons_and_accepts_older_servers_without_them() {
+        for icon in ["", "data:image/png;base64,iVBORw0KGgo="] {
+            let value = proto::AgentPlugin {
+                name: "example".into(),
+                icon_data_url: icon.into(),
+                trust: Some(proto::PluginTrust::default()),
+                ..Default::default()
+            };
+            let entry = plugin_from_proto(value).expect("discovery");
+            assert_eq!(
+                entry.icon_data_url.as_deref(),
+                (!icon.is_empty()).then_some(icon)
+            );
+        }
+    }
 }

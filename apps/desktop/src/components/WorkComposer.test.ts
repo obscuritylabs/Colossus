@@ -99,10 +99,12 @@ describe("WorkComposer capabilities", () => {
           description: "Work on code",
           compatibility: null,
           allowed_tools: null,
+          icon_data_url: "data:image/png;base64,iVBORw0KGgo=",
         },
       ],
     });
     expect(markup).toContain('aria-label="Plugin skills"');
+    expect(markup).toContain('src="data:image/png;base64,iVBORw0KGgo="');
     expect(markup).toContain("Use for this message only");
     expect(markup).toContain("@colossus/coding");
     expect(markup).toContain(

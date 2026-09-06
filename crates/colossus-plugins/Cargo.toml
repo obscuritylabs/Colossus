@@ -17,6 +17,7 @@ fs4.workspace = true
 futures.workspace = true
 hex.workspace = true
 http.workspace = true
+image.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
