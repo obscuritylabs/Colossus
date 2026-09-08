@@ -169,3 +169,11 @@ failure is a blocked native check, not an offline-runtime pass; do not replace e
 or platform credentials to hide it. Use a fresh explicit `COLOSSUS_HOME` and a scratch
 workspace for manual acceptance. The browser-to-worker bridge is separate evidence and
 does not substitute for native dialogs or operating-system integration.
+
+Windows release smoke fixtures use fresh owner-private directories under the current
+user profile, not the runner's potentially shared temporary directory. The Windows
+pre-merge lane runs `release_install_smoke`, including the same fixture helper and core
+bootstrap used by release packaging. The fixture owns all temporary installation,
+plugin-home, and bundle paths and restores the caller's environment on completion.
+Unix installer acceptance covers both permitted sticky ancestors and rejection of
+writable ancestors without sticky protection; BSD mode inspection must retain that bit.
