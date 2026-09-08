@@ -268,6 +268,8 @@ The publisher downloads anonymously from fixed GitHub HTTPS origins, bounds redi
 time and bytes, requires GitHub's SHA-256 for every asset, checks supplied checksum
 documents, and rechecks the release snapshot before publication. Limits are 256 assets,
 2 GiB per asset, and 8 GiB total. Legacy assets without GitHub digests are rejected.
+For publication, both test and publishing jobs check out the same resolved commit of
+protected `main`; the requested release tag selects data only, never publisher code.
 The job then pulls the published manifest by digest and compares the complete inventory
 and every asset again. Its summary and retained evidence contain the digest and pull
 command, never registry credentials. Desktop signing warnings remain unchanged: moving

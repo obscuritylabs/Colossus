@@ -137,7 +137,9 @@ test("only exact OL destinations and non-conflicting publication are permitted",
 test("CI publication is separate from PR checks, uses scoped auth, and preserves exact tags", async () => {
   const source = await readFile(new URL("../../.github/workflows/release-image.yml", import.meta.url), "utf8");
   const publication = source.slice(source.indexOf("\n  publish:\n"));
-  assert.ok(publication.includes("needs: test"));
+  assert.ok(publication.includes("needs: [publisher-revision, test]"));
+  assert.ok(source.includes("gh api repos/obscuritylabs/Colossus/git/ref/heads/main --jq .object.sha"));
+  assert.equal(source.split("ref: ${{ needs.publisher-revision.outputs.revision }}").length - 1, 2, "Test and privileged publication must check out the same resolved trusted publisher, never the requested release tag");
   assert.ok(publication.includes("github.ref == 'refs/heads/main'"));
   assert.ok(publication.includes("github.event_name == 'release'"));
   assert.ok(publication.includes("github.event.release.draft == false"));
