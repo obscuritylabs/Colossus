@@ -8,8 +8,40 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.11] - 2026-09-08
+
+### Added
+
+- Embedded the `colossus` core plugin in the CLI and sidecar with `coding`,
+  `offline-dev`, `security-review`, and `plugin-authoring` skills, available on first
+  launch without a checkout, registry connection, or manual installation.
+- Added home-wide plugin lifecycle management, deterministic OCI packaging and offline
+  transfer, configured registry authentication and trust, and explicit enablement of
+  plugin-provided MCP servers.
+- Added Desktop and TUI plugin management, instruction and resource previews, qualified
+  per-message skill mentions, and visible conversation-level skill selections.
+- Added bounded plugin icons and improved Desktop plugin discovery, with matching
+  public API and SDK display metadata.
+
+### Changed
+
+- Replaced the custom skills, packs, and collections system with Agent Plugins and
+  Agent Skills. Configuration schema version 3 is a hard cutover: regenerate older
+  extension configuration; legacy extension data is not migrated.
+- Kept run catalogs immutable and leased across execution, with workspace policy
+  narrowing the globally active plugin set and normal tool authority applying to
+  selected skill resources and scripts.
+- Bumped the Rust workspace, exact internal dependency pins, Desktop native and fuzz
+  dependencies, lockfiles, and bundled core plugin to `0.10.10-preview.11`.
+
 ### Fixed
 
+- Restored Plugins navigation in the production Desktop sidebar and added keyboard,
+  compact-layout, native command-adapter, worker, and TUI acceptance coverage.
+- Enforced credential-file, credential-helper, and trust-root authority before plugin
+  operations; preserved authorized disabled-plugin discovery and exact skill identities.
+- Bounded local and external plugin icon loading and encoded response sizes, including
+  the complete data URL, and paginated discovery by its encoded size.
 - Added a version-5 filesystem-scoped opaque-handle identity for Linux NFS workspaces
   that do not report birthtime, while preserving the existing birthtime identity and
   failing closed on unsupported, malformed, or inconsistent identity evidence.
