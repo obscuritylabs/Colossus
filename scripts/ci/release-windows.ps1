@@ -5,179 +5,188 @@ param(
 
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
-$binary = Join-Path $env:GITHUB_WORKSPACE "target/$Target/release/colossus.exe"
-$metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
-$version = ($metadata.packages | Where-Object name -eq "colossus-cli").version
-$package = "colossus-$version-$Target"
-$channel = if ($version -match '-preview\.') { "preview" } else { "stable" }
-
-$smoke = Join-Path $env:RUNNER_TEMP "colossus-release-smoke-$Target"
-Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force (Join-Path $smoke "workflows") | Out-Null
-Copy-Item release/smoke-config.yaml (Join-Path $smoke "config.yaml")
-Push-Location $smoke
-$previousPluginHome = $env:COLOSSUS_HOME
-$env:COLOSSUS_HOME = Join-Path $smoke "colossus-home"
+. (Join-Path $PSScriptRoot "windows-release-fixture.ps1")
+$releaseFixture = New-ColossusReleaseFixture
+$originalReleasePluginHome = $env:COLOSSUS_HOME
+$env:COLOSSUS_HOME = Join-Path $releaseFixture "bundle-home"
 try {
-    $versionOutput = (& $binary --version | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $versionOutput.StartsWith("colossus ")) { throw "version command failed" }
-    & $binary --config config.yaml config show | Out-Null
-    $plugins = @(& $binary --config config.yaml plugins list | ConvertFrom-Json)
-    if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "embedded core discovery failed" }
-    & $binary --config config.yaml run connected | Set-Content -Encoding utf8 result.json
-    $result = Get-Content -Raw result.json | ConvertFrom-Json
-    if ($result.output -ne "connected" -or $result.profile -ne "echo" -or $result.event_count -lt 3) { throw "offline smoke failed" }
-    & $binary --config config.yaml audit verify | Set-Content -Encoding utf8 audit.json
-    $audit = Get-Content -Raw audit.json | ConvertFrom-Json
-    if ($audit.last_sequence -lt 1 -or $audit.checkpoint.global_sequence -ne $audit.last_sequence) { throw "audit smoke failed" }
-} finally {
-    $env:COLOSSUS_HOME = $previousPluginHome
-    Pop-Location
-}
+    $binary = Join-Path $env:GITHUB_WORKSPACE "target/$Target/release/colossus.exe"
+    $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+    $version = ($metadata.packages | Where-Object name -eq "colossus-cli").version
+    $package = "colossus-$version-$Target"
+    $channel = if ($version -match '-preview\.') { "preview" } else { "stable" }
 
-$stage = Join-Path $env:RUNNER_TEMP $package
-$dist = Join-Path $PWD "dist"
-Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $stage, $dist | Out-Null
-Copy-Item $binary (Join-Path $stage "colossus.exe")
-Copy-Item release/install.ps1 (Join-Path $stage "install.ps1")
-[IO.File]::WriteAllText(
-    (Join-Path $stage "install-metadata"),
-    (@(
-        "schema_version=1",
-        "version=$version",
-        "target=$Target",
-        "channel=$channel",
-        "distribution_origin=https://github.com/obscuritylabs/Colossus/releases",
-        "installer_kind=direct"
-    ) -join "`n") + "`n",
-    [Text.Encoding]::ASCII
-)
-Copy-Item LICENSE (Join-Path $stage "LICENSE")
-Copy-Item README.md (Join-Path $stage "README.md")
-$archive = Join-Path $dist "$package.zip"
-Compress-Archive -Path $stage -DestinationPath $archive -Force
-$hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-[IO.File]::WriteAllText(
-    "${archive}.sha256",
-    "$hash  $package.zip`n",
-    [Text.Encoding]::ASCII
-)
+    $smoke = Join-Path $releaseFixture "colossus-release-smoke-$Target"
+    Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force (Join-Path $smoke "workflows") | Out-Null
+    Copy-Item release/smoke-config.yaml (Join-Path $smoke "config.yaml")
+    Push-Location $smoke
+    $previousPluginHome = $env:COLOSSUS_HOME
+    $env:COLOSSUS_HOME = Join-Path $smoke "colossus-home"
+    try {
+        $versionOutput = (& $binary --version | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $versionOutput.StartsWith("colossus ")) { throw "version command failed" }
+        & $binary --config config.yaml config show | Out-Null
+        $plugins = @(& $binary --config config.yaml plugins list | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "embedded core discovery failed" }
+        & $binary --config config.yaml run connected | Set-Content -Encoding utf8 result.json
+        $result = Get-Content -Raw result.json | ConvertFrom-Json
+        if ($result.output -ne "connected" -or $result.profile -ne "echo" -or $result.event_count -lt 3) { throw "offline smoke failed" }
+        & $binary --config config.yaml audit verify | Set-Content -Encoding utf8 audit.json
+        $audit = Get-Content -Raw audit.json | ConvertFrom-Json
+        if ($audit.last_sequence -lt 1 -or $audit.checkpoint.global_sequence -ne $audit.last_sequence) { throw "audit smoke failed" }
+    } finally {
+        $env:COLOSSUS_HOME = $previousPluginHome
+        Pop-Location
+    }
 
-$extract = Join-Path $env:RUNNER_TEMP "colossus-install-extract-$Target"
-$prefix = Join-Path $env:RUNNER_TEMP "colossus-install-prefix-$Target"
-$installedSmoke = Join-Path $env:RUNNER_TEMP "colossus-install-smoke-$Target"
-Remove-Item -Recurse -Force $extract, $prefix, $installedSmoke -ErrorAction SilentlyContinue
-Expand-Archive -LiteralPath $archive -DestinationPath $extract
-New-Item -ItemType Directory -Force (Join-Path $installedSmoke "workflows") | Out-Null
-$originalLocalAppData = $env:LOCALAPPDATA
-$env:LOCALAPPDATA = Join-Path $installedSmoke "data"
-try {
-    & (Join-Path $extract "$package/install.ps1") -Prefix $prefix
-} finally {
-    $env:LOCALAPPDATA = $originalLocalAppData
-}
-$receipt = Join-Path $installedSmoke "data/Colossus/install.json"
-if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "installation receipt is missing" }
-Copy-Item release/smoke-config.yaml (Join-Path $installedSmoke "config.yaml")
-$installed = Join-Path $prefix "bin/colossus.exe"
-Push-Location $installedSmoke
-$previousPluginHome = $env:COLOSSUS_HOME
-$env:COLOSSUS_HOME = Join-Path $installedSmoke "colossus-home"
-try {
-    $plugins = @(& $installed --config config.yaml plugins list | ConvertFrom-Json)
-    if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "installed embedded core discovery failed" }
-    & $installed --config config.yaml run installed-offline | Set-Content -Encoding utf8 result.json
-    $result = Get-Content -Raw result.json | ConvertFrom-Json
-    if ($result.output -ne "installed-offline" -or $result.profile -ne "echo") { throw "installed smoke failed" }
-    & $installed --config config.yaml audit verify | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "installed audit failed" }
-} finally {
-    $env:COLOSSUS_HOME = $previousPluginHome
-    Pop-Location
-}
+    $stage = Join-Path $releaseFixture $package
+    $dist = Join-Path $PWD "dist"
+    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $stage, $dist | Out-Null
+    Copy-Item $binary (Join-Path $stage "colossus.exe")
+    Copy-Item release/install.ps1 (Join-Path $stage "install.ps1")
+    [IO.File]::WriteAllText(
+        (Join-Path $stage "install-metadata"),
+        (@(
+            "schema_version=1",
+            "version=$version",
+            "target=$Target",
+            "channel=$channel",
+            "distribution_origin=https://github.com/obscuritylabs/Colossus/releases",
+            "installer_kind=direct"
+        ) -join "`n") + "`n",
+        [Text.Encoding]::ASCII
+    )
+    Copy-Item LICENSE (Join-Path $stage "LICENSE")
+    Copy-Item README.md (Join-Path $stage "README.md")
+    $archive = Join-Path $dist "$package.zip"
+    Compress-Archive -Path $stage -DestinationPath $archive -Force
+    $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText(
+        "${archive}.sha256",
+        "$hash  $package.zip`n",
+        [Text.Encoding]::ASCII
+    )
 
-$bundleRoot = Join-Path $env:RUNNER_TEMP "colossus-bundle-smoke-$Target"
-$bundleStage = Join-Path $bundleRoot "stage"
-$bundle = Join-Path $bundleRoot "bundle"
-$bundlePrefix = Join-Path $bundleRoot "prefix"
-$workflows = Join-Path $bundleRoot "workflows"
-Remove-Item -Recurse -Force $bundleRoot -ErrorAction SilentlyContinue
-$artifactDirectory = Join-Path $bundleStage "artifacts/$Target"
-New-Item -ItemType Directory -Force $artifactDirectory, $workflows | Out-Null
-Copy-Item $binary (Join-Path $artifactDirectory "colossus.exe")
-Copy-Item LICENSE (Join-Path $bundleStage "LICENSE")
-$config = [ordered]@{
-    schemaVersion = 3
-    access = [ordered]@{
-        profile = "pinned"
-        tools = [ordered]@{ include = @("echo"); exclude = @() }
-        actions = [ordered]@{
-            allow = @("bundle.verify")
-            requireApproval = @("bundle.key.inspect", "bundle.build", "bundle.install")
-            deny = @()
-        }
+    $extract = Join-Path $releaseFixture "colossus-install-extract-$Target"
+    $prefix = Join-Path $releaseFixture "colossus-install-prefix-$Target"
+    $installedSmoke = Join-Path $releaseFixture "colossus-install-smoke-$Target"
+    Remove-Item -Recurse -Force $extract, $prefix, $installedSmoke -ErrorAction SilentlyContinue
+    Expand-Archive -LiteralPath $archive -DestinationPath $extract
+    New-Item -ItemType Directory -Force (Join-Path $installedSmoke "workflows") | Out-Null
+    $originalLocalAppData = $env:LOCALAPPDATA
+    $env:LOCALAPPDATA = Join-Path $installedSmoke "data"
+    try {
+        & (Join-Path $extract "$package/install.ps1") -Prefix $prefix
+    } finally {
+        $env:LOCALAPPDATA = $originalLocalAppData
     }
-    storage = [ordered]@{
-        path = (Join-Path $bundleRoot "state.redb")
-        keys = [ordered]@{
-            kind = "environment"
-            journal_variable = "COLOSSUS_BUNDLE_JOURNAL_KEY"
-            journal_key_id = "release-bundle-journal-v1"
-            signing_variable = "COLOSSUS_BUNDLE_CHECKPOINT_KEY"
-            anchor_path = (Join-Path $bundleRoot "anchor.json")
-        }
+    $receipt = Join-Path $installedSmoke "data/Colossus/install.json"
+    if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "installation receipt is missing" }
+    Copy-Item release/smoke-config.yaml (Join-Path $installedSmoke "config.yaml")
+    $installed = Join-Path $prefix "bin/colossus.exe"
+    Push-Location $installedSmoke
+    $previousPluginHome = $env:COLOSSUS_HOME
+    $env:COLOSSUS_HOME = Join-Path $installedSmoke "colossus-home"
+    try {
+        $plugins = @(& $installed --config config.yaml plugins list | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "installed embedded core discovery failed" }
+        & $installed --config config.yaml run installed-offline | Set-Content -Encoding utf8 result.json
+        $result = Get-Content -Raw result.json | ConvertFrom-Json
+        if ($result.output -ne "installed-offline" -or $result.profile -ne "echo") { throw "installed smoke failed" }
+        & $installed --config config.yaml audit verify | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "installed audit failed" }
+    } finally {
+        $env:COLOSSUS_HOME = $previousPluginHome
+        Pop-Location
     }
-    policy = [ordered]@{ kind = "built_in"; require_post_effect = $false }
-    workflows = [ordered]@{ repository = $workflows; user = $workflows }
-    providers = [ordered]@{
-        profiles = [ordered]@{
-            echo = [ordered]@{ kind = "echo"; baseUrl = $null; credentialReference = $null; timeoutMs = 5000 }
-        }
-    }
-    models = [ordered]@{
-        profiles = [ordered]@{
-            echo = [ordered]@{
-                providerProfile = "echo"
-                model = "echo"
-                contextWindowTokens = 32768
-                maxOutputTokens = 4096
-                capabilities = [ordered]@{ toolCalls = $true; streaming = $true }
+
+    $bundleRoot = Join-Path $releaseFixture "colossus-bundle-smoke-$Target"
+    $bundleStage = Join-Path $bundleRoot "stage"
+    $bundle = Join-Path $bundleRoot "bundle"
+    $bundlePrefix = Join-Path $bundleRoot "prefix"
+    $workflows = Join-Path $bundleRoot "workflows"
+    Remove-Item -Recurse -Force $bundleRoot -ErrorAction SilentlyContinue
+    $artifactDirectory = Join-Path $bundleStage "artifacts/$Target"
+    New-Item -ItemType Directory -Force $artifactDirectory, $workflows | Out-Null
+    Copy-Item $binary (Join-Path $artifactDirectory "colossus.exe")
+    Copy-Item LICENSE (Join-Path $bundleStage "LICENSE")
+    $config = [ordered]@{
+        schemaVersion = 3
+        access = [ordered]@{
+            profile = "pinned"
+            tools = [ordered]@{ include = @("echo"); exclude = @() }
+            actions = [ordered]@{
+                allow = @("bundle.verify")
+                requireApproval = @("bundle.key.inspect", "bundle.build", "bundle.install")
+                deny = @()
             }
         }
-        roles = [ordered]@{ primary = "echo" }
+        storage = [ordered]@{
+            path = (Join-Path $bundleRoot "state.redb")
+            keys = [ordered]@{
+                kind = "environment"
+                journal_variable = "COLOSSUS_BUNDLE_JOURNAL_KEY"
+                journal_key_id = "release-bundle-journal-v1"
+                signing_variable = "COLOSSUS_BUNDLE_CHECKPOINT_KEY"
+                anchor_path = (Join-Path $bundleRoot "anchor.json")
+            }
+        }
+        policy = [ordered]@{ kind = "built_in"; require_post_effect = $false }
+        workflows = [ordered]@{ repository = $workflows; user = $workflows }
+        providers = [ordered]@{
+            profiles = [ordered]@{
+                echo = [ordered]@{ kind = "echo"; baseUrl = $null; credentialReference = $null; timeoutMs = 5000 }
+            }
+        }
+        models = [ordered]@{
+            profiles = [ordered]@{
+                echo = [ordered]@{
+                    providerProfile = "echo"
+                    model = "echo"
+                    contextWindowTokens = 32768
+                    maxOutputTokens = 4096
+                    capabilities = [ordered]@{ toolCalls = $true; streaming = $true }
+                }
+            }
+            roles = [ordered]@{ primary = "echo" }
+        }
+        agent = [ordered]@{ maxTurns = 2 }
+        subagents = [ordered]@{ maxConcurrent = 1 }
+        sandbox = [ordered]@{
+            backend = "native"; profile = "release-bundle-smoke-v1"; allowBrokerFallback = $false
+            helperPath = $null; ociRuntime = $null; ociImage = $null; ociProxyImage = $null
+            filesystem = @([ordered]@{ root = $bundleRoot; mode = "write" })
+            executables = @(); environment = @(); networkDestinations = @()
+            timeoutMs = 30000; maxOutputBytes = 1048576; maxProcesses = 1
+            maxMemoryBytes = 67108864; maxConcurrency = 1
+        }
     }
-    agent = [ordered]@{ maxTurns = 2 }
-    subagents = [ordered]@{ maxConcurrent = 1 }
-    sandbox = [ordered]@{
-        backend = "native"; profile = "release-bundle-smoke-v1"; allowBrokerFallback = $false
-        helperPath = $null; ociRuntime = $null; ociImage = $null; ociProxyImage = $null
-        filesystem = @([ordered]@{ root = $bundleRoot; mode = "write" })
-        executables = @(); environment = @(); networkDestinations = @()
-        timeoutMs = 30000; maxOutputBytes = 1048576; maxProcesses = 1
-        maxMemoryBytes = 67108864; maxConcurrency = 1
+    $configPath = Join-Path $bundleRoot "config.yaml"
+    $config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
+    $keyInfo = & $binary --config $configPath --approval-mode full-access bundle key-info `
+        --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
+    $publisherKeys = [ordered]@{}
+    $publisherKeys[$keyInfo.key_id] = $keyInfo.public_key
+    $config["bundles"] = [ordered]@{
+        trustedPublishers = [ordered]@{ colossus = $publisherKeys }
     }
+    $config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
+    $build = & $binary --config $configPath --approval-mode full-access bundle build `
+        $bundleStage $bundle --name colossus-offline --version $version --publisher colossus `
+        --created-at 2026-07-11T00:00:00Z --source-revision $env:GITHUB_SHA `
+        --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
+    & $binary --config $configPath bundle verify $bundle | Out-Null
+    $install = & $binary --config $configPath --approval-mode full-access bundle install `
+        $bundle --prefix $bundlePrefix | ConvertFrom-Json
+    $bundleInstalled = Join-Path $bundlePrefix "bin/colossus.exe"
+    $bundleResult = & $bundleInstalled --config $configPath run bundle-installed | ConvertFrom-Json
+    if ($build.targets.Count -ne 1 -or $build.targets[0] -ne $Target) { throw "unexpected bundle targets" }
+    if ($install.target -ne $Target -or $bundleResult.output -ne "bundle-installed") { throw "unexpected bundle install result" }
+    & $bundleInstalled --config $configPath audit verify | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "bundle-installed audit verify failed" }
+} finally {
+    $env:COLOSSUS_HOME = $originalReleasePluginHome
+    Remove-Item -LiteralPath $releaseFixture -Recurse -Force
 }
-$configPath = Join-Path $bundleRoot "config.yaml"
-$config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
-$keyInfo = & $binary --config $configPath --approval-mode full-access bundle key-info `
-    --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
-$publisherKeys = [ordered]@{}
-$publisherKeys[$keyInfo.key_id] = $keyInfo.public_key
-$config["bundles"] = [ordered]@{
-    trustedPublishers = [ordered]@{ colossus = $publisherKeys }
-}
-$config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
-$build = & $binary --config $configPath --approval-mode full-access bundle build `
-    $bundleStage $bundle --name colossus-offline --version $version --publisher colossus `
-    --created-at 2026-07-11T00:00:00Z --source-revision $env:GITHUB_SHA `
-    --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
-& $binary --config $configPath bundle verify $bundle | Out-Null
-$install = & $binary --config $configPath --approval-mode full-access bundle install `
-    $bundle --prefix $bundlePrefix | ConvertFrom-Json
-$bundleInstalled = Join-Path $bundlePrefix "bin/colossus.exe"
-$bundleResult = & $bundleInstalled --config $configPath run bundle-installed | ConvertFrom-Json
-if ($build.targets.Count -ne 1 -or $build.targets[0] -ne $Target) { throw "unexpected bundle targets" }
-if ($install.target -ne $Target -or $bundleResult.output -ne "bundle-installed") { throw "unexpected bundle install result" }
-& $bundleInstalled --config $configPath audit verify | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "bundle-installed audit verify failed" }

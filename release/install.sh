@@ -64,7 +64,9 @@ ensure_no_link_components() {
 }
 
 directory_mode() {
-    if resolved_mode=$(stat -f '%Lp' -- "$1" 2>/dev/null); then
+    # BSD's low permission field (%Lp) excludes sticky/set-id bits. Keep the
+    # complete octal mode so ancestor checks can recognize sticky protection.
+    if resolved_mode=$(stat -f '%Op' -- "$1" 2>/dev/null); then
         printf '%s\n' "$resolved_mode"
     else
         stat -c '%a' -- "$1"

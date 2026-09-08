@@ -270,7 +270,9 @@ jobs:
       - name: Run Windows worker and AppContainer escape acceptance
         id: worker_acceptance
         continue-on-error: true
-        run: cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture
+        run: >-
+          cargo test --locked -p colossus-cli --test worker_smoke
+          --test windows_sandbox --test release_install_smoke -- --nocapture
       - name: Prepare Windows Managed Local executables
         id: desktop_prepare
         continue-on-error: true

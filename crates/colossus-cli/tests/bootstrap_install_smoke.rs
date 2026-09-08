@@ -214,7 +214,7 @@ esac
 set -eu
 [ "$#" -eq 4 ] && [ "$3" = -- ] || exit 64
 case "$1:$2" in
-    -f:%u|-f:%Lp)
+    -f:%u|-f:%Op)
         if [ "$COLOSSUS_TEST_KERNEL" = Darwin ]; then
             exec /usr/bin/stat "$@"
         fi

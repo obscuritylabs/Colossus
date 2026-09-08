@@ -8,7 +8,28 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.12] - 2026-09-08
+
+### Fixed
+
+- Created Windows release smoke fixtures beneath the runner's user profile with explicit
+  owner-private ACLs and isolated plugin homes. Added real-runtime fixture acceptance to
+  the Windows pre-merge gate so unsafe shared temporary roots fail before tagging.
+- Preserved sticky-directory bits when inspecting macOS installer ancestry, allowing
+  safe private installations beneath sticky temporary directories while continuing to
+  reject replaceable non-sticky ancestors.
+
+### Changed
+
+- Superseded the unpublished preview 11 candidate after its Windows release-fixture
+  validation failed. This preview includes the embedded core plugins, OCI distribution,
+  Desktop/TUI plugin experience, and schema-v3 hard cutover described below.
+- Synchronized Rust package versions, exact dependency pins, lockfiles, the embedded core
+  plugin, and the Desktop fixture to `0.10.10-preview.12`.
+
 ## [0.10.10-preview.11] - 2026-09-08
+
+Unpublished candidate; superseded by preview 12.
 
 ### Added
 

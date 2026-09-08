@@ -174,6 +174,60 @@ fn offline_command(binary: &Path, working_directory: &Path) -> process_support::
 
 #[cfg(unix)]
 #[test]
+fn packaged_installer_preserves_sticky_ancestor_protection() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempdir().expect("directory");
+    let root = fs::canonicalize(directory.path()).expect("canonical test root");
+    create_private_directory(&root);
+    let package = root.join("package");
+    fs::create_dir(&package).expect("package directory");
+    let installer = prepare_package(Path::new(env!("CARGO_BIN_EXE_colossus")), &package);
+    let shared = root.join("sticky-parent");
+    fs::create_dir(&shared).expect("sticky parent");
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o1777)).expect("sticky mode");
+    let prefix = shared.join("private-prefix");
+    let installed = install(&installer, &prefix);
+    assert!(
+        installed.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&installed.stdout),
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    assert!(installed_binary(&prefix).is_file());
+
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).expect("shared mode");
+    let rejected_prefix = shared.join("rejected-prefix");
+    let rejected = install(&installer, &rejected_prefix);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("writable without sticky protection")
+    );
+    assert!(!rejected_prefix.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_release_fixture_supports_private_core_bootstrap() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/ci/test-windows-release-fixture.ps1");
+    let output = Command::new("pwsh")
+        .args(["-NoProfile", "-NonInteractive", "-File"])
+        .arg(script)
+        .arg("-Binary")
+        .arg(env!("CARGO_BIN_EXE_colossus"))
+        .output()
+        .expect("run Windows release fixture acceptance");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn packaged_installer_handles_ubuntu_user_private_group_umask() {
     use std::os::unix::fs::PermissionsExt as _;
 
