@@ -221,3 +221,81 @@ Annotated `vX.Y.Z-preview.N` tags retain the visibly unsigned macOS and Windows 
 Developer Preview path. They do not build stable SDK registry candidates and cannot
 publish npm, PyPI, or Go versions. Production Desktop signing and update-channel
 publication remain an independent release track.
+
+### Release asset OCI images
+
+`Publish Colossus release image` packages every uploaded asset of an already-published
+stable or preview release into one data-only OCI artifact. It runs on release
+publication, or an operator can backfill an exact tag from `main`:
+
+```bash
+gh workflow run release-image.yml --ref main \
+  -f tag=v0.10.10-preview.12 -f registry=auto
+```
+
+The destination is `obscuritylabs/colossus-release` on Docker Hub when both
+`DOCKERHUB_USERNAME` and `DOCKERHUB_PASSWORD` repository secrets are configured and
+authenticate successfully. `DOCKERHUB_PASSWORD` should contain a dedicated Docker Hub
+access token authorized to push that repository, not an interactive account password.
+`auto` falls back to `ghcr.io/obscuritylabs/colossus-release` when those credentials
+are absent or login fails. `registry=dockerhub` fails instead of falling back;
+`registry=ghcr` explicitly selects GitHub Container Registry. A later push/RBAC denial
+fails visibly; rerun with `registry=ghcr` to select that alternative explicitly.
+GHCR uses the job-scoped `GITHUB_TOKEN` with `packages: write`; no personal token or
+copied secret from another repository is required. On first GHCR publication, confirm
+the package visibility is public in the package settings before advertising anonymous
+downloads. The package is linked to this repository using the standard source annotation.
+See [GitHub's Container Registry administration guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+for package visibility and repository access controls.
+
+Each image has exactly the requested `vX.Y.Z` or `vX.Y.Z-preview.N` tag. The workflow
+never moves `latest`, a stable/preview alias, or an existing conflicting version tag.
+An identical rerun verifies and reuses the existing digest. Repository writers must
+retain this single-publisher workflow and must not independently overwrite its tags;
+registry tags themselves are mutable, so air-gap records should use the manifest digest.
+
+There is no base image, operating system, executable entrypoint, or platform selection.
+This is an ORAS artifact, not a runnable Docker `FROM scratch` root filesystem:
+
+- OCI image manifest v1.1, artifact type `application/vnd.colossus.release.v1`;
+- one raw blob per original release asset at `assets/<original-filename>`;
+- `release-inventory.json` with release ID, tag, source commit, channel, publication
+  time, and every asset's ID, size, and SHA-256 digest;
+- deterministic ordering and creation annotation, with no downloaded archive extraction
+  or executable invocation.
+
+The publisher downloads anonymously from fixed GitHub HTTPS origins, bounds redirects,
+time and bytes, requires GitHub's SHA-256 for every asset, checks supplied checksum
+documents, and rechecks the release snapshot before publication. Limits are 256 assets,
+2 GiB per asset, and 8 GiB total. Legacy assets without GitHub digests are rejected.
+The job then pulls the published manifest by digest and compares the complete inventory
+and every asset again. Its summary and retained evidence contain the digest and pull
+command, never registry credentials. Desktop signing warnings remain unchanged: moving
+release bytes into OCI does not sign or notarize them. This whole-release format is
+separate from the Agent Plugin OCI profile and is not accepted by `plugins install`.
+
+Retrieve the release files or carry the entire OCI layout into a disconnected registry:
+
+```bash
+oras pull ghcr.io/obscuritylabs/colossus-release:v0.10.10-preview.12 \
+  --output release-assets
+oras cp --to-oci-layout \
+  ghcr.io/obscuritylabs/colossus-release:v0.10.10-preview.12 \
+  ./release-layout:v0.10.10-preview.12
+oras cp --from-oci-layout ./release-layout:v0.10.10-preview.12 \
+  registry.example/colossus-release:v0.10.10-preview.12
+```
+
+Use the digest-pinned reference from the successful job instead of the tag when recording
+an immutable transfer. ORAS is sufficient; Docker Desktop or a container daemon is not
+required. Verify locally without registry publication:
+
+```bash
+node --test scripts/ci/release-oci.test.mjs
+node scripts/ci/release-oci-roundtrip.mjs
+node scripts/ci/release-oci.mjs prepare v0.10.10-preview.12 /tmp/new-release-output
+```
+
+The round-trip check requires ORAS 1.3.4 and opens no socket. CI pins the ORAS installer
+action and verifies the downloaded CLI checksum; it runs the contracts and real local
+OCI round trip before any job receives registry write permission.
