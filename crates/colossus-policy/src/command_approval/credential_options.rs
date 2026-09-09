@@ -1,4 +1,4 @@
-//! Display-only hints for ambiguous short options. Never resolve or run a command.
+//! Display-only hints for program-specific options. Never resolve or run a command.
 
 use std::{ops::Range, sync::LazyLock};
 
@@ -15,7 +15,7 @@ pub(super) struct Profile {
 
 static PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
     // Programs, value-taking flags, attached/grouped short forms, login-only.
-    [
+    let mut profiles: Vec<_> = [
         (&["ssh-keygen"][..], "NP", true, false),
         (
             &[
@@ -27,7 +27,7 @@ static PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
         ),
         (&["redis-cli"][..], "a", true, false),
         (&["security"][..], "w", true, false),
-        (&["openssl"][..], "k", false, false),
+        (&["openssl"][..], "kK", false, false),
         (&["docker", "podman"][..], "p", true, true),
     ]
     .into_iter()
@@ -64,7 +64,34 @@ static PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
             .expect("constant credential shell option"),
         }
     })
-    .collect()
+    .collect();
+    // Single-dash named options are not grouped short flags. Match complete
+    // value-taking names, not command verbs such as keytool's -storepasswd.
+    // Keep these patterns shared by shell spelling and prepared argv handling.
+    for (programs, option) in [
+        (
+            &["keytool"][..],
+            r"(?i)-(?:(?:src|dest)?(?:store|key)pass|new)",
+        ),
+        (&["jarsigner"][..], r"(?i)-(?:store|key)pass"),
+        (
+            &["openssl"][..],
+            r"-(?:pwri_password|password|passin|passout|secretkey|hmac|macopt)",
+        ),
+    ] {
+        let names = programs.join("|");
+        profiles.push(Profile {
+            programs,
+            login_only: false,
+            cue: Regex::new(&format!(r"(?i)\b(?:{names})(?:\.exe)?\b"))
+                .expect("constant named credential program hint"),
+            argument: Regex::new(&format!(r"^{option}(?:=|$)"))
+                .expect("constant named credential argument option"),
+            shell: Regex::new(&format!(r"(?:^|[\s;&|]){option}[\s=]+"))
+                .expect("constant named credential shell option"),
+        });
+    }
+    profiles
 });
 
 impl Profile {

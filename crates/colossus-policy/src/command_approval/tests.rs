@@ -162,6 +162,22 @@ fn ambiguous_short_password_options_are_recognized_in_shell_and_prepared_argv() 
         ("redis-cli", "", "-a", true),
         ("security", "add-generic-password", "-w", true),
         ("openssl", "enc", "-k", false),
+        ("openssl", "enc", "-K", false),
+        ("openssl", "cms", "-pwri_password", false),
+        ("openssl", "cms", "-secretkey", false),
+        ("openssl", "pkcs12", "-password", false),
+        ("openssl", "dgst", "-hmac", false),
+        ("openssl", "mac", "-macopt", false),
+        ("keytool", "-genkeypair", "-storepass", false),
+        ("keytool", "-genkeypair", "-keypass", false),
+        ("keytool", "-importkeystore", "-srcstorepass", false),
+        ("keytool", "-importkeystore", "-deststorepass", false),
+        ("keytool", "-importkeystore", "-srckeypass", false),
+        ("keytool", "-importkeystore", "-destkeypass", false),
+        ("keytool", "-storepasswd", "-new", false),
+        ("keytool", "-keypasswd", "-KEYPASS", false),
+        ("jarsigner", "", "-storepass", false),
+        ("jarsigner", "", "-keypass", false),
         ("docker", "login", "-p", true),
         ("podman", "login", "-p", true),
     ] {
@@ -206,6 +222,9 @@ fn ambiguous_short_password_options_are_recognized_in_shell_and_prepared_argv() 
     for command in [
         r#""C:\Tools\ssh-keygen.exe" -N 'private-value' PUBLIC_END"#,
         "ssh-\"keygen\" -P 'private-value' PUBLIC_END",
+        "sudo keytool '-storepass' 'private-value' PUBLIC_END",
+        "env openssl cms -pwri_\"password\" 'private-value' PUBLIC_END",
+        r#""C:\Tools\keytool.exe" -keypass 'private-value' PUBLIC_END"#,
     ] {
         let (display, redacted) = sanitized(command, &[], &[]);
         assert!(!display.contains("private-value"), "{display}");
@@ -222,6 +241,10 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
         ("curl", vec!["-N", "https://example.test"]),
         ("docker", vec!["run", "-p", "8080:80", "image"]),
         ("openssl", vec!["s_client", "-key", "key.pem"]),
+        ("openssl", vec!["req", "-new", "-key", "key.pem"]),
+        ("keytool", vec!["-storepasswd", "-keystore", "store.jks"]),
+        ("keytool", vec!["-keypasswd", "-keystore", "store.jks"]),
+        ("jarsigner", vec!["-keystore", "store.jks", "public.jar"]),
     ] {
         for shell in [false, true] {
             let mut request = request();

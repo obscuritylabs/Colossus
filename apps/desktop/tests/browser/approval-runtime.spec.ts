@@ -65,8 +65,8 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       requests.push(input);
       const script =
         process.platform === "win32"
-          ? `echo approved>>approved-marker.txt & rem TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== PASSWORD=top"fixture-concat-tail" --oauth2-"bearer" fixture-name-tail ssh-keygen -N fixture-keygen-tail ${"x".repeat(1400)} COMMAND_TAIL`
-          : `printf 'approved\\n' >> approved-marker.txt # TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== PASSWORD=top"fixture-concat-tail" --oauth2-"bearer" fixture-name-tail ssh-keygen -N fixture-keygen-tail ${"x".repeat(6000)} COMMAND_TAIL`;
+          ? `echo approved>>approved-marker.txt & rem TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== PASSWORD=top"fixture-concat-tail" --oauth2-"bearer" fixture-name-tail ssh-keygen -N fixture-keygen-tail keytool -storepass fixture-storepass-tail openssl cms -pwri_password fixture-pwri-tail ${"x".repeat(1400)} COMMAND_TAIL`
+          : `printf 'approved\\n' >> approved-marker.txt # TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== PASSWORD=top"fixture-concat-tail" --oauth2-"bearer" fixture-name-tail ssh-keygen -N fixture-keygen-tail keytool -storepass fixture-storepass-tail openssl cms -pwri_password fixture-pwri-tail ${"x".repeat(6000)} COMMAND_TAIL`;
       const delta =
         requests.length === 1
           ? {
@@ -176,6 +176,8 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       await expect(full).not.toContainText("fixture-concat-tail");
       await expect(full).not.toContainText("fixture-name-tail");
       await expect(full).not.toContainText("fixture-keygen-tail");
+      await expect(full).not.toContainText("fixture-storepass-tail");
+      await expect(full).not.toContainText("fixture-pwri-tail");
       await full.focus();
       await page.keyboard.press("End");
       await expect
@@ -235,6 +237,8 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
         "fixture-concat-tail",
         "fixture-name-tail",
         "fixture-keygen-tail",
+        "fixture-storepass-tail",
+        "fixture-pwri-tail",
         "resolved_argv",
         "invocation",
       ])
