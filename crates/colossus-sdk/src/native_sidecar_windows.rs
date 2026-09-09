@@ -1,3 +1,4 @@
+use crate::sidecar_agent_runs::AgentRunTransports;
 use crate::{
     AgentRunClient, ApiResult, ArchiveThreadRequest, ArtifactClient, Backend, BackendKind,
     CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
@@ -419,8 +420,10 @@ async fn launch(
     };
     let (agent_runs_closed, _) = watch::channel(false);
     let agent_runs = Arc::new(WindowsAgentRuns {
-        primary: Arc::clone(&primary),
-        approval: approval.clone(),
+        transports: AgentRunTransports {
+            primary: primary.agent_runs(),
+            approval_broker: approval.as_ref().map(|transport| transport.agent_runs()),
+        },
         closed: agent_runs_closed,
     });
     Ok(WindowsSidecarBackend {
@@ -493,37 +496,33 @@ impl CredentialProvider for MemoryCredentialProvider {
 }
 
 struct WindowsAgentRuns {
-    primary: Arc<GrpcBackend>,
-    approval: Option<Arc<GrpcBackend>>,
+    transports: AgentRunTransports,
     closed: watch::Sender<bool>,
 }
 
 #[async_trait]
 impl AgentRunClient for WindowsAgentRuns {
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
-        self.primary.agent_runs().create_run(request).await
+        self.transports.primary.create_run(request).await
     }
 
     async fn get_run(&self, request: GetRunRequest) -> ApiResult<GetRunResponse> {
-        self.primary.agent_runs().get_run(request).await
+        self.transports.get_run(request).await
     }
 
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
-        self.primary.agent_runs().list_runs(request).await
+        self.transports.primary.list_runs(request).await
     }
 
     async fn list_session_activity(
         &self,
         request: ListSessionActivityRequest,
     ) -> ApiResult<ListSessionActivityResponse> {
-        self.primary
-            .agent_runs()
-            .list_session_activity(request)
-            .await
+        self.transports.primary.list_session_activity(request).await
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
-        self.primary.agent_runs().watch_run(request).await
+        self.transports.watch_run(request).await
     }
 
     fn is_closed(&self) -> bool {
@@ -543,26 +542,22 @@ impl AgentRunClient for WindowsAgentRuns {
     }
 
     async fn cancel_run(&self, request: CancelRunRequest) -> ApiResult<CancelRunResponse> {
-        self.primary.agent_runs().cancel_run(request).await
+        self.transports.primary.cancel_run(request).await
     }
 
     async fn archive_thread(&self, request: ArchiveThreadRequest) -> ApiResult<ThreadLifecycle> {
-        self.primary.agent_runs().archive_thread(request).await
+        self.transports.primary.archive_thread(request).await
     }
 
     async fn restore_thread(&self, request: RestoreThreadRequest) -> ApiResult<ThreadLifecycle> {
-        self.primary.agent_runs().restore_thread(request).await
+        self.transports.primary.restore_thread(request).await
     }
 
     async fn respond_interaction(
         &self,
         request: RespondInteractionRequest,
     ) -> ApiResult<RespondInteractionResponse> {
-        if let Some(approval) = &self.approval {
-            approval.agent_runs().respond_interaction(request).await
-        } else {
-            self.primary.agent_runs().respond_interaction(request).await
-        }
+        self.transports.respond_interaction(request).await
     }
 }
 

@@ -256,13 +256,13 @@ jobs:
         id: windows_native
         continue-on-error: true
         run: cargo test --locked -p colossus-windows-native -- --nocapture
-      - name: Test ordinary Windows Managed Local instance paths
+      - name: Test Windows Managed Local instance paths and approval routing
         id: windows_sdk_path
         continue-on-error: true
-        run: >-
-          cargo test --locked -p colossus-sdk --lib --features sidecar
-          native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity
-          -- --exact --nocapture
+        run: |
+          cargo test --locked -p colossus-sdk --lib --features sidecar native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-sdk --lib --features sidecar sidecar_agent_runs::tests -- --nocapture
       - name: Run Windows Colossus-home acceptance
         id: windows_home
         continue-on-error: true

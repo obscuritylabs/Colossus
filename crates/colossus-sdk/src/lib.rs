@@ -38,6 +38,8 @@ mod plugins;
 mod secret;
 #[cfg(feature = "sidecar")]
 mod sidecar;
+#[cfg(all(feature = "sidecar", any(unix, windows)))]
+mod sidecar_agent_runs;
 mod stream;
 mod types;
 pub use plugins::*;

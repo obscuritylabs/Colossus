@@ -1052,6 +1052,10 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
     windows,
     /cargo test --locked -p colossus-sdk --lib --features sidecar\s+native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity/u,
   );
+  assert.match(
+    windows,
+    /if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\s+cargo test --locked -p colossus-sdk --lib --features sidecar sidecar_agent_runs::tests/u,
+  );
   assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
   assert.match(windows, /steps\.desktop_prepare\.outcome/u);

@@ -1,21 +1,24 @@
+use crate::sidecar_agent_runs::AgentRunTransports;
 use crate::{
     AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArchiveThreadRequest,
     ArtifactClient, ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
     CreateRunRequest, CreateRunResponse, CredentialProvider, DownloadedArtifact, GetRunRequest,
-    GetRunResponse, GrpcBackend, GrpcConnectOptions, Interaction, InteractionAnswer,
-    InteractionContent, InteractionStatus, ListRunsRequest, ListRunsResponse,
+    GetRunResponse, GrpcBackend, GrpcConnectOptions, ListRunsRequest, ListRunsResponse,
     ListSessionActivityRequest, ListSessionActivityResponse, MacosCodeSigningRequirement,
     NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
-    RespondInteractionResponse, RestoreThreadRequest, RunUpdateKind, RunUpdateStream, SdkError,
-    SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle,
-    SidecarOptions, ThreadLifecycle, TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
+    RespondInteractionResponse, RestoreThreadRequest, RunUpdateStream, SdkError, SdkResult, Secret,
+    ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, ThreadLifecycle,
+    TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
 };
+#[cfg(test)]
+use crate::{Interaction, InteractionAnswer, InteractionContent, InteractionStatus, RunUpdateKind};
 use async_trait::async_trait;
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, ChildFrame, ConfigurationInspectionRequest,
     ConfigurationInspectionResponse, FailureCode, MAX_FRAME_BYTES, PROTOCOL_VERSION, ParentFrame,
     ReadyResponse, WorkspaceIdentity, decode_payload, encode_frame,
 };
+#[cfg(test)]
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
@@ -900,12 +903,6 @@ impl ConnectedTransports {
     }
 }
 
-#[derive(Clone)]
-struct AgentRunTransports {
-    primary: Arc<dyn AgentRunClient>,
-    approval_broker: Option<Arc<dyn AgentRunClient>>,
-}
-
 #[cfg(unix)]
 impl RunningChild {
     fn transports(&self) -> &ConnectedTransports {
@@ -1252,15 +1249,6 @@ impl ArtifactClient for SwitchingArtifactClient {
     }
 }
 
-fn expose_approval_broker_capability(interaction: &mut Interaction) {
-    if interaction.status == InteractionStatus::Pending
-        && !interaction.etag.is_empty()
-        && matches!(&interaction.content, InteractionContent::Approval(_))
-    {
-        interaction.respondable_by_caller = true;
-    }
-}
-
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
@@ -1268,15 +1256,7 @@ impl AgentRunClient for SwitchingAgentRunClient {
     }
 
     async fn get_run(&self, request: GetRunRequest) -> ApiResult<GetRunResponse> {
-        let transports = self.current().await?;
-        let mut response = transports.primary.get_run(request).await?;
-        if transports.approval_broker.is_some() {
-            response
-                .pending_interactions
-                .iter_mut()
-                .for_each(expose_approval_broker_capability);
-        }
-        Ok(response)
+        self.current().await?.get_run(request).await
     }
 
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
@@ -1295,19 +1275,7 @@ impl AgentRunClient for SwitchingAgentRunClient {
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
-        let transports = self.current().await?;
-        let stream = transports.primary.watch_run(request).await?;
-        if transports.approval_broker.is_none() {
-            return Ok(stream);
-        }
-        Ok(Box::pin(stream.map(|item| {
-            item.map(|mut update| {
-                if let RunUpdateKind::Interaction(interaction) = &mut update.update {
-                    expose_approval_broker_capability(interaction);
-                }
-                update
-            })
-        })))
+        self.current().await?.watch_run(request).await
     }
 
     fn is_closed(&self) -> bool {
@@ -1342,16 +1310,7 @@ impl AgentRunClient for SwitchingAgentRunClient {
         &self,
         request: RespondInteractionRequest,
     ) -> ApiResult<RespondInteractionResponse> {
-        let transports = self.current().await?;
-        if matches!(&request.response, InteractionAnswer::Approval { .. }) {
-            transports
-                .approval_broker
-                .unwrap_or(transports.primary)
-                .respond_interaction(request)
-                .await
-        } else {
-            transports.primary.respond_interaction(request).await
-        }
+        self.current().await?.respond_interaction(request).await
     }
 }
 

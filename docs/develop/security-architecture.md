@@ -848,7 +848,10 @@ primary credential has the four run/read/control/prompt scopes and never
 approval scope, no tools, and no role outside the primary ceiling. The sidecar issues,
 delivers, acknowledges, activates, and revokes the pair as one bootstrap lifecycle;
 the SDK routes only approval answers over the broker's separately authenticated pinned
-gRPC client. Renderer approval input still requires the native operating-system
+gRPC client. Unix and Windows share the same routing and read projection: only pending
+approval interactions with a response etag expose the native broker capability, reads
+stay on the primary client, and ordinary prompt answers never use the approval broker.
+Renderer approval input still requires the native operating-system
 confirmation before an allow response reaches this broker. Command approvals first use
 a separate native-owned read-only review window with a fixed local document and only
 two narrowly scoped review commands. The main renderer cannot supply its trusted text
