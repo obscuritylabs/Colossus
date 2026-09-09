@@ -50,10 +50,23 @@ pub(super) fn is_option(name: &str) -> bool {
                 | "cookie"
                 | "apikey"
                 | "privatekey"
+                | "secretkey"
+                | "accesskey"
+                | "encryptionkey"
+                | "signingkey"
+                | "authkey"
         )
-    ) || ["api_key", "private_key"]
-        .iter()
-        .any(|suffix| normalized == *suffix || normalized.ends_with(&format!("_{suffix}")))
+    ) || [
+        "api_key",
+        "private_key",
+        "secret_key",
+        "access_key",
+        "encryption_key",
+        "signing_key",
+        "auth_key",
+    ]
+    .iter()
+    .any(|suffix| normalized == *suffix || normalized.ends_with(&format!("_{suffix}")))
 }
 
 pub(super) fn ranges(text: &str, spelling: &str, original_ends: &[usize]) -> Vec<Range<usize>> {

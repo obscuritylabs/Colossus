@@ -306,6 +306,17 @@ fn complete_long_credential_names_remain_private_in_both_invocation_forms() {
         "--db_password",
         "--clientSecret",
         "--accessToken",
+        "--secret-key",
+        "--secret_key",
+        "--secretKey",
+        "--SECRETKEY",
+        "--client-secret-key",
+        "--secret-access-key",
+        "--awsSecretAccessKey",
+        "--access-key",
+        "--encryption-key",
+        "--signing-key",
+        "--auth-key",
     ] {
         for arguments in [
             vec![
