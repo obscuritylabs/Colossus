@@ -181,6 +181,62 @@ fn common_authentication_flags_and_cookies_are_not_disclosed() {
 }
 
 #[test]
+fn short_and_long_header_payloads_are_contained_without_evaluating_quotes() {
+    for arguments in [
+        vec!["-HAuthorization: Digest private-value"],
+        vec!["-HProxy-Authorization: Digest private-value"],
+        vec!["-HCookie: session=private-value; other=private-tail"],
+        vec!["-H", "Authorization: Digest private-value"],
+        vec!["--header", "Authorization: Digest private-value"],
+        vec!["--header=Authorization: Digest private-value"],
+        vec!["-c", "curl \"-HAuthorization: Digest private-value\" END"],
+        vec!["-c", "curl -H'Author''ization: Digest private-value' END"],
+        vec![
+            "-c",
+            "curl --header 'Author''ization: Digest private-value' END",
+        ],
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(arguments);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        let released = serde_json::to_string(&context).unwrap();
+        assert!(!released.contains("private-value"), "{released}");
+        assert!(!released.contains("private-tail"), "{released}");
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
+fn cookie_short_options_redact_separated_attached_and_quoted_values() {
+    for arguments in [
+        vec!["-b", "session=private-value; other=private-tail", "END"],
+        vec!["-bsession=private-value", "END"],
+        vec!["-b=session=private-value", "END"],
+        vec!["--cookie", "session=private-value", "END"],
+        vec!["-c", "curl -b session=private-value END"],
+        vec![
+            "-c",
+            "curl -b'session=private-value; other=private-tail' END",
+        ],
+        vec!["-c", "curl -\"b\" session=private-value END"],
+        vec!["-c", "curl --cookie='session=private-value' END"],
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(arguments);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        let released = serde_json::to_string(&context).unwrap();
+        assert!(!released.contains("private-value"), "{released}");
+        assert!(!released.contains("private-tail"), "{released}");
+        assert!(released.contains("END"));
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
 fn complete_token68_credentials_are_redacted_without_changing_execution() {
     let token = "AZaz09-._~+/sensitive==";
     for arguments in [

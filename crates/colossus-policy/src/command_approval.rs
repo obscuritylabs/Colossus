@@ -31,7 +31,7 @@ static AUTHORIZATION: LazyLock<Regex> = LazyLock::new(|| {
 static CREDENTIAL_HEADERS: LazyLock<Regex> = LazyLock::new(|| {
     // Headers are often one quoted shell word or one argv element. Remove the
     // whole value, including all cookie pairs, rather than just its first token.
-    Regex::new(r#"(?i)(\b(?:cookie|set-cookie|authorization|proxy-authorization|x-api-key)\s*:\s*)[^\r\n"']+"#)
+    Regex::new(r#"(?i)((?:\b|-H)(?:cookie|set-cookie|authorization|proxy-authorization|x-api-key)\s*:\s*)[^\r\n"']+"#)
         .expect("constant credential header pattern")
 });
 static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
@@ -41,8 +41,10 @@ static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
         .expect("constant URL credential pattern")
 });
 static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
+    // Treat complete header-option payloads as private too: shell quoting may
+    // split the credential header name, and display must never evaluate it.
     Regex::new(
-        r"(?:^|[\s;&|])(?:(?:-u|-U)[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie)[\s=]+)",
+        r"(?:^|[\s;&|])(?:(?:-u|-U|-b|-H)[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie|--header)[\s=]+)",
     )
     .expect("constant credential flag pattern")
 });
@@ -120,7 +122,13 @@ pub fn command_approval_context(
                     && (SECRET_FIELDS.is_match(argument)
                         || matches!(
                             argument,
-                            "-u" | "-U" | "--user" | "--proxy-user" | "--oauth2-bearer"
+                            "-u" | "-U"
+                                | "-b"
+                                | "-H"
+                                | "--user"
+                                | "--proxy-user"
+                                | "--oauth2-bearer"
+                                | "--header"
                         )));
             arguments.push(project(argument));
         }
