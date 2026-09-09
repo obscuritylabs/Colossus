@@ -2,21 +2,81 @@
 
 use regex::Regex;
 
-pub(super) fn ranges(text: &str, prefix: &Regex) -> Vec<std::ops::Range<usize>> {
+pub(super) fn ranges(
+    text: &str,
+    prefixes: &[&Regex],
+    spelling: &str,
+    original_ends: &[usize],
+) -> Vec<std::ops::Range<usize>> {
     let mut output = Vec::new();
-    let mut cursor = 0;
-    for matched in prefix.find_iter(text) {
-        if matched.start() < cursor {
-            continue;
+    for prefix in prefixes {
+        let mut cursor = 0;
+        for matched in prefix.find_iter(text) {
+            if matched.start() < cursor {
+                continue;
+            }
+            let end = matched.end() + word_end(&text[matched.end()..]);
+            if end == matched.end() {
+                continue;
+            }
+            output.push(matched.end()..end);
+            cursor = end;
         }
-        let end = matched.end() + word_end(&text[matched.end()..]);
-        if end == matched.end() {
-            continue;
+    }
+    // Recognize literal credential names split by shell quotes or escapes. This
+    // auxiliary spelling is never executed and never substitutes variables or
+    // commands. Every released mask is mapped back to the original input bytes.
+    for prefix in prefixes {
+        let mut cursor = 0;
+        for matched in prefix.find_iter(spelling) {
+            let start = matched
+                .start()
+                .checked_sub(1)
+                .map_or(0, |i| original_ends[i]);
+            let value_start = original_ends[matched.end() - 1];
+            // Keep original boundaries when already recognizable (in particular,
+            // do not skip an empty quoted credential to mask the following word).
+            if value_start < cursor || prefix.is_match(&text[start..value_start]) {
+                continue;
+            }
+            let end = value_start + word_end(&text[value_start..]);
+            if end > value_start {
+                output.push(value_start..end);
+                cursor = end;
+            }
         }
-        output.push(matched.end()..end);
-        cursor = end;
     }
     output
+}
+
+pub(super) fn literal_spelling(text: &str) -> (String, Vec<usize>) {
+    let mut spelling = String::with_capacity(text.len());
+    let mut original_ends = Vec::with_capacity(text.len());
+    let mut characters = text.char_indices().peekable();
+    while let Some((mut index, mut character)) = characters.next() {
+        if matches!(character, '\'' | '"') {
+            continue;
+        }
+        if matches!(character, '\\' | '^')
+            && let Some((next_index, next)) = characters.next()
+        {
+            if next == '\n' {
+                continue;
+            }
+            if next == '\r' && characters.peek().is_some_and(|(_, value)| *value == '\n') {
+                characters.next();
+                continue;
+            }
+            index = next_index;
+            character = next;
+        }
+        spelling.push(character);
+        original_ends.extend(std::iter::repeat_n(
+            index + character.len_utf8(),
+            character.len_utf8(),
+        ));
+    }
+    (spelling, original_ends)
 }
 
 #[derive(Clone, Copy)]

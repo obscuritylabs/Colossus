@@ -64,7 +64,9 @@ fn url_credentials_are_masked_through_the_last_authority_delimiter() {
         "https://user:p@ss@host/path?ordinary=value#anchor",
         "curl 'https://user:p@ss@host/' https://example.test/path@name?q=x@y#z@w",
         "https://user:p@ss@[::1]:443/path",
-        "https://example.test/?ordinary=user@host"
+        "https://example.test/?ordinary=user@host",
+        "https://user:pa\"ss\"@host/path",
+        r"https://user:p\@ss@host/path"
     ]);
     let original = request.clone();
     let context = command_approval_context(&request).unwrap().unwrap();
@@ -74,7 +76,9 @@ fn url_credentials_are_masked_through_the_last_authority_delimiter() {
             "https://[REDACTED]@host/path?ordinary=value#anchor",
             "curl 'https://[REDACTED]@host/' https://example.test/path@name?q=x@y#z@w",
             "https://[REDACTED]@[::1]:443/path",
-            "https://example.test/?ordinary=user@host"
+            "https://example.test/?ordinary=user@host",
+            "https://[REDACTED]@host/path",
+            "https://[REDACTED]@host/path"
         ]
     );
     assert!(context.redacted);
@@ -297,6 +301,60 @@ fn ambiguous_credential_words_do_not_release_a_tail() {
         let context = command_approval_context(&request).unwrap().unwrap();
         assert_eq!(context.arguments[0], "TOKEN=[REDACTED]");
     }
+}
+
+#[test]
+fn quoted_and_escaped_literal_credential_names_do_not_release_values() {
+    for command in [
+        r#"curl --oauth2-"bearer" topsecret AFTER"#,
+        r#"curl --"password"='topsecret' AFTER"#,
+        r#"curl --pass""word topsecret AFTER"#,
+        r"curl --pass\word topsecret AFTER",
+        "curl --pass\\\nword topsecret AFTER",
+        r#"curl -"u" user:topsecret AFTER"#,
+        r#"PASS'WORD'=topsecret AFTER"#,
+        r#""PASS"WORD=topsecret AFTER"#,
+        r#"TO"KEN"=top"secret" AFTER"#,
+        r"curl --pass^word topsecret AFTER",
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(["-c", command]);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert!(!context.arguments[1].contains("secret"), "{command}");
+        assert!(context.arguments[1].ends_with(" AFTER"), "{command}");
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+    for command in ["--password '' AFTER", "TOKEN='' AFTER"] {
+        let (display, _) = sanitized(command, &[]);
+        assert!(display.ends_with(" AFTER"), "{display}");
+    }
+}
+
+#[test]
+fn an_unclosed_private_key_masks_the_remainder_without_changing_execution() {
+    for command in [
+        "printf '-----BEGIN PRIVATE KEY-----\nprivate-key-material",
+        "printf '-----BEGIN RSA PRIVATE KEY-----\nprivate-key-material\n'",
+        "printf '-----BEGIN PRI'\"VATE KEY-----\" private-key-material",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key-material\n-----END OPENSSH PRIVATE KEY----- AFTER",
+    ] {
+        let mut request = request();
+        request.content["args"] = json!([command]);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert!(!context.arguments[0].contains("private-key-material"));
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+    assert_eq!(
+        sanitized(
+            "-----BEGIN PRIVATE KEY-----\nmaterial\n-----END PRIVATE KEY----- AFTER",
+            &[]
+        ),
+        ("[REDACTED] AFTER".into(), true)
+    );
 }
 
 #[test]

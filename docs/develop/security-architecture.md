@@ -548,8 +548,10 @@ never contain credentials. Credential ranges are detected against the original d
 input before merging replacements, so one replacement cannot disable another recognizer.
 Quoted concatenations, escapes, and nested substitution words are masked as a whole;
 ambiguous or unclosed credential words conservatively mask the remainder. This scanner
-is display-only and never evaluates shell syntax. Rendering must treat all context as
-plain display data.
+also recognizes literal credential names split by quotes or escapes, without evaluating
+variables or substitutions. An unterminated private-key block masks the remainder.
+The scanner is display-only and never evaluates shell syntax. Rendering must treat all
+context as plain display data.
 The immutable public interaction binds this display through response and replay. The
 context grants no authority and does not change risk-auto eligibility or post-effect
 release.

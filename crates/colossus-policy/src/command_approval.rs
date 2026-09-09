@@ -47,7 +47,7 @@ static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
     .expect("constant credential flag pattern")
 });
 static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----")
+    Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)")
         .expect("constant private key pattern")
 });
 
@@ -163,10 +163,26 @@ fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
             mask[range].fill(true);
         }
     }
-    for prefix in [&*AUTHORIZATION, &*SECRET_ASSIGNMENTS, &*CREDENTIAL_FLAGS] {
-        for range in shell_value::ranges(text, prefix) {
-            mask[range].fill(true);
-        }
+    let (spelling, original_ends) = shell_value::literal_spelling(text);
+    // A literal URL or PEM marker may itself be split by shell quoting. Match
+    // that auxiliary spelling too, but mask only original display bytes.
+    for captures in URL_USERINFO.captures_iter(&spelling) {
+        let start = original_ends[captures.get(1).unwrap().end() - 1];
+        let end = original_ends[captures.get(0).unwrap().end() - 1] - 1; // ASCII @
+        mask[start..end].fill(true);
+    }
+    for matched in PRIVATE_KEY.find_iter(&spelling) {
+        let start = original_ends[matched.start()] - 1; // ASCII opening dash
+        let end = original_ends[matched.end() - 1];
+        mask[start..end].fill(true);
+    }
+    for range in shell_value::ranges(
+        text,
+        &[&*AUTHORIZATION, &*SECRET_ASSIGNMENTS, &*CREDENTIAL_FLAGS],
+        &spelling,
+        &original_ends,
+    ) {
+        mask[range].fill(true);
     }
     let redacted = mask.iter().any(|masked| *masked);
     let mut value = String::with_capacity(text.len());
