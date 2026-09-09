@@ -634,9 +634,9 @@ impl SemanticRenderer {
         let parsed = serde_json::from_str::<Value>(&output).ok();
         let shell = name == Some("shell.run")
             || (name.is_none()
-                && parsed.as_ref().is_some_and(|value| {
-                    value.get("invocation").is_some() || value.get("resolved_argv").is_some()
-                }));
+                && parsed
+                    .as_ref()
+                    .is_some_and(colossus_contracts::is_command_output));
         if shell {
             let display = display_tool_output(Some("shell.run"), &output);
             return PresentationDocument::from_block(PresentationBlock::Card {

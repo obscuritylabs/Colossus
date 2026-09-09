@@ -61,6 +61,58 @@ fn restored_shell_calls_withhold_unprepared_command_and_credentials() {
 }
 
 #[test]
+fn oversized_shell_observations_remain_private_without_the_assistant_history_page() {
+    let result = colossus_contracts::ToolResult {
+        name: "shell.run".into(),
+        call_id: "call".into(),
+        exit_code: 0,
+        output: serde_json::json!({"invocation": {"command": "echo PRIVATE_COMMAND"},
+            "resolved_argv": ["PRIVATE_ARGV"], "cwd": "PRIVATE_PATH", "exit_code": 0,
+            "stdout": format!("SAFE_OUTPUT{}", "x".repeat(128 * 1024)), "stderr": ""})
+        .to_string(),
+    };
+    let messages = colossus_tools::tool_result_observation_messages(&[result]);
+    let envelope: serde_json::Value =
+        serde_json::from_str(&messages[0].content.plain_text()).unwrap();
+    assert_eq!(
+        envelope["_colossusToolObservation"]["toolName"],
+        "shell.run"
+    );
+    assert!(
+        envelope["data"]["invocation"]
+            .to_string()
+            .contains("PRIVATE")
+    );
+    let original = messages[0].clone();
+    for mode in [EventDisplayMode::Compact, EventDisplayMode::Verbose] {
+        let mut source = snapshot();
+        source.preferences.events_mode = mode;
+        source.transcript.messages = vec![SessionMessage {
+            session_id: "019f-test".into(),
+            run_id: "run".into(),
+            sequence: 2,
+            message: original.clone(),
+            created_at: "2026-09-09T00:00:01Z".into(),
+        }];
+        let state = TuiState::from_snapshot(source);
+        for width in [32, 80] {
+            let rendered = transcript_lines(&state, width)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!rendered.contains("PRIVATE"), "{rendered}");
+            assert!(rendered.contains("SAFE_OUTPUT"), "{rendered}");
+            assert!(rendered.contains("withheld"), "{rendered}");
+        }
+    }
+    assert_eq!(
+        messages[0], original,
+        "retained model evidence must remain unchanged"
+    );
+}
+
+#[test]
 fn command_tail_remains_reachable_beyond_u16_wrapped_lines_and_after_resize() {
     // Eight accepted 64-KiB arguments can expand this far after replacing a
     // one-character known credential. The display remains below its 4-MiB bound.

@@ -1786,6 +1786,7 @@ dependencies = [
  "colossus-contracts",
  "colossus-ports",
  "colossus-presentation",
+ "colossus-tools",
  "crossterm",
  "image",
  "portable-pty",
