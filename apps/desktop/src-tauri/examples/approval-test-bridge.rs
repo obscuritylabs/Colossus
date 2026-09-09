@@ -267,6 +267,9 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
         }.await;
         let result = match outcome {
             Ok(result) => json!({"result": result}),
+            Err(_) if value["command"] == "released_activity" => {
+                activity_failure(client, &request.run_id).await
+            }
             Err(_) => json!({"error": "stale or unavailable command review"}),
         };
         println!("{result}");
@@ -276,7 +279,10 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
 }
 
 async fn released_activity(client: &Colossus, run_id: &str) -> anyhow::Result<Value> {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // The normal process budget is 30 seconds. Collection must cover that
+    // budget plus bounded cleanup/provider/journal work, not shorten execution.
+    // This acceptance-only deadline does not change approval or effect limits.
+    tokio::time::timeout(Duration::from_secs(45), async {
         let mut updates = client
             .watch_run(colossus_sdk::WatchRunRequest {
                 run_id: run_id.into(),
@@ -295,4 +301,27 @@ async fn released_activity(client: &Colossus, run_id: &str) -> anyhow::Result<Va
         Ok::<_, anyhow::Error>(json!(activity))
     })
     .await?
+}
+
+async fn activity_failure(client: &Colossus, run_id: &str) -> Value {
+    // Never serialize the underlying error or challenge. Only categorical run
+    // state is needed to distinguish a slow effect from another pending approval.
+    let diagnostics = match tokio::time::timeout(
+        Duration::from_secs(5),
+        client.get_run(GetRunRequest {
+            run_id: run_id.into(),
+        }),
+    )
+    .await
+    {
+        Ok(Ok(details)) => json!({
+            "run_status": format!("{:?}", details.run.status),
+            "pending_count": details.pending_interactions.len(),
+        }),
+        _ => json!({"run_status": "unavailable"}),
+    };
+    json!({
+        "error": "released run activity collection failed or timed out",
+        "diagnostics": diagnostics,
+    })
 }

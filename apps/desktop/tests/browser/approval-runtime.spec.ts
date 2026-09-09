@@ -64,7 +64,10 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       let input = "";
       for await (const chunk of request) input += chunk.toString();
       requests.push(input);
-      const script = approvalMarkerCommand(process.platform === "win32");
+      const script = approvalMarkerCommand(
+        process.platform === "win32",
+        outcome === "allow",
+      );
       const delta =
         requests.length === 1
           ? {
@@ -125,9 +128,23 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
     const invoke = (command: string, args: unknown = {}) => {
       const pending = chain.then(async () => {
         bridge.stdin!.write(`${JSON.stringify({ command, args })}\n`);
-        await expect.poll(pendingLines, { timeout: 15_000 }).toBeGreaterThan(0);
-        const result = lines.shift() as { result?: unknown; error?: string };
-        if (result.error) throw new Error(result.error);
+        // Only terminal activity collection waits through the normal effect
+        // budget: 45 seconds in the bridge plus bounded diagnostic/IPC time.
+        await expect
+          .poll(pendingLines, {
+            timeout: command === "released_activity" ? 55_000 : 15_000,
+            message: `native approval bridge: ${command}`,
+          })
+          .toBeGreaterThan(0);
+        const result = lines.shift() as {
+          result?: unknown;
+          error?: string;
+          diagnostics?: { run_status: string; pending_count?: number };
+        };
+        if (result.error)
+          throw new Error(
+            `${command}: ${result.error}${result.diagnostics ? ` (${JSON.stringify(result.diagnostics)})` : ""}`,
+          );
         return result.result;
       });
       chain = pending.catch(() => undefined);

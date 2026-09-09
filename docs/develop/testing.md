@@ -143,6 +143,12 @@ scenario retries. Screenshots are in `apps/desktop/output/playwright`, with brow
 retained on failure. Mocked browser tests separately cover keyboard operation, compact
 layouts, accessibility, redaction, full details, and stale review state.
 
+The allowed command deliberately runs for more than ten seconds, then must exit
+successfully and append exactly one marker. The test-only activity collector allows
+45 seconds to observe the normal 30-second process budget and terminal publication;
+it does not extend runtime execution or approval limits. Collection failures report
+only categorical run status and pending-interaction count, not private challenges.
+
 Both native acceptance scripts isolate Tauri's build output from the runtime under
 test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's
 external-binary staging must never overwrite the freshly compiled CLI or sidecar
