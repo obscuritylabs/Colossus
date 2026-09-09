@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AcceptanceProcesses } from "./support/acceptance-processes";
 import { approvalMarkerCommand } from "./support/approval-command";
+import { approvalProcessDiagnostics } from "./support/approval-diagnostics";
 
 test.skip(
   process.env.COLOSSUS_APPROVAL_RUNTIME_ACCEPTANCE !== "1",
@@ -59,6 +60,7 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
     await cp(process.env.COLOSSUS_APPROVAL_TEST_SIDECAR!, sidecar);
     await chmod(sidecar, 0o500);
     const marker = join(workspace, "approved-marker.txt");
+    const startedMarker = join(workspace, "started-marker.txt");
     const requests: string[] = [];
     const server = createServer(async (request, response) => {
       let input = "";
@@ -160,6 +162,7 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       expect(lines.shift(), diagnostic).toEqual({ ready: true });
       expect(requests[0]).toContain("justification");
       expect(await readFile(marker, "utf8").catch(() => "")).toBe("");
+      expect(await readFile(startedMarker, "utf8").catch(() => "")).toBe("");
       await page.exposeFunction("nativeCommandApproval", invoke);
       await page.addInitScript(() =>
         Object.assign(window, {
@@ -206,6 +209,7 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
         )
         .toBe(true);
       expect(await readFile(marker, "utf8").catch(() => "")).toBe("");
+      expect(await readFile(startedMarker, "utf8").catch(() => "")).toBe("");
       if (outcome === "cancel") {
         await invoke("cancel_run");
         await page
@@ -255,7 +259,19 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
         expect(released).not.toContain(withheld);
       if (outcome === "allow") {
         const completed = shell.find((item) => item.state === "Completed");
-        expect(completed, released).toBeDefined();
+        const started = await readFile(startedMarker, "utf8").catch(() => "");
+        const approved = await readFile(marker, "utf8").catch(() => "");
+        const diagnostic = JSON.stringify({
+          ...approvalProcessDiagnostics(requests),
+          started:
+            started ===
+            (process.platform === "win32" ? "started\r\n" : "started\n"),
+          approved:
+            approved ===
+            (process.platform === "win32" ? "approved\r\n" : "approved\n"),
+          activity: shell,
+        });
+        expect(completed, diagnostic).toBeDefined();
         expect(JSON.parse(completed!.preview!)).toMatchObject({
           exit_code: 0,
           command_details_withheld: true,
@@ -263,8 +279,12 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
         expect(await readFile(marker, "utf8")).toBe(
           process.platform === "win32" ? "approved\r\n" : "approved\n",
         );
+        expect(started).toBe(
+          process.platform === "win32" ? "started\r\n" : "started\n",
+        );
       } else {
         expect(await readFile(marker, "utf8").catch(() => "")).toBe("");
+        expect(await readFile(startedMarker, "utf8").catch(() => "")).toBe("");
       }
       await page.screenshot({
         path: `output/playwright/command-approval-${outcome}.png`,

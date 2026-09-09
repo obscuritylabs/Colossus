@@ -151,6 +151,9 @@ only categorical run status and pending-interaction count, not private challenge
 The plugin and approval runners use separate `test-results/plugin-runtime` and
 `test-results/approval-runtime` directories so a subsequent suite cannot erase a
 failed suite's traces before the CI artifact upload.
+On process failure, the fixture reports only allowlisted failure categories,
+numeric exit codes, and whether its start/completion markers exist. Private
+provider error text, command arguments, bindings, and output are never echoed.
 
 Both native acceptance scripts isolate Tauri's build output from the runtime under
 test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's

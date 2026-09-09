@@ -46,6 +46,7 @@ run(
     "test",
     "--retries=0",
     "--output=test-results/approval-runtime",
+    "tests/browser/approval-diagnostics.spec.ts",
     "tests/browser/approval-runtime.spec.ts",
   ],
   desktop,
