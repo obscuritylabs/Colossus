@@ -9,13 +9,23 @@ pub(super) fn ranges(
     original_ends: &[usize],
 ) -> Vec<std::ops::Range<usize>> {
     let mut output = Vec::new();
+    let words = word_ranges(text);
+    // A value may start inside an already quoted assignment/header. Its end
+    // comes from the original whole word, not a fresh parse at that interior.
+    let value_end = |start| {
+        let index = words.partition_point(|word| word.end <= start);
+        words
+            .get(index)
+            .filter(|word| word.start <= start)
+            .map_or(start, |word| word.end)
+    };
     for prefix in prefixes {
         let mut cursor = 0;
         for matched in prefix.find_iter(text) {
             if matched.start() < cursor {
                 continue;
             }
-            let end = matched.end() + word_end(&text[matched.end()..]);
+            let end = value_end(matched.end());
             if end == matched.end() {
                 continue;
             }
@@ -39,7 +49,7 @@ pub(super) fn ranges(
             if value_start < cursor || prefix.is_match(&text[start..value_start]) {
                 continue;
             }
-            let end = value_start + word_end(&text[value_start..]);
+            let end = value_end(value_start);
             if end > value_start {
                 output.push(value_start..end);
                 cursor = end;
@@ -47,6 +57,47 @@ pub(super) fn ranges(
         }
     }
     output
+}
+
+fn word_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut words = Vec::new();
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let end = cursor + word_end(&text[cursor..]);
+        if end > cursor {
+            words.push(cursor..end);
+            cursor = end;
+        } else {
+            cursor += text[cursor..].chars().next().unwrap().len_utf8();
+        }
+    }
+    words
+}
+
+/// Lexical command separators outside complete words. No shell evaluation.
+pub(super) fn command_segments(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let end = cursor + word_end(&text[cursor..]);
+        if end > cursor {
+            cursor = end;
+            continue;
+        }
+        let character = text[cursor..].chars().next().unwrap();
+        if matches!(character, ';' | '&' | '|' | '\n' | '\r') {
+            if start < cursor {
+                segments.push(start..cursor);
+            }
+            start = cursor + character.len_utf8();
+        }
+        cursor += character.len_utf8();
+    }
+    if start < text.len() {
+        segments.push(start..text.len());
+    }
+    segments
 }
 
 pub(super) fn literal_spelling(text: &str) -> (String, Vec<usize>) {

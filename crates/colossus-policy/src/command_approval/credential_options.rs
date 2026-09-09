@@ -74,16 +74,53 @@ impl Profile {
 }
 
 pub(super) fn for_invocation(executable: &str, arguments: &[Value]) -> Vec<&'static Profile> {
-    let name = executable
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(executable)
-        .to_ascii_lowercase();
-    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    let name = executable_name(executable);
+    // Carry only literal program hints through ordinary launchers. A package
+    // named mysql in `cargo test -p mysql` is not an invoked credential utility.
+    // This never resolves PATH, evaluates script code, or grants execution.
+    let wrapper = [
+        "env",
+        "sudo",
+        "doas",
+        "nice",
+        "nohup",
+        "timeout",
+        "gtimeout",
+        "stdbuf",
+        "setsid",
+        "chrt",
+        "taskset",
+        "prlimit",
+        "runuser",
+        "xargs",
+        "parallel",
+        "busybox",
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "fish",
+        "ksh",
+        "cmd",
+        "pwsh",
+        "powershell",
+        "wsl",
+        "ssh",
+    ]
+    .contains(&name.as_str());
+    let candidates = std::iter::once(name)
+        .chain(arguments.iter().filter_map(|argument| {
+            wrapper
+                .then(|| argument.as_str().map(executable_name))
+                .flatten()
+        }))
+        .collect::<Vec<_>>();
     PROFILES
         .iter()
         .filter(|profile| {
-            profile.programs.contains(&name)
+            candidates
+                .iter()
+                .any(|name| profile.programs.contains(&name.as_str()))
                 && (!profile.login_only
                     || arguments
                         .iter()
@@ -92,22 +129,66 @@ pub(super) fn for_invocation(executable: &str, arguments: &[Value]) -> Vec<&'sta
         .collect()
 }
 
+fn executable_name(value: &str) -> String {
+    let name = value
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(value)
+        .to_ascii_lowercase();
+    name.strip_suffix(".exe").unwrap_or(&name).to_owned()
+}
+
 pub(super) fn ranges(
     text: &str,
     spelling: &str,
     original_ends: &[usize],
     invocation: &[&Profile],
 ) -> Vec<Range<usize>> {
-    let prefixes = PROFILES
-        .iter()
-        .filter(|profile| {
-            invocation
-                .iter()
-                .any(|selected| std::ptr::eq(*selected, *profile))
-                || profile.cue.is_match(text)
-                || profile.cue.is_match(spelling)
-        })
-        .map(|profile| &profile.shell)
-        .collect::<Vec<_>>();
-    super::shell_value::ranges(text, &prefixes, spelling, original_ends)
+    let segments = super::shell_value::command_segments(text);
+    let mut output = Vec::new();
+    for profile in PROFILES.iter() {
+        let selected = invocation
+            .iter()
+            .any(|selected| std::ptr::eq(*selected, profile));
+        if !selected && !profile.cue.is_match(text) && !profile.cue.is_match(spelling) {
+            continue;
+        }
+        let candidates =
+            super::shell_value::ranges(text, &[&profile.shell], spelling, original_ends);
+        if selected {
+            output.extend(candidates);
+            continue;
+        }
+        // Keep the earliest hint per segment. Repeated program words must not
+        // rescan the rest of a long command or make this projection quadratic.
+        let mut hints = vec![None; segments.len()];
+        for end in profile
+            .cue
+            .find_iter(text)
+            .map(|matched| matched.end())
+            .chain(
+                profile
+                    .cue
+                    .find_iter(spelling)
+                    .map(|matched| original_ends[matched.end() - 1]),
+            )
+        {
+            let index = segments.partition_point(|segment| segment.end < end);
+            if let Some(segment) = segments.get(index)
+                && segment.start < end
+                && end <= segment.end
+            {
+                hints[index] = Some(hints[index].map_or(end, |previous: usize| previous.min(end)));
+            }
+        }
+        output.extend(candidates.into_iter().filter(|range| {
+            let index = segments.partition_point(|segment| segment.end <= range.start);
+            hints
+                .get(index)
+                .copied()
+                .flatten()
+                .is_some_and(|end| range.start >= end)
+        }));
+    }
+    output
 }

@@ -218,6 +218,7 @@ fn ambiguous_short_password_options_are_recognized_in_shell_and_prepared_argv() 
 fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() {
     for (program, arguments) in [
         ("cargo", vec!["test", "-p", "colossus-runtime"]),
+        ("cargo", vec!["test", "-p", "mysql"]),
         ("curl", vec!["-N", "https://example.test"]),
         ("docker", vec!["run", "-p", "8080:80", "image"]),
         ("openssl", vec!["s_client", "-key", "key.pem"]),
@@ -235,6 +236,91 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
             assert_eq!(json!(context.arguments), request.content["args"]);
             assert!(!context.redacted);
         }
+    }
+}
+
+#[test]
+fn literal_program_hints_survive_wrapped_argument_vectors() {
+    for (executable, arguments) in [
+        (
+            "/usr/bin/env",
+            vec![
+                "MODE=test",
+                "ssh-keygen",
+                "-N",
+                "private-value",
+                "PUBLIC_END",
+            ],
+        ),
+        (
+            "/usr/bin/sudo",
+            vec![
+                "-u",
+                "root",
+                "/usr/bin/ssh-keygen",
+                "-Pprivate-value",
+                "PUBLIC_END",
+            ],
+        ),
+        (
+            "/usr/bin/timeout",
+            vec!["10", "sshpass", "-p", "private-value", "PUBLIC_END"],
+        ),
+        (
+            r"C:\Windows\System32\cmd.exe",
+            vec![
+                "/C",
+                r"C:\Tools\SSH-KEYGEN.EXE",
+                "-N",
+                "private-value",
+                "PUBLIC_END",
+            ],
+        ),
+    ] {
+        let mut request = request();
+        request.resource = executable.into();
+        request.content["args"] = json!(arguments);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        let released = serde_json::to_string(&context).unwrap();
+        assert!(!released.contains("private-value"), "{released}");
+        assert!(released.contains("PUBLIC_END"));
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
+fn command_hints_do_not_mask_options_in_a_later_independent_command() {
+    for command in [
+        "mysql --version; cargo test -p mysql",
+        "ssh-keygen -V | curl -N https://example.test",
+        "docker login --help && docker run -p 8080:80 image",
+    ] {
+        let (display, redacted) = sanitized(command, &[], &[]);
+        assert_eq!(display, command);
+        assert!(!redacted);
+    }
+    let command = format!("{}-p private-value PUBLIC_END", "mysql ".repeat(10_000));
+    let (display, redacted) = sanitized(&command, &[], &[]);
+    assert!(!display.contains("private-value"));
+    assert!(display.ends_with("PUBLIC_END"));
+    assert!(redacted);
+}
+
+#[test]
+fn assignments_inside_quoted_words_never_release_a_private_tail() {
+    for command in [
+        r#"export "TOKEN=private-value private-tail"; echo PUBLIC_END"#,
+        r#"export 'PASSWORD=private-value;private-tail'; echo PUBLIC_END"#,
+        r#"printf '%s' "TOKEN=private-value&private-tail" PUBLIC_END"#,
+        r#"ssh-keygen '-Nprivate-value private-tail' -f PUBLIC_END"#,
+    ] {
+        let (display, redacted) = sanitized(command, &[], &[]);
+        assert!(!display.contains("private-value"), "{display}");
+        assert!(!display.contains("private-tail"), "{display}");
+        assert!(display.contains("PUBLIC_END"), "{display}");
+        assert!(redacted);
     }
 }
 
