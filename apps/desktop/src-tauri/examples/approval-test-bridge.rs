@@ -2,6 +2,8 @@
 //! Only test-owned confirmation replaces OS UI; challenge refetch and broker stay real.
 #[path = "../src/approval_adapter.rs"]
 mod approval_adapter;
+#[path = "approval-test-bridge/diagnostics.rs"]
+mod diagnostics;
 
 use anyhow::Context as _;
 use colossus_sdk::{
@@ -298,7 +300,20 @@ async fn released_activity(client: &Colossus, run_id: &str) -> anyhow::Result<Va
                 );
             }
         }
-        Ok::<_, anyhow::Error>(json!(activity))
+        // Terminal errors can stop the agent before another provider request.
+        // Retain only the already-public categorical outcome in that case.
+        let details = client
+            .get_run(GetRunRequest {
+                run_id: run_id.into(),
+            })
+            .await?;
+        Ok::<_, anyhow::Error>(json!({
+            "activity": activity,
+            "terminal": diagnostics::terminal(
+                details.run.status,
+                details.run.terminal.as_ref(),
+            ),
+        }))
     })
     .await?
 }

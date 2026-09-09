@@ -68,7 +68,10 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       requests.push(input);
       const script = approvalMarkerCommand(
         process.platform === "win32",
-        outcome === "allow",
+        // Exercise the shared collector's former ten-second deadline on Unix.
+        // Windows' same effect budget also includes AppContainer setup and its
+        // seven-second cleanup reserve; don't spend that headroom on test sleep.
+        outcome === "allow" && process.platform !== "win32",
       );
       const delta =
         requests.length === 1
@@ -234,12 +237,15 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
           "stale or unavailable",
         );
       }
-      const activity = (await invoke("released_activity")) as {
-        name: string;
-        state: string;
-        input: string | null;
-        preview: string | null;
-      }[];
+      const { activity, terminal } = (await invoke("released_activity")) as {
+        activity: {
+          name: string;
+          state: string;
+          input: string | null;
+          preview: string | null;
+        }[];
+        terminal: { status: string; reason: string; outcome: string | null };
+      };
       const shell = activity.filter((item) => item.name === "shell.run");
       expect(shell.length).toBeGreaterThan(0);
       expect(shell.every((item) => item.input === null)).toBe(true);
@@ -270,8 +276,14 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
             approved ===
             (process.platform === "win32" ? "approved\r\n" : "approved\n"),
           activity: shell,
+          terminal,
         });
         expect(completed, diagnostic).toBeDefined();
+        expect(terminal).toEqual({
+          status: "Completed",
+          reason: "completed",
+          outcome: "Known",
+        });
         expect(JSON.parse(completed!.preview!)).toMatchObject({
           exit_code: 0,
           command_details_withheld: true,

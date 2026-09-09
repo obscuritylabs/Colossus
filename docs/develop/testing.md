@@ -143,8 +143,11 @@ scenario retries. Screenshots are in `apps/desktop/output/playwright`, with brow
 retained on failure. Mocked browser tests separately cover keyboard operation, compact
 layouts, accessibility, redaction, full details, and stale review state.
 
-The allowed command deliberately runs for more than ten seconds, then must exit
-successfully and append exactly one marker. The test-only activity collector allows
+On Unix, the allowed command deliberately runs for more than ten seconds, then must
+exit successfully and append exactly one marker. Windows uses immediate markers:
+AppContainer setup and its seven-second cleanup reserve share the effect budget.
+Both platforms retain zero-exit, exact-once, and no-execution-before-approval checks.
+The test-only activity collector allows
 45 seconds to observe the normal 30-second process budget and terminal publication;
 it does not extend runtime execution or approval limits. Collection failures report
 only categorical run status and pending-interaction count, not private challenges.
@@ -154,6 +157,8 @@ failed suite's traces before the CI artifact upload.
 On process failure, the fixture reports only allowlisted failure categories,
 numeric exit codes, and whether its start/completion markers exist. Private
 provider error text, command arguments, bindings, and output are never echoed.
+The collector also retains the public terminal status, allowlisted reason, and
+outcome certainty, since a terminal timeout need not produce another model request.
 
 Both native acceptance scripts isolate Tauri's build output from the runtime under
 test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's
