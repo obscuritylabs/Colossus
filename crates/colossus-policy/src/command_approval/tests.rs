@@ -761,6 +761,47 @@ fn an_unclosed_private_key_masks_the_remainder_without_changing_execution() {
 }
 
 #[test]
+fn openpgp_private_armor_uses_its_own_footer_or_the_end_of_input() {
+    for begin in [
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+        "-----BEGIN PGP PRI'VATE KEY BLOCK-----'",
+    ] {
+        for end in [
+            "-----END PGP PRIVATE KEY BLOCK-----",
+            "-----END PRIVATE KEY-----",
+            "",
+        ] {
+            let armor = format!("{begin}\nprivate-openpgp-material\n{end} AFTER");
+            for shell in [false, true] {
+                let mut request = request();
+                request.content["args"] = if shell {
+                    json!(["-c", format!("printf '%s' {armor}")])
+                } else {
+                    request.resource = "/usr/bin/printf".into();
+                    json!(["%s", armor])
+                };
+                let original = request.clone();
+                let context = command_approval_context(&request).unwrap().unwrap();
+                let display = context.arguments.last().unwrap();
+                assert!(!display.contains("private-openpgp-material"), "{display}");
+                assert_eq!(
+                    display.ends_with(" AFTER"),
+                    end == "-----END PGP PRIVATE KEY BLOCK-----",
+                    "{display}"
+                );
+                assert!(context.redacted);
+                assert_eq!(request, original);
+            }
+        }
+    }
+    let public =
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----\npublic-material\n-----END PGP PUBLIC KEY BLOCK-----";
+    let (display, redacted) = sanitized(public, &[], &[]);
+    assert!(display.contains("public-material"));
+    assert!(!redacted);
+}
+
+#[test]
 fn quoted_json_credential_keys_are_not_disclosed() {
     let mut request = request();
     request.content["args"] = json!([r#"curl -d '{"password":"quoted-credential-tail"}'"#]);

@@ -80,8 +80,13 @@ static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
     .expect("constant credential flag pattern")
 });
 static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)")
-        .expect("constant private key pattern")
+    // OpenPGP armor has a distinct PRIVATE KEY BLOCK label. A PEM footer
+    // cannot terminate it; malformed or missing armor footers mask to EOF.
+    Regex::new(concat!(
+        r"(?s)-----BEGIN PGP PRIVATE KEY BLOCK-----.*?(?:-----END PGP PRIVATE KEY BLOCK-----|$)",
+        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+    ))
+    .expect("constant private key pattern")
 });
 
 /// Release only prepared `shell.run` command details with validated task intent.
