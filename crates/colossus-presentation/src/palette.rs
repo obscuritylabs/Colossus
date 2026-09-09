@@ -337,7 +337,9 @@ impl TerminalPalette {
             | PresentationBlock::Prompt { .. }
             | PresentationBlock::Image(_) => self.meta,
             PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => self.tool,
-            PresentationBlock::Text(_) | PresentationBlock::Markdown(_) => self.assistant,
+            PresentationBlock::Text(_)
+            | PresentationBlock::Verbatim(_)
+            | PresentationBlock::Markdown(_) => self.assistant,
             PresentationBlock::Blank => TextStyle::plain(),
         }
         .into()

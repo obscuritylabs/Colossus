@@ -225,6 +225,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
         request: &EffectRequest,
         request_hash: &str,
         decision: &PolicyDecision,
+        command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         match self.effective_mode() {
             WorkerApprovalMode::Deny => return Ok(None),
@@ -236,6 +237,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
                     request,
                     request_hash,
                     decision,
+                    command_context,
                 )
                 .await;
             }
@@ -252,6 +254,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
             .request(WorkerPrompt {
                 prompt_id: Uuid::now_v7().to_string(),
                 kind: WorkerPromptKind::Approval,
+                command_context: command_context.cloned(),
                 title: "Approval required".into(),
                 question,
                 choices: vec!["Allow once".into(), "Deny".into()],
@@ -259,8 +262,8 @@ impl ApprovalProvider for WorkerInteractiveApproval {
                 details: json!({
                     "actor": request.actor,
                     "action": request.action,
-                    "resource": request.resource,
-                    "content": request.content,
+                    "resource": command_context.map_or(request.resource.as_str(), |context| context.executable.as_str()),
+                    "content": if command_context.is_some() { serde_json::Value::Null } else { request.content.clone() },
                     "decision_id": decision.decision_id,
                     "reason": decision.reason,
                     "risk": request.risk,
@@ -278,6 +281,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
             request,
             request_hash,
             decision,
+            command_context,
         )
         .await
     }
@@ -295,6 +299,7 @@ impl UserPromptProvider for WorkerInteractiveUserPrompt {
             .request(WorkerPrompt {
                 prompt_id: Uuid::now_v7().to_string(),
                 kind: WorkerPromptKind::UserInput,
+                command_context: None,
                 title: "Input needed".into(),
                 question: request.question.clone(),
                 choices: request.choices.clone(),

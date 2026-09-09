@@ -539,6 +539,10 @@ impl SafetyKernel {
             }
         }
         let mut prepared = request.clone();
+        // Validate the narrow approval release before policy, even in allow-all mode.
+        if prepared.phase == EffectPhase::PreEffect {
+            command_approval_context(&prepared)?;
+        }
         redact_hard_secrets(&mut prepared.content);
         let size = canonical_bytes(&prepared)?.len();
         let limit = if prepared.phase == EffectPhase::PostEffect {

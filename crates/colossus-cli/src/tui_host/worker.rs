@@ -144,7 +144,11 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                 details.extend([
                     ("Action".into(), action.into()),
                     ("Resource".into(), resource.into()),
-                    ("Reason".into(), reason.into()),
+                    ("Policy".into(), reason.into()),
+                    (
+                        "Reason — agent-provided".into(),
+                        "Task-specific reason unavailable".into(),
+                    ),
                 ]);
                 if let Some(risk_reason) = risk_reason {
                     details.push(("Risk review".into(), format!("{risk_level}: {risk_reason}")));
@@ -154,17 +158,27 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                         .map_err(|error| WorkerError::Protocol(error.to_string()))?;
                 (
                     InteractivePromptKind::Approval,
-                    PresentationDocument::from_block(PresentationBlock::Card {
-                        title: prompt.title.clone(),
-                        tone: PresentationTone::Warning,
-                        body: vec![
-                            PresentationBlock::KeyValue(details),
-                            PresentationBlock::Code {
-                                language: Some("exact prepared request".into()),
-                                content,
-                            },
-                        ],
-                    }),
+                    if let Some(context) = &prompt.command_context {
+                        colossus_presentation::command_approval_document(
+                            context,
+                            Some(reason),
+                            risk_reason,
+                            true,
+                        )
+                        .map_err(|error| WorkerError::Protocol(error.to_string()))?
+                    } else {
+                        PresentationDocument::from_block(PresentationBlock::Card {
+                            title: prompt.title.clone(),
+                            tone: PresentationTone::Warning,
+                            body: vec![
+                                PresentationBlock::KeyValue(details),
+                                PresentationBlock::Code {
+                                    language: Some("exact prepared request".into()),
+                                    content,
+                                },
+                            ],
+                        })
+                    },
                 )
             }
             WorkerPromptKind::SandboxBoundaryAcknowledgement => {

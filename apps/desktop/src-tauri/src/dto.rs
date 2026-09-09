@@ -816,6 +816,8 @@ pub(crate) enum InteractionContentDto {
         allow_free_form: bool,
     },
     Approval {
+        #[serde(rename = "commandContext")]
+        command_context: Option<CommandApprovalContextDto>,
         reason: String,
         action: String,
         resource: String,
@@ -838,9 +840,12 @@ impl From<InteractionContent> for InteractionContentDto {
     }
 }
 
+pub(crate) use crate::approval_adapter::CommandApprovalContextDto;
+
 impl InteractionContentDto {
     fn from_approval(approval: ApprovalInteraction) -> Self {
         Self::Approval {
+            command_context: approval.command_context.map(Into::into),
             reason: approval.reason,
             action: approval.action,
             resource: approval.resource,
@@ -2269,6 +2274,7 @@ mod tests {
             respondable_by_caller: true,
             etag: "opaque-etag".into(),
             content: InteractionContent::Approval(ApprovalInteraction {
+                command_context: None,
                 reason: "Allow this network action?".into(),
                 action: "network_request".into(),
                 resource: "https://example.com".into(),

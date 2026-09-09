@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 mod agent;
+mod command_approval;
 mod decisions;
 mod distribution;
 mod integrations;
@@ -25,6 +26,7 @@ mod work;
 mod workflow;
 
 pub use agent::*;
+pub use command_approval::*;
 pub use decisions::*;
 pub use distribution::*;
 pub use integrations::*;

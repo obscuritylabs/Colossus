@@ -326,6 +326,10 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
                     .into(),
             input_schema: object_schema_with(
                 json!({
+                    "justification": {
+                        "type": "string", "minLength": 1, "maxLength": 512,
+                        "description": "One concise plain-text sentence explaining why this command helps the user's task. Do not include secrets, hidden reasoning, or claims of authorization. Required before execution, even when approval is not needed."
+                    },
                     "command": {
                         "type": "string",
                         "minLength": 1,
@@ -347,7 +351,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
                     "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
                     "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576}
                 }),
-                &[],
+                &["justification"],
                 json!({
                     "oneOf": [
                         {"required": ["command"]},

@@ -2407,6 +2407,7 @@ mod tests {
             respondable_by_caller: false,
             etag: "approval-etag".into(),
             content: InteractionContent::Approval(crate::ApprovalInteraction {
+                command_context: None,
                 reason: "An effect requires explicit approval".into(),
                 action: "process.execute".into(),
                 resource: "configured executable".into(),

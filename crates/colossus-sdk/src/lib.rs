@@ -103,18 +103,18 @@ pub use sidecar::{
 pub use stream::RunUpdates;
 pub use types::{
     ApprovalInteraction, ApprovalRisk, ArchiveThreadRequest, ArtifactPurpose, ArtifactReference,
-    ArtifactState, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
-    DownloadedArtifact, GetRunRequest, GetRunResponse, InputContentPart, Interaction,
-    InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest,
-    ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse, MessageContentPart,
-    MessageRole, OutcomeCertainty, PageRequest, PageResponse, PlanExecutionStrategy, PlanRunAction,
-    PlanStatus, PromptAnswer, PromptChoice, ResearchDepth, ResearchSourceKind,
-    RespondInteractionRequest, RespondInteractionResponse, RestoreThreadRequest, Run, RunBranch,
-    RunBranchContextMode, RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal,
-    RunUpdate, RunUpdateKind, RunUpdateStream, ServerCapabilities, SessionActivity,
-    SessionActivityContent, SessionActivityKind, SessionActivityLane, SessionActivityStatus,
-    SessionMessage, ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState,
-    UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
+    ArtifactState, CancelRunRequest, CancelRunResponse, CommandApprovalContext, CreateRunRequest,
+    CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse, InputContentPart,
+    Interaction, InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus,
+    ListRunsRequest, ListRunsResponse, ListSessionActivityRequest, ListSessionActivityResponse,
+    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse,
+    PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer, PromptChoice, ResearchDepth,
+    ResearchSourceKind, RespondInteractionRequest, RespondInteractionResponse,
+    RestoreThreadRequest, Run, RunBranch, RunBranchContextMode, RunCancellation, RunFailure,
+    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream,
+    ServerCapabilities, SessionActivity, SessionActivityContent, SessionActivityKind,
+    SessionActivityLane, SessionActivityStatus, SessionMessage, ThreadLifecycle, TokenUsage,
+    ToolActivity, ToolActivityState, UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
 };
 
 #[cfg(test)]

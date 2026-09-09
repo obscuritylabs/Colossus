@@ -998,6 +998,7 @@ function recentRun(
  */
 export function buildOperationsStudioFixture(
   interactionKind: Interaction["kind"] = "approval",
+  commandApproval = false,
 ): ChatState {
   if (!import.meta.env.DEV) {
     throw new Error(
@@ -1053,6 +1054,23 @@ export function buildOperationsStudioFixture(
       risk: "medium",
       requestHash:
         "0c9fa2e338d64d60336a9ef5d655cf4785bad3eb530995f894ffaac40626d32b",
+      ...(commandApproval
+        ? {
+            action: "process.execute",
+            resource: "configured executable",
+            commandContext: {
+              justification:
+                "Check the workspace build before applying the requested fix.",
+              executable: "/bin/sh",
+              arguments: [
+                "-c",
+                `printf 'two  spaces'; # ${"long argument ".repeat(600)}COMMAND_TAIL`,
+              ],
+              workingDirectory: "/work/project",
+              redacted: true,
+            },
+          }
+        : {}),
     },
   };
   const userPrompt: Interaction = {

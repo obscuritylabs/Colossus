@@ -1648,6 +1648,15 @@ async fn durable_response_beats_expiry_even_when_delivery_is_delayed() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn public_approval_interactions_persist_without_prompt_choices() {
+    persisted_approval_context(false).await;
+}
+
+#[tokio::test]
+async fn public_command_context_survives_reconnect_with_owner_isolation() {
+    persisted_approval_context(true).await;
+}
+
+async fn persisted_approval_context(command: bool) {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let repository: Arc<dyn RunRepository> =
         Arc::new(EventSourcedRunRepository::new(Arc::clone(&journal)));
@@ -1679,12 +1688,25 @@ async fn public_approval_interactions_persist_without_prompt_choices() {
     let router = Arc::new(
         InteractionRouter::new(Arc::new(DenyApproval), None).with_timeout(Duration::from_secs(2)),
     );
-    let effect = effect_request(
+    let mut effect = effect_request(
         owner.actor(),
         "filesystem.write",
         "/private/customer-secret.txt",
         serde_json::json!({"private": true}),
     );
+    let context = command.then(|| {
+        effect.action = "shell.run".into();
+        effect.resource = "/bin/sh".into();
+        effect.content =
+            serde_json::json!({"args": ["-c", "echo 'two  spaces'"], "cwd": "/work/project"});
+        effect.command_intent = Some(colossus_contracts::CommandIntent {
+            justification: "Check command output for the requested fix.".into(),
+        });
+        colossus_policy::command_approval_context(&effect)
+            .unwrap()
+            .unwrap()
+    });
+    let expected_context = context.clone();
     let decision = PolicyDecision {
         decision_id: "approval-decision".into(),
         policy_revision: "approval-test-v1".into(),
@@ -1703,6 +1725,7 @@ async fn public_approval_interactions_persist_without_prompt_choices() {
                             &effect,
                             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                             &decision,
+                            context.as_ref(),
                         )
                         .await
                 })
@@ -1727,6 +1750,22 @@ async fn public_approval_interactions_persist_without_prompt_choices() {
     assert_eq!(pending.kind, InteractionKind::Approval);
     assert!(pending.choices.is_empty());
     assert!(!pending.allow_free_form);
+    assert_eq!(pending.command_context, expected_context);
+    assert_ne!(
+        pending.request_hash.as_deref(),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    let replay = EventSourcedRunRepository::new(Arc::clone(&journal));
+    assert_eq!(
+        replay
+            .get_run(&owner, "approval-run")
+            .unwrap()
+            .unwrap()
+            .pending_interaction,
+        Some(pending)
+    );
+    let other = caller("app:another-reader", "another-reader");
+    assert!(replay.get_run(&other, "approval-run").unwrap().is_none());
 
     router.cancel_run("approval-run");
     assert!(
@@ -1797,6 +1836,7 @@ async fn native_public_approval_mode_changes_apply_without_persisting_false_prom
                     &effect,
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     &decision,
+                    None,
                 )
                 .await
         })
@@ -1812,6 +1852,7 @@ async fn native_public_approval_mode_changes_apply_without_persisting_false_prom
                     &effect,
                     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                     &decision,
+                    None,
                 )
                 .await
         })

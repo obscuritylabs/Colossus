@@ -1613,7 +1613,9 @@ fn approval_summary_blocks(blocks: &[PresentationBlock]) -> Vec<PresentationBloc
     let mut summary = Vec::new();
     for block in blocks {
         match block {
-            PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => {}
+            PresentationBlock::Code { .. }
+            | PresentationBlock::Verbatim(_)
+            | PresentationBlock::Diff(_) => {}
             PresentationBlock::Card { body, .. } => {
                 summary.extend(approval_summary_blocks(body));
             }
@@ -1629,7 +1631,9 @@ fn collect_approval_request_blocks(
 ) {
     for block in blocks {
         match block {
-            PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => {
+            PresentationBlock::Code { .. }
+            | PresentationBlock::Verbatim(_)
+            | PresentationBlock::Diff(_) => {
                 request.push(block.clone());
             }
             PresentationBlock::Card { body, .. } => {

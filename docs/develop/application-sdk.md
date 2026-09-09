@@ -546,11 +546,23 @@ with the run. The initial hosted surface does not expose `SessionService`.
 Prompts and approvals are durable, one-use interactions bound to the owning
 application. Prompt choices echo the exact displayed choice. Approval answers echo a
 fresh randomized one-use binding; the private policy request hash never crosses the
-native boundary. Approval DTOs expose only a fixed public action taxonomy plus a
-bounded display category or an HTTP(S) origin; they never disclose raw internal action
-or tool names, absolute paths, executable names, URL credentials, paths, queries,
-fragments, raw policy reasons, effect arguments, or deterministic commitments to those
-private values.
+native boundary. Approval DTOs retain a fixed public action taxonomy plus a bounded
+display category or HTTP(S) origin. Command execution has one narrow exception:
+optional `command_context` contains the agent's task `justification`, prepared
+`executable`, `arguments` (excluding the executable), `working_directory`, and `redacted`.
+These sanitized details may include actual paths and URLs and are readable only through
+the owning application's authorized run interface. They never contain environment maps,
+stdin, raw credential values, private policy reasons, or private request hashes.
+Instruction-like text is plain display data, not permission to run another command.
+Other effect arguments remain private.
+
+The generic approval `reason` retains its existing semantics; display the command
+justification separately as agent-provided. Missing command context means a historical
+or non-command interaction, not a reason to synthesize task intent. Full-details views
+must not silently truncate accepted commands. Command context participates in immutable
+challenge validation and durable replay. Public protobuf field 8 is additive; removed
+fields 1 and 7 remain reserved. Private worker protocol 22 requires matching clients
+and a worker restart; configuration stays schema version 3.
 The server revalidates responses against the private request and applies current scope
 checks to cancellation and response operations.
 

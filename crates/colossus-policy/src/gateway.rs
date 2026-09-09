@@ -633,20 +633,33 @@ impl EffectGateway {
             EventClassification::Effect,
             disclosure_summary(&request).await?,
         )?;
-        let mut request = match self.kernel.prepare(&request) {
-            Ok(request) => request,
-            Err(error) => {
-                self.event(
-                    &request,
-                    "effect.denied.v1",
-                    EventClassification::Effect,
-                    json!({"reason": error.to_string(), "source": "safety_kernel"}),
-                )?;
-                return Err(error);
-            }
-        };
+        let (command_context, mut request) =
+            match command_approval_context(&request).and_then(|context| {
+                self.kernel
+                    .prepare(&request)
+                    .map(|request| (context, request))
+            }) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.event(
+                        &request,
+                        "effect.denied.v1",
+                        EventClassification::Effect,
+                        json!({"reason": error.to_string(), "source": "safety_kernel"}),
+                    )?;
+                    return Err(error);
+                }
+            };
         let mut decision = self.decide(&request).await?;
         if decision.outcome == DecisionOutcome::RequireApproval {
+            if let Some(context) = &command_context {
+                self.event(
+                    &request,
+                    "approval.requested.v1",
+                    EventClassification::Approval,
+                    json!({"command_context": context}),
+                )?;
+            }
             let risk_auto_approved = self.review_risk(&mut request, &decision).await?;
             let request_hash = sha256_hex(&canonical_bytes(&request)?);
             let approval = if risk_auto_approved {
@@ -656,7 +669,7 @@ impl EffectGateway {
                 )?))
             } else {
                 self.approvals
-                    .request_approval(&request, &request_hash, &decision)
+                    .request_approval(&request, &request_hash, &decision, command_context.as_ref())
                     .await
             };
             let proof = match approval {

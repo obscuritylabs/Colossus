@@ -952,6 +952,14 @@ export interface UserPromptContent {
 
 export type ApprovalRisk = "low" | "medium" | "high";
 
+export interface CommandApprovalContext {
+  justification: string;
+  executable: string;
+  arguments: string[];
+  workingDirectory: string;
+  redacted: boolean;
+}
+
 export interface ApprovalContent {
   type: "approval";
   reason: string;
@@ -959,6 +967,7 @@ export interface ApprovalContent {
   resource: string;
   risk: ApprovalRisk | null;
   requestHash: string;
+  commandContext?: CommandApprovalContext | null;
 }
 
 export type InteractionContent = UserPromptContent | ApprovalContent;

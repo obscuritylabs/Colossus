@@ -312,11 +312,35 @@ impl WorkerPromptHandler for LineWorkerPromptHandler {
             .lock
             .lock()
             .map_err(|_| WorkerError::Protocol("worker prompt lock is poisoned".into()))?;
+        if let Some(context) = &prompt.command_context {
+            if prompt.kind != WorkerPromptKind::Approval {
+                return Err(WorkerError::Protocol(
+                    "command context on a non-approval prompt".into(),
+                ));
+            }
+            let approved = prompt_command_approval(
+                context,
+                prompt.details.get("reason").and_then(Value::as_str),
+                prompt
+                    .details
+                    .get("risk")
+                    .and_then(|risk| risk.get("reason"))
+                    .and_then(Value::as_str),
+            )
+            .map_err(WorkerError::Io)?;
+            return Ok(Some(if approved { "Allow once" } else { "Deny" }.into()));
+        }
         let mut choices = PresentationTable::new(["#", "Choice"], "Enter a free-form answer.");
         for (index, choice) in prompt.choices.iter().enumerate() {
             choices.push_row([(index + 1).to_string(), choice.clone()]);
         }
         let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
+        if prompt.kind == WorkerPromptKind::Approval {
+            body.push(PresentationBlock::KeyValue(vec![(
+                "Reason — agent-provided".into(),
+                "Task-specific reason unavailable".into(),
+            )]));
+        }
         if !prompt.choices.is_empty() {
             body.push(PresentationBlock::Table(choices));
         }

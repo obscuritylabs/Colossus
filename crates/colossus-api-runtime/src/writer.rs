@@ -406,6 +406,7 @@ mod tests {
         writer
             .append(RunUpdateKind::Interaction {
                 interaction: Interaction {
+                    command_context: None,
                     id: "interaction-1".into(),
                     kind: InteractionKind::Prompt,
                     status: InteractionStatus::Pending,
@@ -512,6 +513,7 @@ mod tests {
         writer
             .append(RunUpdateKind::Interaction {
                 interaction: Interaction {
+                    command_context: None,
                     id: "interaction-outcome-unknown".into(),
                     kind: InteractionKind::Prompt,
                     status: InteractionStatus::Pending,

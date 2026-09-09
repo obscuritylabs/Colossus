@@ -19,6 +19,7 @@ pub use artifacts::{
     ArtifactReference, ArtifactState, ArtifactUploadReservation, CreateArtifactUploadRequest,
     EventSourcedArtifactApi, MAX_ARTIFACT_BYTES,
 };
+pub use colossus_contracts::CommandApprovalContext;
 pub use error::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, FieldViolation, OutcomeCertainty,
 };
@@ -41,7 +42,7 @@ pub use runs::{
     RunUpdate, RunUpdateKind, RunUpdateStream, SESSION_ACTIVITY_CAPABILITY, SessionActivity,
     SessionActivityContent, SessionActivityKind, SessionActivityLane, SessionActivityStatus,
     ThreadLifecycle, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest,
-    validate_public_approval_display,
+    validate_public_approval_display, validate_public_command_context,
 };
 
 #[cfg(test)]

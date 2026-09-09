@@ -10,6 +10,7 @@ impl ApprovalProvider for DenyApproval {
         _request: &EffectRequest,
         _request_hash: &str,
         _decision: &PolicyDecision,
+        _command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         Ok(None)
     }
@@ -28,6 +29,7 @@ impl ApprovalProvider for AllowApproval {
         _request: &EffectRequest,
         request_hash: &str,
         _decision: &PolicyDecision,
+        _command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         Ok(Some(approval_proof(
             request_hash,

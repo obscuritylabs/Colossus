@@ -52,6 +52,9 @@ pub use builtin::*;
 mod approval;
 pub use approval::*;
 
+mod command_approval;
+pub use command_approval::command_approval_context;
+
 mod opa;
 pub use opa::*;
 

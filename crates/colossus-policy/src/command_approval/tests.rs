@@ -1,0 +1,178 @@
+use super::*;
+use crate::{effect_request, system_actor};
+use colossus_contracts::CommandIntent;
+use serde_json::json;
+
+fn request() -> EffectRequest {
+    let mut request = effect_request(
+        system_actor("test"),
+        "shell.run",
+        "/bin/sh",
+        json!({
+            "cwd": "/work/project", "args": ["-c", "cargo test"],
+            "environment": {"API_TOKEN": "unique-secret-value"}, "stdin_base64": "private-input"
+        }),
+    );
+    request.command_intent = Some(CommandIntent {
+        justification: "Check the build failure.".into(),
+    });
+    request
+}
+
+#[test]
+fn projects_prepared_invocation_without_changing_execution() {
+    let request = request();
+    let original = request.clone();
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert_eq!(context.arguments, ["-c", "cargo test"]);
+    assert_eq!(context.working_directory, "/work/project");
+    assert_eq!(request, original);
+    let json = serde_json::to_string(&context).unwrap();
+    assert!(!json.contains("unique-secret-value"));
+    assert!(!json.contains("private-input"));
+    assert!(!context.redacted);
+}
+
+#[test]
+fn redacts_credentials_in_shell_strings_urls_and_argument_pairs() {
+    let mut request = request();
+    request.content["args"] = json!([
+        "-c",
+        "TOKEN='secret value'; curl -H 'Authorization: Bearer abc123' 'https://user:pass@host/a?token=abc&ok=1'; echo unique-secret-value",
+        "--password",
+        "argument-secret"
+    ]);
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert!(context.redacted);
+    let text = serde_json::to_string(&context).unwrap();
+    for secret in [
+        "secret value",
+        "abc123",
+        "user:pass",
+        "token=abc",
+        "unique-secret-value",
+        "argument-secret",
+    ] {
+        assert!(!text.contains(secret), "leaked {secret}");
+    }
+}
+
+#[test]
+fn long_details_are_not_truncated_and_controls_are_visible() {
+    let mut request = request();
+    request.content["args"] = json!([format!("{}\n\u{1b}\u{202e}TAIL", "é".repeat(65500))]);
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert!(context.arguments[0].ends_with("\\n\\u{1b}\\u{202e}TAIL"));
+    assert!(context.arguments[0].starts_with(&"é".repeat(65500)));
+    assert!(!context.redacted);
+}
+
+#[test]
+fn common_authentication_flags_and_cookies_are_not_disclosed() {
+    let mut request = request();
+    request.content["args"] = json!([
+        "curl -u 'user:password-value' --proxy-user proxy:pass -H 'Cookie: session=private-cookie' ftp://name:password@host/file",
+        "-u",
+        "separate-user:separate-password",
+        "--user=inline:credential",
+        "-uattached-user:attached-password",
+        "Cookie: first=one-private-cookie; second=two-private-cookie",
+        "curl -H 'Cookie: session=three-private-cookie; csrf=four-private-cookie'"
+    ]);
+    let context = command_approval_context(&request).unwrap().unwrap();
+    let text = serde_json::to_string(&context).unwrap();
+    for secret in [
+        "password-value",
+        "proxy:pass",
+        "private-cookie",
+        "name:password",
+        "separate-password",
+        "inline:credential",
+        "attached-password",
+        "one-private-cookie",
+        "two-private-cookie",
+        "three-private-cookie",
+        "four-private-cookie",
+    ] {
+        assert!(!text.contains(secret), "leaked {secret}");
+    }
+    assert!(context.redacted);
+}
+
+#[test]
+fn absent_legacy_intent_and_non_command_disclosure() {
+    let mut request = request();
+    request.command_intent = None;
+    assert!(command_approval_context(&request).unwrap().is_none());
+    request.command_intent = Some(CommandIntent {
+        justification: "A reason".into(),
+    });
+    request.action = "filesystem.read".into();
+    assert!(command_approval_context(&request).is_err());
+}
+
+#[test]
+fn escaped_controls_are_distinct_from_literal_escape_sequences() {
+    let mut request = request();
+    request.content["args"] = json!(["line\nbreak", "line\\nbreak", "C:\\workspace"]);
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert_eq!(
+        context.arguments,
+        ["line\\nbreak", "line\\\\nbreak", "C:\\\\workspace"]
+    );
+    assert_ne!(context.arguments[0], context.arguments[1]);
+    assert!(!context.redacted);
+}
+
+#[test]
+fn intent_and_actual_command_are_part_of_the_private_request_binding() {
+    let original = request();
+    let bytes = crate::kernel::canonical_bytes(&original).unwrap();
+    for field in ["reason", "executable", "arguments", "cwd"] {
+        let mut changed = original.clone();
+        match field {
+            "reason" => {
+                changed.command_intent.as_mut().unwrap().justification =
+                    "A different purpose.".into()
+            }
+            "executable" => changed.resource = "/bin/other".into(),
+            "arguments" => changed.content["args"] = json!(["other"]),
+            "cwd" => changed.content["cwd"] = json!("/other"),
+            _ => unreachable!(),
+        }
+        assert_ne!(crate::kernel::canonical_bytes(&changed).unwrap(), bytes);
+    }
+    let mut historical = serde_json::to_value(&original).unwrap();
+    historical.as_object_mut().unwrap().remove("command_intent");
+    assert!(
+        serde_json::from_value::<EffectRequest>(historical)
+            .unwrap()
+            .command_intent
+            .is_none()
+    );
+}
+
+#[test]
+fn redaction_expansion_does_not_lower_the_valid_intent_limit() {
+    let mut request = request();
+    request.command_intent.as_mut().unwrap().justification = "x".repeat(512);
+    request.content["environment"]["TOKEN"] = json!("x");
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert_eq!(context.justification, "[REDACTED]".repeat(512));
+    assert!(context.redacted);
+}
+
+#[test]
+fn explanation_redaction_uses_credential_values_before_policy_replaces_them() {
+    let mut request = request();
+    request.content["environment"]["password"] = json!("opaque-secret-value");
+    request.command_intent.as_mut().unwrap().justification =
+        "Check opaque-secret-value configuration.".into();
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert_eq!(context.justification, "Check [REDACTED] configuration.");
+    assert!(context.redacted);
+    assert_eq!(
+        request.content["environment"]["password"],
+        "opaque-secret-value"
+    );
+}

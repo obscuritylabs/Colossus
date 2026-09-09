@@ -122,6 +122,32 @@ Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
 
+### Command approval acceptance
+
+`cargo test -p colossus-cli --test approval_smoke` uses isolated homes and deterministic
+loopback providers to exercise missing-reason recovery, built-in full-command details,
+allow-once and denial, and real PTY Request-tab scrolling with both embedded and worker
+hosts. Marker files prove that no command executes while approval is pending and that
+accepted commands execute only once. Policy tests bind justification, executable,
+arguments, and working directory to the immutable proof and verify sanitized evidence
+is written before the decision is requested.
+
+From `apps/desktop`, `npm run test:approval-runtime` builds a feature-gated acceptance
+example and the real sidecar. It drives the production review component through the
+production native approval adapter, authenticated worker, and separate approval broker.
+Allow, deny, and cancellation use fresh private homes with a credential-free local
+provider. The test substitutes only the human OS-dialog decision; pending-interaction
+refetch, authorization, policy, permits, and process execution remain real. No test bridge
+is linked into production. The macOS and Windows pre-merge lanes run this tier with no
+scenario retries. Screenshots are in `apps/desktop/output/playwright`, with browser traces
+retained on failure. Mocked browser tests separately cover keyboard operation, compact
+layouts, accessibility, redaction, full details, and stale review state.
+
+Native on-screen smoke testing must additionally verify that the isolated command review
+window opens, external navigation is blocked, closing it invalidates review, and final
+OS confirmation identifies the target, reason, and review binding without presenting a
+truncated command as complete. Browser acceptance does not substitute for this check.
+
 ### Desktop plugin runtime acceptance
 
 From `apps/desktop`, run `npm run test:browser:install` once, then

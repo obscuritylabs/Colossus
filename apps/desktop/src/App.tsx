@@ -189,6 +189,7 @@ const FIXTURE_SCENARIO = FIXTURE_QUERY.get("fixture");
 const FIXTURE_MODE =
   import.meta.env.DEV &&
   (FIXTURE_SCENARIO === "operations-studio" ||
+    FIXTURE_SCENARIO === "command-approval" ||
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
     FIXTURE_SCENARIO === "plan-workflow");
@@ -835,6 +836,7 @@ export default function App() {
               FIXTURE_SCENARIO === "interaction-question"
                 ? "user_prompt"
                 : "approval",
+              FIXTURE_SCENARIO === "command-approval",
             )
       : initialChatState,
   );

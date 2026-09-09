@@ -29,6 +29,21 @@ if (
       </AppearanceProvider>,
     );
   });
+} else if (
+  new URLSearchParams(window.location.search).get("surface") ===
+  "command-approval"
+) {
+  void import("./CommandReviewWindow").then(
+    ({ default: CommandReviewWindow }) => {
+      createRoot(root).render(
+        <AppearanceProvider initialPreference={initialAppearance}>
+          <AppErrorBoundary>
+            <CommandReviewWindow />
+          </AppErrorBoundary>
+        </AppearanceProvider>,
+      );
+    },
+  );
 } else if (terminalSurface) {
   void import("./TerminalWindow").then(({ default: TerminalWindow }) => {
     createRoot(root).render(

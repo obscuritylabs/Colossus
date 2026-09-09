@@ -4,6 +4,7 @@ coverage/
 .playwright-cli/
 playwright-report/
 test-results/
+output/playwright/
 *.log
 *.local
 *.tsbuildinfo

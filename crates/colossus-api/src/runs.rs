@@ -13,6 +13,23 @@ use url::Url;
 pub use colossus_contracts::RunBranchContextMode;
 
 const MAX_PUBLIC_APPROVAL_ORIGIN_BYTES: usize = 512;
+
+/// Validate the command-only exception to categorical public approval disclosure.
+pub fn validate_public_command_context(
+    action: Option<&str>,
+    context: Option<&colossus_contracts::CommandApprovalContext>,
+) -> ApiResult<()> {
+    if let Some(context) = context
+        && (action != Some("process.execute") || context.validate().is_err())
+    {
+        return Err(ApiError::invalid(
+            ApiErrorReason::InvalidArgument,
+            "interaction.command_context",
+            "invalid prepared-command approval disclosure",
+        ));
+    }
+    Ok(())
+}
 const MAX_RUN_TITLE_CHARACTERS: usize = 80;
 const UNTITLED_RUN: &str = "Untitled work";
 
@@ -597,6 +614,9 @@ pub struct Interaction {
     pub resource: Option<String>,
     /// Non-authoritative released risk metadata for approvals.
     pub risk: Option<ApprovalRisk>,
+    /// Narrow prepared-command disclosure; absent on legacy and non-command approvals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_context: Option<colossus_contracts::CommandApprovalContext>,
     /// UTC RFC3339 expiry.
     pub expires_at: String,
     /// One-use response after resolution.

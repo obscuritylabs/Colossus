@@ -618,6 +618,9 @@ pub struct EffectRequest {
     pub risk: RiskInput,
     /// Complete proposed logical request or quarantined result content.
     pub content: Value,
+    /// Optional task intent; absent on historical and non-command effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_intent: Option<crate::CommandIntent>,
     /// Credential references with values removed.
     pub credential_references: Vec<CredentialReference>,
     /// Correlation and workflow context.

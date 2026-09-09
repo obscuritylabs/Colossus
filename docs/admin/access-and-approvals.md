@@ -94,6 +94,23 @@ administered by their owner.
 
 ## Development shell
 
+Every new model-issued `shell.run` call supplies a `justification`: one concise,
+plain-text sentence explaining how the command helps the task, up to 512 Unicode
+characters. Missing or invalid explanations return a correctable tool error before
+approval or execution. No additional explanation-model call is made.
+
+Command approvals show **Reason — agent-provided**, the prepared command and working
+directory, and separate policy/risk information where authorized. The reason is not
+evidence that a command is safe or authorized. Credentials are redacted in the display;
+execution input and ordinary tool, sandbox, approval, and permit enforcement are unchanged.
+
+In CLI prompts, enter `details` to inspect the complete command before `yes` or `no`.
+In the TUI, use the scrollable Request tab. Desktop offers expandable details and a
+native-owned full-command review window followed by the operating-system confirmation.
+Viewing details never approves execution. Changing targets or an expired/stale request
+invalidates the native review. Older command approvals display “Task-specific reason
+unavailable”; other effect approvals keep their existing behavior.
+
 `development` keeps `shell.run` approval-required. It becomes visible when an executable
 prerequisite exists; the `workspace-development` sandbox preset supplies the trusted
 platform shell, Git when found, a read/write grant for the selected workspace, read-only

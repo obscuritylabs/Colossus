@@ -1390,6 +1390,21 @@ fn interaction_from_proto(value: proto::Interaction) -> ApiResult<Interaction> {
             })
         }
         (InteractionKind::Approval, interaction::Content::Approval(approval)) => {
+            let command_context =
+                approval
+                    .command_context
+                    .map(|context| colossus_api::CommandApprovalContext {
+                        justification: context.justification,
+                        executable: context.executable,
+                        arguments: context.arguments,
+                        working_directory: context.working_directory,
+                        redacted: context.redacted,
+                    });
+            colossus_api::validate_public_command_context(
+                Some(&approval.action),
+                command_context.as_ref(),
+            )
+            .map_err(|_| protocol_error())?;
             validate_text(&approval.reason, MAX_SUMMARY_BYTES)?;
             validate_text(&approval.action, MAX_SUMMARY_BYTES)?;
             validate_text(&approval.resource, MAX_SUMMARY_BYTES)?;
@@ -1405,6 +1420,7 @@ fn interaction_from_proto(value: proto::Interaction) -> ApiResult<Interaction> {
                 Err(_) => return Err(protocol_error()),
             };
             InteractionContent::Approval(ApprovalInteraction {
+                command_context,
                 reason: approval.reason,
                 action: approval.action,
                 resource: approval.resource,
@@ -2526,6 +2542,7 @@ mod tests {
             respondable_by_caller: true,
             etag: "etag-1".into(),
             content: Some(interaction::Content::Approval(proto::ApprovalInteraction {
+                command_context: None,
                 reason: "A reviewed local effect requires permission.".into(),
                 action: action.into(),
                 resource: resource.into(),
@@ -2537,6 +2554,38 @@ mod tests {
         let valid = interaction_from_proto(approval("workspace.modify", "workspace resource"))
             .expect("canonical approval display");
         assert!(matches!(valid.content, InteractionContent::Approval(_)));
+
+        let context = proto::CommandApprovalContext {
+            justification: "Check dependency versions.".into(),
+            executable: "/bin/sh".into(),
+            arguments: vec!["-c".into(), "echo 'two  spaces'".into()],
+            working_directory: "/work/project".into(),
+            redacted: true,
+        };
+        let mut command = approval("process.execute", "configured executable");
+        let Some(interaction::Content::Approval(content)) = &mut command.content else {
+            unreachable!()
+        };
+        content.command_context = Some(context.clone());
+        let converted = interaction_from_proto(command.clone()).unwrap();
+        let InteractionContent::Approval(converted) = converted.content else {
+            unreachable!()
+        };
+        let projected = converted.command_context.unwrap();
+        assert_eq!(projected.arguments, context.arguments);
+        assert_eq!(projected.justification, context.justification);
+        assert_eq!(projected.working_directory, context.working_directory);
+        assert!(projected.redacted);
+        let Some(interaction::Content::Approval(content)) = &mut command.content else {
+            unreachable!()
+        };
+        content
+            .command_context
+            .as_mut()
+            .unwrap()
+            .arguments
+            .push("\u{202e}spoof".into());
+        assert!(interaction_from_proto(command).is_err());
 
         for malformed in [
             approval("shell.run\nResource: harmless", "workspace resource"),

@@ -604,8 +604,13 @@ pub enum ApprovalRisk {
 }
 
 /// Released approval content.
+pub use colossus_api::CommandApprovalContext;
+
+/// Released approval content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovalInteraction {
+    /// Prepared command display, absent on historical and non-command interactions.
+    pub command_context: Option<CommandApprovalContext>,
     /// Released reason approval is required.
     pub reason: String,
     /// Canonical action.

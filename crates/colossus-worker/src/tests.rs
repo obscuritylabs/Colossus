@@ -744,6 +744,7 @@ async fn prompt_ids_are_one_use_and_unknown_ids_fail_closed() {
 
 fn test_prompt(id: &str, kind: WorkerPromptKind) -> WorkerPrompt {
     WorkerPrompt {
+        command_context: None,
         prompt_id: id.into(),
         kind,
         title: "Test prompt".into(),
@@ -1610,7 +1611,7 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
         let proof = ACTIVE_INTERACTIVE_RUN
             .scope(
                 bridge,
-                provider.request_approval(&request, "request-hash", &decision),
+                provider.request_approval(&request, "request-hash", &decision, None),
             )
             .await
             .expect("approval result");
@@ -1669,7 +1670,7 @@ async fn interactive_worker_uses_the_client_scoped_approval_mode_override() {
     let proof = ACTIVE_INTERACTIVE_RUN
         .scope(
             bridge,
-            provider.request_approval(&request, "request-hash", &decision),
+            provider.request_approval(&request, "request-hash", &decision, None),
         )
         .await
         .expect("client-scoped full access");
@@ -1709,7 +1710,7 @@ async fn worker_wide_approval_mode_changes_apply_without_a_restart() {
 
     assert!(
         provider
-            .request_approval(&request, "deny-hash", &decision)
+            .request_approval(&request, "deny-hash", &decision, None)
             .await
             .expect("deny mode")
             .is_none()
@@ -1721,7 +1722,7 @@ async fn worker_wide_approval_mode_changes_apply_without_a_restart() {
     );
     assert!(
         provider
-            .request_approval(&request, "allow-hash", &decision)
+            .request_approval(&request, "allow-hash", &decision, None)
             .await
             .expect("full access mode")
             .is_some()
@@ -1805,7 +1806,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 21);
+    assert_eq!(PROTOCOL_VERSION, 22);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

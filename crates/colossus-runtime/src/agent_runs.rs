@@ -1105,10 +1105,11 @@ mod plan_mode_instruction_tests {
             request: &EffectRequest,
             request_hash: &str,
             decision: &PolicyDecision,
+            command_context: Option<&colossus_contracts::CommandApprovalContext>,
         ) -> Result<Option<ApprovalProof>, PolicyError> {
             self.control.cancel();
             self.inner
-                .request_approval(request, request_hash, decision)
+                .request_approval(request, request_hash, decision, command_context)
                 .await
         }
     }

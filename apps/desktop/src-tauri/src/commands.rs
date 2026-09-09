@@ -1,6 +1,6 @@
 use colossus_sdk::{
     ApprovalInteraction, ArtifactPurpose, GetRunRequest, IdempotencyKey, InteractionAnswer,
-    InteractionContent, UploadArtifactRequest,
+    UploadArtifactRequest,
 };
 use sha2::{Digest as _, Sha256};
 use std::{fs::File, io::Read as _, path::Path};
@@ -707,6 +707,10 @@ pub(crate) async fn respond_interaction(
     let target = target(&state, &target_id).await?;
     require_run_binding(&state, &target, &request.run_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
+    let target_epoch = target.epoch();
+    let handle = target.target.clone();
+    // Do not hold a selection read lease while the operator reviews a command.
+    drop(target);
     if matches!(
         &request.response,
         InteractionAnswer::Approval { approved: true, .. }
@@ -714,12 +718,21 @@ pub(crate) async fn respond_interaction(
         let _approval_guard = state.try_approval_guard().ok_or_else(|| {
             CommandErrorDto::busy("Another native approval confirmation is already open.")
         })?;
-        if !confirm_effect_approval(&app, &target.target, &request).await?
+        if !confirm_effect_approval(&app, &state, &handle, &target_id, target_epoch, &request)
+            .await?
             && let InteractionAnswer::Approval { approved, .. } = &mut request.response
         {
             *approved = false;
         }
     }
+    let target = crate::commands::target(&state, &target_id).await?;
+    if target.epoch() != target_epoch {
+        return Err(CommandErrorDto::invalid(
+            "approval",
+            "The selected target changed during approval. Refresh the run.",
+        ));
+    }
+    require_run_binding(&state, &target, &request.run_id).await?;
     let response = target
         .target
         .client
@@ -731,7 +744,10 @@ pub(crate) async fn respond_interaction(
 
 async fn confirm_effect_approval(
     app: &AppHandle,
+    state: &AppState,
     target: &TargetHandle,
+    target_id: &str,
+    epoch: u64,
     request: &colossus_sdk::RespondInteractionRequest,
 ) -> Result<bool, CommandErrorDto> {
     let InteractionAnswer::Approval {
@@ -741,39 +757,29 @@ async fn confirm_effect_approval(
     else {
         return Ok(true);
     };
-    let details = target
-        .client
-        .get_run(GetRunRequest {
-            run_id: request.run_id.clone(),
-        })
-        .await
-        .map_err(CommandErrorDto::from_api)?;
-    let interaction = details
-        .pending_interactions
-        .iter()
-        .find(|interaction| interaction.interaction_id == request.interaction_id)
-        .ok_or_else(|| {
-            CommandErrorDto::invalid(
-                "interactionId",
-                "The approval is no longer pending. Refresh the run and retry.",
-            )
-        })?;
-    let InteractionContent::Approval(approval) = &interaction.content else {
-        return Err(CommandErrorDto::invalid(
-            "response",
-            "The interaction is not an effect approval.",
-        ));
+    let approval = crate::command_review::pending_approval(target, request).await?;
+    let review_window = if approval.command_context.is_some() {
+        let Some(window) = crate::command_review::review_command(
+            app, target, target_id, epoch, request, &approval,
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        Some(window)
+    } else {
+        None
     };
-    if interaction.run_id != request.run_id
-        || interaction.etag != request.etag
+    if !state.selection_is_current(target_id, epoch)
+        || crate::command_review::pending_approval(target, request).await? != approval
         || approval.request_hash != *request_hash
     {
         return Err(CommandErrorDto::invalid(
-            "response",
-            "The approval changed. Refresh the run before responding.",
+            "approval",
+            "The approval changed. Refresh the run.",
         ));
     }
-    let message = approval_dialog_message(approval, &target.consent)?;
+    let message = approval_dialog_message(&approval, &target.consent)?;
     let app = app.clone();
     let approved = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
@@ -794,6 +800,18 @@ async fn confirm_effect_approval(
             true,
         )
     })?;
+    if approved
+        && (!state.selection_is_current(target_id, epoch)
+            || review_window
+                .as_ref()
+                .is_some_and(|window| !window.is_current())
+            || crate::command_review::pending_approval(target, request).await? != approval)
+    {
+        return Err(CommandErrorDto::invalid(
+            "approval",
+            "The approval changed during native confirmation. Refresh the run.",
+        ));
+    }
     Ok(approved)
 }
 
@@ -807,6 +825,17 @@ fn approval_dialog_message(
     let resource = native_dialog_field(&approval.resource, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
     let reason = native_dialog_field(&approval.reason, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
     let target = target_consent_description(consent)?;
+    if let Some(context) = &approval.command_context {
+        context.validate().map_err(|_| {
+            CommandErrorDto::invalid("approval", "The command cannot be displayed safely.")
+        })?;
+        let justification = native_dialog_field(&context.justification, 8192)?;
+        let binding =
+            native_dialog_field(&approval.request_hash, MAX_NATIVE_APPROVAL_REASON_BYTES)?;
+        return Ok(format!(
+            "Colossus is requesting permission for the command in the native review window.\n\n{target}\nReason — agent-provided: {justification}\nReview binding: {binding}\n\nFull command and working directory are available in the review window. Allow this exact request once?"
+        ));
+    }
     Ok(format!(
         "Colossus is requesting permission for an effect.\n\n{target}\nAction: {action}\nResource: {resource}\nReason: {reason}\n\nAllow this exact request once?",
     ))
@@ -829,9 +858,11 @@ fn native_dialog_field(value: &str, max_bytes: usize) -> Result<String, CommandE
     Ok(value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-fn target_consent_description(consent: &TargetConsentContext) -> Result<String, CommandErrorDto> {
+pub(crate) fn target_consent_description(
+    consent: &TargetConsentContext,
+) -> Result<String, CommandErrorDto> {
     match consent {
-        TargetConsentContext::ManagedLocal => Ok("Target: Managed Local on this Mac".into()),
+        TargetConsentContext::ManagedLocal => Ok("Target: Managed Local on this device".into()),
         TargetConsentContext::External {
             label,
             instance_id,
@@ -933,6 +964,7 @@ mod tests {
 
     fn approval(reason: &str) -> ApprovalInteraction {
         ApprovalInteraction {
+            command_context: None,
             reason: reason.into(),
             action: "workspace.modify".into(),
             resource: "workspace resource".into(),
@@ -951,6 +983,31 @@ mod tests {
         assert_eq!(message.matches("\nAction:").count(), 1);
         assert_eq!(message.matches("\nResource:").count(), 1);
         assert!(message.contains("Reason: Reviewed change. Action: harmless Resource:"));
+    }
+
+    #[test]
+    fn native_command_confirmation_identifies_the_full_review_without_truncating_it() {
+        let mut pending = approval("policy review");
+        pending.action = "process.execute".into();
+        pending.command_context = Some(colossus_sdk::CommandApprovalContext {
+            justification: "Verify the requested build.".into(),
+            executable: "build-tool".into(),
+            arguments: vec![format!("{}COMMAND_TAIL", "x".repeat(70_000))],
+            working_directory: "workspace".into(),
+            redacted: false,
+        });
+        let message = approval_dialog_message(&pending, &TargetConsentContext::ManagedLocal)
+            .expect("full command remains in the review window");
+        assert!(message.contains("Reason — agent-provided: Verify the requested build."));
+        assert!(message.contains("Review binding: opaque-approval-binding"));
+        assert!(
+            message
+                .contains("Full command and working directory are available in the review window")
+        );
+        assert!(!message.contains("COMMAND_TAIL"));
+        assert!(!message.contains("build-tool"));
+        pending.request_hash = "binding\u{202e}spoofed".into();
+        assert!(approval_dialog_message(&pending, &TargetConsentContext::ManagedLocal).is_err());
     }
 
     #[test]

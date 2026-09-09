@@ -44,6 +44,7 @@ pub trait PublicApprovalModeProvider: Send + Sync {
 }
 
 struct ApprovalContext {
+    command_context: Option<colossus_contracts::CommandApprovalContext>,
     public_binding: String,
     action: String,
     display_resource: String,
@@ -261,13 +262,14 @@ impl ApprovalProvider for PublicInteractionRouter {
         request: &EffectRequest,
         request_hash: &str,
         decision: &PolicyDecision,
+        command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         let active = match ACTIVE_PUBLIC_RUN.try_with(Clone::clone) {
             Ok(active) => active,
             Err(_) => {
                 return self
                     .fallback_approvals
-                    .request_approval(request, request_hash, decision)
+                    .request_approval(request, request_hash, decision, command_context)
                     .await;
             }
         };
@@ -281,6 +283,7 @@ impl ApprovalProvider for PublicInteractionRouter {
                     request,
                     request_hash,
                     decision,
+                    command_context,
                 )
                 .await;
             }
@@ -296,6 +299,7 @@ impl ApprovalProvider for PublicInteractionRouter {
             Vec::new(),
             false,
             Some(ApprovalContext {
+                command_context: command_context.cloned(),
                 public_binding: public_binding.clone(),
                 action: public_approval_action(request),
                 display_resource: public_approval_resource(request),
@@ -328,6 +332,7 @@ impl ApprovalProvider for PublicInteractionRouter {
             request,
             request_hash,
             decision,
+            command_context,
         )
         .await
     }
@@ -363,6 +368,9 @@ async fn request_interaction(
         resource: approval
             .as_ref()
             .map(|details| details.display_resource.clone()),
+        command_context: approval
+            .as_ref()
+            .and_then(|details| details.command_context.clone()),
         risk: approval.and_then(|details| details.risk),
         expires_at,
         response: None,

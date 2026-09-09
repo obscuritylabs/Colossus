@@ -52,6 +52,9 @@ pub struct WorkerPrompt {
     pub allow_free_form: bool,
     /// Bounded released details suitable for a semantic card.
     pub details: Value,
+    /// Frozen prepared-command display; never raw environment or stdin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_context: Option<colossus_contracts::CommandApprovalContext>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

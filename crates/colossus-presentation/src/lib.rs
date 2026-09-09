@@ -37,6 +37,7 @@ const VERBOSE_PREVIEW_CHARS: usize = 8 * 1024;
 const MAX_CUSTOM_THEMES: usize = 64;
 const MAX_THEME_FILE_BYTES: u64 = 64 * 1024;
 
+mod command_approval;
 mod document;
 mod markdown;
 mod palette;
@@ -45,6 +46,7 @@ mod semantic;
 mod terminal;
 mod themes;
 
+pub use command_approval::command_approval_document;
 pub use document::{
     PresentationBlock, PresentationDocument, PresentationError, PresentationTable,
     PresentationTone, StyledLine, StyledSpan, document_from_json,

@@ -1344,6 +1344,7 @@ fn cancellation_atomically_closes_a_pending_interaction() {
                     action: None,
                     resource: None,
                     risk: None,
+                    command_context: None,
                     expires_at: "2999-01-01T00:00:00Z".into(),
                     response: None,
                     responded_at: None,
@@ -1452,6 +1453,7 @@ fn maximum_valid_cancellation_lifecycle_remains_listable() {
                     action: None,
                     resource: None,
                     risk: None,
+                    command_context: None,
                     expires_at: "2999-01-01T00:00:00Z".into(),
                     response: None,
                     responded_at: None,
@@ -1532,6 +1534,7 @@ fn prompt_response_is_principal_bound_one_use_and_idempotent() {
         action: None,
         resource: None,
         risk: None,
+        command_context: None,
         expires_at: "2999-01-01T00:00:00Z".into(),
         response: None,
         responded_at: None,
@@ -1633,6 +1636,23 @@ fn prompt_response_is_principal_bound_one_use_and_idempotent() {
 
 #[test]
 fn persisted_private_approval_display_fails_closed_on_reconstruction_and_feed_replay() {
+    assert_malformed_approval_replay_rejected(None);
+}
+
+#[test]
+fn unsafe_command_context_fails_closed_on_reconstruction_and_feed_replay() {
+    assert_malformed_approval_replay_rejected(Some(colossus_contracts::CommandApprovalContext {
+        justification: "Check the build.".into(),
+        executable: "/bin/sh".into(),
+        arguments: vec!["\u{202e}customer-secret".into()],
+        working_directory: "/work".into(),
+        redacted: false,
+    }));
+}
+
+fn assert_malformed_approval_replay_rejected(
+    command_context: Option<colossus_contracts::CommandApprovalContext>,
+) {
     let (journal, repository, caller) = fixture();
     let request = create_request("private-approval-create", "Request approval");
     create_run(
@@ -1669,9 +1689,24 @@ fn persisted_private_approval_display_fails_closed_on_reconstruction_and_feed_re
             choices: Vec::new(),
             allow_free_form: false,
             request_hash: Some("ab".repeat(32)),
-            action: Some(private_action.into()),
-            resource: Some(private_resource.into()),
+            action: Some(
+                if command_context.is_some() {
+                    "process.execute"
+                } else {
+                    private_action
+                }
+                .into(),
+            ),
+            resource: Some(
+                if command_context.is_some() {
+                    "configured executable"
+                } else {
+                    private_resource
+                }
+                .into(),
+            ),
             risk: Some(ApprovalRisk::High),
+            command_context,
             expires_at: "2999-01-01T00:00:00Z".into(),
             response: None,
             responded_at: None,

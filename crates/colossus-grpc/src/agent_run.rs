@@ -1036,6 +1036,11 @@ fn proto_interaction(
             }),
         ),
         CoreInteractionKind::Approval => {
+            colossus_api::validate_public_command_context(
+                value.action.as_deref(),
+                value.command_context.as_ref(),
+            )
+            .map_err(|_| projection_invariant())?;
             let request_hash = value
                 .request_hash
                 .clone()
@@ -1053,6 +1058,15 @@ fn proto_interaction(
             (
                 InteractionKind::Approval,
                 interaction::Content::Approval(ApprovalInteraction {
+                    command_context: value.command_context.as_ref().map(|context| {
+                        colossus_api_proto::v1alpha1::CommandApprovalContext {
+                            justification: context.justification.clone(),
+                            executable: context.executable.clone(),
+                            arguments: context.arguments.clone(),
+                            working_directory: context.working_directory.clone(),
+                            redacted: context.redacted,
+                        }
+                    }),
                     reason: value.prompt.clone(),
                     action,
                     resource,
@@ -1608,6 +1622,7 @@ mod tests {
         let private_action = "filesystem.write.customer-secret";
         let private_resource = "/Users/alex/private/customer-secret.txt";
         let value = CoreInteraction {
+            command_context: None,
             id: "interaction-private-approval".into(),
             kind: CoreInteractionKind::Approval,
             status: CoreInteractionStatus::Pending,

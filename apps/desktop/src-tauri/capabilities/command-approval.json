@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "command-approval",
+  "description": "Only the fixed native-owned review document can inspect or acknowledge its current command; final approval remains OS-native.",
+  "local": true,
+  "windows": ["command-approval"],
+  "permissions": ["allow-command-review-context", "allow-finish-command-review"]
+}
