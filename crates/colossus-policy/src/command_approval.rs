@@ -23,6 +23,8 @@ const CREDENTIAL_VALUE_OPTIONS: &[&str] = &[
     "--proxy-header",
     "--tlsuser",
     "--proxy-tlsuser",
+    "--tlspassword",
+    "--proxy-tlspassword",
     "--pass",
     "--proxy-pass",
     "--cert",

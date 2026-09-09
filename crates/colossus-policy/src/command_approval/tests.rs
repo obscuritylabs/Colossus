@@ -168,6 +168,8 @@ fn ambiguous_short_password_options_are_recognized_in_shell_and_prepared_argv() 
         ("curl", "", "-H", true),
         ("curl", "", "-E", true),
         ("curl", "", "-svu", true),
+        ("curl", "", "-s4u", true),
+        ("curl", "", "-s6E", true),
         ("ssh-keygen", "", "-N", true),
         ("ssh-keygen", "", "-P", true),
         ("ssh-keygen", "", "-qN", true),
@@ -271,6 +273,14 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
         ("psql", vec!["--no-password", "database"]),
         ("tool", vec!["--tokenize", "input.txt"]),
         ("curl", vec!["-N", "https://example.test"]),
+        ("curl", vec!["-XDELETE", "https://example.test"]),
+        ("curl", vec!["-sXDELETE", "https://example.test"]),
+        ("curl", vec!["-AUserAgent", "https://example.test"]),
+        ("curl", vec!["-sAUserAgent", "https://example.test"]),
+        ("curl", vec!["-oPUBLIC", "https://example.test"]),
+        ("curl", vec!["-dPUBLIC", "https://example.test"]),
+        ("curl", vec!["-DHEADERS", "https://example.test"]),
+        ("curl", vec!["-KPUBLIC", "https://example.test"]),
         ("docker", vec!["run", "-p", "8080:80", "image"]),
         ("openssl", vec!["s_client", "-key", "key.pem"]),
         ("openssl", vec!["req", "-new", "-key", "key.pem"]),
@@ -317,6 +327,8 @@ fn complete_long_credential_names_remain_private_in_both_invocation_forms() {
         "--encryption-key",
         "--signing-key",
         "--auth-key",
+        "--tlspassword",
+        "--proxy-tlspassword",
     ] {
         for arguments in [
             vec![

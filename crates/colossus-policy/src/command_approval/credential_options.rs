@@ -5,6 +5,11 @@ use std::{ops::Range, sync::LazyLock};
 use regex::Regex;
 use serde_json::Value;
 
+// Only value-free curl flags may precede a credential option in a cluster.
+// Value-taking flags such as -X, -A, -d and -o terminate option scanning;
+// letters in their attached values must never become credential flags.
+const CURL_BOOLEAN_SHORT_FLAGS: &str = "#:012346aBfgGiIjJklLMnNOpqRsSvVZ";
+
 pub(super) struct Profile {
     programs: &'static [&'static str],
     login_only: bool,
@@ -47,7 +52,12 @@ static PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
         };
         let option = if attached {
             // Stop at the first credential flag; later letters are its value.
-            format!(r"-[a-zA-Z#]*?[{flags}]")
+            let prefix_flags = if programs.contains(&"curl") {
+                CURL_BOOLEAN_SHORT_FLAGS
+            } else {
+                "a-zA-Z#"
+            };
+            format!(r"-[{prefix_flags}]*?[{flags}]")
         } else {
             format!(r"-[{flags}]")
         };
