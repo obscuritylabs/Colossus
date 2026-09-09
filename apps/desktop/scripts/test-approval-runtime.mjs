@@ -45,6 +45,7 @@ run(
     join(desktop, "node_modules/@playwright/test/cli.js"),
     "test",
     "--retries=0",
+    "--output=test-results/approval-runtime",
     "tests/browser/approval-runtime.spec.ts",
   ],
   desktop,

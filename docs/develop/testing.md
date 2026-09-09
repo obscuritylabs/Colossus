@@ -148,6 +148,9 @@ successfully and append exactly one marker. The test-only activity collector all
 45 seconds to observe the normal 30-second process budget and terminal publication;
 it does not extend runtime execution or approval limits. Collection failures report
 only categorical run status and pending-interaction count, not private challenges.
+The plugin and approval runners use separate `test-results/plugin-runtime` and
+`test-results/approval-runtime` directories so a subsequent suite cannot erase a
+failed suite's traces before the CI artifact upload.
 
 Both native acceptance scripts isolate Tauri's build output from the runtime under
 test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's
