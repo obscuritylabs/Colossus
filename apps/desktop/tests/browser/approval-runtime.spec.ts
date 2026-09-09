@@ -14,6 +14,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AcceptanceProcesses } from "./support/acceptance-processes";
+import { approvalMarkerCommand } from "./support/approval-command";
 
 test.skip(
   process.env.COLOSSUS_APPROVAL_RUNTIME_ACCEPTANCE !== "1",
@@ -63,10 +64,7 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       let input = "";
       for await (const chunk of request) input += chunk.toString();
       requests.push(input);
-      const script =
-        process.platform === "win32"
-          ? `echo approved>>approved-marker.txt & rem TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== PASSWORD=top"fixture-concat-tail" --oauth2-"bearer" fixture-name-tail ssh-keygen -N fixture-keygen-tail keytool -storepass fixture-storepass-tail openssl cms -pwri_password fixture-pwri-tail -----BEGIN PGP PRIVATE KEY BLOCK----- fixture-openpgp-tail -----END PGP PRIVATE KEY BLOCK----- ${"x".repeat(1400)} COMMAND_TAIL`
-          : `printf 'approved\\n' >> approved-marker.txt # TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== PASSWORD=top"fixture-concat-tail" --oauth2-"bearer" fixture-name-tail ssh-keygen -N fixture-keygen-tail keytool -storepass fixture-storepass-tail openssl cms -pwri_password fixture-pwri-tail -----BEGIN PGP PRIVATE KEY BLOCK----- fixture-openpgp-tail -----END PGP PRIVATE KEY BLOCK----- ${"x".repeat(6000)} COMMAND_TAIL`;
+      const script = approvalMarkerCommand(process.platform === "win32");
       const delta =
         requests.length === 1
           ? {
@@ -215,13 +213,6 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
           "stale or unavailable",
         );
       }
-      if (outcome === "allow") {
-        await expect
-          .poll(() => readFile(marker, "utf8").catch(() => ""))
-          .toBe(process.platform === "win32" ? "approved\r\n" : "approved\n");
-      } else {
-        expect(await readFile(marker, "utf8").catch(() => "")).toBe("");
-      }
       const activity = (await invoke("released_activity")) as {
         name: string;
         state: string;
@@ -247,10 +238,16 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
         expect(released).not.toContain(withheld);
       if (outcome === "allow") {
         const completed = shell.find((item) => item.state === "Completed");
+        expect(completed, released).toBeDefined();
         expect(JSON.parse(completed!.preview!)).toMatchObject({
           exit_code: 0,
           command_details_withheld: true,
         });
+        expect(await readFile(marker, "utf8")).toBe(
+          process.platform === "win32" ? "approved\r\n" : "approved\n",
+        );
+      } else {
+        expect(await readFile(marker, "utf8").catch(() => "")).toBe("");
       }
       await page.screenshot({
         path: `output/playwright/command-approval-${outcome}.png`,
