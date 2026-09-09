@@ -128,6 +128,32 @@ async fn start_run(
         })
         .await?;
     tokio::time::timeout(Duration::from_secs(30), async {
+        // Approval publication and buffered tool events have separate writers.
+        // Wait for the queued start event before capturing the run's etag; a
+        // slower journal can otherwise change it between the first two reads.
+        // No decision is made here, and the production adapter still refetches
+        // and validates the exact frozen challenge before every review action.
+        let mut updates = client
+            .watch_run(colossus_sdk::WatchRunRequest {
+                run_id: run.run.run_id.clone(),
+                after_sequence: 0,
+            })
+            .await?;
+        let mut command_started = false;
+        while let Some(update) = updates.next_update().await {
+            if let colossus_sdk::RunUpdateKind::ToolActivity(activity) = update?.update
+                && activity.tool_name == "shell.run"
+                && activity.state == colossus_sdk::ToolActivityState::Started
+            {
+                command_started = true;
+                break;
+            }
+        }
+        anyhow::ensure!(
+            command_started,
+            "run ended before command activity was released"
+        );
+        drop(updates);
         loop {
             let details = client
                 .get_run(GetRunRequest {
@@ -161,7 +187,40 @@ async fn start_run(
 }
 
 async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> anyhow::Result<()> {
-    let frozen = approval_adapter::pending(client, &request).await?;
+    let began = std::time::Instant::now();
+    let frozen = match approval_adapter::pending(client, &request).await {
+        Ok(frozen) => frozen,
+        Err(error) => {
+            // Categorical fixture diagnostics only: no command, credential,
+            // interaction identifier, etag, or approval binding is printed.
+            eprintln!(
+                "initial command review lookup failed after {:?}",
+                began.elapsed()
+            );
+            if let Ok(Ok(details)) = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.get_run(GetRunRequest {
+                    run_id: request.run_id.clone(),
+                }),
+            )
+            .await
+            {
+                let current = details
+                    .pending_interactions
+                    .iter()
+                    .find(|item| item.interaction_id == request.interaction_id);
+                eprintln!(
+                    "run_status={:?} pending_count={} interaction_present={} etag_matches={} respondable={}",
+                    details.run.status,
+                    details.pending_interactions.len(),
+                    current.is_some(),
+                    current.is_some_and(|item| item.etag == request.etag),
+                    current.is_some_and(|item| item.respondable_by_caller),
+                );
+            }
+            return Err(error.into());
+        }
+    };
     let review_id = uuid::Uuid::new_v4().to_string();
     println!("{}", json!({"ready": true}));
     std::io::stdout().flush()?;

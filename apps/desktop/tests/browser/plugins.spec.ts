@@ -78,6 +78,8 @@ test.beforeEach(async ({ page }) => {
       pluginFailure?: string;
       pluginPending?: (value: unknown) => void;
       pluginMcpEnabled?: boolean;
+      pluginHoldInventory?: boolean;
+      pluginReleaseInventory?: (fail?: boolean) => void;
     };
     state.pluginCalls = [];
     state.__TAURI_INTERNALS__ = {
@@ -85,10 +87,20 @@ test.beforeEach(async ({ page }) => {
         state.pluginCalls.push({ command, args });
         if (command === "get_plugin_inventory") {
           core.mcp_servers[0]!.enabled = state.pluginMcpEnabled === true;
-          return {
+          const snapshot = structuredClone({
             plugins: [core, imported],
             managementAvailable: args.targetId === "local",
-          };
+          });
+          if (state.pluginHoldInventory) {
+            state.pluginHoldInventory = false;
+            return new Promise((resolve, reject) => {
+              state.pluginReleaseInventory = (fail = false) =>
+                fail
+                  ? reject(new Error("Outdated inventory read failed"))
+                  : resolve(snapshot);
+            });
+          }
+          return snapshot;
         }
         if (command === "managed_mcp_oauth_status")
           return {
@@ -354,6 +366,109 @@ test("core ownership, global lifecycle, untrusted activation, explicit digest, a
       },
     },
   });
+});
+
+for (const failPending of [false, true]) {
+  test(`activation queues a fresh inventory after a pending ${failPending ? "failed" : "stale"} read`, async ({
+    page,
+  }) => {
+    await page.getByRole("button", { name: /example 1\.0/u }).click();
+    const detail = page.getByRole("article", { name: "example details" });
+    const before = await page.evaluate(() => {
+      const state = window as unknown as {
+        pluginHoldInventory: boolean;
+        pluginCalls: { command: string }[];
+      };
+      state.pluginHoldInventory = true;
+      return state.pluginCalls.filter(
+        ({ command }) => command === "get_plugin_inventory",
+      ).length;
+    });
+    await page.getByRole("button", { name: "Refresh plugins" }).click();
+    await page.waitForFunction(
+      () =>
+        typeof (window as unknown as { pluginReleaseInventory?: unknown })
+          .pluginReleaseInventory === "function",
+    );
+    await detail.getByRole("button", { name: "Activate this digest" }).click();
+    await page.getByRole("button", { name: "Continue enable" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "enable completed" }),
+    ).toBeVisible();
+    await page.evaluate((failPending) => {
+      // Multiple requests must coalesce into one follow-up, not disappear or
+      // start concurrent reads whose results can arrive out of order.
+      for (let index = 0; index < 4; index++)
+        window.dispatchEvent(new Event("focus"));
+      (
+        window as unknown as { pluginReleaseInventory: (fail: boolean) => void }
+      ).pluginReleaseInventory(failPending);
+    }, failPending);
+    await expect(
+      detail.getByRole("button", { name: "Disable", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as { pluginCalls: { command: string }[] }
+          ).pluginCalls.filter(
+            ({ command }) => command === "get_plugin_inventory",
+          ).length,
+      ),
+    ).toBe(before + 2);
+  });
+}
+
+test("queued inventory does not fetch or populate a departed target", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    (
+      window as unknown as { pluginHoldInventory: boolean }
+    ).pluginHoldInventory = true;
+  });
+  await page.getByRole("button", { name: "Refresh plugins" }).click();
+  await page.waitForFunction(
+    () =>
+      typeof (window as unknown as { pluginReleaseInventory?: unknown })
+        .pluginReleaseInventory === "function",
+  );
+  const before = await page.evaluate(() => {
+    window.dispatchEvent(new Event("focus"));
+    return (
+      window as unknown as {
+        pluginCalls: { command: string; args: { targetId?: string } }[];
+      }
+    ).pluginCalls.filter(
+      ({ command, args }) =>
+        command === "get_plugin_inventory" && args.targetId === "local",
+    ).length;
+  });
+  await page.getByRole("button", { name: "External", exact: true }).click();
+  await expect(page.getByText(/Read-only discovery\./u)).toBeVisible();
+  await page.evaluate(() =>
+    (
+      window as unknown as { pluginReleaseInventory: () => void }
+    ).pluginReleaseInventory(),
+  );
+  await expect(
+    page.getByRole("button", { name: "Install", exact: true }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            pluginCalls: { command: string; args: { targetId?: string } }[];
+          }
+        ).pluginCalls.filter(
+          ({ command, args }) =>
+            command === "get_plugin_inventory" && args.targetId === "local",
+        ).length,
+    ),
+  ).toBe(before);
 });
 
 for (const action of [
