@@ -551,7 +551,10 @@ ambiguous or unclosed credential words conservatively mask the remainder. This s
 also recognizes literal credential names split by quotes or escapes, without evaluating
 variables or substitutions. An unterminated private-key block masks the remainder.
 The scanner is display-only and never evaluates shell syntax. Rendering must treat all
-context as plain display data.
+context as plain display data. Credential options include grouped short forms; attached
+argv values use their full argument boundary rather than shell word boundaries. Shell
+activity titles and restored terminal history never reconstruct a command disclosure
+from raw model arguments.
 The immutable public interaction binds this display through response and replay. The
 context grants no authority and does not change risk-auto eligibility or post-effect
 release.

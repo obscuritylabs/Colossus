@@ -441,7 +441,13 @@ impl SemanticRenderer {
             )));
         }
         let family = ToolFamily::from_name(&call.name);
-        let detail = summarize_value(&call.arguments, family.keys());
+        // Model input precedes preparation and credential projection. Command
+        // details may be displayed only through the frozen approval context.
+        let detail = if call.name == "shell.run" {
+            None
+        } else {
+            summarize_value(&call.arguments, family.keys())
+        };
         let rendered = match self.preferences.events_mode {
             EventDisplayMode::Compact => self.with_detail(
                 format!(
@@ -457,7 +463,11 @@ impl SemanticRenderer {
                 call.name,
                 call.call_id,
                 turn,
-                bounded_json(&call.arguments, VERBOSE_PREVIEW_CHARS)?
+                if call.name == "shell.run" {
+                    "withheld; see prepared command approval".into()
+                } else {
+                    bounded_json(&call.arguments, VERBOSE_PREVIEW_CHARS)?
+                }
             ),
             EventDisplayMode::Off => unreachable!("handled above"),
         };
@@ -1051,6 +1061,9 @@ fn tool_output_block(name: &str, output: &Value, arguments: Option<&Value>) -> P
 }
 
 fn tool_call_context(call: &ToolCall, family: ToolFamily) -> Option<String> {
+    if call.name == "shell.run" {
+        return None;
+    }
     if matches!(family, ToolFamily::Shell)
         && let Some(arguments) = call.arguments.get("argv").and_then(Value::as_array)
     {

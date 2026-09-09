@@ -96,6 +96,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shell_activity_never_duplicates_unprepared_input_in_any_display_mode() {
+        use colossus_contracts::{RunEvent, ToolCall, ToolResult};
+
+        for mode in [
+            crate::EventDisplayMode::Off,
+            crate::EventDisplayMode::Compact,
+            crate::EventDisplayMode::Verbose,
+        ] {
+            for density in [
+                crate::TranscriptDensity::Compact,
+                crate::TranscriptDensity::Comfortable,
+            ] {
+                let renderer = crate::SemanticRenderer::new(crate::TerminalPreferences {
+                    events_mode: mode,
+                    transcript_density: density,
+                    ..Default::default()
+                });
+                for invocation in [
+                    serde_json::json!({"command": "echo PRIVATE_COMMAND"}),
+                    serde_json::json!({"argv": ["echo", "PRIVATE_ARGV"]}),
+                ] {
+                    let mut arguments = invocation;
+                    arguments["justification"] = serde_json::json!("PRIVATE_REASON");
+                    arguments["environment"] = serde_json::json!({"TOKEN": "PRIVATE_ENV"});
+                    arguments["stdin"] = serde_json::json!("PRIVATE_STDIN");
+                    let call = ToolCall {
+                        call_id: "call".into(),
+                        name: "shell.run".into(),
+                        arguments,
+                    };
+                    let original = call.clone();
+                    let started = renderer
+                        .run_event(&RunEvent::ToolStarted {
+                            turn: 1,
+                            call: call.clone(),
+                            elapsed_seconds: 0.1,
+                        })
+                        .unwrap()
+                        .unwrap_or_default();
+                    let result = ToolResult {
+                        call_id: "call".into(),
+                        name: "shell.run".into(),
+                        output: serde_json::json!({"stdout": "safe output", "stderr": ""})
+                            .to_string(),
+                        exit_code: 0,
+                    };
+                    let completed = renderer
+                        .tool_completed_with_call(1, &result, 0.1, 0.2, Some(&call))
+                        .unwrap()
+                        .unwrap_or_default();
+                    let retained = renderer.run_event_document(
+                        &RunEvent::ToolCompleted {
+                            turn: 1,
+                            result,
+                            duration_seconds: 0.1,
+                            elapsed_seconds: 0.2,
+                        },
+                        Some(&call),
+                    );
+                    for display in [started, completed, format!("{retained:?}")] {
+                        assert!(
+                            !display.contains("PRIVATE"),
+                            "{mode:?}/{density:?}: {display}"
+                        );
+                    }
+                    assert_eq!(call, original);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn risk_summary_keeps_level_without_fabricating_an_assessment() {
         for level in ["medium", "high"] {
             assert_eq!(

@@ -103,6 +103,8 @@ Command approvals show **Reason — agent-provided**, the prepared command and w
 directory, and separate policy/risk information where authorized. The reason is not
 evidence that a command is safe or authorized. Credentials are redacted in the display;
 execution input and ordinary tool, sandbox, approval, and permit enforcement are unchanged.
+Shell activity and restored terminal history show the tool name, not its raw model
+arguments. Use the prepared approval details to inspect the command safely.
 
 In CLI prompts, enter `details` to inspect the complete command before `yes` or `no`.
 In the TUI, use the scrollable Request tab. Desktop offers expandable details and a
