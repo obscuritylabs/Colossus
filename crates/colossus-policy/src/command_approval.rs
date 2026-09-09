@@ -12,20 +12,37 @@ mod shell_value;
 const REDACTED: &str = "[REDACTED]";
 // Stop at the first value-taking credential option in a short-option group.
 // Later letters are the attached value, not more flags to inspect.
-const SHORT_CREDENTIAL_FLAG: &str = r"-[a-zA-Z#]*?[uUbH]";
+const SHORT_CREDENTIAL_FLAG: &str = r"-[a-zA-Z#]*?[uUbHE]";
+// Shared by shell spelling and argv recognition. Certificate options can carry
+// an attached passphrase, so their entire value is private display data too.
+const CREDENTIAL_VALUE_OPTIONS: &[&str] = &[
+    "--user",
+    "--proxy-user",
+    "--oauth2-bearer",
+    "--cookie",
+    "--header",
+    "--proxy-header",
+    "--tlsuser",
+    "--proxy-tlsuser",
+    "--pass",
+    "--proxy-pass",
+    "--cert",
+    "--proxy-cert",
+    "--login-options",
+    "-passin",
+    "-passout",
+];
+const SECRET_FIELD_PATTERN: &str = r"pass(?:word|wd|phrase)?|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie";
 static SHORT_CREDENTIAL_OPTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!("^{SHORT_CREDENTIAL_FLAG}"))
         .expect("constant short credential option pattern")
 });
 
 static SECRET_FIELDS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(password|passwd|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie)",
-    )
-    .expect("constant credential field pattern")
+    Regex::new(&format!("(?i)({SECRET_FIELD_PATTERN})")).expect("constant credential field pattern")
 });
 static SECRET_ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
-    let field = r"[\w-]*(?:password|passwd|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie)[\w-]*";
+    let field = format!(r"[\w-]*(?:{SECRET_FIELD_PATTERN})[\w-]*");
     Regex::new(&format!(
         r#"(?i)(?:{field}(?:\\?["'])?\s*[=:]\s*|--{field}\s+)"#
     ))
@@ -50,8 +67,13 @@ static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
 static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
     // Treat complete header-option payloads as private too: shell quoting may
     // split the credential header name, and display must never evaluate it.
+    let options = CREDENTIAL_VALUE_OPTIONS
+        .iter()
+        .map(|name| regex::escape(name))
+        .collect::<Vec<_>>()
+        .join("|");
     Regex::new(&format!(
-        r"(?:^|[\s;&|])(?:{SHORT_CREDENTIAL_FLAG}[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie|--header)[\s=]+)",
+        r"(?:^|[\s;&|])(?:(?:{options})[\s=]+|{SHORT_CREDENTIAL_FLAG}[\s=]*)",
     ))
     .expect("constant credential flag pattern")
 });
@@ -152,19 +174,17 @@ pub fn command_approval_context(
 }
 
 fn credential_option_value_start(argument: &str) -> Option<usize> {
-    if let Some(matched) = SHORT_CREDENTIAL_OPTION.find(argument) {
-        return Some(matched.end());
-    }
     let (name, value) = argument
         .split_once('=')
         .map_or((argument, None), |(name, value)| (name, Some(value)));
-    (name.starts_with("--")
-        && (SECRET_FIELDS.is_match(name)
-            || matches!(
-                name,
-                "--user" | "--proxy-user" | "--oauth2-bearer" | "--header"
-            )))
-    .then_some(name.len() + usize::from(value.is_some()))
+    if (name.starts_with("--") && SECRET_FIELDS.is_match(name))
+        || CREDENTIAL_VALUE_OPTIONS.contains(&name)
+    {
+        return Some(name.len() + usize::from(value.is_some()));
+    }
+    SHORT_CREDENTIAL_OPTION
+        .find(argument)
+        .map(|matched| matched.end())
 }
 
 fn invalid() -> GatewayError {

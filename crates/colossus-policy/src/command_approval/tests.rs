@@ -149,6 +149,63 @@ fn long_details_are_not_truncated_and_controls_are_visible() {
 }
 
 #[test]
+fn passphrase_and_certificate_options_share_shell_and_argv_redaction() {
+    for option in CREDENTIAL_VALUE_OPTIONS
+        .iter()
+        .copied()
+        .chain(["--passphrase", "-E", "-svE"])
+    {
+        for arguments in [
+            vec![
+                option.to_owned(),
+                "client.pem:private-value private-tail".into(),
+                "PUBLIC_END".into(),
+            ],
+            vec![
+                format!("{option}=client.pem:private-value private-tail"),
+                "PUBLIC_END".into(),
+            ],
+            vec![
+                "-c".into(),
+                format!("curl {option} 'client.pem:private-value private-tail' PUBLIC_END"),
+            ],
+            vec![
+                "-c".into(),
+                format!("curl {option}='client.pem:private-value private-tail' PUBLIC_END"),
+            ],
+        ] {
+            let mut request = request();
+            request.content["args"] = json!(arguments);
+            let original = request.clone();
+            let context = command_approval_context(&request).unwrap().unwrap();
+            let released = serde_json::to_string(&context).unwrap();
+            assert!(!released.contains("private-value"), "{released}");
+            assert!(!released.contains("private-tail"), "{released}");
+            assert!(released.contains("PUBLIC_END"), "{released}");
+            assert!(context.redacted);
+            assert_eq!(request, original);
+        }
+    }
+    for arguments in [
+        vec!["-Eclient.pem:private-value", "PUBLIC_END"],
+        vec!["-c", "curl -svE'client.pem:private-value' PUBLIC_END"],
+        vec!["-c", "curl --pa\"ss\" 'private-value' PUBLIC_END"],
+        vec![
+            "-c",
+            "curl https://example.test/?pass=private-value PUBLIC_END",
+        ],
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(arguments);
+        let context = command_approval_context(&request).unwrap().unwrap();
+        let released = serde_json::to_string(&context).unwrap();
+        assert!(!released.contains("private-value"), "{released}");
+        assert!(released.contains("PUBLIC_END"));
+        assert!(context.redacted);
+    }
+}
+
+#[test]
 fn common_authentication_flags_and_cookies_are_not_disclosed() {
     let mut request = request();
     request.content["args"] = json!([
