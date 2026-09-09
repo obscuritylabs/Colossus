@@ -34,6 +34,7 @@ fn inspect(document: &PresentationDocument) {
         );
         assert!(text.contains("two  spaces"));
         assert!(text.contains("REDACTED") || text.contains("redacted"));
+        assert!(unwrapped.contains("high:Commandwritesfiles"));
     }
 }
 
@@ -45,12 +46,14 @@ async fn both_hosts_preserve_full_command_and_explicit_decisions() {
         router.install(Some(sender));
         let provider = TuiApprovalProvider::new(router, ApprovalMode::Ask);
         let task = tokio::spawn(async move {
-            let request = colossus_policy::effect_request(
+            let mut request = colossus_policy::effect_request(
                 colossus_policy::system_actor("test"),
                 "shell.run",
                 "/bin/sh",
                 json!({"args": ["-c", "echo fixture"], "cwd": "/work/project"}),
             );
+            request.risk.level = Some("high".into());
+            request.risk.reason = Some("Command writes files".into());
             let decision = PolicyDecision {
                 decision_id: "decision".into(),
                 policy_revision: "test-v1".into(),
@@ -84,7 +87,8 @@ async fn both_hosts_preserve_full_command_and_explicit_decisions() {
                 prompt_id: "worker-command".into(), kind: WorkerPromptKind::Approval,
                 title: "Approval required".into(), question: "Explicit approval required".into(),
                 choices: vec!["Allow once".into(), "Deny".into()], allow_free_form: false,
-                details: json!({"action": "shell.run", "reason": "Explicit approval required"}),
+                details: json!({"action": "shell.run", "reason": "Explicit approval required",
+                    "risk": {"level": "high", "reason": "Command writes files"}}),
                 command_context: Some(context()),
             }).await
             });

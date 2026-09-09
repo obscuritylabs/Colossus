@@ -318,14 +318,17 @@ impl WorkerPromptHandler for LineWorkerPromptHandler {
                     "command context on a non-approval prompt".into(),
                 ));
             }
+            let risk = prompt.details.get("risk");
+            let risk = colossus_presentation::approval_risk_summary(
+                risk.and_then(|risk| risk.get("level"))
+                    .and_then(Value::as_str),
+                risk.and_then(|risk| risk.get("reason"))
+                    .and_then(Value::as_str),
+            );
             let approved = prompt_command_approval(
                 context,
                 prompt.details.get("reason").and_then(Value::as_str),
-                prompt
-                    .details
-                    .get("risk")
-                    .and_then(|risk| risk.get("reason"))
-                    .and_then(Value::as_str),
+                risk.as_deref(),
             )
             .map_err(WorkerError::Io)?;
             return Ok(Some(if approved { "Allow once" } else { "Deny" }.into()));

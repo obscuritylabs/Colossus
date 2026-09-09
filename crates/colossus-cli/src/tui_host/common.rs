@@ -369,10 +369,14 @@ impl ApprovalProvider for TuiApprovalProvider {
             ],
         });
         let document = if let Some(context) = command_context {
+            let risk = colossus_presentation::approval_risk_summary(
+                request.risk.level.as_deref(),
+                request.risk.reason.as_deref(),
+            );
             colossus_presentation::command_approval_document(
                 context,
                 Some(&decision.reason),
-                request.risk.reason.as_deref(),
+                risk.as_deref(),
                 true,
             )
             .map_err(|error| PolicyError::Unavailable(error.to_string()))?

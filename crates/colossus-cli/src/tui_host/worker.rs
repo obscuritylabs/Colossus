@@ -135,8 +135,9 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                     .and_then(Value::as_str);
                 let risk_level = risk
                     .and_then(|risk| risk.get("level"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("not assessed");
+                    .and_then(Value::as_str);
+                let risk_summary =
+                    colossus_presentation::approval_risk_summary(risk_level, risk_reason);
                 let mut details = Vec::new();
                 if let Some(actor) = actor {
                     details.push(("Requested by".into(), actor));
@@ -151,6 +152,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                     ),
                 ]);
                 if let Some(risk_reason) = risk_reason {
+                    let risk_level = risk_level.unwrap_or("not assessed");
                     details.push(("Risk review".into(), format!("{risk_level}: {risk_reason}")));
                 }
                 let content =
@@ -162,7 +164,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                         colossus_presentation::command_approval_document(
                             context,
                             Some(reason),
-                            risk_reason,
+                            risk_summary.as_deref(),
                             true,
                         )
                         .map_err(|error| WorkerError::Protocol(error.to_string()))?

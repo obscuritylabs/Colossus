@@ -143,6 +143,20 @@ pub(crate) async fn pending_approval(
         .map_err(CommandErrorDto::from_api)
 }
 
+/// Recheck local cancellation after the awaited authoritative read. A guard
+/// checked before refetch cannot authorize a window closed during that await.
+pub(crate) async fn revalidate_after_lookup<T: PartialEq>(
+    lookup: impl std::future::Future<Output = Result<T, CommandErrorDto>>,
+    expected: &T,
+    still_current: impl FnOnce() -> bool,
+) -> Result<(), CommandErrorDto> {
+    let observed = lookup.await?;
+    if observed != *expected || !still_current() {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
 /// Return a guard keeping full command details visible through OS confirmation.
 pub(crate) async fn review_command(
     app: &AppHandle,
@@ -239,6 +253,30 @@ async fn review_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancellation_during_final_refetch_prevents_confirmation() {
+        use std::cell::Cell;
+
+        for cause in ["close", "selection", "changed", "unchanged"] {
+            let current = Cell::new(true);
+            let guard_checked = Cell::new(false);
+            let lookup = async {
+                tokio::task::yield_now().await;
+                assert!(!guard_checked.get(), "guard was checked before refetch");
+                if matches!(cause, "close" | "selection") {
+                    current.set(false);
+                }
+                Ok(if cause == "changed" { 2 } else { 1 })
+            };
+            let result = revalidate_after_lookup(lookup, &1, || {
+                guard_checked.set(true);
+                current.get()
+            })
+            .await;
+            assert_eq!(result.is_ok(), cause == "unchanged");
+        }
+    }
 
     #[tokio::test]
     async fn stalled_refetch_cannot_block_close_selection_or_deadline() {

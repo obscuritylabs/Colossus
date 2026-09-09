@@ -2,6 +2,15 @@ use colossus_contracts::CommandApprovalContext;
 
 use crate::{PresentationBlock, PresentationDocument, PresentationError, PresentationTone};
 
+/// Keep risk level and rationale together, separate from the agent's task intent.
+pub fn approval_risk_summary(level: Option<&str>, reason: Option<&str>) -> Option<String> {
+    match (level, reason) {
+        (None, None) => None,
+        (Some(level), None) => Some(level.into()),
+        (level, Some(reason)) => Some(format!("{}: {reason}", level.unwrap_or("not assessed"))),
+    }
+}
+
 /// Render the same frozen prepared-command disclosure across terminal transports.
 /// Full details retain every accepted argument; previews explicitly announce omission.
 pub fn command_approval_document(
@@ -85,6 +94,22 @@ pub fn command_approval_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn risk_summary_keeps_level_without_fabricating_an_assessment() {
+        for level in ["medium", "high"] {
+            assert_eq!(
+                approval_risk_summary(Some(level), Some("Command writes files")),
+                Some(format!("{level}: Command writes files"))
+            );
+            assert_eq!(approval_risk_summary(Some(level), None), Some(level.into()));
+        }
+        assert_eq!(approval_risk_summary(None, None), None);
+        assert_eq!(
+            approval_risk_summary(None, Some("Evaluator unavailable")),
+            Some("not assessed: Evaluator unavailable".into())
+        );
+    }
 
     #[test]
     fn details_preserve_tail_and_argument_boundaries() {

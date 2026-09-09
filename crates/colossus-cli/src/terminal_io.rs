@@ -169,12 +169,13 @@ impl ApprovalProvider for TerminalApproval {
             .lock()
             .map_err(|_| PolicyError::Unavailable("approval terminal lock is poisoned".into()))?;
         if let Some(context) = command_context {
-            let approved = prompt_command_approval(
-                context,
-                Some(&decision.reason),
+            let risk = colossus_presentation::approval_risk_summary(
+                request.risk.level.as_deref(),
                 request.risk.reason.as_deref(),
-            )
-            .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+            );
+            let approved =
+                prompt_command_approval(context, Some(&decision.reason), risk.as_deref())
+                    .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
             drop(guard);
             return if approved {
                 ApprovalProvider::request_approval(

@@ -10,6 +10,13 @@ use crate::GatewayError;
 mod shell_value;
 
 const REDACTED: &str = "[REDACTED]";
+// Stop at the first value-taking credential option in a short-option group.
+// Later letters are the attached value, not more flags to inspect.
+const SHORT_CREDENTIAL_FLAG: &str = r"-[a-zA-Z#]*?[uUbH]";
+static SHORT_CREDENTIAL_OPTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("^{SHORT_CREDENTIAL_FLAG}"))
+        .expect("constant short credential option pattern")
+});
 
 static SECRET_FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -31,7 +38,7 @@ static AUTHORIZATION: LazyLock<Regex> = LazyLock::new(|| {
 static CREDENTIAL_HEADERS: LazyLock<Regex> = LazyLock::new(|| {
     // Headers are often one quoted shell word or one argv element. Remove the
     // whole value, including all cookie pairs, rather than just its first token.
-    Regex::new(r#"(?i)((?:\b|-H)(?:cookie|set-cookie|authorization|proxy-authorization|x-api-key)\s*:\s*)[^\r\n"']+"#)
+    Regex::new(r#"(?i)((?:\b|-[a-zA-Z#]*?H)(?:cookie|set-cookie|authorization|proxy-authorization|x-api-key)\s*:\s*)[^\r\n"']+"#)
         .expect("constant credential header pattern")
 });
 static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
@@ -43,9 +50,9 @@ static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
 static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
     // Treat complete header-option payloads as private too: shell quoting may
     // split the credential header name, and display must never evaluate it.
-    Regex::new(
-        r"(?:^|[\s;&|])(?:(?:-u|-U|-b|-H)[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie|--header)[\s=]+)",
-    )
+    Regex::new(&format!(
+        r"(?:^|[\s;&|])(?:{SHORT_CREDENTIAL_FLAG}[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie|--header)[\s=]+)",
+    ))
     .expect("constant credential flag pattern")
 });
 static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
@@ -110,31 +117,29 @@ pub fn command_approval_context(
     let working_directory = project(cwd);
     let mut arguments = Vec::with_capacity(args.len());
     let mut secret_next = false;
+    let mut argument_redacted = false;
     for argument in args {
         let argument = argument.as_str().ok_or_else(invalid)?;
         if secret_next {
             arguments.push(REDACTED.into());
             secret_next = false;
+            argument_redacted = true;
         } else {
-            secret_next = shell_value::is_dynamic(argument)
-                || (argument.starts_with('-')
-                    && !argument.contains('=')
-                    && (SECRET_FIELDS.is_match(argument)
-                        || matches!(
-                            argument,
-                            "-u" | "-U"
-                                | "-b"
-                                | "-H"
-                                | "--user"
-                                | "--proxy-user"
-                                | "--oauth2-bearer"
-                                | "--header"
-                        )));
-            arguments.push(project(argument));
+            let value_start = credential_option_value_start(argument);
+            if let Some(start) = value_start.filter(|start| *start < argument.len()) {
+                // An attached argv value extends to the argument boundary, not
+                // to a shell delimiter within it (cookies may contain spaces/;).
+                arguments.push(format!("{}{REDACTED}", project(&argument[..start])));
+                argument_redacted = true;
+            } else {
+                secret_next = shell_value::is_dynamic(argument)
+                    || (value_start.is_some() && !argument.contains('='));
+                arguments.push(project(argument));
+            }
         }
     }
     // An argument-level replacement may not have passed through `project`.
-    redacted |= arguments.iter().any(|argument| argument == REDACTED);
+    redacted |= argument_redacted;
     let context = CommandApprovalContext {
         justification,
         executable,
@@ -144,6 +149,22 @@ pub fn command_approval_context(
     };
     context.validate().map_err(|_| invalid())?;
     Ok(Some(context))
+}
+
+fn credential_option_value_start(argument: &str) -> Option<usize> {
+    if let Some(matched) = SHORT_CREDENTIAL_OPTION.find(argument) {
+        return Some(matched.end());
+    }
+    let (name, value) = argument
+        .split_once('=')
+        .map_or((argument, None), |(name, value)| (name, Some(value)));
+    (name.starts_with("--")
+        && (SECRET_FIELDS.is_match(name)
+            || matches!(
+                name,
+                "--user" | "--proxy-user" | "--oauth2-bearer" | "--header"
+            )))
+    .then_some(name.len() + usize::from(value.is_some()))
 }
 
 fn invalid() -> GatewayError {

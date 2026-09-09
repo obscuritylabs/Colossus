@@ -46,7 +46,7 @@ mod semantic;
 mod terminal;
 mod themes;
 
-pub use command_approval::command_approval_document;
+pub use command_approval::{approval_risk_summary, command_approval_document};
 pub use document::{
     PresentationBlock, PresentationDocument, PresentationError, PresentationTable,
     PresentationTone, StyledLine, StyledSpan, document_from_json,

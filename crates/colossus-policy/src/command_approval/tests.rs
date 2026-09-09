@@ -187,10 +187,13 @@ fn short_and_long_header_payloads_are_contained_without_evaluating_quotes() {
         vec!["-HProxy-Authorization: Digest private-value"],
         vec!["-HCookie: session=private-value; other=private-tail"],
         vec!["-H", "Authorization: Digest private-value"],
+        vec!["-svH", "Authorization: Digest private-value"],
+        vec!["-svHAuthorization: Digest private-value"],
         vec!["--header", "Authorization: Digest private-value"],
         vec!["--header=Authorization: Digest private-value"],
         vec!["-c", "curl \"-HAuthorization: Digest private-value\" END"],
         vec!["-c", "curl -H'Author''ization: Digest private-value' END"],
+        vec!["-c", "curl -svH'Author''ization: Digest private-value' END"],
         vec![
             "-c",
             "curl --header 'Author''ization: Digest private-value' END",
@@ -212,10 +215,17 @@ fn short_and_long_header_payloads_are_contained_without_evaluating_quotes() {
 fn cookie_short_options_redact_separated_attached_and_quoted_values() {
     for arguments in [
         vec!["-b", "session=private-value; other=private-tail", "END"],
+        vec!["-sb", "session=private-value; other=private-tail", "END"],
+        vec!["-svbsession=private-value", "END"],
         vec!["-bsession=private-value", "END"],
         vec!["-b=session=private-value", "END"],
         vec!["--cookie", "session=private-value", "END"],
         vec!["-c", "curl -b session=private-value END"],
+        vec!["-c", "curl -sb session=private-value END"],
+        vec![
+            "-c",
+            "curl -#b'session=private-value; other=private-tail' END",
+        ],
         vec![
             "-c",
             "curl -b'session=private-value; other=private-tail' END",
@@ -231,6 +241,54 @@ fn cookie_short_options_redact_separated_attached_and_quoted_values() {
         assert!(!released.contains("private-value"), "{released}");
         assert!(!released.contains("private-tail"), "{released}");
         assert!(released.contains("END"));
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
+fn attached_argv_values_use_argument_not_shell_boundaries() {
+    for prefix in ["-sb", "-H", "-su", "--cookie=", "--header=", "--password="] {
+        let mut request = request();
+        request.content["args"] = json!([
+            format!("{prefix}session=private-value; other=private-tail \"quoted\"\nEND_PRIVATE"),
+            "PUBLIC_END"
+        ]);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert_eq!(
+            context.arguments,
+            [format!("{prefix}[REDACTED]"), "PUBLIC_END".into()]
+        );
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+    for empty in ["--password=", "--cookie=", "--header="] {
+        let mut request = request();
+        request.content["args"] = json!([empty, "PUBLIC_END"]);
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert_eq!(context.arguments, [empty, "PUBLIC_END"]);
+        assert!(!context.redacted);
+    }
+}
+
+#[test]
+fn grouped_short_options_stop_at_the_first_credential_value_boundary() {
+    for option in ["-su", "-sU", "-sb", "-svH"] {
+        let mut request = request();
+        request.content["args"] = json!([option, "private-value", "END"]);
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert_eq!(context.arguments, [option, "[REDACTED]", "END"]);
+
+        // The b/u letters in an attached value are not additional options;
+        // neither an attached-value tail nor the following public arg is lost.
+        request.content["args"] = json!([format!("{option}privatebuvalue"), "END"]);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert_eq!(
+            context.arguments,
+            [format!("{option}[REDACTED]"), "END".into()]
+        );
         assert!(context.redacted);
         assert_eq!(request, original);
     }

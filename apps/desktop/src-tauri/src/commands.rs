@@ -770,15 +770,18 @@ async fn confirm_effect_approval(
     } else {
         None
     };
-    if !state.selection_is_current(target_id, epoch)
-        || crate::command_review::pending_approval(target, request).await? != approval
-        || approval.request_hash != *request_hash
-    {
-        return Err(CommandErrorDto::invalid(
-            "approval",
-            "The approval changed. Refresh the run.",
-        ));
-    }
+    crate::command_review::revalidate_after_lookup(
+        crate::command_review::pending_approval(target, request),
+        &approval,
+        || {
+            state.selection_is_current(target_id, epoch)
+                && review_window
+                    .as_ref()
+                    .is_none_or(crate::command_review::ReviewWindow::is_current)
+                && approval.request_hash == *request_hash
+        },
+    )
+    .await?;
     let message = approval_dialog_message(&approval, &target.consent)?;
     let app = app.clone();
     let approved = tauri::async_runtime::spawn_blocking(move || {
@@ -800,17 +803,18 @@ async fn confirm_effect_approval(
             true,
         )
     })?;
-    if approved
-        && (!state.selection_is_current(target_id, epoch)
-            || review_window
-                .as_ref()
-                .is_some_and(|window| !window.is_current())
-            || crate::command_review::pending_approval(target, request).await? != approval)
-    {
-        return Err(CommandErrorDto::invalid(
-            "approval",
-            "The approval changed during native confirmation. Refresh the run.",
-        ));
+    if approved {
+        crate::command_review::revalidate_after_lookup(
+            crate::command_review::pending_approval(target, request),
+            &approval,
+            || {
+                state.selection_is_current(target_id, epoch)
+                    && review_window
+                        .as_ref()
+                        .is_none_or(crate::command_review::ReviewWindow::is_current)
+            },
+        )
+        .await?;
     }
     Ok(approved)
 }
