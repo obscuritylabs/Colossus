@@ -7,6 +7,7 @@ use regex::Regex;
 
 use crate::GatewayError;
 
+mod credential_options;
 mod shell_value;
 
 const REDACTED: &str = "[REDACTED]";
@@ -31,6 +32,7 @@ const CREDENTIAL_VALUE_OPTIONS: &[&str] = &[
     "--login-options",
     "-passin",
     "-passout",
+    "-pw",
 ];
 const SECRET_FIELD_PATTERN: &str = r"pass(?:word|wd|phrase)?|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie";
 static SHORT_CREDENTIAL_OPTION: LazyLock<Regex> = LazyLock::new(|| {
@@ -129,8 +131,9 @@ pub fn command_approval_context(
     secrets.sort_unstable();
     secrets.dedup();
     let mut redacted = false;
+    let credential_profiles = credential_options::for_invocation(&request.resource, args);
     let mut project = |text: &str| {
-        let (text, changed) = sanitized(text, &secrets);
+        let (text, changed) = sanitized(text, &secrets, &credential_profiles);
         redacted |= changed;
         text
     };
@@ -147,7 +150,7 @@ pub fn command_approval_context(
             secret_next = false;
             argument_redacted = true;
         } else {
-            let value_start = credential_option_value_start(argument);
+            let value_start = credential_option_value_start(argument, &credential_profiles);
             if let Some(start) = value_start.filter(|start| *start < argument.len()) {
                 // An attached argv value extends to the argument boundary, not
                 // to a shell delimiter within it (cookies may contain spaces/;).
@@ -173,7 +176,10 @@ pub fn command_approval_context(
     Ok(Some(context))
 }
 
-fn credential_option_value_start(argument: &str) -> Option<usize> {
+fn credential_option_value_start(
+    argument: &str,
+    profiles: &[&credential_options::Profile],
+) -> Option<usize> {
     let (name, value) = argument
         .split_once('=')
         .map_or((argument, None), |(name, value)| (name, Some(value)));
@@ -181,6 +187,12 @@ fn credential_option_value_start(argument: &str) -> Option<usize> {
         || CREDENTIAL_VALUE_OPTIONS.contains(&name)
     {
         return Some(name.len() + usize::from(value.is_some()));
+    }
+    if let Some(start) = profiles
+        .iter()
+        .find_map(|profile| profile.value_start(argument))
+    {
+        return Some(start);
     }
     SHORT_CREDENTIAL_OPTION
         .find(argument)
@@ -191,7 +203,11 @@ fn invalid() -> GatewayError {
     GatewayError::Safety("command approval details cannot be displayed safely".into())
 }
 
-fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
+fn sanitized(
+    text: &str,
+    secrets: &[&str],
+    profiles: &[&credential_options::Profile],
+) -> (String, bool) {
     // Detect every credential against the original display input. Replacements
     // must not destroy a later recognizer's field name or token boundary.
     // One mask byte per input byte bounds memory independently of the number
@@ -227,6 +243,9 @@ fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
         &spelling,
         &original_ends,
     ) {
+        mask[range].fill(true);
+    }
+    for range in credential_options::ranges(text, &spelling, &original_ends, profiles) {
         mask[range].fill(true);
     }
     shell_value::mask_dynamic_words(text, &mut mask);

@@ -133,7 +133,7 @@ fn repeated_short_secrets_have_input_bounded_display_memory() {
     assert_eq!(request, original);
     // Overlapping recognizers and multibyte values share the same byte mask.
     assert_eq!(
-        sanitized("ééé END", &["é", "éé"]),
+        sanitized("ééé END", &["é", "éé"], &[]),
         ("[REDACTED] END".into(), true)
     );
 }
@@ -146,6 +146,96 @@ fn long_details_are_not_truncated_and_controls_are_visible() {
     assert!(context.arguments[0].ends_with("\\n\\u{1b}\\u{202e}TAIL"));
     assert!(context.arguments[0].starts_with(&"é".repeat(65500)));
     assert!(!context.redacted);
+}
+
+#[test]
+fn ambiguous_short_password_options_are_recognized_in_shell_and_prepared_argv() {
+    for (program, prefix, option, attached) in [
+        ("ssh-keygen", "", "-N", true),
+        ("ssh-keygen", "", "-P", true),
+        ("ssh-keygen", "", "-qN", true),
+        ("sshpass", "", "-p", true),
+        ("mysql", "", "-p", true),
+        ("mariadb", "", "-p", true),
+        ("mongosh", "", "-p", true),
+        ("7z", "a", "-p", true),
+        ("redis-cli", "", "-a", true),
+        ("security", "add-generic-password", "-w", true),
+        ("openssl", "enc", "-k", false),
+        ("docker", "login", "-p", true),
+        ("podman", "login", "-p", true),
+    ] {
+        for join in [" ", "=", ""] {
+            if join.is_empty() && !attached {
+                continue;
+            }
+            let mut arguments = Vec::new();
+            if !prefix.is_empty() {
+                arguments.push(prefix.to_owned());
+            }
+            if join == " " {
+                arguments.extend([option.into(), "private-value private-tail".into()]);
+            } else {
+                arguments.push(format!("{option}{join}private-value private-tail"));
+            }
+            arguments.push("PUBLIC_END".into());
+            for shell in [false, true] {
+                let mut request = request();
+                if shell {
+                    request.content["args"] = json!([
+                        "-c",
+                        format!(
+                            "/usr/bin/{program} {prefix} {option}{join}'private-value private-tail' PUBLIC_END"
+                        )
+                    ]);
+                } else {
+                    request.resource = format!("/usr/bin/{program}");
+                    request.content["args"] = json!(arguments);
+                }
+                let original = request.clone();
+                let context = command_approval_context(&request).unwrap().unwrap();
+                let released = serde_json::to_string(&context).unwrap();
+                assert!(!released.contains("private-value"), "{released}");
+                assert!(!released.contains("private-tail"), "{released}");
+                assert!(released.contains("PUBLIC_END"), "{released}");
+                assert!(context.redacted);
+                assert_eq!(request, original);
+            }
+        }
+    }
+    for command in [
+        r#""C:\Tools\ssh-keygen.exe" -N 'private-value' PUBLIC_END"#,
+        "ssh-\"keygen\" -P 'private-value' PUBLIC_END",
+    ] {
+        let (display, redacted) = sanitized(command, &[], &[]);
+        assert!(!display.contains("private-value"), "{display}");
+        assert!(display.ends_with("PUBLIC_END"));
+        assert!(redacted);
+    }
+}
+
+#[test]
+fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() {
+    for (program, arguments) in [
+        ("cargo", vec!["test", "-p", "colossus-runtime"]),
+        ("curl", vec!["-N", "https://example.test"]),
+        ("docker", vec!["run", "-p", "8080:80", "image"]),
+        ("openssl", vec!["s_client", "-key", "key.pem"]),
+    ] {
+        for shell in [false, true] {
+            let mut request = request();
+            if shell {
+                request.content["args"] =
+                    json!(["-c", format!("{program} {}", arguments.join(" "))]);
+            } else {
+                request.resource = format!("/usr/bin/{program}");
+                request.content["args"] = json!(arguments);
+            }
+            let context = command_approval_context(&request).unwrap().unwrap();
+            assert_eq!(json!(context.arguments), request.content["args"]);
+            assert!(!context.redacted);
+        }
+    }
 }
 
 #[test]
@@ -530,7 +620,7 @@ fn quoted_and_escaped_literal_credential_names_do_not_release_values() {
         assert_eq!(request, original);
     }
     for command in ["--password '' AFTER", "TOKEN='' AFTER"] {
-        let (display, _) = sanitized(command, &[]);
+        let (display, _) = sanitized(command, &[], &[]);
         assert!(display.ends_with(" AFTER"), "{display}");
     }
 }
@@ -554,6 +644,7 @@ fn an_unclosed_private_key_masks_the_remainder_without_changing_execution() {
     assert_eq!(
         sanitized(
             "-----BEGIN PRIVATE KEY-----\nmaterial\n-----END PRIVATE KEY----- AFTER",
+            &[],
             &[]
         ),
         ("[REDACTED] AFTER".into(), true)

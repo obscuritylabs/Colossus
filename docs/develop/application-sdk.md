@@ -553,8 +553,9 @@ display category or HTTP(S) origin. Command execution has one narrow exception:
 optional `command_context` contains the agent's task `justification`, prepared
 `executable`, `arguments` (excluding the executable), `working_directory`, and `redacted`.
 These sanitized details may include actual paths and URLs and are readable only through
-the owning application's authorized run interface. They never contain environment maps,
-stdin, raw credential values, private policy reasons, or private request hashes.
+the owning application's authorized run interface. They omit environment maps, stdin,
+private policy reasons, and private request hashes, and redact known secret values and
+recognized credential forms. Arbitrary secret literals cannot be inferred from ordinary text.
 Instruction-like text is plain display data, not permission to run another command.
 Other effect arguments remain private.
 Public `shell.run` activity events omit raw tool input, which has not yet crossed
