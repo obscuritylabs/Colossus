@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const expectedTestInstanceID = "00000000-0000-4000-8000-000000000001"
@@ -23,6 +25,19 @@ const expectedTestInstanceID = "00000000-0000-4000-8000-000000000001"
 type connectorSystemService struct {
 	v1alpha1.UnimplementedSystemServiceServer
 	authenticatedCalls *atomic.Int32
+}
+
+type connectorAgentService struct {
+	v1alpha1.UnimplementedAgentRunServiceServer
+	response *v1alpha1.GetRunResponse
+}
+
+func (service *connectorAgentService) GetRun(ctx context.Context, _ *v1alpha1.GetRunRequest) (*v1alpha1.GetRunResponse, error) {
+	requestMetadata, ok := metadata.FromIncomingContext(ctx)
+	if !ok || len(requestMetadata.Get("authorization")) != 1 || requestMetadata.Get("authorization")[0] != "Bearer connector-test-token" {
+		return nil, status.Error(codes.Unauthenticated, "invalid bearer credential")
+	}
+	return service.response, nil
 }
 
 func (service *connectorSystemService) GetServerInfo(
@@ -127,6 +142,18 @@ func TestConnectorVerifiesPinnedTLSBearerAndLiveIdentity(t *testing.T) {
 	v1alpha1.RegisterSystemServiceServer(server, &connectorSystemService{
 		authenticatedCalls: authenticatedCalls,
 	})
+	largeApproval := &v1alpha1.GetRunResponse{PendingInteractions: []*v1alpha1.Interaction{{
+		Content: &v1alpha1.Interaction_Approval{Approval: &v1alpha1.ApprovalInteraction{
+			CommandContext: &v1alpha1.CommandApprovalContext{
+				Justification: "A", Executable: "e", WorkingDirectory: "w", Redacted: true,
+				Arguments: []string{strings.Repeat("x", 4*1024*1024-7), "TAIL"},
+			},
+		}},
+	}}}
+	if proto.Size(largeApproval) <= 4*1024*1024 {
+		t.Fatal("fixture must exceed the old transport limit after adding its envelope")
+	}
+	v1alpha1.RegisterAgentRunServiceServer(server, &connectorAgentService{response: largeApproval})
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -164,6 +191,13 @@ func TestConnectorVerifiesPinnedTLSBearerAndLiveIdentity(t *testing.T) {
 	}
 	if got := authenticatedCalls.Load(); got != 1 {
 		t.Fatalf("authenticated GetServerInfo calls = %d, want 1", got)
+	}
+	received, err := v1alpha1.NewAgentRunServiceClient(connection).GetRun(ctx, &v1alpha1.GetRunRequest{RunId: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(received, largeApproval) {
+		t.Fatal("maximum command context changed in transport")
 	}
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)

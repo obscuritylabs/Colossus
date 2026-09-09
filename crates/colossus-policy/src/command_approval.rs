@@ -3,9 +3,11 @@
 use std::sync::LazyLock;
 
 use colossus_contracts::{CommandApprovalContext, EffectRequest, unsafe_command_display_character};
-use regex::{Captures, Regex};
+use regex::Regex;
 
 use crate::GatewayError;
+
+mod shell_value;
 
 const REDACTED: &str = "[REDACTED]";
 
@@ -16,14 +18,15 @@ static SECRET_FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     .expect("constant credential field pattern")
 });
 static SECRET_ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)((?:[\w-]*(?:password|passwd|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie)[\w-]*)[\s=:]+)(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"']+)"#)
-        .expect("constant credential assignment pattern")
+    let field = r"[\w-]*(?:password|passwd|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie)[\w-]*";
+    Regex::new(&format!(
+        r#"(?i)(?:{field}(?:\\?["'])?\s*[=:]\s*|--{field}\s+)"#
+    ))
+    .expect("constant credential assignment pattern")
 });
 static AUTHORIZATION: LazyLock<Regex> = LazyLock::new(|| {
-    // Include the complete token68 alphabet, including `~`, so no credential
-    // suffix survives a partial match in the released approval context.
-    Regex::new(r"(?i)(\b(?:bearer|basic)\s+)[a-z0-9~+/_.=:-]+")
-        .expect("constant authorization pattern")
+    // Consume the whole credential word, not merely a partial token alphabet.
+    Regex::new(r"(?i)\b(?:bearer|basic)\s+").expect("constant authorization pattern")
 });
 static CREDENTIAL_HEADERS: LazyLock<Regex> = LazyLock::new(|| {
     // Headers are often one quoted shell word or one argv element. Remove the
@@ -35,8 +38,10 @@ static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+@").expect("constant URL credential pattern")
 });
 static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"((?:^|[\s;&|])(?:(?:-u|-U)[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie)[\s=]+))(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"']+)"#)
-        .expect("constant credential flag pattern")
+    Regex::new(
+        r"(?:^|[\s;&|])(?:(?:-u|-U)[\s=]*|(?:--user|--proxy-user|--oauth2-bearer|--cookie)[\s=]+)",
+    )
+    .expect("constant credential flag pattern")
 });
 static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----")
@@ -133,33 +138,45 @@ fn invalid() -> GatewayError {
 }
 
 fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
-    let mut value = text.to_owned();
+    // Detect every credential against the original display input. Replacements
+    // must not destroy a later recognizer's field name or token boundary.
+    let mut ranges = Vec::new();
     for secret in secrets {
-        value = value.replace(secret, REDACTED);
+        ranges.extend(
+            text.match_indices(secret)
+                .map(|(start, _)| start..start + secret.len()),
+        );
     }
-    value = PRIVATE_KEY.replace_all(&value, REDACTED).into_owned();
-    for pattern in [
-        &*URL_USERINFO,
-        &*AUTHORIZATION,
-        &*CREDENTIAL_HEADERS,
-        &*SECRET_ASSIGNMENTS,
-        &*CREDENTIAL_FLAGS,
-    ] {
-        value = pattern
-            .replace_all(&value, |captures: &Captures<'_>| {
-                format!(
-                    "{}{REDACTED}{}",
-                    &captures[1],
-                    if std::ptr::eq(pattern, &*URL_USERINFO) {
-                        "@"
-                    } else {
-                        ""
-                    }
-                )
-            })
-            .into_owned();
+    ranges.extend(PRIVATE_KEY.find_iter(text).map(|matched| matched.range()));
+    for (pattern, retained_suffix) in [(&*URL_USERINFO, 1), (&*CREDENTIAL_HEADERS, 0)] {
+        ranges.extend(pattern.captures_iter(text).map(|captures| {
+            captures.get(1).unwrap().end()..captures.get(0).unwrap().end() - retained_suffix
+        }));
     }
-    let redacted = value != text;
+    for prefix in [&*AUTHORIZATION, &*SECRET_ASSIGNMENTS, &*CREDENTIAL_FLAGS] {
+        ranges.extend(shell_value::ranges(text, prefix));
+    }
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+    let redacted = !ranges.is_empty();
+    let mut value = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut masked_until = 0;
+    for range in ranges {
+        if range.start > masked_until {
+            if masked_until > cursor {
+                value.push_str(REDACTED);
+                cursor = masked_until;
+            }
+            value.push_str(&text[cursor..range.start]);
+            cursor = range.start;
+        }
+        masked_until = masked_until.max(range.end);
+    }
+    if masked_until > cursor {
+        value.push_str(REDACTED);
+        cursor = masked_until;
+    }
+    value.push_str(&text[cursor..]);
     let escaped = value
         .chars()
         .flat_map(|character| {

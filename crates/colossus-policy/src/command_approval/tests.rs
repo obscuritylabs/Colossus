@@ -185,7 +185,7 @@ fn redaction_expansion_does_not_lower_the_valid_intent_limit() {
     request.command_intent.as_mut().unwrap().justification = "x".repeat(512);
     request.content["environment"]["TOKEN"] = json!("x");
     let context = command_approval_context(&request).unwrap().unwrap();
-    assert_eq!(context.justification, "[REDACTED]".repeat(512));
+    assert_eq!(context.justification, "[REDACTED]");
     assert!(context.redacted);
 }
 
@@ -201,5 +201,98 @@ fn explanation_redaction_uses_credential_values_before_policy_replaces_them() {
     assert_eq!(
         request.content["environment"]["password"],
         "opaque-secret-value"
+    );
+}
+
+#[test]
+fn complete_shell_credential_words_are_masked_and_other_arguments_are_unchanged() {
+    for command in [
+        r#"TOKEN=top"secret" AFTER"#,
+        r#"TOKEN='top'"secret" AFTER"#,
+        r#"export "PASSWORD"=top"secret" AFTER"#,
+        r"TOKEN=top\ secret AFTER",
+        r#"curl --password=top"secret" AFTER"#,
+        r#"curl --oauth2-bearer top"secret" AFTER"#,
+        r#"Bearer top"secret" AFTER"#,
+        r#"TOKEN=$(printf '%s' "secret") AFTER"#,
+        r#"TOKEN="$(printf '%s' "secret")" AFTER"#,
+        r#"TOKEN=${VALUE:-"top secret"} AFTER"#,
+        "TOKEN=`printf secret` AFTER",
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(["-c", command]);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert!(!context.arguments[1].contains("secret"), "{command}");
+        assert!(context.arguments[1].ends_with(" AFTER"), "{command}");
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
+fn known_secrets_cannot_disable_other_credential_recognizers() {
+    let mut request = request();
+    request.content["environment"]["password"] = json!("pass");
+    request.content["args"] = json!(["password=other-credential-tail AFTER"]);
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert!(!context.arguments[0].contains("other-credential-tail"));
+    assert!(!context.arguments[0].contains("pass"));
+    assert!(context.arguments[0].ends_with(" AFTER"));
+}
+
+#[test]
+fn ambiguous_credential_words_do_not_release_a_tail() {
+    for command in [
+        "TOKEN='unclosed secret tail",
+        "TOKEN=$(unclosed secret tail",
+    ] {
+        let mut request = request();
+        request.content["args"] = json!([command]);
+        let context = command_approval_context(&request).unwrap().unwrap();
+        assert_eq!(context.arguments[0], "TOKEN=[REDACTED]");
+    }
+}
+
+#[test]
+fn quoted_json_credential_keys_are_not_disclosed() {
+    let mut request = request();
+    request.content["args"] = json!([r#"curl -d '{"password":"quoted-credential-tail"}'"#]);
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert!(!context.arguments[0].contains("quoted-credential-tail"));
+    assert!(context.redacted);
+}
+
+#[test]
+fn policy_receives_only_an_intent_digest_while_approval_binding_keeps_the_original() {
+    let mut request = request();
+    request.content["environment"] = json!({"password": "unique-secret-value"});
+    request.command_intent.as_mut().unwrap().justification = "Check unique-secret-value.".into();
+    let kernel = crate::SafetyKernel::new([]);
+    let prepared = kernel.prepare(&request).unwrap();
+    let before = crate::kernel::canonical_bytes(&prepared).unwrap();
+    let policy = kernel.policy_projection(&prepared).unwrap();
+    let justification = &policy.command_intent.as_ref().unwrap().justification;
+    assert_eq!(
+        justification,
+        &format!(
+            "sha256:{}",
+            crate::kernel::sha256_hex(b"Check unique-secret-value.")
+        )
+    );
+    assert!(!justification.contains("unique-secret-value"));
+    assert!(
+        !serde_json::to_string(&policy)
+            .unwrap()
+            .contains("unique-secret-value")
+    );
+    assert_eq!(crate::kernel::canonical_bytes(&prepared).unwrap(), before);
+    assert_eq!(prepared.command_intent, request.command_intent);
+    assert_eq!(
+        command_approval_context(&request)
+            .unwrap()
+            .unwrap()
+            .justification,
+        "Check [REDACTED]."
     );
 }

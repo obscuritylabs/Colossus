@@ -4,12 +4,12 @@ use colossus_presentation::command_approval_document;
 
 #[test]
 fn command_tail_remains_reachable_beyond_u16_wrapped_lines_and_after_resize() {
-    // Four accepted 64-KiB arguments can expand this far after replacing a
+    // Eight accepted 64-KiB arguments can expand this far after replacing a
     // one-character known credential. The display remains below its 4-MiB bound.
     let context = CommandApprovalContext {
         justification: "Check the requested build output.".into(),
         executable: "/bin/echo".into(),
-        arguments: vec!["[REDACTED]".repeat(65_536); 4]
+        arguments: vec!["[REDACTED]-".repeat(32_768); 8]
             .into_iter()
             .chain(["ENDTAIL".into()])
             .collect(),

@@ -538,11 +538,18 @@ New model-issued `shell.run` calls carry bounded, non-authoritative task intent 
 `ProcessSpec`. The original intent, executable, argument vector, and working directory
 are bound by the private request hash and permit. Before policy replaces credential
 fields, the gateway freezes a separate credential-redacted `CommandApprovalContext`.
+Policy adapters receive only a SHA-256 digest of task intent, never its raw explanation;
+this policy-only projection does not replace the request used by approvals or permits.
 Only that context may release the prepared executable, arguments, working directory,
 and agent-provided explanation to the owning run's authorized clients. Environment
 values and stdin are omitted; known secret values and recognizable inline credentials
 are redacted. Arbitrary unknown secrets cannot be inferred, so task explanations must
-never contain credentials. Rendering must treat all context as plain display data.
+never contain credentials. Credential ranges are detected against the original display
+input before merging replacements, so one replacement cannot disable another recognizer.
+Quoted concatenations, escapes, and nested substitution words are masked as a whole;
+ambiguous or unclosed credential words conservatively mask the remainder. This scanner
+is display-only and never evaluates shell syntax. Rendering must treat all context as
+plain display data.
 The immutable public interaction binds this display through response and replay. The
 context grants no authority and does not change risk-auto eligibility or post-effect
 release.

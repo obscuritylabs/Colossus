@@ -467,7 +467,9 @@ simultaneous connections, permits at most 80 concurrent request setups globally 
 per connection, permits 128 HTTP/2 streams per connection, expires connections after
 15 minutes, limits each request decode and handler setup to 30 seconds, limits HTTP/2
 headers to 16 KiB, limits decoded request messages to 2 MiB, and limits encoded
-responses to 4 MiB. Only eight authenticated protobuf decodes may run concurrently,
+responses to 8 MiB. The response budget includes a sanitized command context of up to
+4 MiB plus its envelope; command, effect, and request limits remain unchanged. Only
+eight authenticated protobuf decodes may run concurrently,
 with at most two for one application; the permits are acquired after authentication
 but before message decoding. A streaming protobuf wire guard rejects the 129th
 top-level `CreateRun.input` field, the first forbidden `selected_skills` field, and the

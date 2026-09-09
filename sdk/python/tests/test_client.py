@@ -6,7 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import grpc
-from colossus.api.v1alpha1 import agent_run_pb2, system_pb2, system_pb2_grpc
+from colossus.api.v1alpha1 import (
+    agent_run_pb2,
+    agent_run_pb2_grpc,
+    system_pb2,
+    system_pb2_grpc,
+)
 
 from colossus_sdk.client import AgentRuns, ColossusClient, assert_compatible_server_info
 from colossus_sdk.credential import StaticBearerCredential
@@ -78,8 +83,32 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self_outer = self
+        large_approval = agent_run_pb2.GetRunResponse(
+            pending_interactions=[
+                agent_run_pb2.Interaction(
+                    approval=agent_run_pb2.ApprovalInteraction(
+                        command_context=agent_run_pb2.CommandApprovalContext(
+                            justification="A",
+                            executable="e",
+                            working_directory="w",
+                            arguments=["x" * (4 * 1024 * 1024 - 7), "TAIL"],
+                            redacted=True,
+                        )
+                    )
+                )
+            ]
+        )
+        self.assertGreater(large_approval.ByteSize(), 4 * 1024 * 1024)
+
+        class AgentService(agent_run_pb2_grpc.AgentRunServiceServicer):
+            async def GetRun(self, _request: object, context: object) -> object:
+                metadata = dict(context.invocation_metadata())  # type: ignore[attr-defined]
+                self_outer.assertEqual(metadata.get("authorization"), "Bearer connector-test-token")
+                return large_approval
+
         server = grpc.aio.server()
         system_pb2_grpc.add_SystemServiceServicer_to_server(SystemService(), server)
+        agent_run_pb2_grpc.add_AgentRunServiceServicer_to_server(AgentService(), server)
         port = server.add_secure_port(
             "127.0.0.1:0",
             grpc.ssl_server_credentials(((private_key, certificate),)),
@@ -106,6 +135,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
                 StaticBearerCredential("connector-test-token"),
             )
             self.assertEqual(authenticated_calls, 1)
+            self.assertEqual(await client.agent_runs.get_run("run-1"), large_approval)
             await client.close()
 
             wrong_leaf = (testdata / "leaf.pem").read_bytes()

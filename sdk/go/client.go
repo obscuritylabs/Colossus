@@ -74,7 +74,8 @@ func Dial(
 		grpc.WithDisableServiceConfig(),
 		grpc.WithUserAgent("colossus-go-sdk/0.10.9"),
 		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(4*1024*1024),
+			// Full command context plus its envelope; the send limit stays unchanged.
+			grpc.MaxCallRecvMsgSize(8*1024*1024),
 			grpc.MaxCallSendMsgSize(4*1024*1024),
 		),
 	)

@@ -461,7 +461,15 @@ impl EffectGateway {
     }
 
     async fn decide(&self, request: &EffectRequest) -> Result<PolicyDecision, GatewayError> {
-        let decision = match self.policy.decide(request).await {
+        let decision = match async {
+            let policy_request = self.kernel.policy_projection(request)?;
+            self.policy
+                .decide(&policy_request)
+                .await
+                .map_err(GatewayError::from)
+        }
+        .await
+        {
             Ok(decision) => decision,
             Err(error) => {
                 self.event(
@@ -476,7 +484,7 @@ impl EffectGateway {
                     EventClassification::Effect,
                     json!({"reason": "policy failure; fail closed"}),
                 )?;
-                return Err(error.into());
+                return Err(error);
             }
         };
         if let Err(error) = self.kernel.validate_decision(request, &decision) {

@@ -11,6 +11,28 @@ struct AuditedApproval {
     calls: AtomicUsize,
 }
 
+struct DigestOnlyPolicy(BuiltInPolicy);
+
+#[async_trait]
+impl colossus_ports::PolicyDecisionPoint for DigestOnlyPolicy {
+    async fn decide(&self, request: &EffectRequest) -> Result<PolicyDecision, PolicyError> {
+        if let Some(intent) = &request.command_intent {
+            assert_eq!(
+                intent.justification,
+                format!(
+                    "sha256:{}",
+                    crate::kernel::sha256_hex(b"Check the requested build.")
+                )
+            );
+        }
+        self.0.decide(request).await
+    }
+
+    async fn doctor(&self) -> Result<serde_json::Value, PolicyError> {
+        self.0.doctor().await
+    }
+}
+
 #[async_trait]
 impl ApprovalProvider for AuditedApproval {
     async fn request_approval(
@@ -83,7 +105,7 @@ async fn reason_is_audited_before_approval_and_every_changed_field_rejects_its_p
             .with_filesystem_read_root(cwd.display().to_string());
         let gateway = EffectGateway::new(
             journal,
-            Arc::new(policy),
+            Arc::new(DigestOnlyPolicy(policy)),
             approvals.clone(),
             SafetyKernel::new(["process.spawn".into()]),
             [9; 32],

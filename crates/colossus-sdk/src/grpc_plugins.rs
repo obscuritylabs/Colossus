@@ -68,7 +68,7 @@ pub(super) struct GrpcPluginClient {
 impl GrpcPluginClient {
     fn client(&self) -> ExtensionServiceClient<Channel> {
         ExtensionServiceClient::new(self.transport.channel.clone())
-            .max_decoding_message_size(MAX_MESSAGE_BYTES)
+            .max_decoding_message_size(MAX_RESPONSE_MESSAGE_BYTES)
             .max_encoding_message_size(16 * 1024)
     }
 }

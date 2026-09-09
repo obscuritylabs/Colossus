@@ -212,7 +212,8 @@ class ColossusClient:
         options: list[tuple[str, int | str]] = [
             ("grpc.enable_http_proxy", 0),
             ("grpc.enable_retries", 0),
-            ("grpc.max_receive_message_length", 4 * 1024 * 1024),
+            # Full command context plus the bounded envelope; sends stay unchanged.
+            ("grpc.max_receive_message_length", 8 * 1024 * 1024),
             ("grpc.max_send_message_length", 4 * 1024 * 1024),
             ("grpc.primary_user_agent", "colossus-python-sdk/0.10.9"),
         ]
