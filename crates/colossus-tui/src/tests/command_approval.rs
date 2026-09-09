@@ -30,16 +30,32 @@ fn restored_shell_calls_withhold_unprepared_command_and_credentials() {
             },
             created_at: "2026-09-09T00:00:00Z".into(),
         }];
-        let state = TuiState::from_snapshot(source);
-        for width in [32, 80] {
-            let rendered = transcript_lines(&state, width)
-                .into_iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(!rendered.contains("PRIVATE"), "{rendered}");
-            assert!(rendered.contains("withheld"), "{rendered}");
-            assert!(rendered.contains("shell.run"), "{rendered}");
+        source.transcript.messages.push(SessionMessage {
+            session_id: "019f-test".into(), run_id: "run".into(), sequence: 2,
+            message: ModelMessage {
+                role: ModelMessageRole::Tool, tool_call_id: Some("call".into()), tool_calls: vec![],
+                content: serde_json::json!({"invocation": {"command": "PRIVATE_COMMAND"},
+                    "resolved_argv": ["PRIVATE_ARGV"], "cwd": "PRIVATE_PATH", "stdout": "SAFE_OUTPUT", "stderr": ""}).to_string().into(),
+            }, created_at: "2026-09-09T00:00:01Z".into(),
+        });
+        let messages = source.transcript.messages;
+        // The assistant call may be on an earlier history page. Recognizable
+        // shell-result metadata must still not leak before that page is loaded.
+        for skip in [0, 1] {
+            let mut source = snapshot();
+            source.preferences.events_mode = EventDisplayMode::Verbose;
+            source.transcript.messages = messages[skip..].to_vec();
+            let state = TuiState::from_snapshot(source);
+            for width in [32, 80] {
+                let rendered = transcript_lines(&state, width)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!rendered.contains("PRIVATE"), "{rendered}");
+                assert!(rendered.contains("withheld"), "{rendered}");
+                assert!(rendered.contains("SAFE_OUTPUT"), "{rendered}");
+            }
         }
     }
 }

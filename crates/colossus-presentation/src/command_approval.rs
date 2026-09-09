@@ -138,8 +138,10 @@ mod tests {
                     let result = ToolResult {
                         call_id: "call".into(),
                         name: "shell.run".into(),
-                        output: serde_json::json!({"stdout": "safe output", "stderr": ""})
-                            .to_string(),
+                        output: serde_json::json!({"stdout": "safe output", "stderr": "",
+                            "invocation": call.arguments, "resolved_argv": ["PRIVATE_ARGV"],
+                            "cwd": "PRIVATE_PATH", "observed_origins": ["PRIVATE_ORIGIN"]})
+                        .to_string(),
                         exit_code: 0,
                     };
                     let completed = renderer

@@ -482,8 +482,7 @@ impl SemanticRenderer {
         elapsed_seconds: f64,
         call: Option<&ToolCall>,
     ) -> Result<Option<String>, PresentationError> {
-        let parsed = serde_json::from_str::<Value>(&result.output)
-            .unwrap_or_else(|_| Value::String(result.output.clone()));
+        let parsed = display_tool_output(Some(&result.name), &result.output);
         let family = ToolFamily::from_name(&result.name);
         let recoverable = parsed
             .pointer("/error/recoverable")
@@ -632,6 +631,25 @@ impl SemanticRenderer {
         name: Option<&str>,
         output: String,
     ) -> PresentationDocument {
+        let parsed = serde_json::from_str::<Value>(&output).ok();
+        let shell = name == Some("shell.run")
+            || (name.is_none()
+                && parsed.as_ref().is_some_and(|value| {
+                    value.get("invocation").is_some() || value.get("resolved_argv").is_some()
+                }));
+        if shell {
+            let display = display_tool_output(Some("shell.run"), &output);
+            return PresentationDocument::from_block(PresentationBlock::Card {
+                title: title.into(),
+                tone: PresentationTone::Tool,
+                body: vec![
+                    PresentationBlock::Text(
+                        "Command details withheld; see prepared approval context.".into(),
+                    ),
+                    tool_output_block("shell.run", &display, None),
+                ],
+            });
+        }
         let compact_unknown = name.is_none() && output.chars().nth(COMPACT_PREVIEW_CHARS).is_some();
         let output = if self.preferences.events_mode != EventDisplayMode::Verbose
             && (name.is_some_and(is_raw_web_fetch) || compact_unknown)
@@ -776,8 +794,7 @@ fn tool_result_document_with_mode(
     call: Option<&ToolCall>,
     events_mode: EventDisplayMode,
 ) -> PresentationDocument {
-    let parsed = serde_json::from_str::<Value>(&result.output)
-        .unwrap_or_else(|_| Value::String(result.output.clone()));
+    let parsed = display_tool_output(Some(&result.name), &result.output);
     let lifecycle_status = parsed.get("status").and_then(Value::as_str);
     let pending =
         result.name == "agent.result" && matches!(lifecycle_status, Some("queued" | "running"));
@@ -1077,6 +1094,16 @@ fn tool_call_context(call: &ToolCall, family: ToolFamily) -> Option<String> {
         }
     }
     summarize_value(&call.arguments, family.keys())
+}
+
+fn display_tool_output(name: Option<&str>, output: &str) -> Value {
+    let parsed = serde_json::from_str(output).unwrap_or_else(|_| Value::String(output.into()));
+    if name == Some("shell.run") {
+        colossus_contracts::command_output_display(&parsed)
+            .unwrap_or_else(|| json!({"notice": "Shell output is unavailable for safe display."}))
+    } else {
+        parsed
+    }
 }
 
 fn diff_counts(diff: &str) -> (usize, usize) {

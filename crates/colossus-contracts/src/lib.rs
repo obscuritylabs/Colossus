@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 mod agent;
 mod command_approval;
+mod command_output;
 mod decisions;
 mod distribution;
 mod integrations;
@@ -27,6 +28,7 @@ mod workflow;
 
 pub use agent::*;
 pub use command_approval::*;
+pub use command_output::*;
 pub use decisions::*;
 pub use distribution::*;
 pub use integrations::*;

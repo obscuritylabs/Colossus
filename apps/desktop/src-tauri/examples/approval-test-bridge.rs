@@ -183,6 +183,9 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
             break;
         }
         let outcome = async {
+            if value["command"] == "released_activity" {
+                return released_activity(client, &request.run_id).await;
+            }
             if value["command"] == "cancel_run" {
                 client.cancel_run(CancelRunRequest { run_id: request.run_id.clone(), idempotency_key: IdempotencyKey::new("approval-cancellation")? }).await?;
                 return Ok::<_, anyhow::Error>(Value::Null);
@@ -211,4 +214,26 @@ async fn review_loop(client: &Colossus, request: RespondInteractionRequest) -> a
         std::io::stdout().flush()?;
     }
     Ok(())
+}
+
+async fn released_activity(client: &Colossus, run_id: &str) -> anyhow::Result<Value> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut updates = client
+            .watch_run(colossus_sdk::WatchRunRequest {
+                run_id: run_id.into(),
+                after_sequence: 0,
+            })
+            .await?;
+        let mut activity = Vec::new();
+        while let Some(update) = updates.next_update().await {
+            if let colossus_sdk::RunUpdateKind::ToolActivity(tool) = update?.update {
+                activity.push(
+                    json!({"name": tool.tool_name, "state": format!("{:?}", tool.state),
+                    "input": tool.input, "preview": tool.preview}),
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(json!(activity))
+    })
+    .await?
 }

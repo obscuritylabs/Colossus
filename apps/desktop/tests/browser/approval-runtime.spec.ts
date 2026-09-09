@@ -218,6 +218,32 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       } else {
         expect(await readFile(marker, "utf8").catch(() => "")).toBe("");
       }
+      const activity = (await invoke("released_activity")) as {
+        name: string;
+        state: string;
+        input: string | null;
+        preview: string | null;
+      }[];
+      const shell = activity.filter((item) => item.name === "shell.run");
+      expect(shell.length).toBeGreaterThan(0);
+      expect(shell.every((item) => item.input === null)).toBe(true);
+      const released = JSON.stringify(shell);
+      for (const withheld of [
+        "fixture-private-token",
+        "fixture-bearer-suffix",
+        "fixture-concat-tail",
+        "fixture-name-tail",
+        "resolved_argv",
+        "invocation",
+      ])
+        expect(released).not.toContain(withheld);
+      if (outcome === "allow") {
+        const completed = shell.find((item) => item.state === "Completed");
+        expect(JSON.parse(completed!.preview!)).toMatchObject({
+          exit_code: 0,
+          command_details_withheld: true,
+        });
+      }
       await page.screenshot({
         path: `output/playwright/command-approval-${outcome}.png`,
       });

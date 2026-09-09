@@ -371,7 +371,23 @@ test("command review has isolated IPC and cannot authorize an effect without the
   assert.doesNotMatch(review, /\.respond_interaction\(/u);
   const commands = read("apps/desktop/src-tauri/src/commands.rs");
   assert.match(commands, /\.blocking_show\(\)/u);
-  assert.match(commands, /window\.is_current\(\)/u);
+  assert.equal(
+    commands.match(/crate::command_review::revalidate_after_lookup\(/gu)
+      ?.length,
+    2,
+    "authoritative challenge must be revalidated before and after OS confirmation",
+  );
+  assert.equal(
+    commands.match(
+      /\.is_none_or\(crate::command_review::ReviewWindow::is_current\)/gu,
+    )?.length,
+    2,
+    "both refetches must retain the review-window cancellation guard",
+  );
+  assert.match(
+    review,
+    /let observed = lookup\.await\?;\s*if observed != \*expected \|\| !still_current\(\)/u,
+  );
   const manifest = read("apps/desktop/src-tauri/Cargo.toml");
   assert.match(manifest, /required-features = \["approval-test-bridge"\]/u);
 });

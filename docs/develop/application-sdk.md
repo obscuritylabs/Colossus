@@ -560,6 +560,10 @@ Other effect arguments remain private.
 Public `shell.run` activity events omit raw tool input, which has not yet crossed
 command preparation or display sanitization. Inspect the pending approval's command
 context instead; this also prevents duplicate unredacted commands in activity titles.
+Completed and restored shell activity displays retain only typed process output/status
+fields, not the repeated invocation, argument vector, working directory, or observed
+origins. Unknown result shapes are withheld. Bounded previews remain parseable JSON on
+reconnect; this display projection does not change runtime/model results or evidence.
 
 The generic approval `reason` retains its existing semantics; display the command
 justification separately as agent-provided. Missing command context means a historical
