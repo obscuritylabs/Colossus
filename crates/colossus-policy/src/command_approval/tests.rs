@@ -34,6 +34,38 @@ fn projects_prepared_invocation_without_changing_execution() {
 }
 
 #[test]
+fn dynamically_assembled_words_and_values_are_never_evaluated_or_released() {
+    for arguments in [
+        vec!["-c", "curl --oauth2-$(printf bearer) private-value END"],
+        vec!["-c", "curl --oauth2-`printf bearer` 'private-value' END"],
+        vec!["-c", "curl --oauth2-${FIELD} private-value END"],
+        vec!["-c", "curl --oauth2-%FIELD% private-value END"],
+        vec!["-c", "curl --oauth2-!FIELD! private-value END"],
+        vec!["-c", "curl ${FLAG} private-value END"],
+        vec![
+            "-Command",
+            "curl ('--oauth2-' + 'bearer') private-value END",
+        ],
+        vec!["-c", "curl --{oauth2-bearer,user} private-value END"],
+        vec!["-c", "curl --oauth2-bear?r private-value END"],
+        vec!["${FLAG}", "private-value", "END"],
+        vec!["--oauth2-$(printf bearer)", "private-value", "END"],
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(arguments);
+        // Exact-value masking must not disable dynamic field-name recognition.
+        request.content["environment"]["TOKEN"] = json!("$");
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        let released = serde_json::to_string(&context).unwrap();
+        assert!(!released.contains("private-value"), "leaked: {released}");
+        assert!(released.contains("END"));
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
 fn redacts_credentials_in_shell_strings_urls_and_argument_pairs() {
     let mut request = request();
     request.content["args"] = json!([

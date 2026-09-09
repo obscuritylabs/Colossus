@@ -557,6 +557,9 @@ the owning application's authorized run interface. They never contain environmen
 stdin, raw credential values, private policy reasons, or private request hashes.
 Instruction-like text is plain display data, not permission to run another command.
 Other effect arguments remain private.
+Public `shell.run` activity events omit raw tool input, which has not yet crossed
+command preparation or display sanitization. Inspect the pending approval's command
+context instead; this also prevents duplicate unredacted commands in activity titles.
 
 The generic approval `reason` retains its existing semantics; display the command
 justification separately as agent-provided. Missing command context means a historical

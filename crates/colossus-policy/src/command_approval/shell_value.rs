@@ -79,6 +79,40 @@ pub(super) fn literal_spelling(text: &str) -> (String, Vec<usize>) {
     (spelling, original_ends)
 }
 
+pub(super) fn is_dynamic(text: &str) -> bool {
+    text.contains(['$', '`', '('])
+        || (text.starts_with('-') && text.contains(['{', '[', '*', '?']))
+        || text.bytes().filter(|byte| *byte == b'%').take(2).count() == 2
+        || text.bytes().filter(|byte| *byte == b'!').take(2).count() == 2
+}
+
+/// Expansion can assemble an arbitrary credential flag. Never evaluate it to
+/// decide what to display: mask the complete dynamic word and its next value.
+pub(super) fn mask_dynamic_words(text: &str, mask: &mut [bool]) {
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let end = cursor + word_end(&text[cursor..]);
+        if end == cursor {
+            cursor += text[cursor..].chars().next().unwrap().len_utf8();
+            continue;
+        }
+        // A recognized credential value is already contained by the ordinary
+        // mask; it cannot assemble the field name or consume the following arg.
+        let word = &text[cursor..end];
+        if is_dynamic(word)
+            && word
+                .bytes()
+                .enumerate()
+                .any(|(offset, byte)| b"$`%!(?[{*".contains(&byte) && !mask[cursor + offset])
+        {
+            let next = end + text[end..].len() - text[end..].trim_start().len();
+            let value_end = next + word_end(&text[next..]);
+            mask[cursor..value_end].fill(true);
+        }
+        cursor = end;
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Nested {
     Quote(char),

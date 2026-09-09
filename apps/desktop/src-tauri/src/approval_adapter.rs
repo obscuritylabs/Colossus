@@ -34,11 +34,13 @@ pub(crate) async fn pending(
     client: &Colossus,
     request: &RespondInteractionRequest,
 ) -> ApiResult<ApprovalInteraction> {
-    let details = client
-        .get_run(GetRunRequest {
+    let details = bounded_lookup(
+        client.get_run(GetRunRequest {
             run_id: request.run_id.clone(),
-        })
-        .await?;
+        }),
+        std::time::Duration::from_secs(5),
+    )
+    .await?;
     if details.run.run_id != request.run_id {
         return Err(unavailable());
     }
@@ -48,6 +50,15 @@ pub(crate) async fn pending(
         .find(|interaction| interaction.interaction_id == request.interaction_id)
         .ok_or_else(unavailable)?;
     validate(interaction, request)
+}
+
+async fn bounded_lookup<T>(
+    lookup: impl std::future::Future<Output = ApiResult<T>>,
+    deadline: std::time::Duration,
+) -> ApiResult<T> {
+    tokio::time::timeout(deadline, lookup)
+        .await
+        .map_err(|_| unavailable())?
 }
 
 fn validate(
@@ -90,6 +101,22 @@ fn unavailable() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unresponsive_authoritative_lookup_expires_without_retry() {
+        let result = bounded_lookup(
+            std::future::pending::<ApiResult<()>>(),
+            std::time::Duration::from_millis(5),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            bounded_lookup(async { Ok(7) }, std::time::Duration::from_secs(1))
+                .await
+                .unwrap(),
+            7
+        );
+    }
 
     #[test]
     fn authoritative_pending_identity_status_and_display_are_required() {

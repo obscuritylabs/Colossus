@@ -104,6 +104,20 @@ for (const approved of [false, true]) {
       name: approved ? "Continue to native confirmation" : "Deny",
       exact: true,
     });
+    await page.setViewportSize({ width: 420, height: 360 });
+    const surface = page.locator(".command-review-window");
+    await surface.hover();
+    await page.mouse.wheel(0, 2000);
+    await expect
+      .poll(() => surface.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    await expect(button).toBeInViewport();
+    await expect(
+      page.getByRole("button", { name: "Deny", exact: true }),
+    ).toBeInViewport();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBe(420);
     await button.focus();
     const detailsBox = await full.boundingBox();
     const buttonBox = await button.boundingBox();

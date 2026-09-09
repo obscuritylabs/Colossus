@@ -114,13 +114,14 @@ pub fn command_approval_context(
             arguments.push(REDACTED.into());
             secret_next = false;
         } else {
-            secret_next = argument.starts_with('-')
-                && !argument.contains('=')
-                && (SECRET_FIELDS.is_match(argument)
-                    || matches!(
-                        argument,
-                        "-u" | "-U" | "--user" | "--proxy-user" | "--oauth2-bearer"
-                    ));
+            secret_next = shell_value::is_dynamic(argument)
+                || (argument.starts_with('-')
+                    && !argument.contains('=')
+                    && (SECRET_FIELDS.is_match(argument)
+                        || matches!(
+                            argument,
+                            "-u" | "-U" | "--user" | "--proxy-user" | "--oauth2-bearer"
+                        )));
             arguments.push(project(argument));
         }
     }
@@ -148,11 +149,6 @@ fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
     // of matching secrets. Union matches immediately instead of materializing
     // and sorting a potentially multiplicative vector of duplicate ranges.
     let mut mask = vec![false; text.len()];
-    for secret in secrets {
-        for (start, _) in text.match_indices(secret) {
-            mask[start..start + secret.len()].fill(true);
-        }
-    }
     for matched in PRIVATE_KEY.find_iter(text) {
         mask[matched.range()].fill(true);
     }
@@ -183,6 +179,13 @@ fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
         &original_ends,
     ) {
         mask[range].fill(true);
+    }
+    shell_value::mask_dynamic_words(text, &mut mask);
+    // Known values must not hide expansion syntax from the dynamic-name pass.
+    for secret in secrets {
+        for (start, _) in text.match_indices(secret) {
+            mask[start..start + secret.len()].fill(true);
+        }
     }
     let redacted = mask.iter().any(|masked| *masked);
     let mut value = String::with_capacity(text.len());

@@ -1931,6 +1931,12 @@ fn bounded_tool_activity_text(value: &str) -> Option<String> {
 }
 
 fn released_tool_input(call: &ToolCall) -> Option<String> {
+    // A tool-start event precedes command preparation and approval. Its raw shell
+    // arguments (including env/stdin and model intent) are not a display contract.
+    // Release prepared command details only through sanitized command_context.
+    if call.name == "shell.run" {
+        return None;
+    }
     bounded_tool_activity_text(&serde_json::to_string(&call.arguments).ok()?)
 }
 
@@ -2874,11 +2880,10 @@ mod tests {
         let update = public_event(RunEvent::ToolStarted {
             turn: 1,
             call: ToolCall {
-                call_id: "call-shell".into(),
-                name: "shell.run".into(),
+                call_id: "call-list".into(),
+                name: "filesystem.list".into(),
                 arguments: serde_json::json!({
-                    "command": "git status --short",
-                    "cwd": "."
+                    "path": "."
                 }),
             },
             elapsed_seconds: 0.25,
@@ -2889,11 +2894,41 @@ mod tests {
         let input: serde_json::Value =
             serde_json::from_str(activity.input.as_deref().expect("started tool input"))
                 .expect("valid input JSON");
-        assert_eq!(
-            input,
-            serde_json::json!({"command": "git status --short", "cwd": "."})
-        );
+        assert_eq!(input, serde_json::json!({"path": "."}));
         assert_eq!(activity.preview, None);
+    }
+
+    #[test]
+    fn shell_activity_never_releases_unprepared_command_or_credentials() {
+        for arguments in [
+            serde_json::json!({
+                "command": "PASSWORD=private-value curl https://private.example/path",
+                "cwd": "/private/workspace", "justification": "model intent",
+                "env": {"TOKEN": "private-env"}, "stdin": "private-stdin"
+            }),
+            serde_json::json!({
+                "argv": ["/private/bin/client", "--token", "private-value"],
+                "cwd": "/private/workspace", "justification": "model intent"
+            }),
+        ] {
+            let update = public_event(RunEvent::ToolStarted {
+                turn: 1,
+                call: ToolCall {
+                    call_id: "call-shell".into(),
+                    name: "shell.run".into(),
+                    arguments,
+                },
+                elapsed_seconds: 0.25,
+            });
+            let RunUpdateKind::ToolActivity { activity } = update else {
+                panic!("started tool must project to tool activity");
+            };
+            assert_eq!(activity.tool_name, "shell.run");
+            assert_eq!(activity.input, None);
+            assert_eq!(activity.preview, None);
+            assert!(!activity.summary.contains("private"));
+            assert!(!activity.summary.contains("model intent"));
+        }
     }
 
     #[test]

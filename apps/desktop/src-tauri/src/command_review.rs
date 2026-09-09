@@ -155,7 +155,7 @@ pub(crate) async fn review_command(
     let context = approval.command_context.clone().ok_or_else(unavailable)?;
     context.validate().map_err(|_| unavailable())?;
     let review_id = uuid::Uuid::new_v4().to_string();
-    let (sender, mut receiver) = oneshot::channel();
+    let (sender, receiver) = oneshot::channel();
     let state = app.state::<CommandReviewState>();
     {
         let mut pending = state.0.lock().map_err(|_| unavailable())?;
@@ -195,26 +195,83 @@ pub(crate) async fn review_command(
     let app_state = app.state::<AppState>();
     let mut selection = app_state.subscribe_selection();
     let mut refresh = tokio::time::interval(std::time::Duration::from_secs(2));
-    let deadline = tokio::time::sleep(std::time::Duration::from_mins(5));
-    tokio::pin!(deadline);
-    loop {
-        if !app_state.selection_is_current(target_id, epoch) {
-            return Err(unavailable());
-        }
-        tokio::select! {
-            answer = &mut receiver => return Ok(answer.unwrap_or(false).then_some(guard)),
-            _ = selection.changed() => return Err(unavailable()),
-            () = &mut deadline => return Ok(None),
-            _ = refresh.tick() => {
-                if pending_approval(target, request).await? != *approval { return Err(unavailable()); }
+    if !app_state.selection_is_current(target_id, epoch) {
+        return Err(unavailable());
+    }
+    let refresh = async {
+        loop {
+            refresh.tick().await;
+            if pending_approval(target, request).await? != *approval {
+                return Err(unavailable());
             }
         }
+    };
+    let invalidated = async {
+        let _ = selection.changed().await;
+    };
+    Ok(review_decision(
+        receiver,
+        invalidated,
+        refresh,
+        std::time::Duration::from_mins(5),
+    )
+    .await?
+    .then_some(guard))
+}
+
+// Poll refetch separately: a stalled target must not prevent closure, target
+// changes, user response, or the overall review deadline from cancelling it.
+async fn review_decision(
+    receiver: oneshot::Receiver<bool>,
+    invalidated: impl std::future::Future<Output = ()>,
+    refresh: impl std::future::Future<Output = Result<(), CommandErrorDto>>,
+    deadline: std::time::Duration,
+) -> Result<bool, CommandErrorDto> {
+    tokio::select! {
+        biased;
+        () = invalidated => Err(unavailable()),
+        () = tokio::time::sleep(deadline) => Ok(false),
+        result = refresh => { result?; Err(unavailable()) },
+        answer = receiver => Ok(answer.unwrap_or(false)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stalled_refetch_cannot_block_close_selection_or_deadline() {
+        for cause in ["close", "selection", "deadline", "allow"] {
+            let (sender, receiver) = oneshot::channel();
+            let invalidated = async {
+                if cause != "selection" {
+                    std::future::pending::<()>().await;
+                }
+            };
+            if cause == "allow" {
+                sender.send(true).unwrap();
+            } else if cause == "close" {
+                drop(sender);
+            }
+            let answer = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                review_decision(
+                    receiver,
+                    invalidated,
+                    std::future::pending(),
+                    std::time::Duration::from_millis(10),
+                ),
+            )
+            .await
+            .expect("stalled refresh blocked review cancellation");
+            match cause {
+                "selection" => assert!(answer.is_err()),
+                "allow" => assert!(answer.unwrap()),
+                _ => assert!(!answer.unwrap()),
+            }
+        }
+    }
 
     fn review() -> (PendingReview, oneshot::Receiver<bool>) {
         let (sender, receiver) = oneshot::channel();
