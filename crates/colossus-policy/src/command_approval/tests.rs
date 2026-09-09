@@ -58,6 +58,51 @@ fn redacts_credentials_in_shell_strings_urls_and_argument_pairs() {
 }
 
 #[test]
+fn url_credentials_are_masked_through_the_last_authority_delimiter() {
+    let mut request = request();
+    request.content["args"] = json!([
+        "https://user:p@ss@host/path?ordinary=value#anchor",
+        "curl 'https://user:p@ss@host/' https://example.test/path@name?q=x@y#z@w",
+        "https://user:p@ss@[::1]:443/path",
+        "https://example.test/?ordinary=user@host"
+    ]);
+    let original = request.clone();
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert_eq!(
+        context.arguments,
+        [
+            "https://[REDACTED]@host/path?ordinary=value#anchor",
+            "curl 'https://[REDACTED]@host/' https://example.test/path@name?q=x@y#z@w",
+            "https://[REDACTED]@[::1]:443/path",
+            "https://example.test/?ordinary=user@host"
+        ]
+    );
+    assert!(context.redacted);
+    assert_eq!(request, original);
+}
+
+#[test]
+fn repeated_short_secrets_have_input_bounded_display_memory() {
+    let mut request = request();
+    request.content["environment"] = serde_json::Value::Object(
+        (0..128)
+            .map(|index| (format!("TOKEN_{index}"), json!("a")))
+            .collect(),
+    );
+    request.content["args"] = json!(["a".repeat(65_536)]);
+    let original = request.clone();
+    let context = command_approval_context(&request).unwrap().unwrap();
+    assert_eq!(context.arguments, ["[REDACTED]"]);
+    assert!(context.redacted);
+    assert_eq!(request, original);
+    // Overlapping recognizers and multibyte values share the same byte mask.
+    assert_eq!(
+        sanitized("ééé END", &["é", "éé"]),
+        ("[REDACTED] END".into(), true)
+    );
+}
+
+#[test]
 fn long_details_are_not_truncated_and_controls_are_visible() {
     let mut request = request();
     request.content["args"] = json!([format!("{}\n\u{1b}\u{202e}TAIL", "é".repeat(65500))]);

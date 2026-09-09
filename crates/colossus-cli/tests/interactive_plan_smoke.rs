@@ -237,7 +237,8 @@ fn start_worker(binary: &Path, config: &Path) -> WorkerGuard {
         .arg("full-access")
         .arg("worker")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // Keep native worker crashes visible alongside client transport errors.
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("start worker");
     let mut worker = WorkerGuard { child };

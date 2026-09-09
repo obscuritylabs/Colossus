@@ -120,7 +120,12 @@ async fn reason_is_audited_before_approval_and_every_changed_field_rejects_its_p
         request.command_intent = Some(CommandIntent {
             justification: "Check the requested build.".into(),
         });
-        let result = gateway.execute(request, executor.as_ref()).await;
+        let execution = gateway.execute(request, executor.as_ref());
+        assert!(
+            std::mem::size_of_val(&execution) < 4096,
+            "gateway callers must not embed the full approval state machine"
+        );
+        let result = execution.await;
         assert_eq!(approvals.calls.load(Ordering::Acquire), 1);
         if field == "unchanged" {
             assert!(result.is_ok(), "{result:?}");

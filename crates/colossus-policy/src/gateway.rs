@@ -599,7 +599,9 @@ impl EffectGateway {
         request: EffectRequest,
         executor: &dyn EffectExecutor,
     ) -> Result<ReleasedEffectResult, GatewayError> {
-        self.execute_internal(request, executor, false).await
+        // Do not embed the full approval/policy state machine in every caller's
+        // async state. Nested worker dispatch must fit the default Tokio stack.
+        Box::pin(self.execute_internal(request, executor, false)).await
     }
 
     /// Authorize one streaming effect and release only gateway-approved normalized chunks.
@@ -614,7 +616,7 @@ impl EffectGateway {
             executor,
             observer: tokio::sync::Mutex::new(observer),
         };
-        self.execute_internal(request, &bridge, true).await
+        Box::pin(self.execute_internal(request, &bridge, true)).await
     }
 
     async fn execute_internal(

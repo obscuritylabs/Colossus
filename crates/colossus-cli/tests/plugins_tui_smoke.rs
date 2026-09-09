@@ -109,6 +109,7 @@ fn start_worker(
     let mut command = Command::new(binary);
     command
         .current_dir(workspace)
+        .env_remove("RUST_MIN_STACK")
         .args([
             "--config",
             "config.yaml",
@@ -121,7 +122,8 @@ fn start_worker(
         .env("COLOSSUS_RELEASE_JOURNAL_KEY", "5".repeat(64))
         .env("COLOSSUS_RELEASE_SIGNING_KEY", "6".repeat(64))
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        // Preserve crash diagnostics; an unread pipe hides worker stack aborts.
+        .stderr(Stdio::inherit());
     #[cfg(windows)]
     command
         .env("USERPROFILE", home.path())

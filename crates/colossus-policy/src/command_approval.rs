@@ -35,7 +35,10 @@ static CREDENTIAL_HEADERS: LazyLock<Regex> = LazyLock::new(|| {
         .expect("constant credential header pattern")
 });
 static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+@").expect("constant URL credential pattern")
+    // WHATWG consumers accept unescaped @ inside passwords. Greedily mask to
+    // the last @ in this authority, never into a path, query or fragment.
+    Regex::new(r#"(?i)([a-z][a-z0-9+.-]*://)[^\s/?#"'`\\]*@"#)
+        .expect("constant URL credential pattern")
 });
 static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -92,7 +95,8 @@ pub fn command_approval_context(
         .filter_map(|(_, value)| value.as_str())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    secrets.sort_unstable();
+    secrets.dedup();
     let mut redacted = false;
     let mut project = |text: &str| {
         let (text, changed) = sanitized(text, &secrets);
@@ -140,43 +144,43 @@ fn invalid() -> GatewayError {
 fn sanitized(text: &str, secrets: &[&str]) -> (String, bool) {
     // Detect every credential against the original display input. Replacements
     // must not destroy a later recognizer's field name or token boundary.
-    let mut ranges = Vec::new();
+    // One mask byte per input byte bounds memory independently of the number
+    // of matching secrets. Union matches immediately instead of materializing
+    // and sorting a potentially multiplicative vector of duplicate ranges.
+    let mut mask = vec![false; text.len()];
     for secret in secrets {
-        ranges.extend(
-            text.match_indices(secret)
-                .map(|(start, _)| start..start + secret.len()),
-        );
+        for (start, _) in text.match_indices(secret) {
+            mask[start..start + secret.len()].fill(true);
+        }
     }
-    ranges.extend(PRIVATE_KEY.find_iter(text).map(|matched| matched.range()));
+    for matched in PRIVATE_KEY.find_iter(text) {
+        mask[matched.range()].fill(true);
+    }
     for (pattern, retained_suffix) in [(&*URL_USERINFO, 1), (&*CREDENTIAL_HEADERS, 0)] {
-        ranges.extend(pattern.captures_iter(text).map(|captures| {
-            captures.get(1).unwrap().end()..captures.get(0).unwrap().end() - retained_suffix
-        }));
+        for captures in pattern.captures_iter(text) {
+            let range =
+                captures.get(1).unwrap().end()..captures.get(0).unwrap().end() - retained_suffix;
+            mask[range].fill(true);
+        }
     }
     for prefix in [&*AUTHORIZATION, &*SECRET_ASSIGNMENTS, &*CREDENTIAL_FLAGS] {
-        ranges.extend(shell_value::ranges(text, prefix));
-    }
-    ranges.sort_unstable_by_key(|range| (range.start, range.end));
-    let redacted = !ranges.is_empty();
-    let mut value = String::with_capacity(text.len());
-    let mut cursor = 0;
-    let mut masked_until = 0;
-    for range in ranges {
-        if range.start > masked_until {
-            if masked_until > cursor {
-                value.push_str(REDACTED);
-                cursor = masked_until;
-            }
-            value.push_str(&text[cursor..range.start]);
-            cursor = range.start;
+        for range in shell_value::ranges(text, prefix) {
+            mask[range].fill(true);
         }
-        masked_until = masked_until.max(range.end);
     }
-    if masked_until > cursor {
-        value.push_str(REDACTED);
-        cursor = masked_until;
+    let redacted = mask.iter().any(|masked| *masked);
+    let mut value = String::with_capacity(text.len());
+    let mut was_masked = false;
+    for (index, character) in text.char_indices() {
+        if mask[index] {
+            if !was_masked {
+                value.push_str(REDACTED);
+            }
+        } else {
+            value.push(character);
+        }
+        was_masked = mask[index];
     }
-    value.push_str(&text[cursor..]);
     let escaped = value
         .chars()
         .flat_map(|character| {
