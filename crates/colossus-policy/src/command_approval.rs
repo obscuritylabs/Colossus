@@ -11,9 +11,6 @@ mod credential_options;
 mod shell_value;
 
 const REDACTED: &str = "[REDACTED]";
-// Stop at the first value-taking credential option in a short-option group.
-// Later letters are the attached value, not more flags to inspect.
-const SHORT_CREDENTIAL_FLAG: &str = r"-[a-zA-Z#]*?[uUbHE]";
 // Shared by shell spelling and argv recognition. Certificate options can carry
 // an attached passphrase, so their entire value is private display data too.
 const CREDENTIAL_VALUE_OPTIONS: &[&str] = &[
@@ -35,11 +32,6 @@ const CREDENTIAL_VALUE_OPTIONS: &[&str] = &[
     "-pw",
 ];
 const SECRET_FIELD_PATTERN: &str = r"pass(?:word|wd|phrase)?|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie";
-static SHORT_CREDENTIAL_OPTION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("^{SHORT_CREDENTIAL_FLAG}"))
-        .expect("constant short credential option pattern")
-});
-
 static SECRET_FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!("(?i)({SECRET_FIELD_PATTERN})")).expect("constant credential field pattern")
 });
@@ -74,10 +66,8 @@ static CREDENTIAL_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
         .map(|name| regex::escape(name))
         .collect::<Vec<_>>()
         .join("|");
-    Regex::new(&format!(
-        r"(?:^|[\s;&|])(?:(?:{options})[\s=]+|{SHORT_CREDENTIAL_FLAG}[\s=]*)",
-    ))
-    .expect("constant credential flag pattern")
+    Regex::new(&format!(r"(?:^|[\s;&|])(?:{options})[\s=]+"))
+        .expect("constant credential flag pattern")
 });
 static PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
     // OpenPGP armor has a distinct PRIVATE KEY BLOCK label. A PEM footer
@@ -193,15 +183,9 @@ fn credential_option_value_start(
     {
         return Some(name.len() + usize::from(value.is_some()));
     }
-    if let Some(start) = profiles
+    profiles
         .iter()
         .find_map(|profile| profile.value_start(argument))
-    {
-        return Some(start);
-    }
-    SHORT_CREDENTIAL_OPTION
-        .find(argument)
-        .map(|matched| matched.end())
 }
 
 fn invalid() -> GatewayError {

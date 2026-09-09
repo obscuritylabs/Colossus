@@ -19,6 +19,17 @@ fn request() -> EffectRequest {
     request
 }
 
+// Mixed curl fixtures exercise either a real shell command spelling or the
+// prepared argv for curl itself, not curl flags passed to an unrelated shell.
+fn curl_request(arguments: impl serde::Serialize) -> EffectRequest {
+    let mut request = request();
+    request.content["args"] = json!(arguments);
+    if request.content["args"][0] != "-c" {
+        request.resource = "/usr/bin/curl".into();
+    }
+    request
+}
+
 #[test]
 fn projects_prepared_invocation_without_changing_execution() {
     let request = request();
@@ -151,6 +162,12 @@ fn long_details_are_not_truncated_and_controls_are_visible() {
 #[test]
 fn ambiguous_short_password_options_are_recognized_in_shell_and_prepared_argv() {
     for (program, prefix, option, attached) in [
+        ("curl", "", "-u", true),
+        ("curl", "", "-U", true),
+        ("curl", "", "-b", true),
+        ("curl", "", "-H", true),
+        ("curl", "", "-E", true),
+        ("curl", "", "-svu", true),
         ("ssh-keygen", "", "-N", true),
         ("ssh-keygen", "", "-P", true),
         ("ssh-keygen", "", "-qN", true),
@@ -238,6 +255,16 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
     for (program, arguments) in [
         ("cargo", vec!["test", "-p", "colossus-runtime"]),
         ("cargo", vec!["test", "-p", "mysql"]),
+        ("python", vec!["-u", "script.py"]),
+        ("python3", vec!["-E", "script.py"]),
+        ("python3", vec!["-uE", "a-script-with-ü.py"]),
+        ("sudo", vec!["-u", "root", "python3", "-u", "script.py"]),
+        (
+            "env",
+            vec!["-u", "PYTHONPATH", "python3", "-E", "script.py"],
+        ),
+        ("sort", vec!["-u", "input.txt"]),
+        ("grep", vec!["-E", "pattern", "input.txt"]),
         ("curl", vec!["-N", "https://example.test"]),
         ("docker", vec!["run", "-p", "8080:80", "image"]),
         ("openssl", vec!["s_client", "-key", "key.pem"]),
@@ -265,6 +292,14 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
 #[test]
 fn literal_program_hints_survive_wrapped_argument_vectors() {
     for (executable, arguments) in [
+        (
+            "/usr/bin/env",
+            vec!["curl", "-u", "private-value", "PUBLIC_END"],
+        ),
+        (
+            r"C:\Windows\System32\curl.exe",
+            vec!["-E", "private-value", "PUBLIC_END"],
+        ),
         (
             "/usr/bin/env",
             vec![
@@ -319,6 +354,8 @@ fn command_hints_do_not_mask_options_in_a_later_independent_command() {
         "mysql --version; cargo test -p mysql",
         "ssh-keygen -V | curl -N https://example.test",
         "docker login --help && docker run -p 8080:80 image",
+        "curl --version; python3 -u script.py",
+        "curl --version && python3 -E script.py",
     ] {
         let (display, redacted) = sanitized(command, &[], &[]);
         assert_eq!(display, command);
@@ -373,8 +410,7 @@ fn passphrase_and_certificate_options_share_shell_and_argv_redaction() {
                 format!("curl {option}='client.pem:private-value private-tail' PUBLIC_END"),
             ],
         ] {
-            let mut request = request();
-            request.content["args"] = json!(arguments);
+            let request = curl_request(arguments);
             let original = request.clone();
             let context = command_approval_context(&request).unwrap().unwrap();
             let released = serde_json::to_string(&context).unwrap();
@@ -394,8 +430,7 @@ fn passphrase_and_certificate_options_share_shell_and_argv_redaction() {
             "curl https://example.test/?pass=private-value PUBLIC_END",
         ],
     ] {
-        let mut request = request();
-        request.content["args"] = json!(arguments);
+        let request = curl_request(arguments);
         let context = command_approval_context(&request).unwrap().unwrap();
         let released = serde_json::to_string(&context).unwrap();
         assert!(!released.contains("private-value"), "{released}");
@@ -407,6 +442,7 @@ fn passphrase_and_certificate_options_share_shell_and_argv_redaction() {
 #[test]
 fn common_authentication_flags_and_cookies_are_not_disclosed() {
     let mut request = request();
+    request.resource = "/usr/bin/curl".into();
     request.content["args"] = json!([
         "curl -u 'user:password-value' --proxy-user proxy:pass -H 'Cookie: session=private-cookie' ftp://name:password@host/file",
         "-u",
@@ -455,8 +491,7 @@ fn short_and_long_header_payloads_are_contained_without_evaluating_quotes() {
             "curl --header 'Author''ization: Digest private-value' END",
         ],
     ] {
-        let mut request = request();
-        request.content["args"] = json!(arguments);
+        let request = curl_request(arguments);
         let original = request.clone();
         let context = command_approval_context(&request).unwrap().unwrap();
         let released = serde_json::to_string(&context).unwrap();
@@ -489,8 +524,7 @@ fn cookie_short_options_redact_separated_attached_and_quoted_values() {
         vec!["-c", "curl -\"b\" session=private-value END"],
         vec!["-c", "curl --cookie='session=private-value' END"],
     ] {
-        let mut request = request();
-        request.content["args"] = json!(arguments);
+        let request = curl_request(arguments);
         let original = request.clone();
         let context = command_approval_context(&request).unwrap().unwrap();
         let released = serde_json::to_string(&context).unwrap();
@@ -506,6 +540,7 @@ fn cookie_short_options_redact_separated_attached_and_quoted_values() {
 fn attached_argv_values_use_argument_not_shell_boundaries() {
     for prefix in ["-sb", "-H", "-su", "--cookie=", "--header=", "--password="] {
         let mut request = request();
+        request.resource = "/usr/bin/curl".into();
         request.content["args"] = json!([
             format!("{prefix}session=private-value; other=private-tail \"quoted\"\nEND_PRIVATE"),
             "PUBLIC_END"
@@ -532,6 +567,7 @@ fn attached_argv_values_use_argument_not_shell_boundaries() {
 fn grouped_short_options_stop_at_the_first_credential_value_boundary() {
     for option in ["-su", "-sU", "-sb", "-svH"] {
         let mut request = request();
+        request.resource = "/usr/bin/curl".into();
         request.content["args"] = json!([option, "private-value", "END"]);
         let context = command_approval_context(&request).unwrap().unwrap();
         assert_eq!(context.arguments, [option, "[REDACTED]", "END"]);

@@ -16,6 +16,9 @@ pub(super) struct Profile {
 static PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
     // Programs, value-taking flags, attached/grouped short forms, login-only.
     let mut profiles: Vec<_> = [
+        // Curl's short flags are not universal: Python -u/-E are boolean,
+        // sudo -u names a user, and sort -u selects unique output.
+        (&["curl"][..], "uUbHE", true, false),
         (&["ssh-keygen"][..], "NP", true, false),
         (
             &[
@@ -43,6 +46,7 @@ static PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
             ""
         };
         let option = if attached {
+            // Stop at the first credential flag; later letters are its value.
             format!(r"-[a-zA-Z#]*?[{flags}]")
         } else {
             format!(r"-[{flags}]")

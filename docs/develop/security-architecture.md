@@ -551,7 +551,9 @@ ambiguous or unclosed credential words conservatively mask the remainder. This s
 also recognizes literal credential names split by quotes or escapes, without evaluating
 variables or substitutions. An unterminated private-key block masks the remainder.
 The scanner is display-only and never evaluates shell syntax. Rendering must treat all
-context as plain display data. Credential options include grouped short forms; attached
+context as plain display data. Ambiguous short credential flags use program-specific
+display hints: curl's `-u` and `-E` do not hide Python script paths or ordinary options
+of unrelated programs. Credential options include grouped short forms; attached
 argv values use their full argument boundary rather than shell word boundaries. Shell
 activity titles and restored terminal history never reconstruct a command disclosure
 from raw model arguments.
