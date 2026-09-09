@@ -13,6 +13,7 @@ export function approvalProcessDiagnostics(requests: readonly string[]) {
         const output = JSON.parse(message.content);
         const error = output?.error;
         const category = [
+          "execution_error",
           "validation_error",
           "denied",
           "outcome_unknown",

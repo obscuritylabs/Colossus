@@ -7,6 +7,33 @@ function captured(output: unknown) {
   });
 }
 
+test("runtime execution_error retains its category without exposing private adapter details", () => {
+  const result = approvalProcessDiagnostics([
+    captured({
+      error: {
+        type: "execution_error",
+        message: "adapter failed: private-executable and private-binding",
+        tool: "shell.run",
+        recoverable: true,
+      },
+    }),
+  ]);
+  expect(result.results).toEqual([
+    {
+      category: "execution_error",
+      exitCode: null,
+      timeout: false,
+      memoryLimit: false,
+      accessDenied: false,
+      appContainer: false,
+      cleanup: false,
+      helper: false,
+      permit: false,
+    },
+  ]);
+  expect(JSON.stringify(result)).not.toContain("private-");
+});
+
 test("approval failure diagnostics disclose only bounded categories and numeric exit codes", () => {
   const result = approvalProcessDiagnostics([
     captured({
