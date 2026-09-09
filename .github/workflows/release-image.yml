@@ -1,0 +1,166 @@
+name: Publish Colossus release image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable or preview tag (vX.Y.Z or vX.Y.Z-preview.N)
+        required: true
+        type: string
+      registry:
+        description: Auto tries configured Docker Hub credentials, otherwise GHCR
+        type: choice
+        default: auto
+        options: [auto, dockerhub, ghcr]
+  pull_request:
+    paths:
+      - .github/workflows/release-image.yml
+      - scripts/ci/release-oci*.mjs
+
+permissions: {}
+
+concurrency:
+  group: release-image-${{ github.event.release.tag_name || inputs.tag || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  publisher-revision:
+    name: Resolve the trusted publisher revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      revision: ${{ steps.publisher.outputs.revision }}
+    steps:
+      - name: Use the PR merge revision for tests or protected main for publication
+        id: publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            revision="$GITHUB_SHA"
+          else
+            revision=$(gh api repos/obscuritylabs/Colossus/git/ref/heads/main --jq .object.sha)
+          fi
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Release OCI contracts and offline round trip
+    needs: publisher-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.publisher-revision.outputs.revision }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Install pinned, checksum-verified ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
+          checksum: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
+      - run: node --test scripts/ci/release-oci.test.mjs
+      - run: node scripts/ci/release-oci-roundtrip.mjs
+
+  publish:
+    name: Publish and verify every release asset
+    needs: [publisher-revision, test]
+    if: >-
+      github.repository == 'obscuritylabs/Colossus' &&
+      ((github.event_name == 'release' && github.event.release.draft == false) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Check out the publisher, never execute downloaded release assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.publisher-revision.outputs.revision }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Install pinned, checksum-verified ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
+          checksum: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
+      - name: Snapshot, download, verify, and package the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_output="$RUNNER_TEMP/colossus-release-image"
+          printf 'RELEASE_OUTPUT=%s\n' "$release_output" >> "$GITHUB_ENV"
+          node scripts/ci/release-oci.mjs prepare "$RELEASE_TAG" "$release_output"
+      - name: Authenticate to the selected OL registry
+        id: registry
+        env:
+          REGISTRY_CHOICE: ${{ inputs.registry || 'auto' }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USERNAME: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          auth_dir=$(mktemp -d "$RUNNER_TEMP/colossus-registry-auth.XXXXXX")
+          auth_file="$auth_dir/config.json"
+          printf 'REGISTRY_AUTH_FILE=%s\n' "$auth_file" >> "$GITHUB_ENV"
+          registry=ghcr.io
+          if [[ "$REGISTRY_CHOICE" != ghcr ]]; then
+            if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_PASSWORD" ]] &&
+              printf '%s' "$DOCKERHUB_PASSWORD" | oras login docker.io \
+                --registry-config "$auth_file" --username "$DOCKERHUB_USERNAME" --password-stdin; then
+              registry=docker.io
+            elif [[ "$REGISTRY_CHOICE" == dockerhub ]]; then
+              echo 'Docker Hub authentication failed or its repository secrets are missing.' >&2
+              exit 1
+            else
+              echo 'Docker Hub credentials unavailable; using the authorized GHCR fallback.'
+            fi
+          fi
+          if [[ "$registry" == ghcr.io ]]; then
+            printf '%s' "$GHCR_TOKEN" | oras login ghcr.io \
+              --registry-config "$auth_file" --username "$GHCR_USERNAME" --password-stdin
+          fi
+          printf 'destination=%s/obscuritylabs/colossus-release:%s\n' "$registry" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Publish exact tag, then pull by digest and verify all bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DESTINATION: ${{ steps.registry.outputs.destination }}
+        run: node scripts/ci/release-oci.mjs publish "$RELEASE_OUTPUT" "$DESTINATION"
+      - name: Retain credential-free publication evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-release-image-${{ env.RELEASE_TAG }}
+          path: |
+            ${{ env.RELEASE_OUTPUT }}/publication.json
+            ${{ env.RELEASE_OUTPUT }}/digest.txt
+            ${{ env.RELEASE_OUTPUT }}/payload/release-inventory.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove the job-scoped registry credential file
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${REGISTRY_AUTH_FILE:-}" && -f "$REGISTRY_AUTH_FILE" ]]; then
+            rm -f -- "$REGISTRY_AUTH_FILE"
+          fi
