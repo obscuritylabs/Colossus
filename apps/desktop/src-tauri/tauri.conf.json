@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "capabilities": ["main-chat", "terminal-pty"],
+      "capabilities": ["main-chat", "terminal-pty", "command-approval"],
       "freezePrototype": true,
       "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; media-src 'none'; form-action 'none'",
       "devCsp": "default-src 'self'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; media-src 'none'; form-action 'none'",

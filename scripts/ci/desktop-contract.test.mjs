@@ -123,6 +123,7 @@ test("Tauri bundles only the two native-owned executables", () => {
   assert.deepEqual(config.app.security.capabilities, [
     "main-chat",
     "terminal-pty",
+    "command-approval",
   ]);
   assert.deepEqual(config.plugins.updater, {
     endpoints: [],
@@ -332,6 +333,10 @@ test("release and development CSPs preserve the local-only boundary", () => {
 test("command review has isolated IPC and cannot authorize an effect without the native broker", () => {
   const capability = json(
     "apps/desktop/src-tauri/capabilities/command-approval.json",
+  );
+  const configuration = json("apps/desktop/src-tauri/tauri.conf.json");
+  assert.ok(
+    configuration.app.security.capabilities.includes(capability.identifier),
   );
   assert.deepEqual(capability.windows, ["command-approval"]);
   assert.equal(capability.local, true);

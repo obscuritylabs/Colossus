@@ -143,6 +143,11 @@ scenario retries. Screenshots are in `apps/desktop/output/playwright`, with brow
 retained on failure. Mocked browser tests separately cover keyboard operation, compact
 layouts, accessibility, redaction, full details, and stale review state.
 
+Both native acceptance scripts isolate Tauri's build output from the runtime under
+test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's
+external-binary staging must never overwrite the freshly compiled CLI or sidecar
+with a previously staged binary. Relative target paths resolve from the repository.
+
 Native on-screen smoke testing must additionally verify that the isolated command review
 window opens, external navigation is blocked, closing it invalidates review, and final
 OS confirmation identifies the target, reason, and review binding without presenting a

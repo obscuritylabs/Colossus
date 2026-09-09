@@ -1,9 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { acceptanceTargets } from "./acceptance-targets.mjs";
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(desktop, "../..");
+const targets = acceptanceTargets(
+  repository,
+  desktop,
+  process.env.CARGO_TARGET_DIR,
+);
 function run(executable, args, cwd, env = process.env) {
   const result = spawnSync(executable, args, {
     cwd,
@@ -26,6 +32,8 @@ run(
     "--locked",
     "--manifest-path",
     "apps/desktop/src-tauri/Cargo.toml",
+    "--target-dir",
+    targets.native,
     "--example",
     "plugin-test-bridge",
     "--features",
@@ -40,6 +48,8 @@ run(
     "--locked",
     "--manifest-path",
     "apps/desktop/src-tauri/Cargo.toml",
+    "--target-dir",
+    targets.native,
     "--example",
     "plugin-test-bridge",
     "--features",
@@ -48,10 +58,6 @@ run(
   repository,
 );
 const suffix = process.platform === "win32" ? ".exe" : "";
-const sharedTarget =
-  process.env.CARGO_TARGET_DIR === undefined
-    ? undefined
-    : resolve(repository, process.env.CARGO_TARGET_DIR);
 run(
   process.execPath,
   [
@@ -66,12 +72,9 @@ run(
   {
     ...process.env,
     COLOSSUS_PLUGIN_RUNTIME_ACCEPTANCE: "1",
-    COLOSSUS_PLUGIN_TEST_CLI: join(
-      sharedTarget ?? join(repository, "target"),
-      `debug/colossus${suffix}`,
-    ),
+    COLOSSUS_PLUGIN_TEST_CLI: join(targets.runtime, `debug/colossus${suffix}`),
     COLOSSUS_PLUGIN_TEST_BRIDGE: join(
-      sharedTarget ?? join(desktop, "src-tauri/target"),
+      targets.native,
       `debug/examples/plugin-test-bridge${suffix}`,
     ),
   },

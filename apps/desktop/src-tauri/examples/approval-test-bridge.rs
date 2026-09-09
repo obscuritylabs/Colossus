@@ -3,6 +3,7 @@
 #[path = "../src/approval_adapter.rs"]
 mod approval_adapter;
 
+use anyhow::Context as _;
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, CancelRunRequest, Colossus, CreateRunRequest,
     GetRunRequest, IdempotencyKey, InputContentPart, InstanceId, InteractionAnswer,
@@ -104,7 +105,10 @@ async fn start_run(
         worker_ipc_endpoint(&instance.join("state.redb"))?,
         zeroize::Zeroizing::new([0x5a; 32]),
     )?;
-    worker.set_approval_mode(WorkerApprovalMode::Ask).await?;
+    worker
+        .set_approval_mode(WorkerApprovalMode::Ask)
+        .await
+        .context("authenticated worker approval-mode setup failed")?;
     let run = client
         .create_run(CreateRunRequest {
             input: vec![InputContentPart::Text(
