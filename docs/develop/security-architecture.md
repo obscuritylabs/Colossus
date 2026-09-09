@@ -553,7 +553,10 @@ variables or substitutions. An unterminated private-key block masks the remainde
 The scanner is display-only and never evaluates shell syntax. Rendering must treat all
 context as plain display data. Ambiguous short credential flags use program-specific
 display hints: curl's `-u` and `-E` do not hide Python script paths or ordinary options
-of unrelated programs. Credential options include grouped short forms; attached
+of unrelated programs. Generic long options must end in a complete credential name,
+not merely contain a substring such as `pass` in `--passthru`. Boolean negations and
+suffixes such as `--password-stdin` do not consume the following argument for display.
+Credential options include grouped short forms; attached
 argv values use their full argument boundary rather than shell word boundaries. Shell
 activity titles and restored terminal history never reconstruct a command disclosure
 from raw model arguments.

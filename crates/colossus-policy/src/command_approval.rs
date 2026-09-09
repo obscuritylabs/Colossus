@@ -7,6 +7,7 @@ use regex::Regex;
 
 use crate::GatewayError;
 
+mod credential_fields;
 mod credential_options;
 mod shell_value;
 
@@ -34,13 +35,6 @@ const CREDENTIAL_VALUE_OPTIONS: &[&str] = &[
 const SECRET_FIELD_PATTERN: &str = r"pass(?:word|wd|phrase)?|secret|token|api[-_]?key|authorization|credential|private[-_]?key|cookie";
 static SECRET_FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!("(?i)({SECRET_FIELD_PATTERN})")).expect("constant credential field pattern")
-});
-static SECRET_ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
-    let field = format!(r"[\w-]*(?:{SECRET_FIELD_PATTERN})[\w-]*");
-    Regex::new(&format!(
-        r#"(?i)(?:{field}(?:\\?["'])?\s*[=:]\s*|--{field}\s+)"#
-    ))
-    .expect("constant credential assignment pattern")
 });
 static AUTHORIZATION: LazyLock<Regex> = LazyLock::new(|| {
     // Consume the whole credential word, not merely a partial token alphabet.
@@ -178,9 +172,7 @@ fn credential_option_value_start(
     let (name, value) = argument
         .split_once('=')
         .map_or((argument, None), |(name, value)| (name, Some(value)));
-    if (name.starts_with("--") && SECRET_FIELDS.is_match(name))
-        || CREDENTIAL_VALUE_OPTIONS.contains(&name)
-    {
+    if credential_fields::is_option(name) || CREDENTIAL_VALUE_OPTIONS.contains(&name) {
         return Some(name.len() + usize::from(value.is_some()));
     }
     profiles
@@ -228,10 +220,13 @@ fn sanitized(
     }
     for range in shell_value::ranges(
         text,
-        &[&*AUTHORIZATION, &*SECRET_ASSIGNMENTS, &*CREDENTIAL_FLAGS],
+        &[&*AUTHORIZATION, &*CREDENTIAL_FLAGS],
         &spelling,
         &original_ends,
     ) {
+        mask[range].fill(true);
+    }
+    for range in credential_fields::ranges(text, &spelling, &original_ends) {
         mask[range].fill(true);
     }
     for range in credential_options::ranges(text, &spelling, &original_ends, profiles) {

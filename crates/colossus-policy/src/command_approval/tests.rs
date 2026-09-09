@@ -265,6 +265,11 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
         ),
         ("sort", vec!["-u", "input.txt"]),
         ("grep", vec!["-E", "pattern", "input.txt"]),
+        ("rg", vec!["--passthru", "needle", "input.txt"]),
+        ("rg", vec!["--passthru=needle", "input.txt"]),
+        ("docker", vec!["login", "--password-stdin", "registry.test"]),
+        ("psql", vec!["--no-password", "database"]),
+        ("tool", vec!["--tokenize", "input.txt"]),
         ("curl", vec!["-N", "https://example.test"]),
         ("docker", vec!["run", "-p", "8080:80", "image"]),
         ("openssl", vec!["s_client", "-key", "key.pem"]),
@@ -285,6 +290,49 @@ fn ordinary_short_options_remain_reviewable_without_a_credential_command_hint() 
             let context = command_approval_context(&request).unwrap().unwrap();
             assert_eq!(json!(context.arguments), request.content["args"]);
             assert!(!context.redacted);
+        }
+    }
+}
+
+#[test]
+fn complete_long_credential_names_remain_private_in_both_invocation_forms() {
+    for option in [
+        "--password",
+        "--passphrase",
+        "--token",
+        "--api-key",
+        "--api_key",
+        "--client-secret",
+        "--db_password",
+        "--clientSecret",
+        "--accessToken",
+    ] {
+        for arguments in [
+            vec![
+                option.to_owned(),
+                "private-value private-tail".into(),
+                "END".into(),
+            ],
+            vec![format!("{option}=private-value private-tail"), "END".into()],
+            vec![
+                "-c".into(),
+                format!("tool {option} 'private-value private-tail' END"),
+            ],
+            vec![
+                "-c".into(),
+                format!("tool {option}='private-value private-tail' END"),
+            ],
+        ] {
+            let mut request = request();
+            request.content["args"] = json!(arguments);
+            let original = request.clone();
+            let context = command_approval_context(&request).unwrap().unwrap();
+            let released = serde_json::to_string(&context).unwrap();
+            assert!(!released.contains("private-value"), "{released}");
+            assert!(!released.contains("private-tail"), "{released}");
+            assert!(released.contains("END"));
+            assert!(context.redacted);
+            assert_eq!(request, original);
         }
     }
 }

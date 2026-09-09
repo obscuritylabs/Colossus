@@ -8,6 +8,16 @@ pub(super) fn ranges(
     spelling: &str,
     original_ends: &[usize],
 ) -> Vec<std::ops::Range<usize>> {
+    filtered_ranges(text, prefixes, spelling, original_ends, |_| true)
+}
+
+pub(super) fn filtered_ranges(
+    text: &str,
+    prefixes: &[&Regex],
+    spelling: &str,
+    original_ends: &[usize],
+    include: impl Fn(&str) -> bool,
+) -> Vec<std::ops::Range<usize>> {
     let mut output = Vec::new();
     let words = word_ranges(text);
     // A value may start inside an already quoted assignment/header. Its end
@@ -22,7 +32,7 @@ pub(super) fn ranges(
     for prefix in prefixes {
         let mut cursor = 0;
         for matched in prefix.find_iter(text) {
-            if matched.start() < cursor {
+            if matched.start() < cursor || !include(matched.as_str()) {
                 continue;
             }
             let end = value_end(matched.end());
@@ -39,6 +49,9 @@ pub(super) fn ranges(
     for prefix in prefixes {
         let mut cursor = 0;
         for matched in prefix.find_iter(spelling) {
+            if !include(matched.as_str()) {
+                continue;
+            }
             let start = matched
                 .start()
                 .checked_sub(1)
@@ -46,7 +59,10 @@ pub(super) fn ranges(
             let value_start = original_ends[matched.end() - 1];
             // Keep original boundaries when already recognizable (in particular,
             // do not skip an empty quoted credential to mask the following word).
-            if value_start < cursor || prefix.is_match(&text[start..value_start]) {
+            let already_recognized = prefix
+                .find_iter(&text[start..value_start])
+                .any(|matched| include(matched.as_str()));
+            if value_start < cursor || already_recognized {
                 continue;
             }
             let end = value_end(value_start);
