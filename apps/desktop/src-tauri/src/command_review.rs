@@ -177,7 +177,8 @@ pub(crate) async fn review_command(
     };
     let window =
         WebviewWindowBuilder::new(app, WINDOW, crate::command_review_protocol::window_url())
-            .use_https_scheme(true)
+            // Match the application's exact local IPC origin on Windows.
+            .use_https_scheme(false)
             .on_navigation(crate::command_review_protocol::navigation_allowed)
             .title("Review Colossus command")
             .inner_size(900.0, 700.0)

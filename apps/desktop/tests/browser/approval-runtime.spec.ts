@@ -65,8 +65,8 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
       requests.push(input);
       const script =
         process.platform === "win32"
-          ? `echo approved>>approved-marker.txt & rem ${"x".repeat(1400)} COMMAND_TAIL`
-          : `printf 'approved\\n' >> approved-marker.txt # TOKEN=fixture-private-token ${"x".repeat(6000)} COMMAND_TAIL`;
+          ? `echo approved>>approved-marker.txt & rem TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== ${"x".repeat(1400)} COMMAND_TAIL`
+          : `printf 'approved\\n' >> approved-marker.txt # TOKEN=fixture-private-token Bearer AZ~fixture-bearer-suffix== ${"x".repeat(6000)} COMMAND_TAIL`;
       const delta =
         requests.length === 1
           ? {
@@ -172,6 +172,7 @@ for (const outcome of ["allow", "deny", "cancel"] as const) {
         }),
       ).toBeVisible();
       await expect(full).not.toContainText("fixture-private-token");
+      await expect(full).not.toContainText("fixture-bearer-suffix");
       await full.focus();
       await page.keyboard.press("End");
       await expect

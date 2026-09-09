@@ -1308,10 +1308,15 @@ fn render_approval_dock(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     let document_line_count = document_lines.len();
     let maximum_scroll = document_line_count.saturating_sub(visible);
     let scroll = (*document_scroll).min(maximum_scroll);
+    // Lines are already wrapped. Slice with the full usize offset before handing
+    // the viewport to Ratatui, whose Paragraph scroll offsets are only u16.
+    let document_viewport = document_lines
+        .into_iter()
+        .skip(scroll)
+        .take(visible)
+        .collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(document_lines)
-            .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(document_viewport).wrap(Wrap { trim: false }),
         rows[0],
     );
 

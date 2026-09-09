@@ -100,6 +100,33 @@ fn common_authentication_flags_and_cookies_are_not_disclosed() {
 }
 
 #[test]
+fn complete_token68_credentials_are_redacted_without_changing_execution() {
+    let token = "AZaz09-._~+/sensitive==";
+    for arguments in [
+        vec![format!("Bearer {token}")],
+        vec![format!("bAsIc {token}")],
+        vec![format!("curl --oauth2-bearer {token} https://example.test")],
+        vec![format!(
+            "curl --oauth2-bearer '{token}' https://example.test"
+        )],
+        vec!["--oauth2-bearer".into(), token.into()],
+        vec![format!("--oauth2-bearer={token}")],
+    ] {
+        let mut request = request();
+        request.content["args"] = json!(arguments);
+        let original = request.clone();
+        let context = command_approval_context(&request).unwrap().unwrap();
+        let released = serde_json::to_string(&context).unwrap();
+        assert!(
+            !released.contains("sensitive"),
+            "credential suffix leaked: {released}"
+        );
+        assert!(context.redacted);
+        assert_eq!(request, original);
+    }
+}
+
+#[test]
 fn absent_legacy_intent_and_non_command_disclosure() {
     let mut request = request();
     request.command_intent = None;

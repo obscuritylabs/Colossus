@@ -20,7 +20,9 @@ static SECRET_ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
         .expect("constant credential assignment pattern")
 });
 static AUTHORIZATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(\b(?:bearer|basic)\s+)[a-z0-9+/_.=:-]+")
+    // Include the complete token68 alphabet, including `~`, so no credential
+    // suffix survives a partial match in the released approval context.
+    Regex::new(r"(?i)(\b(?:bearer|basic)\s+)[a-z0-9~+/_.=:-]+")
         .expect("constant authorization pattern")
 });
 static CREDENTIAL_HEADERS: LazyLock<Regex> = LazyLock::new(|| {

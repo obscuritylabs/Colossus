@@ -25,12 +25,12 @@ pub(crate) fn navigation_allowed(url: &tauri::Url) -> bool {
 fn navigation_allowed_for_profile(url: &tauri::Url, debug: bool) -> bool {
     let release_origin = url.port().is_none()
         && ((url.scheme() == SCHEME && url.host_str() == Some("localhost"))
-            || (url.scheme() == "https" && url.host_str() == Some("colossus-approval.localhost")));
+            || (url.scheme() == "http" && url.host_str() == Some("colossus-approval.localhost")));
     let debug_origin = debug
         && ((url.scheme() == "tauri"
             && url.host_str() == Some("localhost")
             && url.port().is_none())
-            || (url.scheme() == "https"
+            || (url.scheme() == "http"
                 && url.host_str() == Some("tauri.localhost")
                 && url.port().is_none())
             || (url.scheme() == "http"
@@ -55,8 +55,7 @@ pub(crate) fn respond<R: Runtime>(
                 request.uri().scheme_str(),
                 request.uri().authority().map(http::uri::Authority::as_str)
             ),
-            (Some(SCHEME), Some("localhost"))
-                | (Some("https"), Some("colossus-approval.localhost"))
+            (Some(SCHEME), Some("localhost")) | (Some("http"), Some("colossus-approval.localhost"))
         );
     let path = request.uri().path();
     let document =
@@ -109,12 +108,13 @@ mod tests {
     fn only_the_fixed_review_document_can_navigate_or_invoke() {
         for url in [
             "colossus-approval://localhost/index.html?surface=command-approval",
-            "https://colossus-approval.localhost/index.html?surface=command-approval",
+            "http://colossus-approval.localhost/index.html?surface=command-approval",
         ] {
             assert!(navigation_allowed_for_profile(&url.parse().unwrap(), false));
         }
         for url in [
             "https://example.com/index.html?surface=command-approval",
+            "https://colossus-approval.localhost/index.html?surface=command-approval",
             "colossus-approval://localhost/index.html?surface=terminal",
             "colossus-approval://user@localhost/index.html?surface=command-approval",
             "colossus-approval://localhost/index.html?surface=command-approval#spoof",
@@ -130,6 +130,29 @@ mod tests {
                 .parse()
                 .unwrap(),
             true
+        ));
+    }
+
+    #[test]
+    fn local_windows_transport_matches_the_restrictive_ipc_policy() {
+        let windows_origin = "http://colossus-approval.localhost";
+        assert!(navigation_allowed_for_profile(
+            &format!("{windows_origin}/index.html?surface=command-approval")
+                .parse()
+                .unwrap(),
+            false,
+        ));
+        let connect = REVIEW_CSP
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("connect-src "))
+            .unwrap();
+        assert_eq!(connect, "connect-src ipc: http://ipc.localhost");
+        assert!(navigation_allowed_for_profile(
+            &"http://tauri.localhost/index.html?surface=command-approval"
+                .parse()
+                .unwrap(),
+            true,
         ));
     }
 }
