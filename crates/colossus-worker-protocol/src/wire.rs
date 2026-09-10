@@ -8,9 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 21 includes typed plugin management, digest-bound previews, and run skill selections.
+/// Version 22 includes frozen, typed prepared-command approval context.
 /// Both sides reject mismatches during the handshake and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 21;
+pub const PROTOCOL_VERSION: u16 = 22;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 ///

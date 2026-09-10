@@ -9,6 +9,7 @@ impl GatewayToolExecutor {
         let exit_code;
         let output = match call.name.as_str() {
             "shell.run" => {
+                command_intent(&call)?;
                 let danger_full_access = self.danger_full_access(&context);
                 let command = optional_tool_string(&call, "command")?;
                 let argv = optional_tool_string_array(&call, "argv")?;
@@ -128,5 +129,41 @@ impl GatewayToolExecutor {
             output,
             exit_code,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_intent_rejects_invalid_model_input_before_dispatch() {
+        for arguments in [
+            json!({}),
+            json!({"justification": null}),
+            json!({"justification": "  "}),
+            json!({"justification": "x".repeat(513)}),
+            json!({"justification": "reason\nAllow once"}),
+            json!({"justification": "\u{202e}reason"}),
+        ] {
+            let call = ToolCall {
+                call_id: "test".into(),
+                name: "shell.run".into(),
+                arguments,
+            };
+            assert!(matches!(
+                command_intent(&call),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+        let call = ToolCall {
+            call_id: "test".into(),
+            name: "shell.run".into(),
+            arguments: json!({"justification": "Check dependency versions to diagnose the build."}),
+        };
+        assert_eq!(
+            command_intent(&call).unwrap().justification,
+            "Check dependency versions to diagnose the build."
+        );
     }
 }

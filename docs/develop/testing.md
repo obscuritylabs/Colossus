@@ -122,6 +122,56 @@ Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
 
+### Command approval acceptance
+
+`cargo test -p colossus-cli --test approval_smoke` uses isolated homes and deterministic
+loopback providers to exercise missing-reason recovery, built-in full-command details,
+allow-once and denial, and real PTY Request-tab scrolling with both embedded and worker
+hosts. Marker files prove that no command executes while approval is pending and that
+accepted commands execute only once. Policy tests bind justification, executable,
+arguments, and working directory to the immutable proof and verify sanitized evidence
+is written before the decision is requested.
+
+From `apps/desktop`, `npm run test:approval-runtime` builds a feature-gated acceptance
+example and the real sidecar. It drives the production review component through the
+production native approval adapter, authenticated worker, and separate approval broker.
+Allow, deny, and cancellation use fresh private homes with a credential-free local
+provider. The test substitutes only the human OS-dialog decision; pending-interaction
+refetch, authorization, policy, permits, and process execution remain real. No test bridge
+is linked into production. The macOS and Windows pre-merge lanes run this tier with no
+scenario retries. Screenshots are in `apps/desktop/output/playwright`, with browser traces
+retained on failure. Mocked browser tests separately cover keyboard operation, compact
+layouts, accessibility, redaction, full details, and stale review state.
+
+On Unix, the allowed command deliberately runs for more than ten seconds, then must
+exit successfully and append exactly one marker. Windows uses immediate markers:
+AppContainer setup and its seven-second cleanup reserve share the effect budget.
+The Windows fixture uses core PowerShell/.NET marker writes without cmdlet module
+autoload; the normal default interpreter, process isolation, and limits are unchanged.
+Both platforms retain zero-exit, exact-once, and no-execution-before-approval checks.
+The test-only activity collector allows
+45 seconds to observe the normal 30-second process budget and terminal publication;
+it does not extend runtime execution or approval limits. Collection failures report
+only categorical run status and pending-interaction count, not private challenges.
+The plugin and approval runners use separate `test-results/plugin-runtime` and
+`test-results/approval-runtime` directories so a subsequent suite cannot erase a
+failed suite's traces before the CI artifact upload.
+On process failure, the fixture reports only allowlisted failure categories,
+numeric exit codes, and whether its start/completion markers exist. Private
+provider error text, command arguments, bindings, and output are never echoed.
+The collector also retains the public terminal status, allowlisted reason, and
+outcome certainty, since a terminal timeout need not produce another model request.
+
+Both native acceptance scripts isolate Tauri's build output from the runtime under
+test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's
+external-binary staging must never overwrite the freshly compiled CLI or sidecar
+with a previously staged binary. Relative target paths resolve from the repository.
+
+Native on-screen smoke testing must additionally verify that the isolated command review
+window opens, external navigation is blocked, closing it invalidates review, and final
+OS confirmation identifies the target, reason, and review binding without presenting a
+truncated command as complete. Browser acceptance does not substitute for this check.
+
 ### Desktop plugin runtime acceptance
 
 From `apps/desktop`, run `npm run test:browser:install` once, then

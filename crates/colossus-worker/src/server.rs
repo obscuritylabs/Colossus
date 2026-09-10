@@ -540,6 +540,7 @@ async fn dispatch_interactive(
             };
             let answer = bridge
                 .request(WorkerPrompt {
+                    command_context: None,
                     prompt_id: Uuid::now_v7().to_string(),
                     kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
                     title: title.into(),

@@ -1,6 +1,9 @@
 use super::*;
 use colossus_contracts::SessionMessage;
 
+#[path = "command_approval_tests.rs"]
+mod command_approval_tests;
+
 fn plan(id: &str, session_id: &str, status: PlanStatus, revision: u64) -> PlanRecord {
     PlanRecord {
         id: id.into(),
@@ -570,7 +573,7 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     };
     let approval = tokio::spawn(async move {
         provider
-            .request_approval(&request, "request-hash", &decision)
+            .request_approval(&request, "request-hash", &decision, None)
             .await
     });
 
@@ -629,7 +632,7 @@ async fn embedded_tui_permission_mode_changes_apply_to_the_live_provider() {
     provider.set_mode(ApprovalMode::Deny);
     assert!(
         provider
-            .request_approval(&request, "deny-hash", &decision)
+            .request_approval(&request, "deny-hash", &decision, None)
             .await
             .expect("deny mode")
             .is_none()
@@ -641,7 +644,7 @@ async fn embedded_tui_permission_mode_changes_apply_to_the_live_provider() {
     provider.set_mode(ApprovalMode::FullAccess);
     assert!(
         provider
-            .request_approval(&request, "allow-hash", &decision)
+            .request_approval(&request, "allow-hash", &decision, None)
             .await
             .expect("full-access mode")
             .is_some()
@@ -653,6 +656,7 @@ async fn worker_tui_projects_approvals_into_the_typed_dock_document() {
     let (sender, mut events) = mpsc::channel(1);
     let handler = worker::TuiWorkerPromptHandler { sender };
     let prompt = WorkerPrompt {
+        command_context: None,
         prompt_id: "worker-approval".into(),
         kind: WorkerPromptKind::Approval,
         title: "Approval required".into(),
@@ -714,6 +718,7 @@ async fn worker_tui_accepts_only_the_canonical_boundary_prompt() {
     let (sender, mut events) = mpsc::channel(1);
     let handler = worker::TuiWorkerPromptHandler { sender };
     let prompt = WorkerPrompt {
+        command_context: None,
         prompt_id: "worker-boundary".into(),
         kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
         title: "External sandbox boundary".into(),
@@ -756,6 +761,7 @@ async fn worker_tui_accepts_only_the_canonical_boundary_prompt() {
     let handler = worker::TuiWorkerPromptHandler { sender };
     let error = handler
         .prompt(WorkerPrompt {
+            command_context: None,
             prompt_id: "worker-boundary-tampered".into(),
             kind: WorkerPromptKind::SandboxBoundaryAcknowledgement,
             title: "External sandbox boundary".into(),

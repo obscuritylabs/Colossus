@@ -166,6 +166,9 @@ jobs:
       - name: Exercise Desktop plugins against the authenticated runtime
         working-directory: apps/desktop
         run: npm run test:plugin-runtime
+      - name: Exercise Desktop command approvals against the authenticated runtime
+        working-directory: apps/desktop
+        run: npm run test:approval-runtime
       - name: Retain macOS plugin acceptance evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -173,6 +176,7 @@ jobs:
           name: macos-plugin-acceptance
           path: |
             apps/desktop/test-results
+            apps/desktop/output/playwright
             output/playwright
           if-no-files-found: ignore
           retention-days: 7
@@ -252,13 +256,13 @@ jobs:
         id: windows_native
         continue-on-error: true
         run: cargo test --locked -p colossus-windows-native -- --nocapture
-      - name: Test ordinary Windows Managed Local instance paths
+      - name: Test Windows Managed Local instance paths and approval routing
         id: windows_sdk_path
         continue-on-error: true
-        run: >-
-          cargo test --locked -p colossus-sdk --lib --features sidecar
-          native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity
-          -- --exact --nocapture
+        run: |
+          cargo test --locked -p colossus-sdk --lib --features sidecar native_sidecar::tests::ordinary_windows_instance_path_matches_its_bound_canonical_identity -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-sdk --lib --features sidecar sidecar_agent_runs::tests -- --nocapture
       - name: Run Windows Colossus-home acceptance
         id: windows_home
         continue-on-error: true
@@ -299,6 +303,12 @@ jobs:
         continue-on-error: true
         working-directory: apps/desktop
         run: npm run test:plugin-runtime
+      - name: Exercise Windows command approvals against the authenticated runtime
+        id: approval_runtime
+        if: steps.desktop_prepare.outcome == 'success'
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npm run test:approval-runtime
       - name: Retain Windows plugin acceptance evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -306,6 +316,7 @@ jobs:
           name: windows-plugin-acceptance
           path: |
             apps/desktop/test-results
+            apps/desktop/output/playwright
             output/playwright
           if-no-files-found: ignore
           retention-days: 7
@@ -326,6 +337,7 @@ jobs:
           TYPECHECK_OUTCOME: ${{ steps.renderer_typecheck.outcome }}
           WORKER_OUTCOME: ${{ steps.worker_acceptance.outcome }}
           PLUGIN_RUNTIME_OUTCOME: ${{ steps.plugin_runtime.outcome }}
+          APPROVAL_RUNTIME_OUTCOME: ${{ steps.approval_runtime.outcome }}
         run: |
           set -eu
           failed=
@@ -341,7 +353,8 @@ jobs:
             "desktop-prepare=$PREPARE_OUTCOME" \
             "desktop-clippy=$CLIPPY_OUTCOME" \
             "desktop-tests=$NATIVE_TEST_OUTCOME" \
-            "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME"
+            "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME" \
+            "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME"
           do
             if test "${result#*=}" != success; then
               failed="$failed ${result%%=*}"

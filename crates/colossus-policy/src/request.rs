@@ -20,6 +20,7 @@ pub fn effect_request(
             reason: None,
         },
         content,
+        command_intent: None,
         credential_references: Vec::new(),
         context: colossus_contracts::ExecutionContext {
             correlation_id: Uuid::now_v7().to_string(),

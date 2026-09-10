@@ -12,10 +12,15 @@ repository = "https://github.com/obscuritylabs/Colossus"
 
 [features]
 plugin-test-bridge = []
+approval-test-bridge = []
 
 [[example]]
 name = "plugin-test-bridge"
 required-features = ["plugin-test-bridge"]
+
+[[example]]
+name = "approval-test-bridge"
+required-features = ["approval-test-bridge"]
 
 [profile.release]
 lto = "thin"

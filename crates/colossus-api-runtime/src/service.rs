@@ -1931,13 +1931,60 @@ fn bounded_tool_activity_text(value: &str) -> Option<String> {
 }
 
 fn released_tool_input(call: &ToolCall) -> Option<String> {
+    // A tool-start event precedes command preparation and approval. Its raw shell
+    // arguments (including env/stdin and model intent) are not a display contract.
+    // Release prepared command details only through sanitized command_context.
+    if call.name == "shell.run" {
+        return None;
+    }
     bounded_tool_activity_text(&serde_json::to_string(&call.arguments).ok()?)
 }
 
 fn released_tool_preview(result: &ToolResult) -> Option<String> {
+    if result.name == "shell.run" && result.exit_code == 0 {
+        return released_command_output(&result.output);
+    }
     (result.exit_code == 0)
         .then(|| bounded_tool_activity_text(&result.output))
         .flatten()
+}
+
+fn released_command_output(output: &str) -> Option<String> {
+    let parsed = serde_json::from_str(output).ok()?;
+    let display = colossus_contracts::command_output_display(&parsed)?;
+    let complete = display.to_string();
+    if complete.len() <= MAX_TOOL_ACTIVITY_PREVIEW_BYTES {
+        return Some(complete);
+    }
+    // Bound individual output fields before serialization: truncating the JSON
+    // envelope would make a safe preview unreadable on reconnect/history replay.
+    let render = |limit| {
+        let mut bounded = display.clone();
+        for pointer in ["/stdout", "/stderr", "/error/code", "/error/message"] {
+            if let Some(value) = bounded.pointer_mut(pointer)
+                && let Some(text) = value.as_str()
+            {
+                *value = bounded_preview_field(text, limit).into();
+            }
+        }
+        bounded.to_string()
+    };
+    let mut low = 0;
+    let mut high = MAX_TOOL_ACTIVITY_PREVIEW_BYTES;
+    let mut best = render(0);
+    while low <= high {
+        let middle = low + (high - low) / 2;
+        let candidate = render(middle);
+        if candidate.len() <= MAX_TOOL_ACTIVITY_PREVIEW_BYTES {
+            best = candidate;
+            low = middle + 1;
+        } else if middle == 0 {
+            break;
+        } else {
+            high = middle - 1;
+        }
+    }
+    Some(best)
 }
 
 fn released_subagent_activity_preview(job: &SubagentJob) -> Option<String> {
@@ -2388,8 +2435,21 @@ fn public_activity(projected: &ProjectedSessionActivity) -> Result<SessionActivi
         started_at: projected.started_at.clone(),
         completed_at: projected.completed_at.clone(),
         duration_ms: projected.duration_ms,
-        input: projected.input.as_ref().map(map_content),
-        result: projected.result.as_ref().map(map_content),
+        input: if projected.title == "shell.run" {
+            None
+        } else {
+            projected.input.as_ref().map(map_content)
+        },
+        result: if projected.title == "shell.run" {
+            projected.result.as_ref().and_then(|content| {
+                released_command_output(&content.value).map(|value| SessionActivityContent {
+                    format: "text".into(),
+                    value,
+                })
+            })
+        } else {
+            projected.result.as_ref().map(map_content)
+        },
         attributes: projected.attributes.clone(),
         source_event_types: projected.source_event_types.clone(),
         first_sequence: projected.first_sequence,
@@ -2874,11 +2934,10 @@ mod tests {
         let update = public_event(RunEvent::ToolStarted {
             turn: 1,
             call: ToolCall {
-                call_id: "call-shell".into(),
-                name: "shell.run".into(),
+                call_id: "call-list".into(),
+                name: "filesystem.list".into(),
                 arguments: serde_json::json!({
-                    "command": "git status --short",
-                    "cwd": "."
+                    "path": "."
                 }),
             },
             elapsed_seconds: 0.25,
@@ -2889,11 +2948,41 @@ mod tests {
         let input: serde_json::Value =
             serde_json::from_str(activity.input.as_deref().expect("started tool input"))
                 .expect("valid input JSON");
-        assert_eq!(
-            input,
-            serde_json::json!({"command": "git status --short", "cwd": "."})
-        );
+        assert_eq!(input, serde_json::json!({"path": "."}));
         assert_eq!(activity.preview, None);
+    }
+
+    #[test]
+    fn shell_activity_never_releases_unprepared_command_or_credentials() {
+        for arguments in [
+            serde_json::json!({
+                "command": "PASSWORD=private-value curl https://private.example/path",
+                "cwd": "/private/workspace", "justification": "model intent",
+                "env": {"TOKEN": "private-env"}, "stdin": "private-stdin"
+            }),
+            serde_json::json!({
+                "argv": ["/private/bin/client", "--token", "private-value"],
+                "cwd": "/private/workspace", "justification": "model intent"
+            }),
+        ] {
+            let update = public_event(RunEvent::ToolStarted {
+                turn: 1,
+                call: ToolCall {
+                    call_id: "call-shell".into(),
+                    name: "shell.run".into(),
+                    arguments,
+                },
+                elapsed_seconds: 0.25,
+            });
+            let RunUpdateKind::ToolActivity { activity } = update else {
+                panic!("started tool must project to tool activity");
+            };
+            assert_eq!(activity.tool_name, "shell.run");
+            assert_eq!(activity.input, None);
+            assert_eq!(activity.preview, None);
+            assert!(!activity.summary.contains("private"));
+            assert!(!activity.summary.contains("model intent"));
+        }
     }
 
     #[test]
@@ -3003,7 +3092,9 @@ mod tests {
 
     #[test]
     fn public_preview_truncation_is_bounded_marked_and_utf8_safe() {
-        let output = "é".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES);
+        let output = serde_json::json!({"stdout": "é".repeat(MAX_TOOL_ACTIVITY_PREVIEW_BYTES),
+            "resolved_argv": ["PRIVATE"], "invocation": {"command": "PRIVATE"}})
+        .to_string();
         let update = public_event(RunEvent::ToolCompleted {
             turn: 1,
             result: ToolResult {
@@ -3019,9 +3110,61 @@ mod tests {
             panic!("completed tool must project to tool activity");
         };
         let preview = activity.preview.expect("successful tool preview");
-        assert_eq!(preview.len(), MAX_TOOL_ACTIVITY_PREVIEW_BYTES);
-        assert!(preview.ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION));
+        assert!(preview.len() <= MAX_TOOL_ACTIVITY_PREVIEW_BYTES);
+        assert!(preview.len() >= MAX_TOOL_ACTIVITY_PREVIEW_BYTES - 4);
+        assert!(!preview.contains("PRIVATE"));
+        let parsed: serde_json::Value = serde_json::from_str(&preview).unwrap();
+        assert!(
+            parsed["stdout"]
+                .as_str()
+                .unwrap()
+                .ends_with(TOOL_ACTIVITY_PREVIEW_TRUNCATION)
+        );
+        assert_eq!(released_command_output(&preview), Some(preview.clone()));
         assert!(preview.is_char_boundary(preview.len()));
+    }
+
+    #[test]
+    fn completed_and_historical_shell_activity_withhold_invocation_metadata() {
+        let output = serde_json::json!({"stdout": "SAFE_OUTPUT", "stderr": "", "exit_code": 0,
+            "invocation": {"command": "PRIVATE_COMMAND", "environment": {"TOKEN": "PRIVATE_ENV"}},
+            "resolved_argv": ["PRIVATE_ARGV"], "cwd": "PRIVATE_PATH", "observed_origins": ["PRIVATE_URL"]}).to_string();
+        let result = ToolResult {
+            call_id: "call".into(),
+            name: "shell.run".into(),
+            output: output.clone(),
+            exit_code: 0,
+        };
+        let preview = released_tool_preview(&result).unwrap();
+        assert!(preview.contains("SAFE_OUTPUT"));
+        assert!(!preview.contains("PRIVATE"));
+        assert_eq!(
+            result.output, output,
+            "model/evidence output must remain unchanged"
+        );
+        for historical_output in [output, preview] {
+            let projected: ProjectedSessionActivity = serde_json::from_value(serde_json::json!({
+                "activity_id": "activity", "session_id": "session", "run_id": "run", "turn": 1,
+                "lane": "tools", "kind": "tool", "title": "shell.run", "summary": "Completed shell.run",
+                "actor": "tool", "status": "completed", "started_at": "2026-09-09T00:00:00Z",
+                "completed_at": null, "duration_ms": null,
+                "input": {"format": "json", "value": "PRIVATE_INPUT"},
+                "result": {"format": "text", "value": historical_output},
+                "attributes": {}, "source_event_types": [], "first_sequence": 1, "last_sequence": 2
+            })).unwrap();
+            let activity = public_activity(&projected).unwrap();
+            assert!(activity.input.is_none());
+            let value = activity.result.unwrap().value;
+            assert!(value.contains("SAFE_OUTPUT"));
+            assert!(!value.contains("PRIVATE"));
+        }
+        for malformed in [
+            "PRIVATE raw observation",
+            "{\"stdout\": \"PRIVATE truncated JSON",
+            "{\"invocation\":\"PRIVATE\"}",
+        ] {
+            assert_eq!(released_command_output(malformed), None);
+        }
     }
 
     #[test]

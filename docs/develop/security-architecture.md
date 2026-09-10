@@ -531,7 +531,38 @@ prompt, a fresh randomized one-use binding, a fixed public action category, and 
 sanitized resource category or HTTP(S) origin. The private policy request hash remains
 inside the native runtime. Raw internal action and tool names, absolute paths,
 executables, URL user information, paths, queries, fragments, raw policy reasons,
-effect arguments, and deterministic commitments to those values remain private.
+effect arguments, and deterministic commitments to those values remain private except
+for the following explicit command-approval release.
+
+New model-issued `shell.run` calls carry bounded, non-authoritative task intent outside
+`ProcessSpec`. The original intent, executable, argument vector, and working directory
+are bound by the private request hash and permit. Before policy replaces credential
+fields, the gateway freezes a separate credential-redacted `CommandApprovalContext`.
+Policy adapters receive only a SHA-256 digest of task intent, never its raw explanation;
+this policy-only projection does not replace the request used by approvals or permits.
+Only that context may release the prepared executable, arguments, working directory,
+and agent-provided explanation to the owning run's authorized clients. Environment
+values and stdin are omitted; known secret values and recognizable inline credentials
+are redacted. Arbitrary unknown secrets cannot be inferred, so task explanations must
+never contain credentials. Credential ranges are detected against the original display
+input before merging replacements, so one replacement cannot disable another recognizer.
+Quoted concatenations, escapes, and nested substitution words are masked as a whole;
+ambiguous or unclosed credential words conservatively mask the remainder. This scanner
+also recognizes literal credential names split by quotes or escapes, without evaluating
+variables or substitutions. An unterminated private-key block masks the remainder.
+The scanner is display-only and never evaluates shell syntax. Rendering must treat all
+context as plain display data. Ambiguous short credential flags use program-specific
+display hints: curl's `-u` and `-E` do not hide Python script paths or ordinary options
+of unrelated programs. Generic long options must end in a complete credential name,
+not merely contain a substring such as `pass` in `--passthru`. Boolean negations and
+suffixes such as `--password-stdin` do not consume the following argument for display.
+Credential options include grouped short forms; attached
+argv values use their full argument boundary rather than shell word boundaries. Shell
+activity titles and restored terminal history never reconstruct a command disclosure
+from raw model arguments.
+The immutable public interaction binds this display through response and replay. The
+context grants no authority and does not change risk-auto eligibility or post-effect
+release.
 
 Credential revocation blocks later authentication but does not alter work already
 accepted under that application's captured authority. Cancellation is a separate
@@ -546,9 +577,10 @@ may already have committed.
 
 The renderer in a Tauri application is untrusted application input. It calls narrow
 capability-scoped Rust commands and receives ordered released updates. It never receives
-daemon credentials, private discovery paths, effect inputs, quarantined effect output,
+daemon credentials, private discovery paths, unrestricted effect inputs, quarantined effect output,
 hidden reasoning, or a generic process, filesystem, network, or SDK invocation escape
-hatch. A successful tool lifecycle update may include a bounded preview of the tool
+hatch. The narrow sanitized command-approval context described above is available only
+to clients authorized to read the owning run. A successful tool lifecycle update may include a bounded preview of the tool
 output only after the same post-effect policy release that makes that output available to
 the model. The preview is capped at 64 KiB and marked when truncated; failed, cancelled,
 unstarted, and outcome-unknown tools do not release an output preview.
@@ -821,8 +853,17 @@ primary credential has the four run/read/control/prompt scopes and never
 approval scope, no tools, and no role outside the primary ceiling. The sidecar issues,
 delivers, acknowledges, activates, and revokes the pair as one bootstrap lifecycle;
 the SDK routes only approval answers over the broker's separately authenticated pinned
-gRPC client. Renderer approval input still requires the native operating-system
-confirmation before an allow response reaches this broker.
+gRPC client. Unix and Windows share the same routing and read projection: only pending
+approval interactions with a response etag expose the native broker capability, reads
+stay on the primary client, and ordinary prompt answers never use the approval broker.
+Renderer approval input still requires the native operating-system
+confirmation before an allow response reaches this broker. Command approvals first use
+a separate native-owned read-only review window with a fixed local document and only
+two narrowly scoped review commands. The main renderer cannot supply its trusted text
+or acknowledge review through those commands. The native client fetches and revalidates
+the pending interaction before review, before OS confirmation, and after confirmation.
+Selection changes, stale bindings, cancellation, and expiry cannot submit an allow to
+the broker. Full command details remain available without weakening the OS confirmation.
 First-time non-Minimal access and every access-rank elevation, including
 Development-to-Allow-all, require a fixed native confirmation before the wider tool
 ceiling is persisted. Execution-boundary elevation is confirmed independently, including

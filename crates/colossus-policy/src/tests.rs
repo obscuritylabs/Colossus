@@ -28,6 +28,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "command_approval/gateway_tests.rs"]
+mod command_gateway_tests;
+
 #[tokio::test(flavor = "current_thread")]
 async fn disclosure_summary_preserves_the_bounded_audit_contract() {
     let request = effect_request(
@@ -103,6 +106,7 @@ impl ApprovalProvider for RiskAutoApproval {
         _request: &colossus_contracts::EffectRequest,
         request_hash: &str,
         _decision: &colossus_contracts::PolicyDecision,
+        _command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<colossus_contracts::ApprovalProof>, PolicyError> {
         self.prompts.fetch_add(1, Ordering::AcqRel);
         Ok(Some(super::approval_proof(request_hash, "test-operator")?))

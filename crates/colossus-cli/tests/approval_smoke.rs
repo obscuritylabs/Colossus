@@ -3,6 +3,15 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+#[path = "approval_smoke/commands.rs"]
+mod command_approval;
+
+#[path = "support/terminal.rs"]
+#[allow(dead_code)]
+mod terminal_support;
+#[path = "approval_smoke/tui_commands.rs"]
+mod tui_commands;
+
 use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{

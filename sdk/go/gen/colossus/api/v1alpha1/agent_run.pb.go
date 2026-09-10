@@ -3191,9 +3191,12 @@ type ApprovalInteraction struct {
 	Risk ApprovalRisk `protobuf:"varint,5,opt,name=risk,proto3,enum=colossus.api.v1alpha1.ApprovalRisk" json:"risk,omitempty"`
 	// request_hash is a randomized one-use binding to the private evaluated request.
 	// It is not a deterministic digest of hidden request fields.
-	RequestHash   string `protobuf:"bytes,6,opt,name=request_hash,json=requestHash,proto3" json:"request_hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RequestHash string `protobuf:"bytes,6,opt,name=request_hash,json=requestHash,proto3" json:"request_hash,omitempty"`
+	// command_context is the credential-redacted prepared command, available only
+	// for command execution approvals. It never grants additional authority.
+	CommandContext *CommandApprovalContext `protobuf:"bytes,8,opt,name=command_context,json=commandContext,proto3" json:"command_context,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ApprovalInteraction) Reset() {
@@ -3261,6 +3264,95 @@ func (x *ApprovalInteraction) GetRequestHash() string {
 	return ""
 }
 
+func (x *ApprovalInteraction) GetCommandContext() *CommandApprovalContext {
+	if x != nil {
+		return x.CommandContext
+	}
+	return nil
+}
+
+// CommandApprovalContext is a bounded display copy, not executable input.
+type CommandApprovalContext struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// justification is the agent-provided task purpose, separate from policy and risk.
+	Justification string `protobuf:"bytes,1,opt,name=justification,proto3" json:"justification,omitempty"`
+	// executable is the prepared executable, with secrets removed and controls escaped.
+	Executable string `protobuf:"bytes,2,opt,name=executable,proto3" json:"executable,omitempty"`
+	// arguments preserve argument boundaries and exclude the executable.
+	Arguments []string `protobuf:"bytes,3,rep,name=arguments,proto3" json:"arguments,omitempty"`
+	// working_directory is the prepared working directory, sanitized for display.
+	WorkingDirectory string `protobuf:"bytes,4,opt,name=working_directory,json=workingDirectory,proto3" json:"working_directory,omitempty"`
+	// redacted indicates that credential-bearing text was replaced.
+	Redacted      bool `protobuf:"varint,5,opt,name=redacted,proto3" json:"redacted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandApprovalContext) Reset() {
+	*x = CommandApprovalContext{}
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandApprovalContext) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandApprovalContext) ProtoMessage() {}
+
+func (x *CommandApprovalContext) ProtoReflect() protoreflect.Message {
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandApprovalContext.ProtoReflect.Descriptor instead.
+func (*CommandApprovalContext) Descriptor() ([]byte, []int) {
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *CommandApprovalContext) GetJustification() string {
+	if x != nil {
+		return x.Justification
+	}
+	return ""
+}
+
+func (x *CommandApprovalContext) GetExecutable() string {
+	if x != nil {
+		return x.Executable
+	}
+	return ""
+}
+
+func (x *CommandApprovalContext) GetArguments() []string {
+	if x != nil {
+		return x.Arguments
+	}
+	return nil
+}
+
+func (x *CommandApprovalContext) GetWorkingDirectory() string {
+	if x != nil {
+		return x.WorkingDirectory
+	}
+	return ""
+}
+
+func (x *CommandApprovalContext) GetRedacted() bool {
+	if x != nil {
+		return x.Redacted
+	}
+	return false
+}
+
 // Interaction is a durable caller-bound prompt or approval.
 type Interaction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3293,7 +3385,7 @@ type Interaction struct {
 
 func (x *Interaction) Reset() {
 	*x = Interaction{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[31]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3305,7 +3397,7 @@ func (x *Interaction) String() string {
 func (*Interaction) ProtoMessage() {}
 
 func (x *Interaction) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[31]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3318,7 +3410,7 @@ func (x *Interaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Interaction.ProtoReflect.Descriptor instead.
 func (*Interaction) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{31}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *Interaction) GetInteractionId() string {
@@ -3433,7 +3525,7 @@ type PromptChoiceAnswer struct {
 
 func (x *PromptChoiceAnswer) Reset() {
 	*x = PromptChoiceAnswer{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[32]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3445,7 +3537,7 @@ func (x *PromptChoiceAnswer) String() string {
 func (*PromptChoiceAnswer) ProtoMessage() {}
 
 func (x *PromptChoiceAnswer) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[32]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3458,7 +3550,7 @@ func (x *PromptChoiceAnswer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptChoiceAnswer.ProtoReflect.Descriptor instead.
 func (*PromptChoiceAnswer) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{32}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *PromptChoiceAnswer) GetChoiceId() string {
@@ -3491,7 +3583,7 @@ type PromptAnswer struct {
 
 func (x *PromptAnswer) Reset() {
 	*x = PromptAnswer{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[33]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3503,7 +3595,7 @@ func (x *PromptAnswer) String() string {
 func (*PromptAnswer) ProtoMessage() {}
 
 func (x *PromptAnswer) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[33]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3516,7 +3608,7 @@ func (x *PromptAnswer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptAnswer.ProtoReflect.Descriptor instead.
 func (*PromptAnswer) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{33}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PromptAnswer) GetAnswer() isPromptAnswer_Answer {
@@ -3575,7 +3667,7 @@ type ApprovalAnswer struct {
 
 func (x *ApprovalAnswer) Reset() {
 	*x = ApprovalAnswer{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[34]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3587,7 +3679,7 @@ func (x *ApprovalAnswer) String() string {
 func (*ApprovalAnswer) ProtoMessage() {}
 
 func (x *ApprovalAnswer) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[34]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3600,7 +3692,7 @@ func (x *ApprovalAnswer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalAnswer.ProtoReflect.Descriptor instead.
 func (*ApprovalAnswer) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{34}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ApprovalAnswer) GetApproved() bool {
@@ -3641,7 +3733,7 @@ type RespondInteractionRequest struct {
 
 func (x *RespondInteractionRequest) Reset() {
 	*x = RespondInteractionRequest{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[35]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3653,7 +3745,7 @@ func (x *RespondInteractionRequest) String() string {
 func (*RespondInteractionRequest) ProtoMessage() {}
 
 func (x *RespondInteractionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[35]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3666,7 +3758,7 @@ func (x *RespondInteractionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RespondInteractionRequest.ProtoReflect.Descriptor instead.
 func (*RespondInteractionRequest) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{35}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *RespondInteractionRequest) GetRunId() string {
@@ -3751,7 +3843,7 @@ type RespondInteractionResponse struct {
 
 func (x *RespondInteractionResponse) Reset() {
 	*x = RespondInteractionResponse{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[36]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3763,7 +3855,7 @@ func (x *RespondInteractionResponse) String() string {
 func (*RespondInteractionResponse) ProtoMessage() {}
 
 func (x *RespondInteractionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[36]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3776,7 +3868,7 @@ func (x *RespondInteractionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RespondInteractionResponse.ProtoReflect.Descriptor instead.
 func (*RespondInteractionResponse) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{36}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *RespondInteractionResponse) GetInteraction() *Interaction {
@@ -3797,7 +3889,7 @@ type VisibleOutputDelta struct {
 
 func (x *VisibleOutputDelta) Reset() {
 	*x = VisibleOutputDelta{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[37]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3809,7 +3901,7 @@ func (x *VisibleOutputDelta) String() string {
 func (*VisibleOutputDelta) ProtoMessage() {}
 
 func (x *VisibleOutputDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[37]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3822,7 +3914,7 @@ func (x *VisibleOutputDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VisibleOutputDelta.ProtoReflect.Descriptor instead.
 func (*VisibleOutputDelta) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{37}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *VisibleOutputDelta) GetText() string {
@@ -3843,7 +3935,7 @@ type ReasoningSummary struct {
 
 func (x *ReasoningSummary) Reset() {
 	*x = ReasoningSummary{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[38]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3855,7 +3947,7 @@ func (x *ReasoningSummary) String() string {
 func (*ReasoningSummary) ProtoMessage() {}
 
 func (x *ReasoningSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[38]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3868,7 +3960,7 @@ func (x *ReasoningSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReasoningSummary.ProtoReflect.Descriptor instead.
 func (*ReasoningSummary) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{38}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ReasoningSummary) GetSummary() string {
@@ -3899,7 +3991,7 @@ type ToolActivity struct {
 
 func (x *ToolActivity) Reset() {
 	*x = ToolActivity{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[39]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3911,7 +4003,7 @@ func (x *ToolActivity) String() string {
 func (*ToolActivity) ProtoMessage() {}
 
 func (x *ToolActivity) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[39]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3924,7 +4016,7 @@ func (x *ToolActivity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolActivity.ProtoReflect.Descriptor instead.
 func (*ToolActivity) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{39}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ToolActivity) GetCallId() string {
@@ -3988,7 +4080,7 @@ type TokenUsage struct {
 
 func (x *TokenUsage) Reset() {
 	*x = TokenUsage{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[40]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4000,7 +4092,7 @@ func (x *TokenUsage) String() string {
 func (*TokenUsage) ProtoMessage() {}
 
 func (x *TokenUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[40]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4013,7 +4105,7 @@ func (x *TokenUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenUsage.ProtoReflect.Descriptor instead.
 func (*TokenUsage) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{40}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *TokenUsage) GetInputTokens() uint64 {
@@ -4064,7 +4156,7 @@ type RunNotice struct {
 
 func (x *RunNotice) Reset() {
 	*x = RunNotice{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[41]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4076,7 +4168,7 @@ func (x *RunNotice) String() string {
 func (*RunNotice) ProtoMessage() {}
 
 func (x *RunNotice) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[41]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4089,7 +4181,7 @@ func (x *RunNotice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunNotice.ProtoReflect.Descriptor instead.
 func (*RunNotice) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{41}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RunNotice) GetReason() string {
@@ -4117,7 +4209,7 @@ type RunStateChanged struct {
 
 func (x *RunStateChanged) Reset() {
 	*x = RunStateChanged{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[42]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4129,7 +4221,7 @@ func (x *RunStateChanged) String() string {
 func (*RunStateChanged) ProtoMessage() {}
 
 func (x *RunStateChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[42]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4142,7 +4234,7 @@ func (x *RunStateChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStateChanged.ProtoReflect.Descriptor instead.
 func (*RunStateChanged) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{42}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *RunStateChanged) GetStatus() RunStatus {
@@ -4165,7 +4257,7 @@ type RunFailed struct {
 
 func (x *RunFailed) Reset() {
 	*x = RunFailed{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[43]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4177,7 +4269,7 @@ func (x *RunFailed) String() string {
 func (*RunFailed) ProtoMessage() {}
 
 func (x *RunFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[43]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4190,7 +4282,7 @@ func (x *RunFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunFailed.ProtoReflect.Descriptor instead.
 func (*RunFailed) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{43}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *RunFailed) GetStatus() RunStatus {
@@ -4238,7 +4330,7 @@ type RunUpdate struct {
 
 func (x *RunUpdate) Reset() {
 	*x = RunUpdate{}
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[44]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4250,7 +4342,7 @@ func (x *RunUpdate) String() string {
 func (*RunUpdate) ProtoMessage() {}
 
 func (x *RunUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[44]
+	mi := &file_colossus_api_v1alpha1_agent_run_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4263,7 +4355,7 @@ func (x *RunUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunUpdate.ProtoReflect.Descriptor instead.
 func (*RunUpdate) Descriptor() ([]byte, []int) {
-	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{44}
+	return file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *RunUpdate) GetRunId() string {
@@ -4680,13 +4772,22 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x0fallow_free_form\x18\x03 \x01(\bR\rallowFreeForm\"<\n" +
 	"\x0eReleasedDetail\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\xd9\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\xb1\x02\n" +
 	"\x13ApprovalInteraction\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x16\n" +
 	"\x06action\x18\x03 \x01(\tR\x06action\x12\x1a\n" +
 	"\bresource\x18\x04 \x01(\tR\bresource\x127\n" +
 	"\x04risk\x18\x05 \x01(\x0e2#.colossus.api.v1alpha1.ApprovalRiskR\x04risk\x12!\n" +
-	"\frequest_hash\x18\x06 \x01(\tR\vrequestHashJ\x04\b\x01\x10\x02J\x04\b\a\x10\bR\x05titleR\adetails\"\xad\x04\n" +
+	"\frequest_hash\x18\x06 \x01(\tR\vrequestHash\x12V\n" +
+	"\x0fcommand_context\x18\b \x01(\v2-.colossus.api.v1alpha1.CommandApprovalContextR\x0ecommandContextJ\x04\b\x01\x10\x02J\x04\b\a\x10\bR\x05titleR\adetails\"\xc5\x01\n" +
+	"\x16CommandApprovalContext\x12$\n" +
+	"\rjustification\x18\x01 \x01(\tR\rjustification\x12\x1e\n" +
+	"\n" +
+	"executable\x18\x02 \x01(\tR\n" +
+	"executable\x12\x1c\n" +
+	"\targuments\x18\x03 \x03(\tR\targuments\x12+\n" +
+	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\x12\x1a\n" +
+	"\bredacted\x18\x05 \x01(\bR\bredacted\"\xad\x04\n" +
 	"\vInteraction\x12%\n" +
 	"\x0einteraction_id\x18\x01 \x01(\tR\rinteractionId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12:\n" +
@@ -4884,7 +4985,7 @@ func file_colossus_api_v1alpha1_agent_run_proto_rawDescGZIP() []byte {
 }
 
 var file_colossus_api_v1alpha1_agent_run_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_colossus_api_v1alpha1_agent_run_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_colossus_api_v1alpha1_agent_run_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_colossus_api_v1alpha1_agent_run_proto_goTypes = []any{
 	(RunMode)(0),                        // 0: colossus.api.v1alpha1.RunMode
 	(ResearchDepth)(0),                  // 1: colossus.api.v1alpha1.ResearchDepth
@@ -4931,42 +5032,43 @@ var file_colossus_api_v1alpha1_agent_run_proto_goTypes = []any{
 	(*UserPromptInteraction)(nil),       // 42: colossus.api.v1alpha1.UserPromptInteraction
 	(*ReleasedDetail)(nil),              // 43: colossus.api.v1alpha1.ReleasedDetail
 	(*ApprovalInteraction)(nil),         // 44: colossus.api.v1alpha1.ApprovalInteraction
-	(*Interaction)(nil),                 // 45: colossus.api.v1alpha1.Interaction
-	(*PromptChoiceAnswer)(nil),          // 46: colossus.api.v1alpha1.PromptChoiceAnswer
-	(*PromptAnswer)(nil),                // 47: colossus.api.v1alpha1.PromptAnswer
-	(*ApprovalAnswer)(nil),              // 48: colossus.api.v1alpha1.ApprovalAnswer
-	(*RespondInteractionRequest)(nil),   // 49: colossus.api.v1alpha1.RespondInteractionRequest
-	(*RespondInteractionResponse)(nil),  // 50: colossus.api.v1alpha1.RespondInteractionResponse
-	(*VisibleOutputDelta)(nil),          // 51: colossus.api.v1alpha1.VisibleOutputDelta
-	(*ReasoningSummary)(nil),            // 52: colossus.api.v1alpha1.ReasoningSummary
-	(*ToolActivity)(nil),                // 53: colossus.api.v1alpha1.ToolActivity
-	(*TokenUsage)(nil),                  // 54: colossus.api.v1alpha1.TokenUsage
-	(*RunNotice)(nil),                   // 55: colossus.api.v1alpha1.RunNotice
-	(*RunStateChanged)(nil),             // 56: colossus.api.v1alpha1.RunStateChanged
-	(*RunFailed)(nil),                   // 57: colossus.api.v1alpha1.RunFailed
-	(*RunUpdate)(nil),                   // 58: colossus.api.v1alpha1.RunUpdate
-	nil,                                 // 59: colossus.api.v1alpha1.SessionActivity.AttributesEntry
-	(OutcomeCertainty)(0),               // 60: colossus.api.v1alpha1.OutcomeCertainty
-	(*timestamppb.Timestamp)(nil),       // 61: google.protobuf.Timestamp
-	(*ContentPart)(nil),                 // 62: colossus.api.v1alpha1.ContentPart
-	(*PageRequest)(nil),                 // 63: colossus.api.v1alpha1.PageRequest
-	(*PageResponse)(nil),                // 64: colossus.api.v1alpha1.PageResponse
-	(*SessionMessage)(nil),              // 65: colossus.api.v1alpha1.SessionMessage
+	(*CommandApprovalContext)(nil),      // 45: colossus.api.v1alpha1.CommandApprovalContext
+	(*Interaction)(nil),                 // 46: colossus.api.v1alpha1.Interaction
+	(*PromptChoiceAnswer)(nil),          // 47: colossus.api.v1alpha1.PromptChoiceAnswer
+	(*PromptAnswer)(nil),                // 48: colossus.api.v1alpha1.PromptAnswer
+	(*ApprovalAnswer)(nil),              // 49: colossus.api.v1alpha1.ApprovalAnswer
+	(*RespondInteractionRequest)(nil),   // 50: colossus.api.v1alpha1.RespondInteractionRequest
+	(*RespondInteractionResponse)(nil),  // 51: colossus.api.v1alpha1.RespondInteractionResponse
+	(*VisibleOutputDelta)(nil),          // 52: colossus.api.v1alpha1.VisibleOutputDelta
+	(*ReasoningSummary)(nil),            // 53: colossus.api.v1alpha1.ReasoningSummary
+	(*ToolActivity)(nil),                // 54: colossus.api.v1alpha1.ToolActivity
+	(*TokenUsage)(nil),                  // 55: colossus.api.v1alpha1.TokenUsage
+	(*RunNotice)(nil),                   // 56: colossus.api.v1alpha1.RunNotice
+	(*RunStateChanged)(nil),             // 57: colossus.api.v1alpha1.RunStateChanged
+	(*RunFailed)(nil),                   // 58: colossus.api.v1alpha1.RunFailed
+	(*RunUpdate)(nil),                   // 59: colossus.api.v1alpha1.RunUpdate
+	nil,                                 // 60: colossus.api.v1alpha1.SessionActivity.AttributesEntry
+	(OutcomeCertainty)(0),               // 61: colossus.api.v1alpha1.OutcomeCertainty
+	(*timestamppb.Timestamp)(nil),       // 62: google.protobuf.Timestamp
+	(*ContentPart)(nil),                 // 63: colossus.api.v1alpha1.ContentPart
+	(*PageRequest)(nil),                 // 64: colossus.api.v1alpha1.PageRequest
+	(*PageResponse)(nil),                // 65: colossus.api.v1alpha1.PageResponse
+	(*SessionMessage)(nil),              // 66: colossus.api.v1alpha1.SessionMessage
 }
 var file_colossus_api_v1alpha1_agent_run_proto_depIdxs = []int32{
 	3,  // 0: colossus.api.v1alpha1.RunResult.plan_status:type_name -> colossus.api.v1alpha1.PlanStatus
-	60, // 1: colossus.api.v1alpha1.RunFailure.outcome_certainty:type_name -> colossus.api.v1alpha1.OutcomeCertainty
+	61, // 1: colossus.api.v1alpha1.RunFailure.outcome_certainty:type_name -> colossus.api.v1alpha1.OutcomeCertainty
 	3,  // 2: colossus.api.v1alpha1.RunCancellation.plan_status:type_name -> colossus.api.v1alpha1.PlanStatus
 	0,  // 3: colossus.api.v1alpha1.Run.mode:type_name -> colossus.api.v1alpha1.RunMode
 	5,  // 4: colossus.api.v1alpha1.Run.status:type_name -> colossus.api.v1alpha1.RunStatus
-	61, // 5: colossus.api.v1alpha1.Run.created_at:type_name -> google.protobuf.Timestamp
-	61, // 6: colossus.api.v1alpha1.Run.updated_at:type_name -> google.protobuf.Timestamp
-	61, // 7: colossus.api.v1alpha1.Run.started_at:type_name -> google.protobuf.Timestamp
-	61, // 8: colossus.api.v1alpha1.Run.finished_at:type_name -> google.protobuf.Timestamp
+	62, // 5: colossus.api.v1alpha1.Run.created_at:type_name -> google.protobuf.Timestamp
+	62, // 6: colossus.api.v1alpha1.Run.updated_at:type_name -> google.protobuf.Timestamp
+	62, // 7: colossus.api.v1alpha1.Run.started_at:type_name -> google.protobuf.Timestamp
+	62, // 8: colossus.api.v1alpha1.Run.finished_at:type_name -> google.protobuf.Timestamp
 	14, // 9: colossus.api.v1alpha1.Run.result:type_name -> colossus.api.v1alpha1.RunResult
 	15, // 10: colossus.api.v1alpha1.Run.failure:type_name -> colossus.api.v1alpha1.RunFailure
 	16, // 11: colossus.api.v1alpha1.Run.cancellation:type_name -> colossus.api.v1alpha1.RunCancellation
-	62, // 12: colossus.api.v1alpha1.CreateRunRequest.input:type_name -> colossus.api.v1alpha1.ContentPart
+	63, // 12: colossus.api.v1alpha1.CreateRunRequest.input:type_name -> colossus.api.v1alpha1.ContentPart
 	0,  // 13: colossus.api.v1alpha1.CreateRunRequest.mode:type_name -> colossus.api.v1alpha1.RunMode
 	20, // 14: colossus.api.v1alpha1.CreateRunRequest.plan_action:type_name -> colossus.api.v1alpha1.PlanRunAction
 	19, // 15: colossus.api.v1alpha1.CreateRunRequest.branch:type_name -> colossus.api.v1alpha1.RunBranch
@@ -4978,80 +5080,81 @@ var file_colossus_api_v1alpha1_agent_run_proto_depIdxs = []int32{
 	4,  // 21: colossus.api.v1alpha1.ExecutePlanAction.strategy:type_name -> colossus.api.v1alpha1.PlanExecutionStrategy
 	17, // 22: colossus.api.v1alpha1.CreateRunResponse.run:type_name -> colossus.api.v1alpha1.Run
 	17, // 23: colossus.api.v1alpha1.GetRunResponse.run:type_name -> colossus.api.v1alpha1.Run
-	45, // 24: colossus.api.v1alpha1.GetRunResponse.pending_interactions:type_name -> colossus.api.v1alpha1.Interaction
+	46, // 24: colossus.api.v1alpha1.GetRunResponse.pending_interactions:type_name -> colossus.api.v1alpha1.Interaction
 	5,  // 25: colossus.api.v1alpha1.ListRunsRequest.statuses:type_name -> colossus.api.v1alpha1.RunStatus
-	63, // 26: colossus.api.v1alpha1.ListRunsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	64, // 26: colossus.api.v1alpha1.ListRunsRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	17, // 27: colossus.api.v1alpha1.ListRunsResponse.runs:type_name -> colossus.api.v1alpha1.Run
-	64, // 28: colossus.api.v1alpha1.ListRunsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	65, // 28: colossus.api.v1alpha1.ListRunsResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
 	7,  // 29: colossus.api.v1alpha1.SessionActivity.lane:type_name -> colossus.api.v1alpha1.SessionActivityLane
 	8,  // 30: colossus.api.v1alpha1.SessionActivity.kind:type_name -> colossus.api.v1alpha1.SessionActivityKind
 	9,  // 31: colossus.api.v1alpha1.SessionActivity.status:type_name -> colossus.api.v1alpha1.SessionActivityStatus
-	61, // 32: colossus.api.v1alpha1.SessionActivity.started_at:type_name -> google.protobuf.Timestamp
-	61, // 33: colossus.api.v1alpha1.SessionActivity.completed_at:type_name -> google.protobuf.Timestamp
+	62, // 32: colossus.api.v1alpha1.SessionActivity.started_at:type_name -> google.protobuf.Timestamp
+	62, // 33: colossus.api.v1alpha1.SessionActivity.completed_at:type_name -> google.protobuf.Timestamp
 	28, // 34: colossus.api.v1alpha1.SessionActivity.input:type_name -> colossus.api.v1alpha1.SessionActivityContent
 	28, // 35: colossus.api.v1alpha1.SessionActivity.result:type_name -> colossus.api.v1alpha1.SessionActivityContent
-	59, // 36: colossus.api.v1alpha1.SessionActivity.attributes:type_name -> colossus.api.v1alpha1.SessionActivity.AttributesEntry
+	60, // 36: colossus.api.v1alpha1.SessionActivity.attributes:type_name -> colossus.api.v1alpha1.SessionActivity.AttributesEntry
 	7,  // 37: colossus.api.v1alpha1.ListSessionActivityRequest.lanes:type_name -> colossus.api.v1alpha1.SessionActivityLane
 	8,  // 38: colossus.api.v1alpha1.ListSessionActivityRequest.kinds:type_name -> colossus.api.v1alpha1.SessionActivityKind
 	9,  // 39: colossus.api.v1alpha1.ListSessionActivityRequest.statuses:type_name -> colossus.api.v1alpha1.SessionActivityStatus
-	63, // 40: colossus.api.v1alpha1.ListSessionActivityRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
+	64, // 40: colossus.api.v1alpha1.ListSessionActivityRequest.page:type_name -> colossus.api.v1alpha1.PageRequest
 	29, // 41: colossus.api.v1alpha1.ListSessionActivityResponse.activities:type_name -> colossus.api.v1alpha1.SessionActivity
-	64, // 42: colossus.api.v1alpha1.ListSessionActivityResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
-	58, // 43: colossus.api.v1alpha1.WatchRunResponse.update:type_name -> colossus.api.v1alpha1.RunUpdate
+	65, // 42: colossus.api.v1alpha1.ListSessionActivityResponse.page:type_name -> colossus.api.v1alpha1.PageResponse
+	59, // 43: colossus.api.v1alpha1.WatchRunResponse.update:type_name -> colossus.api.v1alpha1.RunUpdate
 	17, // 44: colossus.api.v1alpha1.CancelRunResponse.run:type_name -> colossus.api.v1alpha1.Run
 	36, // 45: colossus.api.v1alpha1.ArchiveThreadResponse.thread:type_name -> colossus.api.v1alpha1.ThreadLifecycle
 	36, // 46: colossus.api.v1alpha1.RestoreThreadResponse.thread:type_name -> colossus.api.v1alpha1.ThreadLifecycle
 	41, // 47: colossus.api.v1alpha1.UserPromptInteraction.choices:type_name -> colossus.api.v1alpha1.PromptChoice
 	12, // 48: colossus.api.v1alpha1.ApprovalInteraction.risk:type_name -> colossus.api.v1alpha1.ApprovalRisk
-	10, // 49: colossus.api.v1alpha1.Interaction.kind:type_name -> colossus.api.v1alpha1.InteractionKind
-	11, // 50: colossus.api.v1alpha1.Interaction.status:type_name -> colossus.api.v1alpha1.InteractionStatus
-	61, // 51: colossus.api.v1alpha1.Interaction.created_at:type_name -> google.protobuf.Timestamp
-	61, // 52: colossus.api.v1alpha1.Interaction.expires_at:type_name -> google.protobuf.Timestamp
-	42, // 53: colossus.api.v1alpha1.Interaction.user_prompt:type_name -> colossus.api.v1alpha1.UserPromptInteraction
-	44, // 54: colossus.api.v1alpha1.Interaction.approval:type_name -> colossus.api.v1alpha1.ApprovalInteraction
-	46, // 55: colossus.api.v1alpha1.PromptAnswer.choice:type_name -> colossus.api.v1alpha1.PromptChoiceAnswer
-	47, // 56: colossus.api.v1alpha1.RespondInteractionRequest.prompt_answer:type_name -> colossus.api.v1alpha1.PromptAnswer
-	48, // 57: colossus.api.v1alpha1.RespondInteractionRequest.approval_answer:type_name -> colossus.api.v1alpha1.ApprovalAnswer
-	45, // 58: colossus.api.v1alpha1.RespondInteractionResponse.interaction:type_name -> colossus.api.v1alpha1.Interaction
-	13, // 59: colossus.api.v1alpha1.ToolActivity.state:type_name -> colossus.api.v1alpha1.ToolActivityState
-	5,  // 60: colossus.api.v1alpha1.RunStateChanged.status:type_name -> colossus.api.v1alpha1.RunStatus
-	5,  // 61: colossus.api.v1alpha1.RunFailed.status:type_name -> colossus.api.v1alpha1.RunStatus
-	15, // 62: colossus.api.v1alpha1.RunFailed.failure:type_name -> colossus.api.v1alpha1.RunFailure
-	61, // 63: colossus.api.v1alpha1.RunUpdate.created_at:type_name -> google.protobuf.Timestamp
-	56, // 64: colossus.api.v1alpha1.RunUpdate.state:type_name -> colossus.api.v1alpha1.RunStateChanged
-	51, // 65: colossus.api.v1alpha1.RunUpdate.output_delta:type_name -> colossus.api.v1alpha1.VisibleOutputDelta
-	52, // 66: colossus.api.v1alpha1.RunUpdate.reasoning_summary:type_name -> colossus.api.v1alpha1.ReasoningSummary
-	53, // 67: colossus.api.v1alpha1.RunUpdate.tool_activity:type_name -> colossus.api.v1alpha1.ToolActivity
-	54, // 68: colossus.api.v1alpha1.RunUpdate.usage:type_name -> colossus.api.v1alpha1.TokenUsage
-	45, // 69: colossus.api.v1alpha1.RunUpdate.interaction:type_name -> colossus.api.v1alpha1.Interaction
-	65, // 70: colossus.api.v1alpha1.RunUpdate.message:type_name -> colossus.api.v1alpha1.SessionMessage
-	55, // 71: colossus.api.v1alpha1.RunUpdate.notice:type_name -> colossus.api.v1alpha1.RunNotice
-	14, // 72: colossus.api.v1alpha1.RunUpdate.result:type_name -> colossus.api.v1alpha1.RunResult
-	57, // 73: colossus.api.v1alpha1.RunUpdate.failure:type_name -> colossus.api.v1alpha1.RunFailed
-	16, // 74: colossus.api.v1alpha1.RunUpdate.cancellation:type_name -> colossus.api.v1alpha1.RunCancellation
-	18, // 75: colossus.api.v1alpha1.AgentRunService.CreateRun:input_type -> colossus.api.v1alpha1.CreateRunRequest
-	24, // 76: colossus.api.v1alpha1.AgentRunService.GetRun:input_type -> colossus.api.v1alpha1.GetRunRequest
-	26, // 77: colossus.api.v1alpha1.AgentRunService.ListRuns:input_type -> colossus.api.v1alpha1.ListRunsRequest
-	30, // 78: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:input_type -> colossus.api.v1alpha1.ListSessionActivityRequest
-	32, // 79: colossus.api.v1alpha1.AgentRunService.WatchRun:input_type -> colossus.api.v1alpha1.WatchRunRequest
-	34, // 80: colossus.api.v1alpha1.AgentRunService.CancelRun:input_type -> colossus.api.v1alpha1.CancelRunRequest
-	37, // 81: colossus.api.v1alpha1.AgentRunService.ArchiveThread:input_type -> colossus.api.v1alpha1.ArchiveThreadRequest
-	39, // 82: colossus.api.v1alpha1.AgentRunService.RestoreThread:input_type -> colossus.api.v1alpha1.RestoreThreadRequest
-	49, // 83: colossus.api.v1alpha1.AgentRunService.RespondInteraction:input_type -> colossus.api.v1alpha1.RespondInteractionRequest
-	23, // 84: colossus.api.v1alpha1.AgentRunService.CreateRun:output_type -> colossus.api.v1alpha1.CreateRunResponse
-	25, // 85: colossus.api.v1alpha1.AgentRunService.GetRun:output_type -> colossus.api.v1alpha1.GetRunResponse
-	27, // 86: colossus.api.v1alpha1.AgentRunService.ListRuns:output_type -> colossus.api.v1alpha1.ListRunsResponse
-	31, // 87: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:output_type -> colossus.api.v1alpha1.ListSessionActivityResponse
-	33, // 88: colossus.api.v1alpha1.AgentRunService.WatchRun:output_type -> colossus.api.v1alpha1.WatchRunResponse
-	35, // 89: colossus.api.v1alpha1.AgentRunService.CancelRun:output_type -> colossus.api.v1alpha1.CancelRunResponse
-	38, // 90: colossus.api.v1alpha1.AgentRunService.ArchiveThread:output_type -> colossus.api.v1alpha1.ArchiveThreadResponse
-	40, // 91: colossus.api.v1alpha1.AgentRunService.RestoreThread:output_type -> colossus.api.v1alpha1.RestoreThreadResponse
-	50, // 92: colossus.api.v1alpha1.AgentRunService.RespondInteraction:output_type -> colossus.api.v1alpha1.RespondInteractionResponse
-	84, // [84:93] is the sub-list for method output_type
-	75, // [75:84] is the sub-list for method input_type
-	75, // [75:75] is the sub-list for extension type_name
-	75, // [75:75] is the sub-list for extension extendee
-	0,  // [0:75] is the sub-list for field type_name
+	45, // 49: colossus.api.v1alpha1.ApprovalInteraction.command_context:type_name -> colossus.api.v1alpha1.CommandApprovalContext
+	10, // 50: colossus.api.v1alpha1.Interaction.kind:type_name -> colossus.api.v1alpha1.InteractionKind
+	11, // 51: colossus.api.v1alpha1.Interaction.status:type_name -> colossus.api.v1alpha1.InteractionStatus
+	62, // 52: colossus.api.v1alpha1.Interaction.created_at:type_name -> google.protobuf.Timestamp
+	62, // 53: colossus.api.v1alpha1.Interaction.expires_at:type_name -> google.protobuf.Timestamp
+	42, // 54: colossus.api.v1alpha1.Interaction.user_prompt:type_name -> colossus.api.v1alpha1.UserPromptInteraction
+	44, // 55: colossus.api.v1alpha1.Interaction.approval:type_name -> colossus.api.v1alpha1.ApprovalInteraction
+	47, // 56: colossus.api.v1alpha1.PromptAnswer.choice:type_name -> colossus.api.v1alpha1.PromptChoiceAnswer
+	48, // 57: colossus.api.v1alpha1.RespondInteractionRequest.prompt_answer:type_name -> colossus.api.v1alpha1.PromptAnswer
+	49, // 58: colossus.api.v1alpha1.RespondInteractionRequest.approval_answer:type_name -> colossus.api.v1alpha1.ApprovalAnswer
+	46, // 59: colossus.api.v1alpha1.RespondInteractionResponse.interaction:type_name -> colossus.api.v1alpha1.Interaction
+	13, // 60: colossus.api.v1alpha1.ToolActivity.state:type_name -> colossus.api.v1alpha1.ToolActivityState
+	5,  // 61: colossus.api.v1alpha1.RunStateChanged.status:type_name -> colossus.api.v1alpha1.RunStatus
+	5,  // 62: colossus.api.v1alpha1.RunFailed.status:type_name -> colossus.api.v1alpha1.RunStatus
+	15, // 63: colossus.api.v1alpha1.RunFailed.failure:type_name -> colossus.api.v1alpha1.RunFailure
+	62, // 64: colossus.api.v1alpha1.RunUpdate.created_at:type_name -> google.protobuf.Timestamp
+	57, // 65: colossus.api.v1alpha1.RunUpdate.state:type_name -> colossus.api.v1alpha1.RunStateChanged
+	52, // 66: colossus.api.v1alpha1.RunUpdate.output_delta:type_name -> colossus.api.v1alpha1.VisibleOutputDelta
+	53, // 67: colossus.api.v1alpha1.RunUpdate.reasoning_summary:type_name -> colossus.api.v1alpha1.ReasoningSummary
+	54, // 68: colossus.api.v1alpha1.RunUpdate.tool_activity:type_name -> colossus.api.v1alpha1.ToolActivity
+	55, // 69: colossus.api.v1alpha1.RunUpdate.usage:type_name -> colossus.api.v1alpha1.TokenUsage
+	46, // 70: colossus.api.v1alpha1.RunUpdate.interaction:type_name -> colossus.api.v1alpha1.Interaction
+	66, // 71: colossus.api.v1alpha1.RunUpdate.message:type_name -> colossus.api.v1alpha1.SessionMessage
+	56, // 72: colossus.api.v1alpha1.RunUpdate.notice:type_name -> colossus.api.v1alpha1.RunNotice
+	14, // 73: colossus.api.v1alpha1.RunUpdate.result:type_name -> colossus.api.v1alpha1.RunResult
+	58, // 74: colossus.api.v1alpha1.RunUpdate.failure:type_name -> colossus.api.v1alpha1.RunFailed
+	16, // 75: colossus.api.v1alpha1.RunUpdate.cancellation:type_name -> colossus.api.v1alpha1.RunCancellation
+	18, // 76: colossus.api.v1alpha1.AgentRunService.CreateRun:input_type -> colossus.api.v1alpha1.CreateRunRequest
+	24, // 77: colossus.api.v1alpha1.AgentRunService.GetRun:input_type -> colossus.api.v1alpha1.GetRunRequest
+	26, // 78: colossus.api.v1alpha1.AgentRunService.ListRuns:input_type -> colossus.api.v1alpha1.ListRunsRequest
+	30, // 79: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:input_type -> colossus.api.v1alpha1.ListSessionActivityRequest
+	32, // 80: colossus.api.v1alpha1.AgentRunService.WatchRun:input_type -> colossus.api.v1alpha1.WatchRunRequest
+	34, // 81: colossus.api.v1alpha1.AgentRunService.CancelRun:input_type -> colossus.api.v1alpha1.CancelRunRequest
+	37, // 82: colossus.api.v1alpha1.AgentRunService.ArchiveThread:input_type -> colossus.api.v1alpha1.ArchiveThreadRequest
+	39, // 83: colossus.api.v1alpha1.AgentRunService.RestoreThread:input_type -> colossus.api.v1alpha1.RestoreThreadRequest
+	50, // 84: colossus.api.v1alpha1.AgentRunService.RespondInteraction:input_type -> colossus.api.v1alpha1.RespondInteractionRequest
+	23, // 85: colossus.api.v1alpha1.AgentRunService.CreateRun:output_type -> colossus.api.v1alpha1.CreateRunResponse
+	25, // 86: colossus.api.v1alpha1.AgentRunService.GetRun:output_type -> colossus.api.v1alpha1.GetRunResponse
+	27, // 87: colossus.api.v1alpha1.AgentRunService.ListRuns:output_type -> colossus.api.v1alpha1.ListRunsResponse
+	31, // 88: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:output_type -> colossus.api.v1alpha1.ListSessionActivityResponse
+	33, // 89: colossus.api.v1alpha1.AgentRunService.WatchRun:output_type -> colossus.api.v1alpha1.WatchRunResponse
+	35, // 90: colossus.api.v1alpha1.AgentRunService.CancelRun:output_type -> colossus.api.v1alpha1.CancelRunResponse
+	38, // 91: colossus.api.v1alpha1.AgentRunService.ArchiveThread:output_type -> colossus.api.v1alpha1.ArchiveThreadResponse
+	40, // 92: colossus.api.v1alpha1.AgentRunService.RestoreThread:output_type -> colossus.api.v1alpha1.RestoreThreadResponse
+	51, // 93: colossus.api.v1alpha1.AgentRunService.RespondInteraction:output_type -> colossus.api.v1alpha1.RespondInteractionResponse
+	85, // [85:94] is the sub-list for method output_type
+	76, // [76:85] is the sub-list for method input_type
+	76, // [76:76] is the sub-list for extension type_name
+	76, // [76:76] is the sub-list for extension extendee
+	0,  // [0:76] is the sub-list for field type_name
 }
 
 func init() { file_colossus_api_v1alpha1_agent_run_proto_init() }
@@ -5076,21 +5179,21 @@ func file_colossus_api_v1alpha1_agent_run_proto_init() {
 	}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[12].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[15].OneofWrappers = []any{}
-	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[31].OneofWrappers = []any{
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[32].OneofWrappers = []any{
 		(*Interaction_UserPrompt)(nil),
 		(*Interaction_Approval)(nil),
 	}
-	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[33].OneofWrappers = []any{
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[34].OneofWrappers = []any{
 		(*PromptAnswer_Choice)(nil),
 		(*PromptAnswer_FreeFormText)(nil),
 	}
-	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[35].OneofWrappers = []any{
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[36].OneofWrappers = []any{
 		(*RespondInteractionRequest_PromptAnswer)(nil),
 		(*RespondInteractionRequest_ApprovalAnswer)(nil),
 	}
-	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[39].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[40].OneofWrappers = []any{}
-	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[44].OneofWrappers = []any{
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[41].OneofWrappers = []any{}
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[45].OneofWrappers = []any{
 		(*RunUpdate_State)(nil),
 		(*RunUpdate_OutputDelta)(nil),
 		(*RunUpdate_ReasoningSummary)(nil),
@@ -5109,7 +5212,7 @@ func file_colossus_api_v1alpha1_agent_run_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_colossus_api_v1alpha1_agent_run_proto_rawDesc), len(file_colossus_api_v1alpha1_agent_run_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   46,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

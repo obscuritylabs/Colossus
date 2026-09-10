@@ -1,0 +1,44 @@
+.command-approval-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.command-approval-preview {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.command-approval-scroll {
+  max-height: 45vh;
+  overflow: auto;
+  margin-block: 1rem;
+  border: 1px solid var(--border);
+  padding: 0.75rem;
+}
+.command-approval-scroll pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.command-approval-reason {
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+.command-approval-details dd {
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+.command-review-window {
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding: 1.5rem;
+}
+.command-review-actions {
+  padding: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  background: var(--surface);
+}

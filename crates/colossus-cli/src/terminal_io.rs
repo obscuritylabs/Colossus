@@ -162,17 +162,46 @@ impl ApprovalProvider for TerminalApproval {
         request: &EffectRequest,
         request_hash: &str,
         decision: &PolicyDecision,
+        command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         let guard = self
             .lock
             .lock()
             .map_err(|_| PolicyError::Unavailable("approval terminal lock is poisoned".into()))?;
+        if let Some(context) = command_context {
+            let risk = colossus_presentation::approval_risk_summary(
+                request.risk.level.as_deref(),
+                request.risk.reason.as_deref(),
+            );
+            let approved =
+                prompt_command_approval(context, Some(&decision.reason), risk.as_deref())
+                    .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+            drop(guard);
+            return if approved {
+                ApprovalProvider::request_approval(
+                    &AllowApproval {
+                        approved_by: "terminal-user".into(),
+                    },
+                    request,
+                    request_hash,
+                    decision,
+                    command_context,
+                )
+                .await
+            } else {
+                Ok(None)
+            };
+        }
         let content = serde_json::to_string_pretty(&request.content)
             .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
         let mut details = vec![
             ("Action".into(), request.action.clone()),
             ("Resource".into(), request.resource.clone()),
-            ("Reason".into(), decision.reason.clone()),
+            ("Policy".into(), decision.reason.clone()),
+            (
+                "Reason — agent-provided".into(),
+                "Task-specific reason unavailable".into(),
+            ),
         ];
         if let Some(reason) = request.risk.reason.as_deref() {
             let level = request.risk.level.as_deref().unwrap_or("unavailable");
@@ -210,6 +239,7 @@ impl ApprovalProvider for TerminalApproval {
             request,
             request_hash,
             decision,
+            command_context,
         )
         .await
     }
@@ -219,6 +249,31 @@ impl ApprovalProvider for TerminalApproval {
 pub(super) enum StreamTarget {
     Stdout,
     Stderr,
+}
+
+pub(super) fn prompt_command_approval(
+    context: &colossus_contracts::CommandApprovalContext,
+    policy: Option<&str>,
+    risk: Option<&str>,
+) -> io::Result<bool> {
+    let show = |full| -> io::Result<()> {
+        let document =
+            colossus_presentation::command_approval_document(context, policy, risk, full)
+                .map_err(io::Error::other)?;
+        write_stderr_document(&document)
+    };
+    show(false)?;
+    loop {
+        eprint!("Allow this command once? [y/N/details] ");
+        io::stderr().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "details" | "d" => show(true)?,
+            "y" | "yes" | "1" | "allow once" => return Ok(true),
+            _ => return Ok(false),
+        }
+    }
 }
 
 pub(super) struct TerminalStreamObserver {

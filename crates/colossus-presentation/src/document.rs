@@ -31,6 +31,8 @@ pub enum PresentationTone {
 pub enum PresentationBlock {
     /// Plain released text.
     Text(String),
+    /// Plain preformatted text, soft-wrapped without clipping or collapsing spaces.
+    Verbatim(String),
     /// Verified metadata for an encrypted run-input image. Terminal interfaces may
     /// replace this metadata-only block with a transient authorized preview.
     Image(ModelImageReference),

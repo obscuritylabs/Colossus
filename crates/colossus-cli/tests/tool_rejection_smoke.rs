@@ -339,6 +339,7 @@ fn invalid_and_denied_tools_stop_before_effect_execution() {
         "shell.run",
         json!({
             "argv": ["sh", "-c", "echo escaped > shell-must-not-exist.txt"],
+            "justification": "Check that unconfigured shell executables are rejected.",
             "cwd": ".",
             "env": {}
         }),

@@ -111,7 +111,8 @@ export async function createSecureGrpcClient<Client extends grpc.Client>(
   const options: grpc.ClientOptions = {
     "grpc.enable_http_proxy": 0,
     "grpc.enable_retries": 0,
-    "grpc.max_receive_message_length": 4 * 1024 * 1024,
+    // Full command context plus the bounded response envelope; sends stay unchanged.
+    "grpc.max_receive_message_length": 8 * 1024 * 1024,
     "grpc.max_send_message_length": 4 * 1024 * 1024,
     "grpc.primary_user_agent": "colossus-typescript-sdk/0.10.9",
     // grpc-js always forwards its TLS servername, while Node rejects IP

@@ -1,5 +1,7 @@
 use super::*;
 
+mod command_approval;
+
 #[test]
 fn terminal_query_requires_a_real_emulator_hint() {
     assert!(!terminal_can_answer_graphics_query(|name| match name {

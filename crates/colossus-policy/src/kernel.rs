@@ -539,9 +539,33 @@ impl SafetyKernel {
             }
         }
         let mut prepared = request.clone();
+        // Validate the narrow approval release before policy, even in allow-all mode.
+        if prepared.phase == EffectPhase::PreEffect {
+            command_approval_context(&prepared)?;
+        }
         redact_hard_secrets(&mut prepared.content);
-        let size = canonical_bytes(&prepared)?.len();
-        let limit = if prepared.phase == EffectPhase::PostEffect {
+        self.validate_policy_input_size(&prepared)?;
+        Ok(prepared)
+    }
+
+    /// Task intent has no policy authority. Release only its digest to policy
+    /// adapters; the original request still binds approvals, permits and execution.
+    pub(super) fn policy_projection(
+        &self,
+        request: &EffectRequest,
+    ) -> Result<EffectRequest, GatewayError> {
+        let mut projected = request.clone();
+        if let Some(intent) = &mut projected.command_intent {
+            intent.justification =
+                format!("sha256:{}", sha256_hex(intent.justification.as_bytes()));
+        }
+        self.validate_policy_input_size(&projected)?;
+        Ok(projected)
+    }
+
+    fn validate_policy_input_size(&self, request: &EffectRequest) -> Result<(), GatewayError> {
+        let size = canonical_bytes(request)?.len();
+        let limit = if request.phase == EffectPhase::PostEffect {
             self.post_effect_policy_input_limit
         } else {
             self.policy_input_limit
@@ -549,7 +573,7 @@ impl SafetyKernel {
         if size > limit {
             return Err(GatewayError::Policy(PolicyError::InputTooLarge { limit }));
         }
-        Ok(prepared)
+        Ok(())
     }
 
     pub(super) fn validate_decision(

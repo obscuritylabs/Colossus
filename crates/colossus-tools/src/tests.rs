@@ -383,6 +383,7 @@ fn process_tools_keep_distinct_policy_identities_and_structured_argv() {
                 call_id: "shell".into(),
                 name: "shell.run".into(),
                 arguments: json!({
+                    "justification": "Check the workspace tests for regressions.",
                     "argv": ["cargo", "test", "--workspace"],
                     "cwd": ".",
                     "timeout_ms": 30000,
@@ -396,14 +397,18 @@ fn process_tools_keep_distinct_policy_identities_and_structured_argv() {
             .validate(&ToolCall {
                 call_id: "shell-command".into(),
                 name: "shell.run".into(),
-                arguments: json!({"command": "cargo test --workspace", "cwd": "."}),
+                arguments: json!({"justification": "Check the workspace tests for regressions.", "command": "cargo test --workspace", "cwd": "."}),
             })
             .is_ok()
     );
     for arguments in [
-        json!({"argv": []}),
+        json!({"justification": "Check the build.", "argv": []}),
         json!({}),
-        json!({"command": "pwd", "argv": ["pwd"]}),
+        json!({"justification": "Check the working directory.", "command": "pwd", "argv": ["pwd"]}),
+        json!({"command": "pwd"}),
+        json!({"argv": ["pwd"]}),
+        json!({"command": "pwd", "justification": 42}),
+        json!({"command": "pwd", "justification": "x".repeat(513)}),
     ] {
         assert!(matches!(
             registry.validate(&ToolCall {

@@ -57,13 +57,23 @@ pub(super) fn transcript_from_messages(
                 }
                 for call in record.message.tool_calls {
                     tool_names.insert(call.call_id.clone(), call.name.clone());
+                    let input = if call.name == "shell.run" {
+                        // Retained model calls have no prepared, sanitized context.
+                        // Do not reconstruct command disclosure from their raw input.
+                        PresentationBlock::Text(
+                            "Raw shell input withheld; review the prepared command in its approval request."
+                                .into(),
+                        )
+                    } else {
+                        PresentationBlock::Code {
+                            language: Some("arguments".into()),
+                            content: call.arguments.to_string(),
+                        }
+                    };
                     document.push(PresentationBlock::Card {
                         title: format!("Requested {}", call.name),
                         tone: PresentationTone::Tool,
-                        body: vec![PresentationBlock::Code {
-                            language: Some("arguments".into()),
-                            content: call.arguments.to_string(),
-                        }],
+                        body: vec![input],
                     });
                 }
                 (TranscriptKind::Assistant, document, None)

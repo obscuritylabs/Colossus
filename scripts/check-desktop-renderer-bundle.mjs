@@ -14,6 +14,8 @@ const forbiddenFixtureStrings = [
   "nativePluginAcceptance",
   "Test settings value",
   "plugin-test-bridge",
+  "approval-test-bridge",
+  "nativeCommandApproval",
 ];
 
 async function files(directory) {

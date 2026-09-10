@@ -316,6 +316,7 @@ impl ApprovalProvider for TuiApprovalProvider {
         request: &EffectRequest,
         request_hash: &str,
         decision: &PolicyDecision,
+        command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
         match self.mode() {
             ApprovalMode::Deny => return Ok(None),
@@ -327,6 +328,7 @@ impl ApprovalProvider for TuiApprovalProvider {
                     request,
                     request_hash,
                     decision,
+                    command_context,
                 )
                 .await;
             }
@@ -345,7 +347,11 @@ impl ApprovalProvider for TuiApprovalProvider {
             ),
             ("Action".into(), request.action.clone()),
             ("Resource".into(), request.resource.clone()),
-            ("Reason".into(), decision.reason.clone()),
+            ("Policy".into(), decision.reason.clone()),
+            (
+                "Reason — agent-provided".into(),
+                "Task-specific reason unavailable".into(),
+            ),
         ];
         if let Some(reason) = request.risk.reason.as_deref() {
             let level = request.risk.level.as_deref().unwrap_or("not assessed");
@@ -362,6 +368,21 @@ impl ApprovalProvider for TuiApprovalProvider {
                 },
             ],
         });
+        let document = if let Some(context) = command_context {
+            let risk = colossus_presentation::approval_risk_summary(
+                request.risk.level.as_deref(),
+                request.risk.reason.as_deref(),
+            );
+            colossus_presentation::command_approval_document(
+                context,
+                Some(&decision.reason),
+                risk.as_deref(),
+                true,
+            )
+            .map_err(|error| PolicyError::Unavailable(error.to_string()))?
+        } else {
+            document
+        };
         let response = self
             .router
             .prompt(
@@ -384,6 +405,7 @@ impl ApprovalProvider for TuiApprovalProvider {
             request,
             request_hash,
             decision,
+            command_context,
         )
         .await
     }

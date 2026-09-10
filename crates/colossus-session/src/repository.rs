@@ -66,7 +66,7 @@ impl SessionRepository for EventSourcedSessionRepository {
 
     fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
         let limit = limit.clamp(1, LIST_LIMIT_MAX);
-        let mut sessions = collect_stream_ids(self.journal.as_ref(), "session:")?
+        let sessions = collect_stream_ids(self.journal.as_ref(), "session:")?
             .into_iter()
             .map(|stream_id| {
                 stream_id
@@ -82,14 +82,7 @@ impl SessionRepository for EventSourcedSessionRepository {
             .into_iter()
             .filter_map(|id| self.get_session(&id).transpose())
             .collect::<Result<Vec<_>, _>>()?;
-        sessions.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.id.cmp(&left.id))
-        });
-        sessions.truncate(limit);
-        Ok(sessions)
+        ordering::recent_sessions(sessions, limit)
     }
 
     fn append_messages(

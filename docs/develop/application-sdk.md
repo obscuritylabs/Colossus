@@ -467,7 +467,9 @@ simultaneous connections, permits at most 80 concurrent request setups globally 
 per connection, permits 128 HTTP/2 streams per connection, expires connections after
 15 minutes, limits each request decode and handler setup to 30 seconds, limits HTTP/2
 headers to 16 KiB, limits decoded request messages to 2 MiB, and limits encoded
-responses to 4 MiB. Only eight authenticated protobuf decodes may run concurrently,
+responses to 8 MiB. The response budget includes a sanitized command context of up to
+4 MiB plus its envelope; command, effect, and request limits remain unchanged. Only
+eight authenticated protobuf decodes may run concurrently,
 with at most two for one application; the permits are acquired after authentication
 but before message decoding. A streaming protobuf wire guard rejects the 129th
 top-level `CreateRun.input` field, the first forbidden `selected_skills` field, and the
@@ -546,11 +548,31 @@ with the run. The initial hosted surface does not expose `SessionService`.
 Prompts and approvals are durable, one-use interactions bound to the owning
 application. Prompt choices echo the exact displayed choice. Approval answers echo a
 fresh randomized one-use binding; the private policy request hash never crosses the
-native boundary. Approval DTOs expose only a fixed public action taxonomy plus a
-bounded display category or an HTTP(S) origin; they never disclose raw internal action
-or tool names, absolute paths, executable names, URL credentials, paths, queries,
-fragments, raw policy reasons, effect arguments, or deterministic commitments to those
-private values.
+native boundary. Approval DTOs retain a fixed public action taxonomy plus a bounded
+display category or HTTP(S) origin. Command execution has one narrow exception:
+optional `command_context` contains the agent's task `justification`, prepared
+`executable`, `arguments` (excluding the executable), `working_directory`, and `redacted`.
+These sanitized details may include actual paths and URLs and are readable only through
+the owning application's authorized run interface. They omit environment maps, stdin,
+private policy reasons, and private request hashes, and redact known secret values and
+recognized credential forms. Arbitrary secret literals cannot be inferred from ordinary text.
+Instruction-like text is plain display data, not permission to run another command.
+Other effect arguments remain private.
+Public `shell.run` activity events omit raw tool input, which has not yet crossed
+command preparation or display sanitization. Inspect the pending approval's command
+context instead; this also prevents duplicate unredacted commands in activity titles.
+Completed and restored shell activity displays retain only typed process output/status
+fields, not the repeated invocation, argument vector, working directory, or observed
+origins. Unknown result shapes are withheld. Bounded previews remain parseable JSON on
+reconnect; this display projection does not change runtime/model results or evidence.
+
+The generic approval `reason` retains its existing semantics; display the command
+justification separately as agent-provided. Missing command context means a historical
+or non-command interaction, not a reason to synthesize task intent. Full-details views
+must not silently truncate accepted commands. Command context participates in immutable
+challenge validation and durable replay. Public protobuf field 8 is additive; removed
+fields 1 and 7 remain reserved. Private worker protocol 22 requires matching clients
+and a worker restart; configuration stays schema version 3.
 The server revalidates responses against the private request and applies current scope
 checks to cancellation and response operations.
 

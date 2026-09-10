@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { CommandFailure } from "../api";
 import type { Interaction, InteractionAnswer } from "../types";
+import { CommandApprovalDetails } from "./CommandApprovalDetails";
 
 interface InteractionCardProps {
   interaction: Interaction;
@@ -75,6 +76,11 @@ export function InteractionCard({
           )}
         </div>
         <p>{content.reason}</p>
+        {content.commandContext ? (
+          <CommandApprovalDetails context={content.commandContext} />
+        ) : content.action === "process.execute" ? (
+          <p>Task-specific reason unavailable</p>
+        ) : null}
         <dl className="approval-details">
           <div>
             <dt>Resource</dt>

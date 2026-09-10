@@ -1,5 +1,30 @@
 use super::*;
 
+pub(super) fn command_intent(
+    call: &ToolCall,
+) -> Result<colossus_contracts::CommandIntent, ToolError> {
+    let justification = call
+        .arguments
+        .get("justification")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message:
+                "justification is required: explain briefly why this command helps the user's task"
+                    .into(),
+        })?;
+    let intent = colossus_contracts::CommandIntent {
+        justification: justification.into(),
+    };
+    intent
+        .validate()
+        .map_err(|message| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: message.into(),
+        })?;
+    Ok(intent)
+}
+
 pub(super) struct McpAgentToolResult {
     pub(super) output: String,
     pub(super) exit_code: i32,
@@ -712,6 +737,9 @@ impl GatewayToolExecutor {
             serde_json::to_value(spec).map_err(|error| ToolError::Failed(error.to_string()))?,
         );
         request.capabilities = vec![action.into()];
+        if action == "shell.run" {
+            request.command_intent = Some(command_intent(call)?);
+        }
         request.context = context;
         let result = self
             .gateway

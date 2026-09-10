@@ -498,6 +498,9 @@ impl TerminalDocumentRenderer {
     fn render_block(&self, block: &PresentationBlock, width: usize) -> Vec<String> {
         match block {
             PresentationBlock::Text(text) => wrap_text(&sanitize_terminal_text(text), width),
+            PresentationBlock::Verbatim(text) => {
+                wrap_verbatim(&sanitize_terminal_text(text), width)
+            }
             PresentationBlock::Image(image) => self.render_card(
                 &format!("Image · {}", image.file_name),
                 PresentationTone::Neutral,
@@ -912,6 +915,25 @@ fn truncate_width(value: &str, width: usize) -> String {
     }
     rendered.push('…');
     rendered
+}
+
+fn wrap_verbatim(value: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for source in value.split('\n') {
+        let mut line = String::new();
+        let mut columns = 0;
+        for character in source.chars() {
+            let character_width = character.width().unwrap_or(0);
+            if !line.is_empty() && columns + character_width > width.max(1) {
+                lines.push(std::mem::take(&mut line));
+                columns = 0;
+            }
+            line.push(character);
+            columns += character_width;
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 fn wrap_text(value: &str, width: usize) -> Vec<String> {

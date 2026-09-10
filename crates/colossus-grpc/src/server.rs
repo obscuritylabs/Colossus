@@ -38,7 +38,10 @@ use tonic::{
 };
 
 pub(crate) const MAX_REQUEST_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const MAX_RESPONSE_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+// Preserve the existing response envelope budget alongside one maximum pending
+// command context. Each run has at most one pending interaction.
+pub(crate) const MAX_RESPONSE_MESSAGE_BYTES: usize =
+    4 * 1024 * 1024 + colossus_contracts::MAX_COMMAND_APPROVAL_BYTES;
 const MAX_HEADER_LIST_BYTES: u32 = 16 * 1024;
 pub(crate) const MAX_CONCURRENT_STREAMS: u32 = 128;
 /// Request slots that active watches are structurally unable to consume.
@@ -477,6 +480,41 @@ pub enum PublicGrpcServerError {
 mod tests {
     use super::*;
     use std::task::{Wake, Waker};
+
+    #[test]
+    fn maximum_command_context_fits_with_its_response_envelope() {
+        use colossus_api_proto::v1alpha1 as proto;
+        use prost::Message as _;
+        let context = colossus_contracts::CommandApprovalContext {
+            justification: "A".into(),
+            executable: "e".into(),
+            working_directory: "w".into(),
+            arguments: vec!["x".repeat(colossus_contracts::MAX_COMMAND_APPROVAL_BYTES - 3)],
+            redacted: true,
+        };
+        context.validate().unwrap();
+        let response = proto::GetRunResponse {
+            pending_interactions: vec![proto::Interaction {
+                content: Some(proto::interaction::Content::Approval(
+                    proto::ApprovalInteraction {
+                        command_context: Some(proto::CommandApprovalContext {
+                            justification: context.justification,
+                            executable: context.executable,
+                            arguments: context.arguments,
+                            working_directory: context.working_directory,
+                            redacted: context.redacted,
+                        }),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(response.encoded_len() > 4 * 1024 * 1024);
+        assert!(response.encoded_len() < MAX_RESPONSE_MESSAGE_BYTES);
+        assert_eq!(MAX_REQUEST_MESSAGE_BYTES, 2 * 1024 * 1024);
+    }
 
     struct WakeFlag(AtomicBool);
 

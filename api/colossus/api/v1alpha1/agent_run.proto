@@ -724,6 +724,23 @@ message ApprovalInteraction {
 
   reserved 7;
   reserved "details";
+  // command_context is the credential-redacted prepared command, available only
+  // for command execution approvals. It never grants additional authority.
+  CommandApprovalContext command_context = 8;
+}
+
+// CommandApprovalContext is a bounded display copy, not executable input.
+message CommandApprovalContext {
+  // justification is the agent-provided task purpose, separate from policy and risk.
+  string justification = 1;
+  // executable is the prepared executable, with secrets removed and controls escaped.
+  string executable = 2;
+  // arguments preserve argument boundaries and exclude the executable.
+  repeated string arguments = 3;
+  // working_directory is the prepared working directory, sanitized for display.
+  string working_directory = 4;
+  // redacted indicates that credential-bearing text was replaced.
+  bool redacted = 5;
 }
 
 // Interaction is a durable caller-bound prompt or approval.

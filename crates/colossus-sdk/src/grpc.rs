@@ -50,7 +50,9 @@ use url::Url;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_REQUEST_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+// Four MiB of command context plus the existing four-MiB response envelope.
+const MAX_RESPONSE_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_HEADER_LIST_BYTES: u32 = 16 * 1024;
 const MAX_CERTIFICATE_PEM_BYTES: usize = 256 * 1024;
 const MAX_ERROR_DETAILS_BYTES: usize = 64 * 1024;
@@ -387,8 +389,8 @@ impl fmt::Debug for GrpcAgentRunClient {
 impl GrpcAgentRunClient {
     fn client(&self) -> AgentRunServiceClient<Channel> {
         AgentRunServiceClient::new(self.channel.clone())
-            .max_decoding_message_size(MAX_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_MESSAGE_BYTES)
+            .max_decoding_message_size(MAX_RESPONSE_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
     }
 
     async fn request<T>(&self, message: T) -> ApiResult<Request<T>> {
@@ -425,8 +427,8 @@ async fn verify_server_identity(
         .await
         .map_err(connect_api_error)?;
     let response = SystemServiceClient::new(client.channel.clone())
-        .max_decoding_message_size(MAX_MESSAGE_BYTES)
-        .max_encoding_message_size(MAX_MESSAGE_BYTES)
+        .max_decoding_message_size(MAX_RESPONSE_MESSAGE_BYTES)
+        .max_encoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
         .get_server_info(request)
         .await
         .map_err(api_error_from_status)
@@ -866,8 +868,8 @@ impl fmt::Debug for GrpcArtifactClient {
 impl GrpcArtifactClient {
     fn client(&self) -> ArtifactServiceClient<Channel> {
         ArtifactServiceClient::new(self.channel.clone())
-            .max_decoding_message_size(MAX_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_MESSAGE_BYTES)
+            .max_decoding_message_size(MAX_RESPONSE_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
     }
 
     async fn request<T>(&self, message: T) -> ApiResult<Request<T>> {
@@ -1390,6 +1392,21 @@ fn interaction_from_proto(value: proto::Interaction) -> ApiResult<Interaction> {
             })
         }
         (InteractionKind::Approval, interaction::Content::Approval(approval)) => {
+            let command_context =
+                approval
+                    .command_context
+                    .map(|context| colossus_api::CommandApprovalContext {
+                        justification: context.justification,
+                        executable: context.executable,
+                        arguments: context.arguments,
+                        working_directory: context.working_directory,
+                        redacted: context.redacted,
+                    });
+            colossus_api::validate_public_command_context(
+                Some(&approval.action),
+                command_context.as_ref(),
+            )
+            .map_err(|_| protocol_error())?;
             validate_text(&approval.reason, MAX_SUMMARY_BYTES)?;
             validate_text(&approval.action, MAX_SUMMARY_BYTES)?;
             validate_text(&approval.resource, MAX_SUMMARY_BYTES)?;
@@ -1405,6 +1422,7 @@ fn interaction_from_proto(value: proto::Interaction) -> ApiResult<Interaction> {
                 Err(_) => return Err(protocol_error()),
             };
             InteractionContent::Approval(ApprovalInteraction {
+                command_context,
                 reason: approval.reason,
                 action: approval.action,
                 resource: approval.resource,
@@ -2526,6 +2544,7 @@ mod tests {
             respondable_by_caller: true,
             etag: "etag-1".into(),
             content: Some(interaction::Content::Approval(proto::ApprovalInteraction {
+                command_context: None,
                 reason: "A reviewed local effect requires permission.".into(),
                 action: action.into(),
                 resource: resource.into(),
@@ -2537,6 +2556,60 @@ mod tests {
         let valid = interaction_from_proto(approval("workspace.modify", "workspace resource"))
             .expect("canonical approval display");
         assert!(matches!(valid.content, InteractionContent::Approval(_)));
+
+        let context = proto::CommandApprovalContext {
+            justification: "Check dependency versions.".into(),
+            executable: "/bin/sh".into(),
+            arguments: vec!["-c".into(), "echo 'two  spaces'".into()],
+            working_directory: "/work/project".into(),
+            redacted: true,
+        };
+        let mut command = approval("process.execute", "configured executable");
+        let Some(interaction::Content::Approval(content)) = &mut command.content else {
+            unreachable!()
+        };
+        content.command_context = Some(context.clone());
+        let converted = interaction_from_proto(command.clone()).unwrap();
+        let InteractionContent::Approval(converted) = converted.content else {
+            unreachable!()
+        };
+        let projected = converted.command_context.unwrap();
+        assert_eq!(projected.arguments, context.arguments);
+        assert_eq!(projected.justification, context.justification);
+        assert_eq!(projected.working_directory, context.working_directory);
+        assert!(projected.redacted);
+        let mut maximum = command.clone();
+        let Some(interaction::Content::Approval(content)) = &mut maximum.content else {
+            unreachable!()
+        };
+        let context = content.command_context.as_mut().unwrap();
+        let metadata = context.justification.len()
+            + context.executable.len()
+            + context.working_directory.len();
+        context.arguments = vec!["x".repeat(4 * 1024 * 1024 - metadata - 4), "TAIL".into()];
+        let encoded = maximum.encode_to_vec();
+        assert!(encoded.len() > MAX_REQUEST_MESSAGE_BYTES);
+        assert!(encoded.len() < MAX_RESPONSE_MESSAGE_BYTES);
+        let maximum = proto::Interaction::decode(encoded.as_slice()).unwrap();
+        let InteractionContent::Approval(maximum) =
+            interaction_from_proto(maximum).unwrap().content
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            maximum.command_context.unwrap().arguments.last().unwrap(),
+            "TAIL"
+        );
+        let Some(interaction::Content::Approval(content)) = &mut command.content else {
+            unreachable!()
+        };
+        content
+            .command_context
+            .as_mut()
+            .unwrap()
+            .arguments
+            .push("\u{202e}spoof".into());
+        assert!(interaction_from_proto(command).is_err());
 
         for malformed in [
             approval("shell.run\nResource: harmless", "workspace resource"),

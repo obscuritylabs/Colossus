@@ -4260,6 +4260,7 @@ async fn subprocess_content_denied_post_effect_never_reaches_the_tool_caller() {
                 call_id: "process-post-deny".into(),
                 name: "shell.run".into(),
                 arguments: json!({
+                    "justification": "Exercise post-effect denial without releasing output.",
                     "argv": [executable.display().to_string()],
                     "cwd": ".",
                 }),
@@ -6613,6 +6614,7 @@ async fn danger_full_access_shell_needs_no_process_resource_configuration() {
                 call_id: "danger-shell".into(),
                 name: "shell.run".into(),
                 arguments: json!({
+                    "justification": "Check the selected ambient process configuration.",
                     "command": "echo unrestricted",
                     "cwd": outside_cwd.path(),
                     "env": {"PATH": "/operator/path", "UNDECLARED_ENVIRONMENT": "available"},
@@ -6694,6 +6696,7 @@ async fn danger_full_access_withholds_host_resolution_until_acknowledgement() {
                     call_id: "unacknowledged-shell".into(),
                     name: "shell.run".into(),
                     arguments: json!({
+                        "justification": "Check the selected executable version.",
                         "argv": [candidate.display().to_string(), "--version"],
                         "cwd": outside_cwd.path(),
                     }),
@@ -6789,7 +6792,7 @@ async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
             ToolCall {
                 call_id: "shell".into(),
                 name: "shell.run".into(),
-                arguments: json!({"argv": ["git", "bad-command"]}),
+                arguments: json!({"justification": "Exercise a known nonzero process outcome.", "argv": ["git", "bad-command"]}),
             },
             ExecutionContext::default(),
         )

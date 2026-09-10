@@ -64,10 +64,13 @@ pub trait ApprovalProvider: Send + Sync {
     async fn risk_review_fallback(&self, _notice: RiskReviewFallbackNotice) {}
 
     /// Request a proof bound to the canonical request hash and initial decision.
+    /// The gateway supplies a frozen, sanitized command display, derived before
+    /// credential fields are replaced for policy. It is never execution authority.
     async fn request_approval(
         &self,
         request: &EffectRequest,
         request_hash: &str,
         decision: &PolicyDecision,
+        command_context: Option<&colossus_contracts::CommandApprovalContext>,
     ) -> Result<Option<ApprovalProof>, PolicyError>;
 }

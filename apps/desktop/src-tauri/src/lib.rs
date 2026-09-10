@@ -1,5 +1,8 @@
+mod approval_adapter;
 mod bundle;
 mod codex_auth;
+mod command_review;
+mod command_review_protocol;
 mod commands;
 mod configuration_import;
 mod connection;
@@ -27,6 +30,7 @@ mod updates;
 mod workspace_files;
 
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
+use command_review::{command_review_context, finish_command_review};
 use commands::{
     archive_thread, cancel_run, choose_run_attachment, create_run, get_run, list_asides, list_runs,
     list_session_activity, read_artifact_content, respond_interaction, restore_thread, watch_run,
@@ -78,13 +82,19 @@ pub fn run() {
         std::process::exit(1);
     }
     let application = tauri::Builder::default()
+        .register_uri_scheme_protocol(command_review_protocol::SCHEME, |context, request| {
+            command_review_protocol::respond(&context, &request)
+        })
         .register_uri_scheme_protocol(terminal_protocol::SCHEME, |context, request| {
             terminal_protocol::respond(&context, &request)
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
+        .manage(command_review::CommandReviewState::default())
         .invoke_handler(tauri::generate_handler![
+            command_review_context,
+            finish_command_review,
             get_plugin_inventory,
             resolve_plugin_selection,
             read_plugin_preview,

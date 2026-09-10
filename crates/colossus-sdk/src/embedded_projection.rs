@@ -517,6 +517,11 @@ fn public_interaction(
             core::scopes::PROMPTS_RESPOND,
         ),
         core::InteractionKind::Approval => {
+            core::validate_public_command_context(
+                value.action.as_deref(),
+                value.command_context.as_ref(),
+            )
+            .map_err(|_| projection_error())?;
             let action = value.action.clone().ok_or_else(projection_error)?;
             let resource = value.resource.clone().ok_or_else(projection_error)?;
             core::validate_public_approval_display(&action, &resource)
@@ -524,6 +529,7 @@ fn public_interaction(
             (
                 InteractionKind::Approval,
                 InteractionContent::Approval(ApprovalInteraction {
+                    command_context: value.command_context.clone(),
                     reason: value.prompt.clone(),
                     action,
                     resource,

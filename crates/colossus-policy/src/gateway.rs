@@ -461,7 +461,15 @@ impl EffectGateway {
     }
 
     async fn decide(&self, request: &EffectRequest) -> Result<PolicyDecision, GatewayError> {
-        let decision = match self.policy.decide(request).await {
+        let decision = match async {
+            let policy_request = self.kernel.policy_projection(request)?;
+            self.policy
+                .decide(&policy_request)
+                .await
+                .map_err(GatewayError::from)
+        }
+        .await
+        {
             Ok(decision) => decision,
             Err(error) => {
                 self.event(
@@ -476,7 +484,7 @@ impl EffectGateway {
                     EventClassification::Effect,
                     json!({"reason": "policy failure; fail closed"}),
                 )?;
-                return Err(error.into());
+                return Err(error);
             }
         };
         if let Err(error) = self.kernel.validate_decision(request, &decision) {
@@ -591,7 +599,9 @@ impl EffectGateway {
         request: EffectRequest,
         executor: &dyn EffectExecutor,
     ) -> Result<ReleasedEffectResult, GatewayError> {
-        self.execute_internal(request, executor, false).await
+        // Do not embed the full approval/policy state machine in every caller's
+        // async state. Nested worker dispatch must fit the default Tokio stack.
+        Box::pin(self.execute_internal(request, executor, false)).await
     }
 
     /// Authorize one streaming effect and release only gateway-approved normalized chunks.
@@ -606,7 +616,7 @@ impl EffectGateway {
             executor,
             observer: tokio::sync::Mutex::new(observer),
         };
-        self.execute_internal(request, &bridge, true).await
+        Box::pin(self.execute_internal(request, &bridge, true)).await
     }
 
     async fn execute_internal(
@@ -633,20 +643,33 @@ impl EffectGateway {
             EventClassification::Effect,
             disclosure_summary(&request).await?,
         )?;
-        let mut request = match self.kernel.prepare(&request) {
-            Ok(request) => request,
-            Err(error) => {
-                self.event(
-                    &request,
-                    "effect.denied.v1",
-                    EventClassification::Effect,
-                    json!({"reason": error.to_string(), "source": "safety_kernel"}),
-                )?;
-                return Err(error);
-            }
-        };
+        let (command_context, mut request) =
+            match command_approval_context(&request).and_then(|context| {
+                self.kernel
+                    .prepare(&request)
+                    .map(|request| (context, request))
+            }) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.event(
+                        &request,
+                        "effect.denied.v1",
+                        EventClassification::Effect,
+                        json!({"reason": error.to_string(), "source": "safety_kernel"}),
+                    )?;
+                    return Err(error);
+                }
+            };
         let mut decision = self.decide(&request).await?;
         if decision.outcome == DecisionOutcome::RequireApproval {
+            if let Some(context) = &command_context {
+                self.event(
+                    &request,
+                    "approval.requested.v1",
+                    EventClassification::Approval,
+                    json!({"command_context": context}),
+                )?;
+            }
             let risk_auto_approved = self.review_risk(&mut request, &decision).await?;
             let request_hash = sha256_hex(&canonical_bytes(&request)?);
             let approval = if risk_auto_approved {
@@ -656,7 +679,7 @@ impl EffectGateway {
                 )?))
             } else {
                 self.approvals
-                    .request_approval(&request, &request_hash, &decision)
+                    .request_approval(&request, &request_hash, &decision, command_context.as_ref())
                     .await
             };
             let proof = match approval {

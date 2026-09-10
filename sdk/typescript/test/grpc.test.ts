@@ -5,15 +5,17 @@ import { test } from "node:test";
 import * as grpc from "@grpc/grpc-js";
 
 import { StaticBearerCredential } from "../src/credential.js";
-import {
-  certificateSha256,
-  parseEndpointDescriptor,
-} from "../src/endpoint.js";
+import { certificateSha256, parseEndpointDescriptor } from "../src/endpoint.js";
 import {
   assertCompatibleServerInfo,
   createSecureGrpcClient,
 } from "../src/grpc.js";
-import { AgentRunServiceClient } from "../src/gen/colossus/api/v1alpha1/agent_run.js";
+import {
+  AgentRunServiceClient,
+  AgentRunServiceService,
+  GetRunResponse,
+  type AgentRunServiceServer,
+} from "../src/gen/colossus/api/v1alpha1/agent_run.js";
 import {
   DeploymentMode,
   SystemServiceService,
@@ -122,6 +124,35 @@ test("connector verifies pinned TLS, bearer auth, and live server identity", asy
     },
   };
   server.addService(SystemServiceService, implementation);
+  const largeApproval = GetRunResponse.fromPartial({
+    pendingInteractions: [
+      {
+        content: {
+          $case: "approval",
+          value: {
+            commandContext: {
+              justification: "A",
+              executable: "e",
+              workingDirectory: "w",
+              arguments: ["x".repeat(4 * 1024 * 1024 - 7), "TAIL"],
+              redacted: true,
+            },
+          },
+        },
+      },
+    ],
+  });
+  assert.ok(
+    GetRunResponse.encode(largeApproval).finish().length > 4 * 1024 * 1024,
+  );
+  server.addService(AgentRunServiceService, {
+    getRun(call, callback) {
+      assert.deepEqual(call.metadata.get("authorization"), [
+        "Bearer connector-test-token",
+      ]);
+      callback(null, largeApproval);
+    },
+  } satisfies Partial<AgentRunServiceServer>);
   const port = await new Promise<number>((resolve, reject) => {
     server.bindAsync(
       "127.0.0.1:0",
@@ -159,6 +190,13 @@ test("connector verifies pinned TLS, bearer auth, and live server identity", asy
     assert.equal(authenticatedCalls, 1);
     assert.equal(clientExistedDuringCompatibilityCall, true);
     assert.equal(applicationChannelRequests, 1);
+    const received = await new Promise<GetRunResponse>((resolve, reject) => {
+      client.getRun({ runId: "run-1" }, (error, response) => {
+        if (error !== null) reject(error);
+        else resolve(response);
+      });
+    });
+    assert.deepEqual(received, largeApproval);
     client.close();
 
     const wrongLeaf = readFileSync(

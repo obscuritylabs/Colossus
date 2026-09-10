@@ -75,11 +75,11 @@ policy, approval, permits, or audit.
 `shell.run` accepts exactly one invocation form:
 
 ```json
-{"command":"cargo test -p colossus-runtime --lib","cwd":".","timeout_ms":120000}
+{"command":"cargo test -p colossus-runtime --lib","justification":"Check runtime tests for regressions in the changed code.","cwd":".","timeout_ms":120000}
 ```
 
 ```json
-{"argv":["git","status","--short"],"cwd":"."}
+{"argv":["git","status","--short"],"justification":"Identify existing workspace changes before editing.","cwd":"."}
 ```
 
 `command` is the recommended form for a bounded non-interactive script. Colossus
@@ -87,6 +87,12 @@ selects the trusted shell supplied by `workspace-development` or one explicit sh
 grant and invokes it without startup profiles. `argv` preserves exact execution and
 requires its first entry to resolve to one configured or derived executable. Shell
 wrappers used in `argv` cannot request login, interactive, or startup-profile behavior.
+
+Both forms require `justification`, a nonblank plain-text task purpose of at most
+512 Unicode characters, without control or bidirectional characters. Do not include
+credentials, hidden reasoning, or claims of authorization. This field is required even
+when policy or the approval mode permits execution without an interactive prompt. An
+invalid explanation executes nothing and can be corrected within normal turn limits.
 
 Under a configured isolating boundary, `cwd` remains inside the canonical workspace.
 Colossus supplies an isolated `HOME`/temp directory and sanitized absolute `PATH`;

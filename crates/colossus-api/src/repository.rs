@@ -3,7 +3,7 @@ use crate::{
     InteractionKind, InteractionResponse, InteractionStatus, ListRunsRequest, ListRunsResponse,
     NewRun, Run, RunExecutionRequest, RunStatus, RunUpdate, RunUpdateKind, ThreadLifecycle,
     identity::scopes,
-    validate_public_approval_display,
+    validate_public_approval_display, validate_public_command_context,
     validation::{
         MAX_IDENTIFIER_BYTES, MAX_INPUT_BYTES, MAX_PAGE_SIZE, MAX_ROLE_BYTES, MAX_TOOL_BYTES,
         MAX_UPDATE_PAGE_SIZE, bounded_text, token,
@@ -2462,6 +2462,7 @@ fn validate_interaction(run: &Run, interaction: &Interaction) -> ApiResult<()> {
                 || interaction.action.is_some()
                 || interaction.resource.is_some()
                 || interaction.risk.is_some()
+                || interaction.command_context.is_some()
             {
                 return Err(ApiError::invalid(
                     ApiErrorReason::InvalidArgument,
@@ -2478,6 +2479,10 @@ fn validate_interaction(run: &Run, interaction: &Interaction) -> ApiResult<()> {
             }
         }
         InteractionKind::Approval => {
+            validate_public_command_context(
+                interaction.action.as_deref(),
+                interaction.command_context.as_ref(),
+            )?;
             if !interaction.choices.is_empty() || interaction.allow_free_form {
                 return Err(ApiError::invalid(
                     ApiErrorReason::InvalidArgument,
@@ -2615,8 +2620,13 @@ fn same_interaction_challenge(expected: &Interaction, actual: &Interaction) -> b
         && expected.action == actual.action
         && expected.resource == actual.resource
         && expected.risk == actual.risk
+        && expected.command_context == actual.command_context
         && expected.expires_at == actual.expires_at
 }
+
+#[cfg(test)]
+#[path = "repository_command_tests.rs"]
+mod command_approval_tests;
 
 fn validate_response(interaction: &Interaction, response: &InteractionResponse) -> ApiResult<()> {
     match (interaction.kind, response) {
@@ -3016,6 +3026,11 @@ fn validate_update_owner(caller: &CallerContext, kind: &RunUpdateKind) -> ApiRes
             ));
         }
         if interaction.kind == InteractionKind::Approval {
+            validate_public_command_context(
+                interaction.action.as_deref(),
+                interaction.command_context.as_ref(),
+            )
+            .map_err(|_| invariant(caller, "the durable command approval could not be verified"))?;
             let action = interaction.action.as_deref().ok_or_else(|| {
                 invariant(
                     caller,

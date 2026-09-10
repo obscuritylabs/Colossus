@@ -11,6 +11,8 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "command_review_context",
+    "finish_command_review",
     "get_plugin_inventory",
     "resolve_plugin_selection",
     "read_plugin_preview",

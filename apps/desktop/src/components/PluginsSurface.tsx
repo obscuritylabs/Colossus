@@ -53,19 +53,31 @@ export function PluginsSurface({
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const refreshQueued = useRef(false);
   const mounted = useRef(false);
   const refresh = useCallback(async () => {
-    if (!targetId || !supported || inFlight.current) return;
+    if (!targetId || !supported) return;
+    if (inFlight.current) {
+      // A lifecycle change can finish while an older inventory is in flight.
+      // Coalesce requests, but retain one follow-up so that change is observed.
+      refreshQueued.current = true;
+      return;
+    }
     inFlight.current = true;
     setLoading(true);
     try {
-      const next = await getPluginInventory(targetId);
-      if (mounted.current) {
-        setInventory(next);
-        setInventoryError("");
-      }
-    } catch (error) {
-      if (mounted.current) setInventoryError(failure(error));
+      do {
+        refreshQueued.current = false;
+        try {
+          const next = await getPluginInventory(targetId);
+          if (mounted.current) {
+            setInventory(next);
+            setInventoryError("");
+          }
+        } catch (error) {
+          if (mounted.current) setInventoryError(failure(error));
+        }
+      } while (refreshQueued.current && mounted.current);
     } finally {
       inFlight.current = false;
       if (mounted.current) setLoading(false);
