@@ -146,6 +146,8 @@ layouts, accessibility, redaction, full details, and stale review state.
 On Unix, the allowed command deliberately runs for more than ten seconds, then must
 exit successfully and append exactly one marker. Windows uses immediate markers:
 AppContainer setup and its seven-second cleanup reserve share the effect budget.
+The Windows fixture uses core PowerShell/.NET marker writes without cmdlet module
+autoload; the normal default interpreter, process isolation, and limits are unchanged.
 Both platforms retain zero-exit, exact-once, and no-execution-before-approval checks.
 The test-only activity collector allows
 45 seconds to observe the normal 30-second process budget and terminal publication;
