@@ -8,6 +8,35 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.13] - 2026-09-11
+
+### Added
+
+- Required a concise, task-specific justification for new model-issued `shell.run`
+  commands and displayed it separately from policy and risk information in CLI, TUI,
+  Desktop, and SDK approval interactions.
+- Added full command review with prepared executable, argument boundaries, working
+  directory, display-only credential redaction, and immutable approval binding. Desktop
+  review uses an isolated native-owned window and retains native final confirmation.
+- Added data-only OCI release images containing every published release asset, with
+  authenticated Docker Hub publication and GHCR fallback, verified inventories,
+  checksum validation, and digest-pinned offline transfer.
+
+### Changed
+
+- Bumped the authenticated worker protocol to 22 and added optional public command
+  context without changing schema-version-3 configuration or historical approvals.
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles, the
+  embedded core plugin, and the Desktop fixture to `0.10.10-preview.13`.
+
+### Fixed
+
+- Shared authenticated sidecar approval-broker routing across macOS and Windows.
+- Prevented raw shell invocation details from bypassing the sanitized approval context
+  through live or restored public tool activity.
+- Preserved post-operation Desktop plugin inventory refreshes and ordered recent
+  sessions by parsed timestamps rather than RFC3339 string formatting.
+
 ## [0.10.10-preview.12] - 2026-09-08
 
 ### Fixed
