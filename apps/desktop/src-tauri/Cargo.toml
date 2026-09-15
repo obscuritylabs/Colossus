@@ -77,7 +77,7 @@ colossus-windows-native = { version = "=0.10.10-preview.13", path = "../../../cr
 
 [dev-dependencies]
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
-rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.23.0"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
