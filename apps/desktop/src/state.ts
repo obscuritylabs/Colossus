@@ -30,6 +30,8 @@ export interface RunView {
   run: Run;
   /** Volatile renderer-only create input; never hydrated from daemon state. */
   localPrompt: string | null;
+  /** Accepted renderer request, retained across snapshots until lifecycle metadata arrives. */
+  localPlanContinuation?: { planId: string; revision: number };
   output: string;
   updates: RunUpdate[];
   seenSequences: ReadonlySet<number>;
@@ -52,6 +54,12 @@ export type ChatAction =
   | { type: "select_run"; runId: string | null }
   | { type: "upsert_run"; run: Run }
   | { type: "record_local_prompt"; runId: string; prompt: string }
+  | {
+      type: "record_plan_continuation";
+      runId: string;
+      planId: string;
+      revision: number;
+    }
   | { type: "hydrate_run"; details: RunDetails }
   | { type: "ingest_update"; update: RunUpdate }
   | { type: "watch_started"; runId: string }
@@ -643,6 +651,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         views: updateViewMap(state.views, action.runId, (view) => ({
           ...view,
           localPrompt: view.localPrompt ?? action.prompt,
+        })),
+      };
+    case "record_plan_continuation":
+      return {
+        ...state,
+        views: updateViewMap(state.views, action.runId, (view) => ({
+          ...view,
+          localPlanContinuation: {
+            planId: action.planId,
+            revision: action.revision,
+          },
         })),
       };
     case "hydrate_run": {

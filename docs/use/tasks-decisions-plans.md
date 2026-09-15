@@ -171,8 +171,11 @@ Plan ID. They are available only when authenticated discovery advertises
 Desktop offers continuation controls only for the latest known Draft revision. Older
 conversation cards remain readable, while approved, executed, discarded, and legacy
 revision-zero plans cannot be revised in chat. Once an execution request is accepted,
-the composer switches to Execute mode. The Plans view retains the latest available
-planning response after execution; it does not replace it with the execution result.
+the composer switches to Execute mode. Continuation controls remain unavailable while
+an accepted revision or execution is queued, running, or waiting for approval. If it
+fails without releasing updated plan metadata, use the advanced workflow to check its
+state before retrying. The Plans view retains the latest available planning response
+after execution; it does not replace it with the execution result.
 That response is a model-written summary. Use the advanced workflow to inspect the
 canonical plan content and ordered steps.
 

@@ -2,6 +2,7 @@ import type { ResearchSource } from "./components/ResearchSourcesPanel";
 import { researchSources } from "./components/ResearchSourcesPanel";
 import type { RunView } from "./state";
 import type { PlanStatus, RunTerminal } from "./types";
+import { isTerminalStatus } from "./types";
 
 export interface SessionPlanReference {
   planId: string;
@@ -13,6 +14,7 @@ export interface SessionPlanReference {
   createdAt: string;
   cancelled: boolean;
   output: string;
+  continuationPending?: boolean;
 }
 
 export interface SessionResearchSource extends ResearchSource {
@@ -27,11 +29,18 @@ export interface AutomaticPlanSelection {
 
 /** Whether released metadata supports displaying draft continuation controls. */
 export function canContinuePlan(
-  plan: { status?: PlanStatus | null; revision?: number },
+  plan: {
+    status?: PlanStatus | null;
+    revision?: number;
+    continuationPending?: boolean;
+  },
   continuationAvailable: boolean,
 ): boolean {
   return (
-    continuationAvailable && plan.status === "draft" && (plan.revision ?? 0) > 0
+    continuationAvailable &&
+    !plan.continuationPending &&
+    plan.status === "draft" &&
+    (plan.revision ?? 0) > 0
   );
 }
 
@@ -80,12 +89,26 @@ export function selectSessionPlans(
   views: readonly RunView[],
 ): readonly SessionPlanReference[] {
   const plans = new Map<string, SessionPlanReference>();
+  const pendingRevisions = new Map<string, number>();
   const planningResponses = new Map<
     string,
     { revision: number; output: string }
   >();
   for (const [runIndex, view] of views.entries()) {
     const reference = terminalPlan(view.run.terminal);
+    const continuation = view.localPlanContinuation;
+    if (
+      continuation !== undefined &&
+      (!isTerminalStatus(view.run.status) || reference === null)
+    ) {
+      pendingRevisions.set(
+        continuation.planId,
+        Math.max(
+          pendingRevisions.get(continuation.planId) ?? 0,
+          continuation.revision,
+        ),
+      );
+    }
     if (reference === null) {
       continue;
     }
@@ -115,6 +138,8 @@ export function selectSessionPlans(
     .map((plan) => ({
       ...plan,
       output: planningResponses.get(plan.planId)?.output ?? "",
+      continuationPending:
+        (pendingRevisions.get(plan.planId) ?? -1) >= plan.revision,
     }))
     .sort(
       (left, right) =>
