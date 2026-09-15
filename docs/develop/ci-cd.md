@@ -147,7 +147,9 @@ with the standalone Tauri graph on the runner's bounded disk. The desktop job li
 tests the standalone native bridge; runs pinned Chromium keyboard,
 accessibility, high-contrast, drawer, approval, and 880×640 layout acceptance; deletes
 its debug artifacts; then builds the bundled sidecar, CLI, and Tauri application into one
-shared non-incremental release tree. The native job exercises the otherwise-ignored real sidecar
+shared non-incremental release tree. Its 75-minute job limit accommodates both the
+debug/browser checks and a cold optimized build when compiler-cache reuse is low.
+The native job exercises the otherwise-ignored real sidecar
 bootstrap/pinned-gRPC/guardian lifecycle and sandbox acceptance. Together they prove the
 pruned locked build, then create an ad-hoc signed two-phase app bundle and verify the outer
 seal plus final nested-binary manifest hashes. Ad-hoc signing
