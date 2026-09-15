@@ -1984,7 +1984,7 @@ test("plan titles open the rendered plan and previews do not leak Markdown synta
     }),
   ).toBeVisible();
   await expect(
-    details.getByText("Rendered from the durable plan output"),
+    details.getByText("Response released by the planning run"),
   ).toBeVisible();
 });
 

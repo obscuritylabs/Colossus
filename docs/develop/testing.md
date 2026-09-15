@@ -122,6 +122,48 @@ Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
 
+### Plan Mode acceptance
+
+Run `cargo test -p colossus-cli --test plan_mode_smoke --test interactive_plan_smoke`
+for non-mutation, durable draft writes, refinement, approval, and once-only consumption.
+The interactive suite covers line mode and a real PTY in embedded and worker-backed
+runtimes. From `apps/desktop`, run
+`npm run test:browser -- tests/browser/plan-workflow.spec.ts` for revision controls,
+execution mode handoff, and retained planning previews. These deterministic providers
+and browser fixtures prove contracts; they do not prove a live model follows the
+instructions or that a packaged native application is correctly connected.
+
+`cargo test -p colossus-api-runtime --lib public_plan_question_resumes_after_answer_and_persists_one_draft`
+uses a loopback provider with the production runtime, event forwarding, public run
+repository, and interaction router. It verifies that tool-start delivery precedes the
+question, an answer reaches the next model request, and the run completes with exactly
+one draft. Run this tier when changing Plan Mode, interactive prompts, or event buffering;
+an isolated question-card fixture cannot expose an interaction overtaking queued events.
+
+For live acceptance, use a disposable workspace by default. When an operator explicitly
+requests their active configuration, use clearly named test sessions and record the
+resolved config source, model, reasoning, limits, access profile, state location, and
+binary version without exporting credentials. Resolve CLI and Desktop independently:
+workspace YAML and Desktop's saved provider/model resources may differ. Confirm the
+packaged CLI and sidecar match the source binaries. Run the CLI and Desktop checks
+sequentially when they share a workspace; workspace ownership is exclusive even with
+different state paths. Do not disable the lease or change provider/policy settings to
+make the test pass.
+
+| Live scenario | Evidence to retain |
+| --- | --- |
+| Simple planning without inspection | One Draft at revision 1, ordered steps, actual provider/model and run ID |
+| Plan a documentation change after reading two named files | Only bounded inspection and one plan write; proposed edits explicitly marked `requires_mutation: true` |
+| Ask for a file change and task records while in Plan Mode | A draft describes the work; no file or TaskRecord is created |
+| Native UI clarification and refinement | Question answered through the UI; same plan ID advances revision; old revision has no continuation controls |
+| Native Run once for a harmless output-only plan | Plan becomes Executed, composer enters Execute mode, repeat execution controls retire, planning preview survives |
+
+Compare repository changes before and after each planning scenario. Retain canonical
+plan records, tool-call names, run results, and native screenshots separately from mock
+test results. Record model errors and cancellations as observed; do not turn retries
+into an unqualified first-attempt pass. Live samples supplement the deterministic
+negative cases and cannot guarantee every future model response.
+
 ### Command approval acceptance
 
 `cargo test -p colossus-cli --test approval_smoke` uses isolated homes and deterministic

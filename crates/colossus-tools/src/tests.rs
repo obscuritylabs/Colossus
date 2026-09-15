@@ -658,6 +658,9 @@ fn plan_tools_require_ordered_structured_steps_and_exact_arguments() {
     for arguments in [
         json!({"prompt": "missing steps"}),
         json!({"prompt": "empty", "steps": []}),
+        json!({"prompt": "unclassified edit", "steps": [{"title": "Edit the documentation"}]}),
+        json!({"prompt": "invalid classification", "steps": [{"title": "Edit", "requires_mutation": null}]}),
+        json!({"prompt": "invalid classification", "steps": [{"title": "Edit", "requires_mutation": "false"}]}),
         json!({"prompt": "unknown", "steps": [{"title": "x", "code": "rm -rf"}]}),
     ] {
         assert!(matches!(
@@ -673,6 +676,9 @@ fn plan_tools_require_ordered_structured_steps_and_exact_arguments() {
         json!({"steps": [{"title": "missing content"}]}),
         json!({"content": "missing steps"}),
         json!({"content": "empty steps", "steps": []}),
+        json!({"content": "unclassified edit", "steps": [{"title": "Edit the documentation"}]}),
+        json!({"content": "invalid classification", "steps": [{"title": "Edit", "requires_mutation": null}]}),
+        json!({"content": "invalid classification", "steps": [{"title": "Edit", "requires_mutation": "false"}]}),
         json!({
             "plan_id": "caller-controlled",
             "content": "forged target",

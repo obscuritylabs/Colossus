@@ -2693,6 +2693,7 @@ export default function App() {
       }
       createAttempt.current = null;
       setPlanRevision(null);
+      setMode("execute");
       targetRoutes.current.bindRun(run.runId, route);
       dispatch({ type: "upsert_run", run });
       dispatch({

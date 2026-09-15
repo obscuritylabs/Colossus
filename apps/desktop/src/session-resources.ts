@@ -25,6 +25,29 @@ export interface AutomaticPlanSelection {
   observedKeys: ReadonlySet<string>;
 }
 
+/** Whether released metadata supports displaying draft continuation controls. */
+export function canContinuePlan(
+  plan: { status?: PlanStatus | null; revision?: number },
+  continuationAvailable: boolean,
+): boolean {
+  return (
+    continuationAvailable && plan.status === "draft" && (plan.revision ?? 0) > 0
+  );
+}
+
+/** Older run cards remain readable but cannot act on a superseded draft. */
+export function canContinuePlanFromRun(
+  sourceRunId: string,
+  plans: readonly SessionPlanReference[],
+  continuationAvailable: boolean,
+): boolean {
+  return plans.some(
+    (plan) =>
+      plan.sourceRunId === sourceRunId &&
+      canContinuePlan(plan, continuationAvailable),
+  );
+}
+
 function terminalPlan(
   terminal: RunTerminal | null,
 ): Pick<
@@ -57,6 +80,10 @@ export function selectSessionPlans(
   views: readonly RunView[],
 ): readonly SessionPlanReference[] {
   const plans = new Map<string, SessionPlanReference>();
+  const planningResponses = new Map<
+    string,
+    { revision: number; output: string }
+  >();
   for (const [runIndex, view] of views.entries()) {
     const reference = terminalPlan(view.run.terminal);
     if (reference === null) {
@@ -74,12 +101,26 @@ export function selectSessionPlans(
     if (current === undefined || candidate.revision >= current.revision) {
       plans.set(reference.planId, candidate);
     }
+    if (view.run.mode === "plan") {
+      const response = planningResponses.get(reference.planId);
+      if (response === undefined || reference.revision >= response.revision) {
+        planningResponses.set(reference.planId, {
+          revision: reference.revision,
+          output: view.output,
+        });
+      }
+    }
   }
-  return [...plans.values()].sort(
-    (left, right) =>
-      right.createdAt.localeCompare(left.createdAt) ||
-      left.planId.localeCompare(right.planId),
-  );
+  return [...plans.values()]
+    .map((plan) => ({
+      ...plan,
+      output: planningResponses.get(plan.planId)?.output ?? "",
+    }))
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        left.planId.localeCompare(right.planId),
+    );
 }
 
 function automaticPlanKey(
@@ -94,7 +135,9 @@ export function selectPlanForAutomaticDetails(
   plans: readonly SessionPlanReference[],
   observedKeys: ReadonlySet<string>,
 ): AutomaticPlanSelection {
-  const eligiblePlans = plans.filter((plan) => !plan.cancelled);
+  const eligiblePlans = plans.filter(
+    (plan) => !plan.cancelled && canContinuePlan(plan, true),
+  );
   const plan =
     eligiblePlans.find(
       (candidate) => !observedKeys.has(automaticPlanKey(sessionId, candidate)),

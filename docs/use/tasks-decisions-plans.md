@@ -77,6 +77,12 @@ not expose `task.create` or `task.update`: this keeps planning non-mutating exce
 its single bounded Plan write. Create durable Tasks explicitly when that separate
 tracking workflow is useful.
 
+Each model-written step must explicitly set `requires_mutation` to describe its future
+execution. Planned file edits use `true` even though the planning turn itself does not
+execute them. Missing or non-boolean values are rejected instead of silently reporting
+the step as non-mutating. This declaration informs review; it does not grant authority
+to execute the step.
+
 New plans start at revision 1. Existing legacy records without the field read as
 revision 0. Refinement replaces Markdown content and ordered steps while preserving the
 original prompt, and every refinement or lifecycle transition increments the optimistic
@@ -161,6 +167,14 @@ Colossus Desktop turns a returned Draft into an in-chat decision card:
 The typed actions carry a source run ID and revision rather than a renderer-selected
 Plan ID. They are available only when authenticated discovery advertises
 `plans.continue`; clients fail closed when it is absent.
+
+Desktop offers continuation controls only for the latest known Draft revision. Older
+conversation cards remain readable, while approved, executed, discarded, and legacy
+revision-zero plans cannot be revised in chat. Once an execution request is accepted,
+the composer switches to Execute mode. The Plans view retains the latest available
+planning response after execution; it does not replace it with the execution result.
+That response is a model-written summary. Use the advanced workflow to inspect the
+canonical plan content and ordered steps.
 
 ## Expected result
 

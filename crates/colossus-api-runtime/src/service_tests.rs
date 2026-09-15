@@ -41,6 +41,8 @@ use std::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
+mod plan_interaction;
+
 struct RuntimeFixture {
     runtime: Arc<Runtime>,
     _directory: TempDir,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canContinuePlanFromRun,
   selectPlanForAutomaticDetails,
   selectSessionPlans,
   selectSessionSources,
@@ -123,6 +124,38 @@ describe("session resources", () => {
     expect(
       selectPlanForAutomaticDetails("session-1", plans, new Set()).plan,
     ).toBeNull();
+  });
+
+  it("retires old draft actions when a plan is revised or consumed", () => {
+    const first = view("one", "draft", 1);
+    const revised = view("two", "revised", 2);
+    const plans = selectSessionPlans([first, revised]);
+    expect(canContinuePlanFromRun("one", plans, true)).toBe(false);
+    expect(canContinuePlanFromRun("two", plans, true)).toBe(true);
+    expect(canContinuePlanFromRun("two", plans, false)).toBe(false);
+
+    const executed = view("three", "Implementation completed.", 4);
+    executed.run.mode = "execute";
+    if (executed.run.terminal?.type === "result") {
+      executed.run.terminal.result.planStatus = "executed";
+    }
+    const consumed = selectSessionPlans([executed, first, revised]);
+    expect(consumed[0]?.output).toBe("revised");
+    for (const id of ["one", "two", "three"]) {
+      expect(canContinuePlanFromRun(id, consumed, true)).toBe(false);
+    }
+    expect(
+      selectPlanForAutomaticDetails("session-1", consumed, new Set()).plan,
+    ).toBeNull();
+  });
+
+  it("does not present execution output as a missing planning response", () => {
+    const executed = view("executed", "Implementation completed.", 3);
+    executed.run.mode = "execute";
+    if (executed.run.terminal?.type === "result") {
+      executed.run.terminal.result.planStatus = "executed";
+    }
+    expect(selectSessionPlans([executed])[0]?.output).toBe("");
   });
 
   it("aggregates bounded released sources and tool actions across runs", () => {

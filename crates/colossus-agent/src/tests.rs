@@ -22,7 +22,6 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
         "filesystem.read",
         "git.diff",
         "patch.preview",
-        "task.create",
         "plan.create",
         "memory.search",
         "user.ask",
@@ -32,6 +31,8 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
         assert!(plan_mode_tool(allowed, &create), "{allowed}");
     }
     for denied in [
+        "task.create",
+        "task.update",
         "filesystem.write",
         "process.run",
         "network.fetch",
@@ -758,6 +759,11 @@ async fn plan_mode_create_offers_exact_catalog_and_dispatches_only_one_bound_wri
                 name: "filesystem.write".into(),
                 arguments: json!({"path": "blocked", "content": "must not run"}),
             },
+            ProviderEvent::ToolCallRequested {
+                call_id: "blocked-task".into(),
+                name: "task.create".into(),
+                arguments: json!({"title": "Must not create a task while planning"}),
+            },
             plan_create_call("plan-create"),
             plan_create_call("duplicate-create"),
         ]),
@@ -822,7 +828,6 @@ async fn plan_mode_create_offers_exact_catalog_and_dispatches_only_one_bound_wri
             "repo.map",
             "repo.references",
             "repo.symbol_search",
-            "task.create",
             "task.list",
             "tool.search",
             "user.ask",

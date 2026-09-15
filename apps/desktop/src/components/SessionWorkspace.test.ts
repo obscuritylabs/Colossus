@@ -122,6 +122,7 @@ describe("SessionWorkspace", () => {
 
   it("makes plan titles readable actions and renders a compact Markdown preview", () => {
     const plan = runView("run-plan", "make me a simple plan", 2);
+    plan.run.mode = "plan";
     plan.run.terminal = {
       type: "result",
       result: {
@@ -144,6 +145,7 @@ describe("SessionWorkspace", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionPlansView, {
         views: [plan],
+        continuationAvailable: true,
         workflowAvailable: true,
         onInspectPlan: vi.fn(),
         onOpenPlanWorkflow: vi.fn(),

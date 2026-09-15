@@ -56,13 +56,13 @@ The remaining Plan Mode allowlist is:
 - `filesystem.list`, `filesystem.read`, `filesystem.search`, `git.status`, `git.diff`,
   `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`,
   `repo.file_summary`, and `patch.preview`;
-- `context.show`, `context.snapshots`, `plugin.resource.read`, `task.create`,
+- `context.show`, `context.snapshots`, `plugin.resource.read`,
   `task.list`, `decision.list`, `plan.show`, `memory.list`, `memory.search`,
   `agent.result`, and `agent.list`.
 
 Normal access resolution and prerequisites can remove entries from that list. Plan Mode
 never offers filesystem writes, patch application, command/process execution, approval,
-networking, delegation, plan execution, or plan discard.
+networking, delegation, task creation or updates, plan execution, or plan discard.
 
 `plan.discard` is an operator-only Local State action rather than a model tool.
 `plan.approve_request` remains Administration. Direct execution and approved-plan Goal

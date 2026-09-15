@@ -476,9 +476,9 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
                             "properties": {
                                 "title": {"type": "string", "minLength": 1, "maxLength": 512},
                                 "detail": {"type": "string", "maxLength": 65536, "default": ""},
-                                "requires_mutation": {"type": "boolean", "default": false}
+                                "requires_mutation": {"type": "boolean", "description": "Whether executing this step may change files or other state. Set true for planned edits even though Plan Mode does not execute them."}
                             },
-                            "required": ["title"]
+                            "required": ["title", "requires_mutation"]
                         }
                     }
                 }),
@@ -506,9 +506,9 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
                             "properties": {
                                 "title": {"type": "string", "minLength": 1, "maxLength": 512},
                                 "detail": {"type": "string", "maxLength": 65536, "default": ""},
-                                "requires_mutation": {"type": "boolean", "default": false}
+                                "requires_mutation": {"type": "boolean", "description": "Whether executing this step may change files or other state. Set true for planned edits even though Plan Mode does not execute them."}
                             },
-                            "required": ["title"]
+                            "required": ["title", "requires_mutation"]
                         }
                     }
                 }),

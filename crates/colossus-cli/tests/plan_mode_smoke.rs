@@ -98,6 +98,11 @@ fn parse(output: &std::process::Output, label: &str) -> Value {
 
 #[test]
 fn plan_mode_cannot_mutate_and_approved_plans_are_consumed_once() {
+    let denied_task = r#"data: {"id":"task-denied","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"task-1","type":"function","function":{"name":"task_create","arguments":"{\"title\":\"Must not persist during planning\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
     let denied_write = r#"data: {"id":"plan-denied","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"filesystem_write","arguments":"{\"path\":\"plan-mode-escape.txt\",\"content\":\"escaped\",\"mode\":\"create\"}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
@@ -139,6 +144,7 @@ data: [DONE]
 
 "#;
     let (origin, server) = serve(vec![
+        denied_task,
         denied_write,
         denied_plan,
         denied_finished,
@@ -170,12 +176,12 @@ data: [DONE]
             "access": {
                 "profile": "pinned",
                 "tools": {
-                    "include": ["filesystem.write", "plan.create", "goal.update"],
+                    "include": ["filesystem.write", "task.create", "plan.create", "goal.update"],
                     "exclude": []
                 },
                 "actions": {
                     "allow": [
-                    "provider.openai.chat", "filesystem.write", "plan.create", "plan.execute",
+                    "provider.openai.chat", "filesystem.write", "task.create", "task.list", "plan.create", "plan.execute",
                     "goal.create", "goal.update", "goal.iteration.record"
                     ],
                     "requireApproval": ["plan.approve_request"],
@@ -206,7 +212,7 @@ data: [DONE]
                 },
                 "roles": {"primary": "test"}
             },
-            "agent": {"maxTurns": 4},
+            "agent": {"maxTurns": 5},
             "subagents": {"maxConcurrent": 1},
             "sandbox": {
                 "backend": "native",
@@ -255,6 +261,11 @@ data: [DONE]
     assert_eq!(denied["plan"]["revision"], 1);
     assert_eq!(denied["plan"]["status"], "draft");
     assert!(!directory.path().join("plan-mode-escape.txt").exists());
+    let tasks = parse(
+        &run(binary, &config, &["tasks", "list", "--session", session_id]),
+        "planning task list",
+    );
+    assert_eq!(tasks, json!([]), "planning must not create durable Tasks");
 
     let planned = parse(
         &run(
@@ -360,6 +371,7 @@ data: [DONE]
     let requests = server.join().expect("provider server");
     let denied_body = requests[0].split("\r\n\r\n").nth(1).expect("body");
     assert!(!denied_body.contains("filesystem_write"));
+    assert!(!denied_body.contains("task_create"));
     assert!(denied_body.contains("plan_create"));
     let correction_body = requests[1].split("\r\n\r\n").nth(1).expect("body");
     assert!(correction_body.contains("not available in this run mode"));

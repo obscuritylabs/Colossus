@@ -2089,7 +2089,7 @@ async fn queued_and_running_subagent_cancellation_is_published_immediately() {
             .await
             .expect("cancellation update deadline")
             .expect("cancellation update");
-        match update.event {
+        match update.envelope.event {
             RunEvent::SubagentUpdated { job } => {
                 assert_eq!(job.id, queued.id);
                 assert_eq!(job.status, SubagentStatus::Cancelled);
@@ -4685,7 +4685,7 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
                     "prompt": "Finish the Rust transition",
                     "content": "# Durable plan",
                     "steps": [
-                        {"title": "Inspect", "detail": "Read the contracts"},
+                        {"title": "Inspect", "detail": "Read the contracts", "requires_mutation": false},
                         {"title": "Implement", "requires_mutation": true}
                     ],
                 }),

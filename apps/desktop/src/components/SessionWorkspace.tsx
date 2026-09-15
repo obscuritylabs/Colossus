@@ -21,7 +21,11 @@ import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import type { ComponentType } from "react";
 
 import { shortDateLabel } from "../presenters";
-import { selectSessionPlans, selectSessionSources } from "../session-resources";
+import {
+  canContinuePlan,
+  selectSessionPlans,
+  selectSessionSources,
+} from "../session-resources";
 import type { SessionPlanReference } from "../session-resources";
 import type { RunView } from "../state";
 import type { SessionMap, SessionMapResource } from "../types";
@@ -453,12 +457,14 @@ function planStatus(plan: SessionPlanReference): string {
 
 export function SessionPlansView({
   views,
+  continuationAvailable,
   workflowAvailable,
   onInspectPlan,
   onOpenPlanWorkflow,
   onRevisePlan,
 }: {
   views: readonly RunView[];
+  continuationAvailable: boolean;
   workflowAvailable: boolean;
   onInspectPlan: (plan: SessionPlanReference) => void;
   onOpenPlanWorkflow: (sessionId: string, planId: string) => void;
@@ -520,6 +526,7 @@ export function SessionPlansView({
                   </button>
                   <button
                     type="button"
+                    disabled={!canContinuePlan(plan, continuationAvailable)}
                     onClick={() =>
                       onRevisePlan(plan.sourceRunId, plan.planId, plan.revision)
                     }

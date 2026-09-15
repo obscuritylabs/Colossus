@@ -30,6 +30,7 @@ import {
 import { isNearConversationLatest } from "../conversation-follow";
 import { presentRunStatus, shortDateLabel } from "../presenters";
 import {
+  canContinuePlanFromRun,
   selectPlanForAutomaticDetails,
   selectSessionPlans,
   selectSessionSources,
@@ -1114,6 +1115,7 @@ export function WorkSurface({
               ) : sessionWorkspaceView === "plans" ? (
                 <SessionPlansView
                   views={conversationViews}
+                  continuationAvailable={planContinuationAvailable}
                   workflowAvailable={planWorkflowAvailable}
                   onInspectPlan={openPlanInDetails}
                   onOpenPlanWorkflow={onOpenPlanWorkflow}
@@ -1154,7 +1156,11 @@ export function WorkSurface({
                         <RunTimeline
                           view={conversationView}
                           activityComparison={activityComparisonEnabled}
-                          planContinuationAvailable={planContinuationAvailable}
+                          planContinuationAvailable={canContinuePlanFromRun(
+                            conversationView.run.runId,
+                            sessionPlans,
+                            planContinuationAvailable,
+                          )}
                           planWorkflowAvailable={planWorkflowAvailable}
                           onInspectPlan={openConversationPlanInDetails}
                           onOpenPlanWorkflow={onOpenPlanWorkflow}
@@ -1443,6 +1449,7 @@ export function WorkSurface({
                   <PlanDetailsPanel
                     plan={selectedPlan}
                     sessionId={run.sessionId}
+                    continuationAvailable={planContinuationAvailable}
                     workflowAvailable={planWorkflowAvailable}
                     onBack={() => setSelectedPlanId(null)}
                     onRevise={onRevisePlan}
