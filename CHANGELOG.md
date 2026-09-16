@@ -8,6 +8,19 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.15] - 2026-09-17
+
+### Changed
+
+- Spelled out `Obscurity Labs // COLOSSUS` in the persistent terminal footer.
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles, the
+  embedded core plugin, and the Desktop fixture to `0.10.10-preview.15`.
+
+### Fixed
+
+- Kept the full Obscurity Labs name and security warning count visible when the
+  terminal is too narrow for the complete footer branding.
+
 ## [0.10.10-preview.14] - 2026-09-16
 
 ### Fixed
