@@ -180,6 +180,10 @@ import type {
 } from "./types";
 import { USE_CONFIGURED_MAX_TURNS, isTerminalStatus } from "./types";
 import {
+  canContinuePlanFromRun,
+  selectSessionPlans,
+} from "./session-resources";
+import {
   listFixtureWorkspaceDirectory,
   readFixtureWorkspaceFile,
 } from "./dev/workspace-files-fixture";
@@ -1987,6 +1991,14 @@ export default function App() {
           }));
         }
         dispatch({ type: "upsert_run", run });
+        if (submission.planRevision !== undefined) {
+          dispatch({
+            type: "record_plan_continuation",
+            runId: run.runId,
+            planId: submission.planRevision.planId,
+            revision: submission.planRevision.revision,
+          });
+        }
         dispatch({
           type: "record_local_prompt",
           runId: run.runId,
@@ -2557,7 +2569,15 @@ export default function App() {
       return;
     }
     const source = chatRef.current.views.get(sourceRunId);
-    if (source === undefined || !isTerminalStatus(source.run.status)) {
+    if (
+      source === undefined ||
+      !isTerminalStatus(source.run.status) ||
+      !canContinuePlanFromRun(
+        sourceRunId,
+        selectSessionPlans([...chatRef.current.views.values()]),
+        true,
+      )
+    ) {
       setActionError({
         ...FALLBACK_ACTION_ERROR,
         code: "plan_source_unavailable",
@@ -2587,6 +2607,11 @@ export default function App() {
     if (
       source === undefined ||
       !isTerminalStatus(source.run.status) ||
+      !canContinuePlanFromRun(
+        sourceRunId,
+        selectSessionPlans([...chatRef.current.views.values()]),
+        true,
+      ) ||
       route === null ||
       targetRoutes.current?.isCurrent(route) !== true
     ) {
@@ -2685,6 +2710,16 @@ export default function App() {
           etag: `fixture-etag-${runId}`,
           archived: false,
         };
+        const acceptedStatus = FIXTURE_QUERY.get("planExecutionStatus");
+        if (acceptedStatus === "queued" || acceptedStatus === "waiting") {
+          run = {
+            ...run,
+            status: acceptedStatus,
+            startedAt: null,
+            finishedAt: null,
+            terminal: null,
+          };
+        }
       } else {
         run = await createRun(route.targetId, request);
       }
@@ -2693,8 +2728,15 @@ export default function App() {
       }
       createAttempt.current = null;
       setPlanRevision(null);
+      setMode("execute");
       targetRoutes.current.bindRun(run.runId, route);
       dispatch({ type: "upsert_run", run });
+      dispatch({
+        type: "record_plan_continuation",
+        runId: run.runId,
+        planId,
+        revision,
+      });
       dispatch({
         type: "record_local_prompt",
         runId: run.runId,

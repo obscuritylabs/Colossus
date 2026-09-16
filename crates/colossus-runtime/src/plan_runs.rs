@@ -3,7 +3,7 @@
 use super::*;
 
 impl Runtime {
-    /// Execute structurally read-only Plan Mode with only inspection, task, and plan tools.
+    /// Execute Plan Mode with read-only inspection and one durable draft write.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_plan_with_skills(
         &self,

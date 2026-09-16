@@ -80,7 +80,10 @@ pub(super) fn tool_plan_steps(call: &ToolCall) -> Result<Vec<PlanStep>, ToolErro
             let requires_mutation = object
                 .get("requires_mutation")
                 .and_then(Value::as_bool)
-                .unwrap_or(false);
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "each plan step requires_mutation must be a boolean".into(),
+                })?;
             Ok(PlanStep {
                 index: u32::try_from(index + 1).map_err(|_| ToolError::InvalidArguments {
                     tool: call.name.clone(),
@@ -603,5 +606,36 @@ pub(super) fn mcp_runtime_tool_error(error: RuntimeError) -> ToolError {
             message,
         },
         error => ToolError::Failed(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_step_parsing_requires_an_explicit_execution_mutation_declaration() {
+        let call = |step| ToolCall {
+            call_id: "plan-step".into(),
+            name: "plan.create".into(),
+            arguments: serde_json::json!({"steps": [step]}),
+        };
+        for step in [
+            serde_json::json!({"title": "Edit the documentation"}),
+            serde_json::json!({"title": "Edit", "requires_mutation": null}),
+            serde_json::json!({"title": "Edit", "requires_mutation": "false"}),
+        ] {
+            assert!(matches!(
+                tool_plan_steps(&call(step)),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+        for requires_mutation in [false, true] {
+            let steps = tool_plan_steps(&call(serde_json::json!({
+                "title": "Classified step", "requires_mutation": requires_mutation,
+            })))
+            .expect("explicit declaration");
+            assert_eq!(steps[0].requires_mutation, requires_mutation);
+        }
     }
 }

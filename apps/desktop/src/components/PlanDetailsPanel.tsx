@@ -6,6 +6,7 @@ import {
 } from "@tabler/icons-react";
 
 import type { SessionPlanReference } from "../session-resources";
+import { canContinuePlan } from "../session-resources";
 import { MarkdownContent } from "./MarkdownContent";
 
 function planStatus(plan: SessionPlanReference): string {
@@ -20,6 +21,7 @@ function planStatus(plan: SessionPlanReference): string {
 export function PlanDetailsPanel({
   plan,
   sessionId,
+  continuationAvailable,
   workflowAvailable,
   onBack,
   onRevise,
@@ -27,6 +29,7 @@ export function PlanDetailsPanel({
 }: {
   plan: SessionPlanReference;
   sessionId: string;
+  continuationAvailable: boolean;
   workflowAvailable: boolean;
   onBack: () => void;
   onRevise: (sourceRunId: string, planId: string, revision: number) => void;
@@ -60,8 +63,8 @@ export function PlanDetailsPanel({
             <IconListDetails size={18} stroke={1.6} />
           </span>
           <div>
-            <strong>Released plan</strong>
-            <small>Rendered from the durable plan output</small>
+            <strong>Planning response</strong>
+            <small>Response released by the planning run</small>
           </div>
         </div>
         {plan.output.trim() === "" ? (
@@ -81,6 +84,7 @@ export function PlanDetailsPanel({
       <footer className="plan-details-actions">
         <button
           type="button"
+          disabled={!canContinuePlan(plan, continuationAvailable)}
           onClick={() => onRevise(plan.sourceRunId, plan.planId, plan.revision)}
         >
           <IconRefresh size={14} stroke={1.7} aria-hidden="true" />

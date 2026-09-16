@@ -274,13 +274,16 @@ impl Runtime {
             .cloned();
         if let Some(events) = events {
             let _ = events
-                .send(RunEventEnvelope {
-                    schema_version: 1,
-                    run_id: job.parent_run_id.clone(),
-                    session_id: job.session_id.clone(),
-                    event: RunEvent::SubagentUpdated {
-                        job: Box::new(job.clone()),
+                .send(BufferedRunEvent {
+                    envelope: RunEventEnvelope {
+                        schema_version: 1,
+                        run_id: job.parent_run_id.clone(),
+                        session_id: job.session_id.clone(),
+                        event: RunEvent::SubagentUpdated {
+                            job: Box::new(job.clone()),
+                        },
                     },
+                    delivered: None,
                 })
                 .await;
         }

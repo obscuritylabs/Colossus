@@ -122,7 +122,7 @@ pub struct Runtime {
     pub(super) subagent_max_concurrent: usize,
     pub(super) subagent_notify: watch::Sender<u64>,
     pub(super) subagent_drain_lock: TokioMutex<()>,
-    pub(super) subagent_event_sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<RunEventEnvelope>>>>,
+    pub(super) subagent_event_sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<BufferedRunEvent>>>>,
     pub(super) tools: Arc<dyn ToolRegistry>,
     pub(super) access: AccessResolution,
     pub(super) filesystem_executor: Arc<dyn EffectExecutor>,

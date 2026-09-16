@@ -33,6 +33,7 @@ import {
   type ActivityLabelKind,
 } from "../activity-labels";
 import type { RunView } from "../state";
+import { canContinuePlan } from "../session-resources";
 import type {
   MessageContentPart,
   RunFailure,
@@ -971,9 +972,7 @@ function PlanResultCard({
   const [goalIterations, setGoalIterations] = useState(5);
   const [busyAction, setBusyAction] = useState<"direct" | "goal" | null>(null);
   const actionable =
-    plan.revision !== undefined &&
-    plan.status === "draft" &&
-    continuationAvailable &&
+    canContinuePlan(plan, continuationAvailable) &&
     onRevise !== undefined &&
     onExecute !== undefined;
   const executed = plan.status === "executed";

@@ -102,7 +102,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
-rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.4", features = ["mount", "process"] }
 security-framework = "3.7.0"
 sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }

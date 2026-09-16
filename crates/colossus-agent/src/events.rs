@@ -177,7 +177,6 @@ pub(super) fn plan_mode_tool(name: &str, target: &PlanDraftTarget) -> bool {
                 | "repo.references"
                 | "repo.file_summary"
                 | "patch.preview"
-                | "task.create"
                 | "task.list"
                 | "decision.list"
                 | "plan.show"
