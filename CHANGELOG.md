@@ -8,6 +8,32 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.14] - 2026-09-16
+
+### Fixed
+
+- Kept Plan mode focused on producing one draft: planning cannot create tasks, and
+  every planned step must explicitly declare whether its eventual execution mutates
+  state.
+- Preserved live clarification and planning after a user answers a question by
+  delivering the tool-start event before opening the interaction.
+- Retired Desktop plan controls as soon as a revision or execution is accepted,
+  including queued and waiting runs, preventing duplicate continuation requests.
+  Preserved the planning response through execution and returned the composer to
+  Execute mode after direct or Goal continuation.
+- Increased the macOS pre-merge Desktop job limit to accommodate browser and native
+  acceptance followed by cold optimized CLI, sidecar, and app builds.
+
+### Security
+
+- Updated Rustls to 0.23.45 in the core and Desktop dependency graphs to address
+  RUSTSEC-2026-0285, with the required WebPKI and AWS-LC dependency updates.
+
+### Changed
+
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles, the
+  embedded core plugin, and the Desktop fixture to `0.10.10-preview.14`.
+
 ## [0.10.10-preview.13] - 2026-09-11
 
 ### Added
