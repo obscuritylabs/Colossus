@@ -39,9 +39,9 @@ colossus -w /absolute/path/to/repository tui --resume
 A new empty session opens with a responsive Lab Console showing the canonical workspace,
 provider route, sandbox profile, approval mode, and readiness state. The console is process-local:
 it is not written to the durable transcript, and it recedes as soon as the first command or
-prompt is submitted. Its terminal-native `OL // COLOSSUS` lockup brands both the header and
-persistent footer without depending on an image protocol. Roomy layouts add the Obscurity Labs
-name, a restrained red rail, the prompt **What do you want to work on?**, and distinct
+prompt is submitted. Its terminal-native `OL // COLOSSUS` lockup brands the header, while
+`Obscurity Labs // COLOSSUS` brands the persistent footer without depending on an image protocol.
+Roomy layouts add the Obscurity Labs name, a restrained red rail, the prompt **What do you want to work on?**, and distinct
 `// RUNTIME` and `// SESSION` sections. Resumed sessions open directly on their retained transcript. At narrow or
 short terminal sizes, the same startup context collapses into a compact briefing. Inline startup
 moves the existing terminal view into native scrollback and begins from a clean visible viewport;

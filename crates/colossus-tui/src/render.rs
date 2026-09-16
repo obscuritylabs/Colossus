@@ -2,7 +2,7 @@ use super::*;
 
 const OBSCURITY_LABS_RED: Color = Color::Rgb(213, 16, 48);
 const OBSCURITY_LABS_SEGMENT: &str = "OL //  ";
-const OBSCURITY_LABS_FOOTER_SEGMENT: &str = " OL // COLOSSUS ";
+const OBSCURITY_LABS_FOOTER_SEGMENT: &str = " Obscurity Labs // COLOSSUS ";
 const WIDE_WELCOME_MIN_WIDTH: usize = 96;
 const WIDE_WELCOME_MIN_HEIGHT: usize = 22;
 
