@@ -1091,16 +1091,19 @@ fn render_branded_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect, fo
         );
     } else {
         let badge = format!(" ⚠ Security: {} ", state.security_posture.finding_count());
+        let badge_width = UnicodeWidthStr::width(badge.as_str());
+        let brand = if brand_width + badge_width > width {
+            " Obscurity Labs "
+        } else {
+            OBSCURITY_LABS_FOOTER_SEGMENT
+        };
         let remaining = width
-            .saturating_sub(UnicodeWidthStr::width(badge.as_str()))
-            .saturating_sub(brand_width);
+            .saturating_sub(badge_width)
+            .saturating_sub(UnicodeWidthStr::width(brand));
         let footer = truncate_width(footer, remaining);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(
-                    OBSCURITY_LABS_FOOTER_SEGMENT,
-                    obscurity_labs_footer_style(&state.preferences),
-                ),
+                Span::styled(brand, obscurity_labs_footer_style(&state.preferences)),
                 Span::styled(
                     badge,
                     filled_approval_control_style(palette.warning_style(), true),

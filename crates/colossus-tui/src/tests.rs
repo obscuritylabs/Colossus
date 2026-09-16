@@ -463,6 +463,21 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
             .bg,
         "the warning badge should read as a distinct shell-style segment"
     );
+    for width in [40, 42, 43] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("narrow terminal");
+        terminal
+            .draw(|frame| render_footer(frame, &state, frame.area()))
+            .expect("draw narrow footer");
+        let footer = (0..width)
+            .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(footer.contains("Obscurity Labs"), "{width}: {footer}");
+        assert!(
+            footer.contains("⚠ Security: 2"),
+            "the warning count must remain visible at {width} columns: {footer}"
+        );
+    }
 }
 
 #[test]
