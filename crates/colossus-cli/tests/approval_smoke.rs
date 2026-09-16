@@ -330,7 +330,10 @@ fn risk_auto_mcp_server() -> (String, thread::JoinHandle<Vec<String>>) {
         })
     );
     let task = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Keep the fixture alive through CLI startup, MCP discovery, risk review,
+        // and the sandboxed call under parallel suite load. Each runtime request
+        // retains its own timeout; this bounds only the test server's lifetime.
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut requests = Vec::new();
         while requests.len() < 3 && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
