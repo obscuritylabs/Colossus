@@ -222,7 +222,7 @@ fn footer_uses_a_terminal_native_obscurity_labs_segment() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(
-        rendered.starts_with(" OL // COLOSSUS 019f-tes"),
+        rendered.starts_with(" Obscurity Labs // COLOSSUS 019f-tes"),
         "{rendered}"
     );
     let brand = terminal
@@ -435,7 +435,7 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         .collect::<String>();
     assert!(footer.contains("Security: 2"));
     assert!(
-        footer.starts_with(" OL // COLOSSUS  ⚠ Security: 2"),
+        footer.starts_with(" Obscurity Labs // COLOSSUS  ⚠ Security: 2"),
         "the branded footer must retain the persistent security status: {footer}"
     );
     assert_ne!(
@@ -452,7 +452,7 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
         terminal
             .backend()
             .buffer()
-            .cell((19, 0))
+            .cell((31, 0))
             .expect("security badge cell")
             .bg,
         terminal
@@ -463,6 +463,21 @@ fn danger_full_access_posture_adds_a_non_durable_card_and_persistent_footer_badg
             .bg,
         "the warning badge should read as a distinct shell-style segment"
     );
+    for width in [40, 42, 43] {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("narrow terminal");
+        terminal
+            .draw(|frame| render_footer(frame, &state, frame.area()))
+            .expect("draw narrow footer");
+        let footer = (0..width)
+            .filter_map(|x| terminal.backend().buffer().cell((x, 0)))
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(footer.contains("Obscurity Labs"), "{width}: {footer}");
+        assert!(
+            footer.contains("⚠ Security: 2"),
+            "the warning count must remain visible at {width} columns: {footer}"
+        );
+    }
 }
 
 #[test]

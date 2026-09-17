@@ -480,7 +480,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     assert!(welcome.contains("OL //  COLOSSUS"), "{welcome}");
     assert!(welcome.contains("OBSCURITY LABS"), "{welcome}");
     assert!(
-        welcome.contains("OL // COLOSSUS  ⚠ Security: 2"),
+        welcome.contains("Obscurity Labs // COLOSSUS  ⚠ Security: 2"),
         "the branded footer must retain the persistent security status: {welcome}"
     );
     let rail = welcome

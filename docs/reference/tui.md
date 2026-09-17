@@ -51,8 +51,9 @@ warning card and remain visible as a warning count in the footer. Each finding i
 risk line followed by a dim, concise recommendation. This includes an explicit
 `danger_full_access` sandbox backend even when its boundary acknowledgement is already
 configured. A quiet row separates startup guidance from the composer. The footer is a
-full-width contrasting status surface. `OL // COLOSSUS` leads the row, and an active security
-count remains a distinct warning-colored segment beside it. The color-free theme uses the same
+full-width contrasting status surface. `Obscurity Labs // COLOSSUS` leads the row, and an active security
+count remains a distinct warning-colored segment beside it. If both segments cannot fit, the
+footer retains `Obscurity Labs` and the full security count. The color-free theme uses the same
 bold text lockup without depending on the Obscurity Labs red.
 
 Effect approvals use a compact bottom-docked, focus-taking surface that keeps the
