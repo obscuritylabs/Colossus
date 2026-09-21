@@ -2349,6 +2349,8 @@ p {
 }
 
 .work-thread {
+  --conversation-max-width: 1100px;
+
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -4753,7 +4755,7 @@ p {
 
 .timeline {
   display: flex;
-  max-width: 790px;
+  max-width: var(--conversation-max-width, 790px);
   flex-direction: column;
   gap: 14px;
   margin: 0 auto;
@@ -4761,7 +4763,7 @@ p {
 
 .conversation-timeline {
   display: flex;
-  max-width: 790px;
+  max-width: var(--conversation-max-width, 790px);
   flex-direction: column;
   gap: 22px;
   margin: 0 auto;
@@ -6095,7 +6097,7 @@ p {
 }
 
 .pending-interaction-dock {
-  max-width: 790px;
+  max-width: var(--conversation-max-width, 790px);
   max-height: min(280px, 38vh);
   margin: 0 auto 10px;
   overflow: auto;
@@ -6138,7 +6140,7 @@ p {
 
 .work-composer {
   position: relative;
-  max-width: 790px;
+  max-width: var(--conversation-max-width, 790px);
   margin: 0 auto;
   padding: 9px 10px 8px;
   border: 1px solid var(--border-strong);
@@ -13335,6 +13337,36 @@ textarea {
 
 .repository-import-dialog {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.mcp-delete-dialog {
+  width: min(520px, calc(100vw - 48px));
+  padding: 0;
+  color: var(--text);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.mcp-delete-dialog:not([open]) {
+  display: none;
+}
+
+.mcp-delete-dialog::backdrop {
+  background: var(--surface-overlay);
+}
+
+.mcp-delete-dialog h3,
+.mcp-delete-content {
+  overflow-wrap: anywhere;
+}
+
+.mcp-delete-content {
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.mcp-delete-content p + div,
+.mcp-delete-content [role="alert"] {
+  margin-top: 16px;
 }
 
 .import-stage-list {

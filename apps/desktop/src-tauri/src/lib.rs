@@ -46,9 +46,9 @@ use desktop_commands::{
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
 use managed_configuration_commands::{
-    apply_space_configuration, create_managed_credential, delete_managed_credential,
-    get_managed_configuration, rotate_managed_credential, save_global_defaults,
-    save_space_configuration, upsert_global_mcp_server, upsert_global_model,
+    apply_space_configuration, create_managed_credential, delete_global_mcp_server,
+    delete_managed_credential, get_managed_configuration, rotate_managed_credential,
+    save_global_defaults, save_space_configuration, upsert_global_mcp_server, upsert_global_model,
     upsert_global_provider, upsert_global_search_provider, upsert_global_telemetry_profile,
 };
 use managed_diagnostics::{
@@ -127,6 +127,7 @@ pub fn run() {
             apply_repository_configuration,
             save_global_defaults,
             upsert_global_mcp_server,
+            delete_global_mcp_server,
             diagnose_managed_mcp_server,
             managed_mcp_oauth_status,
             begin_managed_mcp_oauth,

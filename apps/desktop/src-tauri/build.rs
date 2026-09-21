@@ -45,6 +45,7 @@ const COMMANDS: &[&str] = &[
     "apply_repository_configuration",
     "save_global_defaults",
     "upsert_global_mcp_server",
+    "delete_global_mcp_server",
     "diagnose_managed_mcp_server",
     "managed_mcp_oauth_status",
     "begin_managed_mcp_oauth",

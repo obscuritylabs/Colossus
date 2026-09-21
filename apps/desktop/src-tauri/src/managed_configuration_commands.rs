@@ -5,6 +5,8 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use uuid::Uuid;
 
+mod mcp_deletion;
+
 use crate::{
     desktop_commands::{connect_guard, settings_store},
     desktop_dto::ManagedRuntimeStateDto,
@@ -155,6 +157,13 @@ pub(crate) struct UpsertGlobalMcpServerInput {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeleteGlobalMcpServerInput {
+    expected_revision: u64,
+    resource_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UpsertGlobalProviderInput {
     expected_revision: u64,
     resource_id: Option<String>,
@@ -269,6 +278,19 @@ pub(crate) async fn upsert_global_mcp_server(
     let store = settings_store()?;
     let mut settings = store.load()?;
     apply_mcp_upsert(&mut settings, request)?;
+    store.save(&settings)?;
+    snapshot(state.inner(), &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn delete_global_mcp_server(
+    state: State<'_, AppState>,
+    request: DeleteGlobalMcpServerInput,
+) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    mcp_deletion::apply_mcp_deletion(&mut settings, &request)?;
     store.save(&settings)?;
     snapshot(state.inner(), &settings).await
 }

@@ -36,6 +36,7 @@ import {
   createRun,
   desktopReleaseChannel,
   deleteManagedCredential,
+  deleteGlobalMcpServer,
   diagnoseManagedMcpServer,
   diagnoseManagedModel,
   diagnoseManagedProvider,
@@ -93,6 +94,16 @@ describe("desktop API target routing", () => {
     tauri.invoke.mockReset();
     tauri.invoke.mockResolvedValue(undefined);
     tauri.channels.length = 0;
+  });
+
+  it("deletes a global MCP resource with its reviewed revision", async () => {
+    const snapshot = { globalConfiguration: { revision: 8, mcpServers: [] } };
+    tauri.invoke.mockResolvedValue(snapshot);
+    const request = { expectedRevision: 7, resourceId: "mcp-resource-1" };
+    await expect(deleteGlobalMcpServer(request)).resolves.toEqual(snapshot);
+    expect(tauri.invoke).toHaveBeenCalledWith("delete_global_mcp_server", {
+      request,
+    });
   });
 
   it("captures queued mentions through the native shared parser before delivery", async () => {
