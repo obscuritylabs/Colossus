@@ -24,8 +24,16 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { type InputHTMLAttributes, useEffect, useMemo, useState } from "react";
+import {
+  type InputHTMLAttributes,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { PluginConfigurationEditor } from "./PluginConfigurationEditor";
+import { McpDeleteDialog } from "./McpDeleteDialog";
+import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 
 import {
   applyRepositoryConfiguration,
@@ -33,7 +41,9 @@ import {
   beginManagedMcpOAuth,
   completeManagedMcpOAuth,
   createManagedCredential,
+  CommandFailure,
   deleteManagedCredential,
+  deleteGlobalMcpServer,
   diagnoseManagedMcpServer,
   diagnoseManagedModel,
   diagnoseManagedProvider,
@@ -1549,6 +1559,14 @@ export function ManagedSettingsPane({
         },
   );
   const [mcpEditor, setMcpEditor] = useState<McpEditorDraft | null>(null);
+  const [mcpDeletion, setMcpDeletion] = useState<{
+    resourceId: string;
+    expectedRevision: number;
+  } | null>(null);
+  const mcpDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const mcpToDelete = snapshot.globalConfiguration.mcpServers.find(
+    (entry) => entry.id === mcpDeletion?.resourceId,
+  );
   const [providerEditor, setProviderEditor] =
     useState<ProviderEditorDraft | null>(null);
   const [modelEditor, setModelEditor] = useState<ModelEditorDraft | null>(null);
@@ -1668,10 +1686,18 @@ export function ManagedSettingsPane({
       const next = isTauriRuntime() ? await action() : fixtureAction();
       setSnapshot(next);
       pushToast(success);
+      return true;
     } catch (error: unknown) {
       setFailure(
-        error instanceof Error ? error.message : "The settings change failed.",
+        error instanceof CommandFailure && error.detail.violations.length
+          ? error.detail.violations
+              .map((violation) => violation.description)
+              .join(" ")
+          : error instanceof Error
+            ? error.message
+            : "The settings change failed.",
       );
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1679,10 +1705,21 @@ export function ManagedSettingsPane({
 
   function fixtureRevision(mutator: (draft: ManagedSettingsSnapshot) => void) {
     const draft = structuredClone(snapshot);
+    const inheritedDefaults = defaultOverrides(draft);
     draft.globalConfiguration.revision += 1;
     draft.globalConfiguration.defaults.currentRevision =
       draft.globalConfiguration.revision;
     mutator(draft);
+    if (
+      !draft.globalConfiguration.defaults.revisions.some(
+        ({ revision }) => revision === draft.globalConfiguration.revision,
+      )
+    ) {
+      draft.globalConfiguration.defaults.revisions.push({
+        revision: draft.globalConfiguration.revision,
+        value: inheritedDefaults,
+      });
+    }
     return draft;
   }
 
@@ -2172,6 +2209,28 @@ export function ManagedSettingsPane({
     setMcpEditor(null);
   }
 
+  async function removeMcp() {
+    if (!mcpDeletion || !mcpToDelete || busy) return;
+    const request = mcpDeletion;
+    const names = new Set(mcpToDelete.revisions.map(({ value }) => value.name));
+    const deleted = await perform(
+      () => deleteGlobalMcpServer(request),
+      () => deleteMcpFixture(snapshot, request),
+      "MCP server deleted.",
+    );
+    if (!deleted) return;
+    setMcpDeletion(null);
+    if (mcpEditor?.resourceId === request.resourceId) setMcpEditor(null);
+    const withoutServer = <T,>(values: Record<string, T>): Record<string, T> =>
+      Object.fromEntries(
+        Object.entries(values).filter(([key]) => !names.has(key)),
+      );
+    setMcpDiagnostics(withoutServer);
+    setMcpOauthStatuses(withoutServer);
+    setMcpOauthLogins(withoutServer);
+    setMcpOauthCallbacks(withoutServer);
+  }
+
   async function saveProvider() {
     if (!providerEditor) return;
     const provider = managedProvider(providerEditor);
@@ -2533,6 +2592,14 @@ export function ManagedSettingsPane({
             mcpEditor={mcpEditor}
             setMcpEditor={setMcpEditor}
             onSaveMcp={() => void saveMcp()}
+            onDeleteMcp={(resourceId, trigger) => {
+              setFailure("");
+              mcpDeleteTrigger.current = trigger;
+              setMcpDeletion({
+                resourceId,
+                expectedRevision: snapshot.globalConfiguration.revision,
+              });
+            }}
             providerEditor={providerEditor}
             setProviderEditor={setProviderEditor}
             onSaveProvider={() => void saveProvider()}
@@ -2716,6 +2783,17 @@ export function ManagedSettingsPane({
           ) : null}
         </>
       )}
+      {mcpToDelete ? (
+        <McpDeleteDialog
+          label={mcpToDelete.label}
+          consumers={managedMcpConsumers(snapshot, mcpToDelete.id)}
+          busy={busy}
+          error={failure}
+          returnFocus={mcpDeleteTrigger.current}
+          onCancel={() => setMcpDeletion(null)}
+          onDelete={() => void removeMcp()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2756,6 +2834,7 @@ function GlobalSettingsBody({
   mcpEditor,
   setMcpEditor,
   onSaveMcp,
+  onDeleteMcp,
   providerEditor,
   setProviderEditor,
   onSaveProvider,
@@ -2801,6 +2880,7 @@ function GlobalSettingsBody({
   mcpEditor: McpEditorDraft | null;
   setMcpEditor: (draft: McpEditorDraft | null) => void;
   onSaveMcp: () => void;
+  onDeleteMcp: (resourceId: string, trigger: HTMLButtonElement) => void;
   providerEditor: ProviderEditorDraft | null;
   setProviderEditor: (draft: ProviderEditorDraft | null) => void;
   onSaveProvider: () => void;
@@ -2853,6 +2933,8 @@ function GlobalSettingsBody({
           <button
             className="button primary"
             type="button"
+            id="add-mcp-server"
+            disabled={busy}
             onClick={() => setMcpEditor({ ...EMPTY_MCP_DRAFT })}
           >
             <IconPlus size={16} aria-hidden="true" />
@@ -2933,9 +3015,22 @@ function GlobalSettingsBody({
                     type="button"
                     aria-label={`Edit ${entry.label}`}
                     title={`Edit ${entry.label}`}
+                    disabled={busy}
                     onClick={() => setMcpEditor(mcpDraft(entry))}
                   >
                     <IconEdit size={17} />
+                  </button>
+                  <button
+                    className="icon-button danger-icon-button"
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Delete ${entry.label}`}
+                    title={`Delete ${entry.label}`}
+                    onClick={(event) =>
+                      onDeleteMcp(entry.id, event.currentTarget)
+                    }
+                  >
+                    <IconTrash size={17} aria-hidden="true" />
                   </button>
                 </div>
               </div>

@@ -454,6 +454,7 @@ test("terminal PTY authority is isolated from the main WebView", () => {
 test("main WebView exposes every advanced configuration, Space, Aside, thread lifecycle, and updater command it calls", () => {
   const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
   for (const permission of [
+    "allow-delete-global-mcp-server",
     "allow-apply-managed-model-configuration",
     "allow-set-approval-mode",
     "allow-get-thread-delegate",
@@ -478,6 +479,7 @@ test("main WebView exposes every advanced configuration, Space, Aside, thread li
   const api = read("apps/desktop/src/api.ts");
   const build = read("apps/desktop/src-tauri/build.rs");
   for (const command of [
+    "delete_global_mcp_server",
     "apply_managed_model_configuration",
     "set_approval_mode",
     "get_thread_delegate",

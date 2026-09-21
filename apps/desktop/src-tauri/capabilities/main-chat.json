@@ -34,6 +34,7 @@
     "allow-apply-repository-configuration",
     "allow-save-global-defaults",
     "allow-upsert-global-mcp-server",
+    "allow-delete-global-mcp-server",
     "allow-upsert-global-provider",
     "allow-upsert-global-model",
     "allow-upsert-global-search-provider",

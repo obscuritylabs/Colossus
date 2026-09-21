@@ -417,6 +417,17 @@ export function upsertGlobalMcpServer(request: {
   return call("upsert_global_mcp_server", { request });
 }
 
+export interface DeleteGlobalMcpServerRequest {
+  expectedRevision: number;
+  resourceId: string;
+}
+
+export function deleteGlobalMcpServer(
+  request: DeleteGlobalMcpServerRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_mcp_server", { request });
+}
+
 export function upsertGlobalProvider(request: {
   expectedRevision: number;
   resourceId: string | null;

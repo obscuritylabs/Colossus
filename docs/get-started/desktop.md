@@ -134,6 +134,13 @@ line, working directories, multiple native credential bindings, non-secret stati
 headers, OAuth, research projections, stateless HTTP, and optional runtime limits.
 Credential values remain native-only; the editor stores and displays identifiers.
 
+To remove a saved MCP server, open **Settings → Global → MCP servers**, choose
+**Delete** beside the server, and confirm. First disable the server and apply changes
+in every workspace listed in the dialog; restore archived workspaces before doing so.
+Deletion removes the saved definition and all its versions, while keeping credentials
+and OAuth data. It does not uninstall the server or change repository configuration.
+Plugin-provided servers remain managed through their plugin.
+
 Use **Import config** in a Workspace to inspect `.colossus/config.yaml` without modifying
 the repository. Desktop proposes reusable catalog resources, Workspace overrides, and
 native credential mappings. Same-name conflicts require **Rename**, **Replace**, or

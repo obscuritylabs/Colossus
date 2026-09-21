@@ -1,6 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
+import { McpDeleteDialog } from "./McpDeleteDialog";
 
 import type {
   DesktopStatus,
@@ -1245,4 +1247,113 @@ describe("ManagedSettingsPane", () => {
       expect(markup).not.toContain("payload");
     },
   );
+});
+
+describe("MCP deletion", () => {
+  function snapshot() {
+    const result = buildManagedSettingsFixture(desktop());
+    const server: ManagedMcpServer = {
+      name: "docs",
+      transport: "streamable_http",
+      command: null,
+      args: [],
+      workingDirectory: null,
+      environmentCredentials: {},
+      url: "https://docs.example.test/mcp",
+      headers: {},
+      credentialHeaders: {},
+      allowStateless: false,
+      oauth: null,
+      allowedTools: [],
+      researchTools: [],
+      timeoutMs: null,
+      maxOutputBytes: null,
+    };
+    result.globalConfiguration.mcpServers = [
+      "docs-resource",
+      "other-resource",
+    ].map((id) => ({
+      id,
+      label: "Same label",
+      archived: false,
+      currentRevision: 2,
+      revisions: [
+        { revision: 1, value: server },
+        { revision: 2, value: server },
+      ],
+    }));
+    return result;
+  }
+
+  it("shows archived and historical consumers by resource identity and blocks confirmation", () => {
+    const source = snapshot();
+    const archived = structuredClone(source.spaces[0]!);
+    archived.id = "archived";
+    archived.name = "Archived Research";
+    archived.archived = true;
+    archived.configuration.catalogRevisions["mcp:old-name"] = {
+      resourceId: "docs-resource",
+      revision: 1,
+    };
+    source.spaces.push(archived);
+    const consumers = managedMcpConsumers(source, "docs-resource");
+    expect(consumers).toEqual([archived]);
+    expect(managedMcpConsumers(source, "other-resource")).toEqual([]);
+    const markup = renderToStaticMarkup(
+      createElement(McpDeleteDialog, {
+        label: "Docs",
+        consumers,
+        busy: false,
+        error: "",
+        returnFocus: null,
+        onCancel: vi.fn(),
+        onDelete: vi.fn(),
+      }),
+    );
+    expect(markup).toContain("Archived Research (archived)");
+    expect(markup).toContain("Restore archived workspaces first.");
+    expect(markup).toMatch(/disabled="">Delete server/);
+    expect(() =>
+      deleteMcpFixture(source, {
+        expectedRevision: 4,
+        resourceId: "docs-resource",
+      }),
+    ).toThrow(/Disable/);
+  });
+
+  it("removes all server revisions while retaining pending changes and unrelated resources", () => {
+    const source = snapshot();
+    const pending = structuredClone(source.spaces[0]!);
+    pending.id = "pending";
+    pending.configuration.acceptedGlobalRevision = 3;
+    pending.pendingGlobalRevision = 4;
+    source.spaces.push(pending);
+    const before = structuredClone(source);
+    const result = deleteMcpFixture(source, {
+      expectedRevision: 4,
+      resourceId: "docs-resource",
+    });
+    expect(result.globalConfiguration.mcpServers).toEqual([
+      source.globalConfiguration.mcpServers[1],
+    ]);
+    expect(result.globalConfiguration.credentials).toEqual(
+      source.globalConfiguration.credentials,
+    );
+    expect(result.globalConfiguration.defaults.revisions.at(-1)?.value).toEqual(
+      source.globalConfiguration.defaults.revisions.at(-1)?.value,
+    );
+    expect(result.spaces[0]!.configuration.acceptedGlobalRevision).toBe(5);
+    expect(result.spaces[1]!.configuration.acceptedGlobalRevision).toBe(3);
+    expect(result.spaces[1]!.pendingGlobalRevision).toBe(5);
+    expect(source).toEqual(before);
+    expect(() =>
+      deleteMcpFixture(source, {
+        expectedRevision: 3,
+        resourceId: "docs-resource",
+      }),
+    ).toThrow(/Reload/);
+    expect(() =>
+      deleteMcpFixture(source, { expectedRevision: 4, resourceId: "missing" }),
+    ).toThrow(/unknown/);
+  });
 });
