@@ -79,7 +79,9 @@ named `input_schema` retain ordinary secret redaction. This exception does not r
 credential values supplied as tool arguments.
 Sensitive properties retain this check through document-local JSON-pointer references,
 including shared and recursive definitions. References that cannot be inspected locally
-fail closed in sensitive positions.
+fail closed in sensitive positions. Local URI fragments are percent-decoded before JSON
+Pointer traversal. Resource boundaries follow the declared schema dialect (`id` in
+Draft 4, `$id` in later drafts); unknown dialects fail closed.
 
 The configured top-level `credential_headers` map preserves strict `scheme` and
 `reference` objects for both `env:` references and opaque `host:` credential IDs.

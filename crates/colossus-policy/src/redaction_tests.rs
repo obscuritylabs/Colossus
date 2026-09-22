@@ -309,3 +309,158 @@ fn sensitive_schema_references_preserve_safe_cycles_and_reject_uninspectable_tar
         shared
     );
 }
+
+#[test]
+fn schema_reference_scope_uses_the_declared_dialect() {
+    for (dialect, identifier, definitions) in [
+        (
+            "https://json-schema.org/draft/2020-12/schema",
+            "id",
+            "$defs",
+        ),
+        (
+            "https://json-schema.org/draft/2019-09/schema",
+            "id",
+            "$defs",
+        ),
+        (
+            "http://json-schema.org/draft-07/schema#",
+            "id",
+            "definitions",
+        ),
+        (
+            "http://json-schema.org/draft-04/schema#",
+            "$id",
+            "definitions",
+        ),
+    ] {
+        let schema = json!({
+            "$schema": dialect,
+            "properties": {"apiKey": {"$ref": format!("#/{definitions}/wrapper")}},
+            definitions: {
+                "credential": {"default": "must-not-leak"},
+                "wrapper": {
+                    identifier: "https://example.test/ignored",
+                    "allOf": [{"$ref": format!("#/{definitions}/credential")}],
+                    definitions: {"credential": {"type": "string"}}
+                }
+            }
+        });
+        let mut request = mcp_call_request("streamable_http", "https://example.test/mcp", None);
+        request.content["operation"]["input_schema"] = schema;
+        assert!(
+            matches!(
+                SafetyKernel::new(["mcp.invoke".into()]).prepare(&request),
+                Err(GatewayError::Safety(_))
+            ),
+            "ignored identifier in {dialect}"
+        );
+        let actual_identifier = if identifier == "id" { "$id" } else { "id" };
+        let wrapper = &mut request.content["operation"]["input_schema"][definitions]["wrapper"];
+        wrapper.as_object_mut().expect("wrapper").remove(identifier);
+        wrapper[actual_identifier] = json!("https://example.test/embedded");
+        SafetyKernel::new(["mcp.invoke".into()])
+            .prepare(&request)
+            .expect("dialect-specific embedded resource");
+
+        if definitions == "definitions" {
+            request.content["operation"]["input_schema"][definitions]["wrapper"]
+                [actual_identifier] = json!("#wrapper");
+            assert!(
+                matches!(
+                    SafetyKernel::new(["mcp.invoke".into()]).prepare(&request),
+                    Err(GatewayError::Safety(_))
+                ),
+                "legacy anchor does not change resource"
+            );
+            let wrapper = &mut request.content["operation"]["input_schema"][definitions]["wrapper"];
+            wrapper[actual_identifier] = json!("https://example.test/ignored-ref-sibling");
+            wrapper["$ref"] = json!(format!("#/{definitions}/credential"));
+            assert!(
+                matches!(
+                    SafetyKernel::new(["mcp.invoke".into()]).prepare(&request),
+                    Err(GatewayError::Safety(_))
+                ),
+                "legacy $ref sibling does not change resource"
+            );
+        }
+    }
+
+    let mut request = mcp_call_request("streamable_http", "https://example.test/mcp", None);
+    request.content["operation"]["input_schema"] = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {"apiKey": {"$ref": "#/$defs/embedded/definitions/alias"}},
+        "definitions": {"credential": {"type": "string"}},
+        "$defs": {"embedded": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "id": "https://example.test/draft4",
+            "definitions": {
+                "alias": {"$ref": "#/definitions/credential"},
+                "credential": {"default": "must-not-leak"}
+            }
+        }}
+    });
+    let kernel = SafetyKernel::new(["mcp.invoke".into()]);
+    assert!(matches!(
+        kernel.prepare(&request),
+        Err(GatewayError::Safety(_))
+    ));
+    request.content["operation"]["input_schema"]["$defs"]["embedded"]["definitions"]["credential"] =
+        json!({"type": "string"});
+    kernel
+        .prepare(&request)
+        .expect("mixed dialects without secrets");
+    request.content["operation"]["input_schema"]["$schema"] =
+        json!("https://example.test/unknown-dialect");
+    assert!(matches!(
+        kernel.prepare(&request),
+        Err(GatewayError::Safety(_))
+    ));
+}
+
+#[test]
+fn schema_reference_fragments_decode_before_json_pointer_tokens() {
+    for (name, reference) in [
+        ("credential value", "#/$defs/credential%20value"),
+        ("credential/value", "#%2f$defs%2fcredential%7E1value"),
+        ("credential~value", "#/$defs/credential%7e0value"),
+        ("credentialé", "#/$defs/credential%C3%A9"),
+        ("credential%20value", "#/$defs/credential%2520value"),
+    ] {
+        let mut request = mcp_call_request("streamable_http", "https://example.test/mcp", None);
+        request.content["operation"]["input_schema"] = json!({
+            "properties": {"apiKey": {"$ref": reference}},
+            "$defs": {name: {"type": "string"}}
+        });
+        let kernel = SafetyKernel::new(["mcp.invoke".into()]);
+        assert_eq!(
+            kernel
+                .prepare(&request)
+                .expect("encoded local reference")
+                .content["operation"]["input_schema"],
+            request.content["operation"]["input_schema"]
+        );
+        request.content["operation"]["input_schema"]["$defs"][name]["default"] =
+            json!("must-not-leak");
+        assert!(matches!(
+            kernel.prepare(&request),
+            Err(GatewayError::Safety(_))
+        ));
+    }
+    for reference in [
+        "#/$defs/value%",
+        "#/$defs/value%2",
+        "#/$defs/value%GG",
+        "#/$defs/value%FF",
+    ] {
+        let mut request = mcp_call_request("streamable_http", "https://example.test/mcp", None);
+        request.content["operation"]["input_schema"] = json!({
+            "properties": {"apiKey": {"$ref": reference}},
+            "$defs": {"value": {"type": "string"}}
+        });
+        assert!(matches!(
+            SafetyKernel::new(["mcp.invoke".into()]).prepare(&request),
+            Err(GatewayError::Safety(_))
+        ));
+    }
+}

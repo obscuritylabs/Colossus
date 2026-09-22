@@ -64,18 +64,21 @@ fn schema_paths(request: &EffectRequest) -> Vec<String> {
 }
 
 fn schema_contains_secret(schema: &Value) -> bool {
-    let mut pending = vec![(schema, false, schema)];
+    let mut pending = vec![(schema, false, schema, SchemaDialect::Modern)];
     let mut checked_references = std::collections::HashSet::new();
     // A worklist prevents long reference chains from exhausting the call stack.
-    // Each referenced target is inspected at most once in the sensitive context.
-    while let Some((schema, sensitive_value, root)) = pending.pop() {
+    // Inspect each referenced target once per sensitive resource/dialect context.
+    while let Some((schema, sensitive_value, root, dialect)) = pending.pop() {
         let Some(object) = schema.as_object() else {
             if contains_secret_data(schema) {
                 return true;
             }
             continue;
         };
-        let root = if is_schema_resource(schema) {
+        let Some(dialect) = dialect.detect(schema) else {
+            return true;
+        };
+        let root = if dialect.is_resource(schema) {
             schema
         } else {
             root
@@ -103,6 +106,7 @@ fn schema_contains_secret(schema: &Value) -> bool {
                                 child,
                                 sensitive_value || is_hard_secret_key(name),
                                 root,
+                                dialect,
                             ));
                         }
                     } else if contains_secret_data(value) {
@@ -111,9 +115,13 @@ fn schema_contains_secret(schema: &Value) -> bool {
                 }
                 "allOf" | "anyOf" | "oneOf" | "prefixItems" | "items" => {
                     if let Some(schemas) = value.as_array() {
-                        pending.extend(schemas.iter().map(|child| (child, sensitive_value, root)));
+                        pending.extend(
+                            schemas
+                                .iter()
+                                .map(|child| (child, sensitive_value, root, dialect)),
+                        );
                     } else {
-                        pending.push((value, sensitive_value, root));
+                        pending.push((value, sensitive_value, root, dialect));
                     }
                 }
                 "additionalProperties"
@@ -126,19 +134,23 @@ fn schema_contains_secret(schema: &Value) -> bool {
                 | "if"
                 | "then"
                 | "else"
-                | "contentSchema" => pending.push((value, sensitive_value, root)),
+                | "contentSchema" => pending.push((value, sensitive_value, root, dialect)),
                 "$ref" | "$dynamicRef" | "$recursiveRef" if sensitive_value => {
                     // Uninspectable references fail closed. Preparation never
                     // fetches schemas over the network.
-                    let Some((target, scope)) = value
+                    let Some((target, scope, target_dialect)) = value
                         .as_str()
                         .and_then(|reference| reference.strip_prefix('#'))
-                        .and_then(|path| local_reference_target(root, path))
+                        .and_then(|path| local_reference_target(root, path, dialect))
                     else {
                         return true;
                     };
-                    if checked_references.insert(std::ptr::from_ref(target)) {
-                        pending.push((target, true, scope));
+                    if checked_references.insert((
+                        std::ptr::from_ref(target),
+                        std::ptr::from_ref(scope),
+                        target_dialect,
+                    )) {
+                        pending.push((target, true, scope, target_dialect));
                     }
                 }
                 // Defaults, examples and value constraints are literal data.
@@ -158,24 +170,73 @@ fn schema_contains_secret(schema: &Value) -> bool {
     false
 }
 
-fn is_schema_resource(value: &Value) -> bool {
-    ["$id", "id"]
-        .iter()
-        .any(|key| value.get(key).is_some_and(Value::is_string))
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SchemaDialect {
+    Draft4,
+    Draft6Or7,
+    Modern,
 }
 
-fn local_reference_target<'a>(root: &'a Value, path: &str) -> Option<(&'a Value, &'a Value)> {
+impl SchemaDialect {
+    fn detect(self, schema: &Value) -> Option<Self> {
+        match schema.get("$schema").and_then(Value::as_str) {
+            None => Some(self),
+            Some(uri) => match uri.trim_end_matches('#') {
+                "http://json-schema.org/draft-04/schema" => Some(Self::Draft4),
+                "http://json-schema.org/draft-06/schema"
+                | "http://json-schema.org/draft-07/schema" => Some(Self::Draft6Or7),
+                "https://json-schema.org/draft/2019-09/schema"
+                | "https://json-schema.org/draft/2020-12/schema" => Some(Self::Modern),
+                // Unknown dialects cannot establish a trustworthy reference scope.
+                _ => None,
+            },
+        }
+    }
+
+    fn is_resource(self, schema: &Value) -> bool {
+        let key = if self == Self::Draft4 { "id" } else { "$id" };
+        let Some(id) = schema.get(key).and_then(Value::as_str) else {
+            return false;
+        };
+        // Older drafts ignore $ref siblings and use fragment-only IDs as anchors.
+        self == Self::Modern || (schema.get("$ref").is_none() && !id.starts_with('#'))
+    }
+}
+
+fn local_reference_target<'a>(
+    root: &'a Value,
+    fragment: &str,
+    mut dialect: SchemaDialect,
+) -> Option<(&'a Value, &'a Value, SchemaDialect)> {
+    let path = decode_fragment(fragment)?;
     let mut target = root;
     let mut scope = root;
+    dialect = dialect.detect(root)?;
     if !path.is_empty() {
         for segment in path.strip_prefix('/')?.split('/') {
             target = target.pointer(&format!("/{segment}"))?;
-            if is_schema_resource(target) {
+            dialect = dialect.detect(target)?;
+            if dialect.is_resource(target) {
                 scope = target;
             }
         }
     }
-    Some((target, scope))
+    Some((target, scope, dialect))
+}
+
+fn decode_fragment(fragment: &str) -> Option<String> {
+    let mut bytes = fragment.bytes();
+    let mut decoded = Vec::with_capacity(fragment.len());
+    while let Some(byte) = bytes.next() {
+        decoded.push(if byte == b'%' {
+            let high = char::from(bytes.next()?).to_digit(16)?;
+            let low = char::from(bytes.next()?).to_digit(16)?;
+            u8::try_from(high * 16 + low).ok()?
+        } else {
+            byte
+        });
+    }
+    String::from_utf8(decoded).ok()
 }
 
 fn contains_secret_data(value: &Value) -> bool {
