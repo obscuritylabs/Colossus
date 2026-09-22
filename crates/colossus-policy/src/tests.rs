@@ -31,6 +31,9 @@ use std::{
 #[path = "command_approval/gateway_tests.rs"]
 mod command_gateway_tests;
 
+#[path = "redaction_tests.rs"]
+mod redaction_tests;
+
 #[tokio::test(flavor = "current_thread")]
 async fn disclosure_summary_preserves_the_bounded_audit_contract() {
     let request = effect_request(

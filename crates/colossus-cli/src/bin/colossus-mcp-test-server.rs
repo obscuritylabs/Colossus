@@ -68,7 +68,10 @@ fn handle_request(request: &Value) -> Result<(), Box<dyn std::error::Error>> {
                             },
                             "inputSchema": {
                                 "type": "object",
-                                "properties": {"text": {"type": "string"}},
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "apiKey": {"type": "string"}
+                                },
                                 "required": ["text"],
                                 "additionalProperties": false
                             }

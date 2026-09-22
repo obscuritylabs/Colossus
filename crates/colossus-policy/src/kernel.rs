@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "schema_disclosure.rs"]
+mod schema_disclosure;
+
 const DEFAULT_POLICY_INPUT_LIMIT: usize = 1024 * 1024;
 const DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT: usize = 8 * 1024 * 1024;
 pub(super) const PERMIT_LIFETIME_MS: i128 = 30_000;
@@ -543,7 +546,7 @@ impl SafetyKernel {
         if prepared.phase == EffectPhase::PreEffect {
             command_approval_context(&prepared)?;
         }
-        redact_hard_secrets(&mut prepared.content);
+        schema_disclosure::redact_request_content(&mut prepared)?;
         self.validate_policy_input_size(&prepared)?;
         Ok(prepared)
     }
