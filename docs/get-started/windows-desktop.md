@@ -93,6 +93,16 @@ inspected by the sealed sidecar parser, and imported `env:` credential reference
 be mapped to Windows-backed opaque records. Provider/model/search/MCP diagnostics run
 through the selected Workspace's authenticated worker instead of from the WebView.
 
+For a credential-free MCP connection check, add Cloudflare's documentation server to
+the global MCP catalog with transport **Streamable HTTP**, URL
+`https://docs.mcp.cloudflare.com/mcp`, allowed tool
+`search_cloudflare_documentation`, and **Allow stateless HTTP** enabled. Accept and
+enable that server revision in the Workspace, apply the configuration, and run its
+MCP health test. Cloudflare omits the session ID, so the stateless option is required;
+use the `/mcp` endpoint, not a legacy SSE transport. No API key or OAuth login is needed.
+See [Cloudflare's server catalog](https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/)
+and [MCP configuration](../reference/configuration/mcp.md).
+
 ### 3. Import a private CA
 
 Open **Settings → Additional CA certificates → Import PEM bundle**. Desktop accepts a

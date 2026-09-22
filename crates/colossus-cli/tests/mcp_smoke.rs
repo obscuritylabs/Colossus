@@ -1,5 +1,5 @@
 //! End-to-end configured MCP discovery, invocation, redaction, and research tests.
-#![cfg(any(target_os = "linux", target_os = "macos"))]
+#![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
 #[path = "support/process.rs"]
 mod process_support;
@@ -38,6 +38,12 @@ fn configured_mcp_is_allowlisted_permit_bound_redacted_and_research_capable() {
     let state = workspace.join("state.redb");
     let anchor = workspace.join("anchor.json");
     let config = workspace.join("config.yaml");
+    let backend = if cfg!(windows) {
+        "windows_job"
+    } else {
+        "native"
+    };
+    let timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     fs::write(
         &config,
         format!(
@@ -79,10 +85,10 @@ mcp:
           title: Fixture MCP source
           arguments:
             text: "{{query}}"
-      timeoutMs: 5000
+      timeoutMs: {timeout_ms}
       maxOutputBytes: 1048576
 sandbox:
-  backend: native
+  backend: {backend}
   profile: mcp-native-test-v1
   allowBrokerFallback: false
   helperPath: null
@@ -96,17 +102,17 @@ sandbox:
     - {server}
   environment: [MCP_TEST_SECRET]
   networkDestinations: []
-  timeoutMs: 5000
+  timeoutMs: {timeout_ms}
   maxOutputBytes: 1048576
   maxProcesses: 4
   maxMemoryBytes: 134217728
   maxConcurrency: 1
 "#,
-            state = state.display(),
-            anchor = anchor.display(),
-            workflows = workflows.display(),
-            server = server.display(),
-            workspace = workspace.display(),
+            state = serde_json::to_string(&state).expect("state path"),
+            anchor = serde_json::to_string(&anchor).expect("anchor path"),
+            workflows = serde_json::to_string(&workflows).expect("workflow path"),
+            server = serde_json::to_string(&server).expect("server path"),
+            workspace = serde_json::to_string(&workspace).expect("workspace path"),
         ),
     )
     .expect("config");

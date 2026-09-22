@@ -190,6 +190,10 @@ fn corrupt_content_is_never_reused_or_overwritten_even_when_leased() {
             .expect("simulate disk corruption");
     }
     #[cfg(not(unix))]
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "this non-Unix corruption fixture only clears the read-only flag"
+    )]
     {
         let mut writable = original.clone();
         writable.set_readonly(false);

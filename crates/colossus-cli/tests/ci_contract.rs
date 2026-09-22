@@ -1032,7 +1032,7 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
         )
         .as_str(),
         Some(
-            "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox --test release_install_smoke -- --nocapture"
+            "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox --test mcp_smoke --test release_install_smoke -- --nocapture"
         )
     );
     for name in [
