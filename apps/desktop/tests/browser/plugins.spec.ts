@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
       icon_data_url: icon,
       manifest: {
         name: "colossus",
-        version: "0.10.10-preview.15",
+        version: "0.10.10-preview.16",
         description: "Core authoring and development skills",
       },
       digest: `sha256:${"1".repeat(64)}`,

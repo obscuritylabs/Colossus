@@ -277,7 +277,7 @@ jobs:
         continue-on-error: true
         run: >-
           cargo test --locked -p colossus-cli --test worker_smoke
-          --test windows_sandbox --test release_install_smoke -- --nocapture
+          --test windows_sandbox --test mcp_smoke --test release_install_smoke -- --nocapture
       - name: Prepare Windows Managed Local executables
         id: desktop_prepare
         continue-on-error: true

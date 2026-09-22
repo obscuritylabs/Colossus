@@ -2,6 +2,9 @@
 
 #![cfg(windows)]
 
+#[path = "windows_lifecycle/mcp.rs"]
+mod mcp;
+
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,

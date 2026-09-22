@@ -1168,6 +1168,10 @@ fn set_writable_permissions(path: &Path, directory: bool) -> Result<(), StoreErr
 }
 
 #[cfg(not(unix))]
+#[allow(
+    clippy::permissions_set_readonly_false,
+    reason = "non-Unix removal clears the read-only flag; Unix uses explicit private modes"
+)]
 fn set_writable_permissions(path: &Path, _directory: bool) -> Result<(), StoreError> {
     let mut permissions = fs::metadata(path).map_err(adapter)?.permissions();
     permissions.set_readonly(false);

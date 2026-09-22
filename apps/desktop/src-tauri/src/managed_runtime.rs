@@ -1015,8 +1015,8 @@ async fn install_managed_target(
         .await;
 
     let config_path = options.managed_config_path();
-    let worker_endpoint = worker_ipc_endpoint(&options.instance_dir().as_path().join("state.redb"))
-        .map_err(|_| {
+    let worker_endpoint =
+        managed_worker_endpoint(options.instance_dir().as_path()).map_err(|_| {
             classified(
                 "runtime_configuration",
                 "Managed Local generated an invalid private worker endpoint.",
@@ -1069,6 +1069,16 @@ async fn install_managed_target(
     }
     state.touch_managed_space(space_id).await;
     Ok(())
+}
+
+fn managed_worker_endpoint(
+    instance_dir: &Path,
+) -> Result<String, colossus_worker_protocol::WorkerControlError> {
+    // The sidecar binds the canonical instance directory before resolving state.
+    // On Windows the ordinary DOS and canonical verbatim spellings hash to
+    // different named pipes. The state file need not exist before startup.
+    let canonical = std::fs::canonicalize(instance_dir)?;
+    worker_ipc_endpoint(&canonical.join("state.redb"))
 }
 
 fn application_grant(profile: AccessProfileSetting) -> Result<SidecarApplicationGrant, SdkError> {
@@ -1291,6 +1301,26 @@ fn classified(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_worker_endpoint_matches_sidecar_canonical_state_before_startup() {
+        let instance = tempfile::tempdir().expect("instance directory");
+        let supplied = instance.path().to_string_lossy();
+        let supplied = supplied.strip_prefix(r"\\?\").unwrap_or(&supplied);
+        let canonical = instance.path().canonicalize().expect("canonical instance");
+        let state = canonical.join("state.redb");
+        assert!(!state.exists(), "endpoint is needed before sidecar startup");
+        assert_eq!(
+            managed_worker_endpoint(Path::new(supplied)).expect("Desktop endpoint"),
+            worker_ipc_endpoint(&state).expect("sidecar endpoint"),
+        );
+    }
+
+    #[test]
+    fn managed_worker_endpoint_rejects_a_missing_instance_directory() {
+        let root = tempfile::tempdir().expect("root");
+        assert!(managed_worker_endpoint(&root.path().join("missing")).is_err());
+    }
 
     #[test]
     fn desktop_grant_includes_every_declared_builtin_without_inventing_capabilities() {

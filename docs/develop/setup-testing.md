@@ -62,6 +62,32 @@ toolchain under `sdk/`.
         live_splunk_streamable_http_discovery -- --ignored
     ```
 
+    Credential-free public MCP acceptance uses Cloudflare's documentation server:
+
+    ```bash
+    cargo test -p colossus-cli --test mcp_remote_smoke -- --ignored --nocapture
+    ```
+
+    This verifies that a stateless server is rejected without its explicit opt-in,
+    discovers the documentation tool, performs one read-only search, and verifies
+    the resulting audit journal. It requires outbound HTTPS and runs on Windows,
+    macOS, and Linux. Public service availability is not a deterministic CI gate.
+
+    On Windows, also exercise Desktop's authenticated managed-sidecar diagnostic
+    channel with platform-protected state:
+
+    ```powershell
+    cargo test -p colossus-sidecar --test windows_lifecycle cloudflare_docs -- --ignored --nocapture
+    ```
+
+    This needs Windows Credential Manager, local sockets, and public HTTPS. It uses
+    temporary private workspace/home directories and cleans up its credential records.
+    The native Desktop unit suite separately verifies that ordinary Windows paths
+    select the same worker pipe as the sidecar's canonical paths, even before the
+    state file exists. The deterministic `mcp_smoke` CLI suite covers local stdio
+    discovery, calls, redaction, research, and audit on all three supported platforms;
+    Windows runs it with the AppContainer/Job Object backend in the pre-merge lane.
+
 3. Run the fast development tier. It checks the diff, formatting, crate roots, and all
    workspace library tests:
 
