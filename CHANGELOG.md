@@ -8,6 +8,27 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.16] - 2026-09-21
+
+### Fixed
+
+- Canonicalized the Windows Desktop worker endpoint before deriving its named pipe,
+  keeping MCP diagnostics connected to the managed sidecar.
+- Kept Windows plugin cleanup and corruption fixtures compatible with strict Clippy
+  checks while retaining explicit private permission modes on Unix.
+
+### Added
+
+- Windows stdio MCP acceptance in pre-merge CI and opt-in public Cloudflare Docs
+  discovery and tool-call checks for the CLI and native sidecar.
+- Desktop instructions for testing a stateless public HTTP MCP server.
+
+### Changed
+
+- Added saved MCP server deletion and widened the Desktop chat layout.
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles, the
+  embedded core plugin, and the Desktop fixture to `0.10.10-preview.16`.
+
 ## [0.10.10-preview.15] - 2026-09-17
 
 ### Changed
