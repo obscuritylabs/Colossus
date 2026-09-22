@@ -77,6 +77,15 @@ literal data in defaults and examples, and non-null defaults or value constraint
 secret-named inputs, fail closed before policy or execution. Arbitrary argument objects
 named `input_schema` retain ordinary secret redaction. This exception does not release
 credential values supplied as tool arguments.
+Sensitive properties retain this check through document-local JSON-pointer references,
+including shared and recursive definitions. References that cannot be inspected locally
+fail closed in sensitive positions.
+
+The configured top-level `credential_headers` map preserves strict `scheme` and
+`reference` objects for both `env:` references and opaque `host:` credential IDs.
+Host IDs use the MCP contract's bounded ASCII identifier grammar; they are handles,
+not credential values. Malformed references, extra fields, and nested argument
+lookalikes retain ordinary redaction. Credentials are resolved only after authorization.
 
 Provider text streaming preserves exact text and order while coalescing consecutive
 token-sized deltas into batches of at most 4 KiB or 100 ms before they enter post-effect

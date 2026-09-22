@@ -13,7 +13,7 @@ pub(super) fn redact_request_content(request: &mut EffectRequest) -> Result<(), 
     let mut schemas = Vec::with_capacity(paths.len());
     for path in paths {
         if let Some(schema) = request.content.pointer_mut(&path) {
-            if schema_contains_secret(schema, false) {
+            if schema_contains_secret(schema) {
                 return Err(GatewayError::Safety(
                     "tool schema contains hard-secret literal data".into(),
                 ));
@@ -63,57 +63,119 @@ fn schema_paths(request: &EffectRequest) -> Vec<String> {
     Vec::new()
 }
 
-fn schema_contains_secret(schema: &Value, sensitive_value: bool) -> bool {
-    let Some(object) = schema.as_object() else {
-        return contains_secret_data(schema);
-    };
-    object
-        .iter()
-        .any(|(keyword, value)| match keyword.as_str() {
-            "properties" | "patternProperties" | "$defs" | "definitions" | "dependentSchemas"
-            | "dependencies" | "dependentRequired" => value.as_object().map_or_else(
-                || contains_secret_data(value),
-                |schemas| {
-                    schemas.iter().any(|(name, schema)| {
-                        // Dependency arrays contain property names, not secret values.
-                        if matches!(keyword.as_str(), "dependencies" | "dependentRequired")
-                            && schema.is_array()
-                        {
-                            return contains_secret_data(schema);
+fn schema_contains_secret(schema: &Value) -> bool {
+    let mut pending = vec![(schema, false, schema)];
+    let mut checked_references = std::collections::HashSet::new();
+    // A worklist prevents long reference chains from exhausting the call stack.
+    // Each referenced target is inspected at most once in the sensitive context.
+    while let Some((schema, sensitive_value, root)) = pending.pop() {
+        let Some(object) = schema.as_object() else {
+            if contains_secret_data(schema) {
+                return true;
+            }
+            continue;
+        };
+        let root = if is_schema_resource(schema) {
+            schema
+        } else {
+            root
+        };
+        for (keyword, value) in object {
+            match keyword.as_str() {
+                "properties" | "patternProperties" | "$defs" | "definitions"
+                | "dependentSchemas" | "dependencies" | "dependentRequired" => {
+                    if let Some(schemas) = value.as_object() {
+                        for (name, child) in schemas {
+                            // Dependency arrays contain property names, not values.
+                            if matches!(keyword.as_str(), "dependencies" | "dependentRequired")
+                                && child.is_array()
+                            {
+                                if contains_secret_data(child) {
+                                    return true;
+                                }
+                                continue;
+                            }
+                            if is_hard_secret_key(name) && !child.is_object() && !child.is_boolean()
+                            {
+                                return true;
+                            }
+                            pending.push((
+                                child,
+                                sensitive_value || is_hard_secret_key(name),
+                                root,
+                            ));
                         }
-                        if is_hard_secret_key(name) && !schema.is_object() && !schema.is_boolean() {
-                            return true;
-                        }
-                        schema_contains_secret(schema, sensitive_value || is_hard_secret_key(name))
-                    })
-                },
-            ),
-            "allOf" | "anyOf" | "oneOf" | "prefixItems" | "items" => {
-                if let Some(schemas) = value.as_array() {
-                    schemas
-                        .iter()
-                        .any(|schema| schema_contains_secret(schema, sensitive_value))
-                } else {
-                    schema_contains_secret(value, sensitive_value)
+                    } else if contains_secret_data(value) {
+                        return true;
+                    }
+                }
+                "allOf" | "anyOf" | "oneOf" | "prefixItems" | "items" => {
+                    if let Some(schemas) = value.as_array() {
+                        pending.extend(schemas.iter().map(|child| (child, sensitive_value, root)));
+                    } else {
+                        pending.push((value, sensitive_value, root));
+                    }
+                }
+                "additionalProperties"
+                | "unevaluatedProperties"
+                | "additionalItems"
+                | "unevaluatedItems"
+                | "contains"
+                | "propertyNames"
+                | "not"
+                | "if"
+                | "then"
+                | "else"
+                | "contentSchema" => pending.push((value, sensitive_value, root)),
+                "$ref" | "$dynamicRef" | "$recursiveRef" if sensitive_value => {
+                    // Uninspectable references fail closed. Preparation never
+                    // fetches schemas over the network.
+                    let Some((target, scope)) = value
+                        .as_str()
+                        .and_then(|reference| reference.strip_prefix('#'))
+                        .and_then(|path| local_reference_target(root, path))
+                    else {
+                        return true;
+                    };
+                    if checked_references.insert(std::ptr::from_ref(target)) {
+                        pending.push((target, true, scope));
+                    }
+                }
+                // Defaults, examples and value constraints are literal data.
+                "default" | "examples" | "const" | "enum" if sensitive_value => {
+                    if !value.is_null() {
+                        return true;
+                    }
+                }
+                _ => {
+                    if is_hard_secret_key(keyword) || contains_secret_data(value) {
+                        return true;
+                    }
                 }
             }
-            "additionalProperties"
-            | "unevaluatedProperties"
-            | "additionalItems"
-            | "unevaluatedItems"
-            | "contains"
-            | "propertyNames"
-            | "not"
-            | "if"
-            | "then"
-            | "else"
-            | "contentSchema" => schema_contains_secret(value, sensitive_value),
-            // A schema is metadata; defaults, examples and value constraints are data.
-            // Reject secret-bearing declarations instead of changing their bound hash
-            // or injecting redaction markers into a schema passed to another service.
-            "default" | "examples" | "const" | "enum" if sensitive_value => !value.is_null(),
-            _ => is_hard_secret_key(keyword) || contains_secret_data(value),
-        })
+        }
+    }
+    false
+}
+
+fn is_schema_resource(value: &Value) -> bool {
+    ["$id", "id"]
+        .iter()
+        .any(|key| value.get(key).is_some_and(Value::is_string))
+}
+
+fn local_reference_target<'a>(root: &'a Value, path: &str) -> Option<(&'a Value, &'a Value)> {
+    let mut target = root;
+    let mut scope = root;
+    if !path.is_empty() {
+        for segment in path.strip_prefix('/')?.split('/') {
+            target = target.pointer(&format!("/{segment}"))?;
+            if is_schema_resource(target) {
+                scope = target;
+            }
+        }
+    }
+    Some((target, scope))
 }
 
 fn contains_secret_data(value: &Value) -> bool {

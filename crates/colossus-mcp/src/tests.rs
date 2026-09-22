@@ -501,7 +501,9 @@ fn ambient_validation_keeps_exact_mcp_declarations_but_omits_duplicate_sandbox_g
     );
 }
 
-struct McpEffectShapeExecutor;
+struct McpEffectShapeExecutor {
+    reference: &'static str,
+}
 
 #[async_trait]
 impl EffectExecutor for McpEffectShapeExecutor {
@@ -517,7 +519,7 @@ impl EffectExecutor for McpEffectShapeExecutor {
             .get("Authorization")
             .ok_or_else(|| ExecutionError::Failed("authorization reference was removed".into()))?;
         assert_eq!(authorization.scheme.as_deref(), Some("Bearer"));
-        assert_eq!(authorization.reference, "env:SPLUNK_MCP_TOKEN");
+        assert_eq!(authorization.reference, self.reference);
         assert!(input.allow_stateless);
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
@@ -529,6 +531,15 @@ impl EffectExecutor for McpEffectShapeExecutor {
 
 #[tokio::test]
 async fn gateway_preserves_remote_credential_reference_shape_and_session_mode() {
+    check_remote_credential_reference("env:SPLUNK_MCP_TOKEN").await;
+}
+
+#[tokio::test]
+async fn gateway_preserves_host_credential_header_reference() {
+    check_remote_credential_reference("host:mcp-github-token").await;
+}
+
+async fn check_remote_credential_reference(reference: &'static str) {
     let endpoint = "http://127.0.0.1:8787/mcp";
     let mut server = remote_server(endpoint);
     server.allow_stateless = true;
@@ -536,7 +547,7 @@ async fn gateway_preserves_remote_credential_reference_shape_and_session_mode() 
         "Authorization".into(),
         McpCredentialHeaderConfig {
             scheme: Some("Bearer".into()),
-            reference: "env:SPLUNK_MCP_TOKEN".into(),
+            reference: reference.into(),
         },
     );
     let executor = McpExecutor::new(
@@ -546,7 +557,7 @@ async fn gateway_preserves_remote_credential_reference_shape_and_session_mode() 
         },
         Path::new("."),
         "native",
-        Arc::new(McpEffectShapeExecutor),
+        Arc::new(McpEffectShapeExecutor { reference }),
     )
     .expect("MCP executor");
     let policy = BuiltInPolicy::offline_default()
@@ -583,7 +594,7 @@ async fn gateway_preserves_remote_credential_reference_shape_and_session_mode() 
         .expect("effect request");
     assert_eq!(request.content["transport"], "streamable_http");
     gateway
-        .execute(request, &McpEffectShapeExecutor)
+        .execute(request, &McpEffectShapeExecutor { reference })
         .await
         .expect("gateway execution");
 }
@@ -613,7 +624,9 @@ async fn remote_plaintext_mcp_requires_ambient_authority_in_the_permit() {
         &config,
         Path::new("."),
         "danger_full_access",
-        Arc::new(McpEffectShapeExecutor),
+        Arc::new(McpEffectShapeExecutor {
+            reference: "env:COLOSSUS_TEST_MISSING_PLAINTEXT_MCP_KEY",
+        }),
     )
     .expect("MCP executor");
     let request = || {
