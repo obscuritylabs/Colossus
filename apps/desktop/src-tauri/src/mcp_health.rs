@@ -50,6 +50,9 @@ pub(crate) fn message(report: &McpHealthReport) -> String {
             "The worker could not load the configured credentials. Check this computer's credential binding or OAuth sign-in."
         }
         McpDiagnosticCode::Dns => "The MCP hostname could not resolve to a permitted address.",
+        McpDiagnosticCode::Process => {
+            "The MCP subprocess could not run or complete. Check its command, executable access, and resource limits."
+        }
         McpDiagnosticCode::Connect => {
             "The worker could not connect directly to the MCP server. Check network access and firewall rules."
         }
@@ -68,6 +71,9 @@ pub(crate) fn message(report: &McpHealthReport) -> String {
             }
             Some(407) => {
                 "The network requested proxy authentication. The MCP HTTP client uses a direct connection."
+            }
+            Some(404) => {
+                "The MCP endpoint or session was not found. Check the endpoint and retry the connection."
             }
             Some(300..=399) => {
                 "The endpoint returned a redirect. Configure the final MCP endpoint; redirects are disabled."

@@ -13,6 +13,8 @@ pub enum McpDiagnosticStage {
     ClientSetup,
     /// Resolve configured host credentials or OAuth credentials.
     Credentials,
+    /// Execute a stdio subprocess and collect its bounded protocol output.
+    Process,
     /// Negotiate an MCP session.
     Initialize,
     /// Discover allowlisted tools.
@@ -33,6 +35,8 @@ pub enum McpDiagnosticCode {
     Policy,
     /// Required credentials could not be resolved.
     Credentials,
+    /// The MCP subprocess could not run or exceeded a resource limit.
+    Process,
     /// DNS failed or returned no permitted addresses.
     Dns,
     /// A direct connection could not be established.

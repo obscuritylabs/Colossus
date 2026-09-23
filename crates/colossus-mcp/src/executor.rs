@@ -1036,6 +1036,16 @@ fn process_stdout(bytes: &[u8], operation: &McpOperation) -> Result<Vec<u8>, Exe
         &result.observed_origins,
     );
     if result.timed_out || result.resource_limit_exceeded.is_some() || result.output_truncated {
+        McpDiagnosticCapture::current().fail(
+            if result.timed_out {
+                McpDiagnosticCode::Timeout
+            } else if result.output_truncated {
+                McpDiagnosticCode::ResponseTooLarge
+            } else {
+                McpDiagnosticCode::Process
+            },
+            None,
+        );
         return Err(operation_error(
             operation,
             "MCP process timed out, exceeded a resource limit, or truncated protocol output",
@@ -1047,6 +1057,7 @@ fn process_stdout(bytes: &[u8], operation: &McpOperation) -> Result<Vec<u8>, Exe
     if !result.success || result.exit_code != Some(0) {
         // A valid complete response is still considered below; absence remains unknown for calls.
         if response_value(&stdout, MCP_REQUEST_ID).is_err() {
+            McpDiagnosticCapture::current().fail(McpDiagnosticCode::Process, None);
             return Err(operation_error(
                 operation,
                 format!("MCP server exited with status {:?}", result.exit_code),
@@ -1106,6 +1117,7 @@ fn call_response_result(bytes: &[u8], id: i64) -> Result<CallToolResult, String>
 }
 
 fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
+    McpDiagnosticCapture::current().stage(McpDiagnosticStage::Initialize);
     let result: InitializeResult =
         serde_json::from_value(response_result(stdout, INITIALIZE_REQUEST_ID)?)
             .map_err(|error| format!("invalid MCP initialize result: {error}"))?;
@@ -1123,8 +1135,10 @@ fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
 
 fn parse_tools(stdout: &[u8], server: &ConfiguredServer) -> Result<McpToolsPage, String> {
     validate_initialize(stdout)?;
+    McpDiagnosticCapture::current().stage(McpDiagnosticStage::ListTools);
     let result: ListToolsResult = serde_json::from_value(response_result(stdout, MCP_REQUEST_ID)?)
         .map_err(|error| format!("invalid MCP tools result: {error}"))?;
+    McpDiagnosticCapture::current().stage(McpDiagnosticStage::ValidateResponse);
     parse_tools_result(result, server)
 }
 
@@ -1601,6 +1615,8 @@ impl EffectExecutor for McpExecutor {
                 )),
             };
         }
+        let diagnostics = McpDiagnosticCapture::current();
+        diagnostics.stage(McpDiagnosticStage::Credentials);
         let (mut environment, secrets) =
             resolve_environment(&server.environment, self.credentials.as_ref())?;
         for (name, value) in &server.literal_environment {
@@ -1628,7 +1644,14 @@ impl EffectExecutor for McpExecutor {
         };
         let mut process_request = request.clone();
         process_request.content = serde_json::to_value(process).map_err(failed)?;
-        let process_result = match self.process.execute(&process_request, permit).await {
+        diagnostics.stage(McpDiagnosticStage::Process);
+        let process_result = match self
+            .process
+            .execute(&process_request, permit)
+            .await
+            .inspect_err(|error| {
+                diagnostics.fail(crate::diagnostics::process_failure(error), None);
+            }) {
             Ok(result) => result,
             Err(ExecutionError::OutcomeUnknown(error)) => {
                 return Err(ExecutionError::OutcomeUnknown(error));

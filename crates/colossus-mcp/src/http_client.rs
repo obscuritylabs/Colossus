@@ -246,6 +246,8 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
         if status == StatusCode::NOT_FOUND && session_was_attached {
+            self.diagnostics
+                .fail(McpDiagnosticCode::HttpStatus, Some(404));
             return Err(StreamableHttpError::SessionExpired);
         }
         if !status.is_success() {

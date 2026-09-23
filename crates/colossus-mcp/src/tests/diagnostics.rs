@@ -123,6 +123,57 @@ async fn concurrent_checks_preserve_http_status_without_headers_bodies_or_urls()
 }
 
 #[tokio::test]
+async fn expired_session_preserves_404_during_tool_discovery() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (_, request) = read_http_request(&mut stream).await;
+            match request.as_ref().and_then(|value| value["method"].as_str()) {
+                Some("initialize") => {
+                    let body = json!({"jsonrpc": "2.0", "id": request.unwrap()["id"], "result": {
+                        "protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "fixture", "version": "1"}
+                    }})
+                    .to_string();
+                    write_http_response(
+                        &mut stream,
+                        "200 OK",
+                        "Content-Type: application/json\r\nMcp-Session-Id: private-session\r\n",
+                        &body,
+                    )
+                    .await;
+                }
+                Some("notifications/initialized") => {
+                    write_http_response(&mut stream, "202 Accepted", "", "").await;
+                }
+                Some("tools/list") => {
+                    write_http_response(&mut stream, "404 Not Found", "", "private-body").await;
+                }
+                None => {
+                    write_http_response(&mut stream, "405 Method Not Allowed", "", "").await;
+                }
+                other => panic!("unexpected method: {other:?}"),
+            }
+        }
+    });
+    let observed = probe(endpoint, client(), 4096).await;
+    task.abort();
+    assert!(!observed.0);
+    assert_eq!(observed.1, McpDiagnosticStage::ListTools);
+    assert_eq!(
+        observed.2,
+        Some(McpDiagnosticFailure {
+            code: McpDiagnosticCode::HttpStatus,
+            http_status: Some(404)
+        })
+    );
+}
+
+#[tokio::test]
 async fn refused_connection_and_request_timeout_have_distinct_categories() {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await

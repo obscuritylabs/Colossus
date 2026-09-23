@@ -1,5 +1,6 @@
 use super::*;
 mod diagnostics;
+mod stdio_diagnostics;
 use colossus_contracts::{ActorType, DecisionOutcome, SandboxBoundaryMode};
 use colossus_policy::{
     AllowApproval, BuiltInPolicy, EffectGateway, SafetyKernel, SandboxBoundaryGate,

@@ -98,6 +98,7 @@ fn classify_failure(error: &RuntimeError, stage: McpDiagnosticStage) -> McpDiagn
             match stage {
                 McpDiagnosticStage::Configuration => McpDiagnosticCode::Configuration,
                 McpDiagnosticStage::Credentials => McpDiagnosticCode::Credentials,
+                McpDiagnosticStage::Process => McpDiagnosticCode::Process,
                 McpDiagnosticStage::ClientSetup => McpDiagnosticCode::Transport,
                 _ => McpDiagnosticCode::Protocol,
             }
@@ -112,6 +113,22 @@ mod tests {
 
     #[test]
     fn gateway_denial_and_deadline_remain_distinct_from_protocol_failure() {
+        for (stage, code) in [
+            (
+                McpDiagnosticStage::Credentials,
+                McpDiagnosticCode::Credentials,
+            ),
+            (McpDiagnosticStage::Process, McpDiagnosticCode::Process),
+            (McpDiagnosticStage::ListTools, McpDiagnosticCode::Protocol),
+        ] {
+            assert_eq!(
+                classify_failure(
+                    &RuntimeError::Gateway(GatewayError::Execution("private process text".into())),
+                    stage
+                ),
+                code
+            );
+        }
         assert_eq!(
             classify_failure(
                 &RuntimeError::Gateway(GatewayError::Denied("private policy text".into())),

@@ -57,6 +57,18 @@ impl McpDiagnosticCapture {
     }
 }
 
+pub(super) fn process_failure(error: &colossus_policy::ExecutionError) -> McpDiagnosticCode {
+    // This exact marker is generated locally by ProcessExecutor, never subprocess output.
+    match error {
+        colossus_policy::ExecutionError::Failed(message)
+            if message == "sandboxed process exceeded its timeout" =>
+        {
+            McpDiagnosticCode::Timeout
+        }
+        _ => McpDiagnosticCode::Process,
+    }
+}
+
 pub(super) fn request_failure(error: &reqwest::Error) -> McpDiagnosticCode {
     use std::error::Error as _;
     if error.is_timeout() {
