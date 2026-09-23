@@ -20,7 +20,7 @@ manifest digest globally; each workspace can narrow that active set with `plugin
 ## Built-in skills
 
 The CLI and Managed Local sidecar embed the `colossus` plugin, including `coding`,
-`offline-dev`, `security-review`, and `plugin-authoring`. First startup with an explicit
+`help`, `offline-dev`, `security-review`, and `plugin-authoring`. First startup with an explicit
 Colossus home installs and enables it without a checkout, registry or interpreter.
 Standalone SDK runtimes without a home remain isolated and do not open your personal home.
 
@@ -34,6 +34,22 @@ On startup, each binary selects its bundled version for subsequent runs sharing 
 home, including binary rollbacks. A user's global disabled preference survives that
 change. Workspace exclusions never change global activation. Existing runs retain their
 original leased catalog, skill instructions and MCP configuration.
+
+### Built-in documentation help
+
+Select `@colossus/help` in Desktop or `/plugin use colossus/help` in the TUI for
+Colossus usage, configuration, and troubleshooting guidance. The skill includes the
+complete `docs/` tree from the executable's build under `references/docs/`, with the
+original Markdown, relative paths, diagrams, and other assets. Its documentation is
+available without a source checkout or registry connection and follows binary upgrades
+and rollbacks. The agent reads relevant pages on demand; the complete manual is not
+inserted into every conversation.
+
+The snapshot is generated directly from the canonical documentation during the Rust
+build. Authors edit `docs/` once; no second documentation tree is maintained. Help uses
+the existing skill resource and permitted tool boundaries. Model-assisted help still
+requires a working model; ordinary documentation and diagnostic commands remain useful
+when the agent cannot run.
 
 ## Desktop and terminal selection
 

@@ -46,6 +46,9 @@ fn automatic_compaction_is_visible_deterministic_and_preserves_raw_history() {
         &config,
         format!(
             r#"schemaVersion: 3
+# Keep this small history-compaction budget independent of the bundled skill catalog.
+plugins:
+  enabled: false
 storage:
   path: {state}
   keys:

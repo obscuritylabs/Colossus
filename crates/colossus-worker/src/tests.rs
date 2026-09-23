@@ -1002,7 +1002,7 @@ async fn hosted_core_previews_and_lifecycle_fit_the_standard_worker_stack() {
         .await
         .expect("inventory");
     assert_eq!(inventory[0]["manifest"]["name"], "colossus");
-    assert_eq!(inventory[0]["skills"].as_array().expect("skills").len(), 4);
+    assert_eq!(inventory[0]["skills"].as_array().expect("skills").len(), 5);
     assert!(!inventory.to_string().contains("instructions"));
     let digest = inventory[0]["digest"].as_str().expect("digest").to_owned();
     let preview = fixture

@@ -979,6 +979,7 @@ version = "0.10.10-preview.17"
 dependencies = [
  "colossus-plugins",
  "colossus-ports",
+ "serde_json",
  "tempfile",
 ]
 

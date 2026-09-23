@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "colossus",
   "version": "0.10.10-preview.17",
-  "description": "First-party Colossus development and security Agent Skills.",
+  "description": "First-party Colossus help, development, and security Agent Skills with release-matched documentation.",
   "author": {
     "name": "Colossus"
   },

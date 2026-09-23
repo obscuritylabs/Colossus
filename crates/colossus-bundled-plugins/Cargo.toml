@@ -9,6 +9,10 @@ license.workspace = true
 [dependencies]
 colossus-plugins.workspace = true
 colossus-ports.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+colossus-plugins.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
