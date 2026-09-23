@@ -11,14 +11,17 @@ export function McpHealthDetails({
       <p role={diagnostic.healthy ? "status" : "alert"}>
         {diagnostic.message ??
           (diagnostic.healthy
-            ? `${diagnostic.tools.length} tools discovered.`
+            ? "MCP connection and tool discovery succeeded."
             : "MCP health check failed.")}
       </p>
       {diagnostic.healthy && (
-        <span>
-          {diagnostic.tools.map((tool) => tool.name).join(", ") ||
-            "No allowlisted tools"}
-        </span>
+        <>
+          <p>{diagnostic.tools.length} allowlisted tools discovered.</p>
+          <span>
+            {diagnostic.tools.map((tool) => tool.name).join(", ") ||
+              "No allowlisted tools"}
+          </span>
+        </>
       )}
       {report && (
         <details>

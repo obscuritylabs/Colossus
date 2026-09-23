@@ -39,6 +39,7 @@ describe("MCP health details", () => {
     expect(html).toContain("colossus mcp doctor");
     expect(html).toContain("Export diagnostics");
     expect(html).not.toContain("No allowlisted tools");
+    expect(html).not.toContain("allowlisted tools discovered.");
   });
 
   it("renders success without a failure alert", () => {
@@ -49,6 +50,31 @@ describe("MCP health details", () => {
     );
     expect(html).toContain('role="status"');
     expect(html).toContain("No allowlisted tools");
+    expect(html).toContain("0 allowlisted tools discovered.");
     expect(html).not.toContain('role="alert"');
+  });
+
+  it("keeps the discovered tool count alongside a native success message", () => {
+    const html = renderToStaticMarkup(
+      createElement(McpHealthDetails, {
+        diagnostic: {
+          server: "github",
+          healthy: true,
+          message: "MCP health check succeeded.",
+          tools: [
+            {
+              server: "github",
+              name: "list_issues",
+              title: null,
+              description: null,
+            },
+          ],
+        },
+      }),
+    );
+    expect(html).toContain("MCP health check succeeded.");
+    expect(html).toContain("1 allowlisted tools discovered.");
+    expect(html).toContain("list_issues");
+    expect(html).not.toContain("No allowlisted tools");
   });
 });

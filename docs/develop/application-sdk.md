@@ -571,7 +571,7 @@ justification separately as agent-provided. Missing command context means a hist
 or non-command interaction, not a reason to synthesize task intent. Full-details views
 must not silently truncate accepted commands. Command context participates in immutable
 challenge validation and durable replay. Public protobuf field 8 is additive; removed
-fields 1 and 7 remain reserved. Private worker protocol 22 requires matching clients
+fields 1 and 7 remain reserved. Private worker protocol 23 requires matching clients
 and a worker restart; configuration stays schema version 3.
 The server revalidates responses against the private request and applies current scope
 checks to cancellation and response operations.
