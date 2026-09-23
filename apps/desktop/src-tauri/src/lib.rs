@@ -15,6 +15,7 @@ mod managed_configuration;
 mod managed_configuration_commands;
 mod managed_diagnostics;
 mod managed_runtime;
+mod mcp_health;
 mod plugin_adapter;
 mod plugin_commands;
 mod plugin_selection;

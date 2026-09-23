@@ -1033,6 +1033,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         },
         Command::Mcp(command) => match command.command {
             McpAction::Servers => print_json(&runtime.mcp_servers()?)?,
+            McpAction::Doctor { server } => print_json(&runtime.mcp_doctor(&server).await)?,
             McpAction::Tools { server } => {
                 print_json(&runtime.mcp_tools(server.as_deref()).await?)?;
             }

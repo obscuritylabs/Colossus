@@ -1,3 +1,4 @@
+import { McpHealthDetails } from "./McpHealthDetails";
 import {
   IconActivityHeartbeat,
   IconAdjustments,
@@ -1987,8 +1988,13 @@ export function ManagedSettingsPane({
 
   async function testMcpServer(server: string) {
     if (!selectedSpace) return;
+    setMcpDiagnostics((current) => {
+      const next = { ...current };
+      delete next[server];
+      return next;
+    });
     await runMcpDiagnostic(async () => {
-      const diagnostic = isTauriRuntime()
+      const diagnostic: ManagedMcpDiagnostic = isTauriRuntime()
         ? await diagnoseManagedMcpServer(selectedSpace.id, server)
         : {
             server,
@@ -2006,7 +2012,7 @@ export function ManagedSettingsPane({
       pushToast(
         diagnostic.healthy
           ? `${server} is healthy; ${diagnostic.tools.length} tools discovered.`
-          : `${server} diagnostic failed.`,
+          : (diagnostic.message ?? `${server} diagnostic failed.`),
         diagnostic.healthy ? "success" : "error",
       );
     });
@@ -4223,13 +4229,15 @@ export function SpaceSettingsBody({
                       </small>
                     </div>
                     <span
-                      className={`status-chip ${diagnostic?.healthy ? "tone-success" : enabled ? "tone-success" : "tone-neutral"}`}
+                      className={`status-chip ${diagnostic ? (diagnostic.healthy ? "tone-success" : "tone-danger") : enabled ? "tone-success" : "tone-neutral"}`}
                     >
                       {diagnostic?.healthy
                         ? "Healthy"
-                        : enabled
-                          ? "Enabled"
-                          : "Available"}
+                        : diagnostic
+                          ? "Failed"
+                          : enabled
+                            ? "Enabled"
+                            : "Available"}
                     </span>
                     <div className="resource-actions">
                       <button
@@ -4273,15 +4281,7 @@ export function SpaceSettingsBody({
                     />
                   </div>
                   {diagnostic ? (
-                    <div className="mcp-diagnostic-detail" role="status">
-                      <strong>
-                        {diagnostic.tools.length} tools discovered
-                      </strong>
-                      <span>
-                        {diagnostic.tools.map((tool) => tool.name).join(", ") ||
-                          "No allowlisted tools"}
-                      </span>
-                    </div>
+                    <McpHealthDetails diagnostic={diagnostic} />
                   ) : null}
                   {oauthStatus || oauthLogin ? (
                     <div className="mcp-oauth-detail">

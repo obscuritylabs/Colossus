@@ -1,3 +1,4 @@
+use colossus_worker_protocol::{McpDiagnosticCode, McpDiagnosticFailure, McpHealthReport};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -50,6 +51,12 @@ struct WorkerMcpTool {
     description: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct WorkerMcpHealthCheck {
+    report: McpHealthReport,
+    tools: Vec<WorkerMcpTool>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManagedMcpToolDiagnosticDto {
@@ -65,6 +72,8 @@ pub(crate) struct ManagedMcpDiagnosticDto {
     server: String,
     healthy: bool,
     tools: Vec<ManagedMcpToolDiagnosticDto>,
+    report: McpHealthReport,
+    message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -200,12 +209,29 @@ pub(crate) async fn diagnose_managed_mcp_server(
 ) -> Result<ManagedMcpDiagnosticDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let worker = worker_for(&state, &request.space_id).await?;
-    let tools = worker
-        .mcp_tools(Some(&request.server))
-        .await
-        .map_err(|_| diagnostic_error("The MCP server health test failed."))?;
-    let tools = serde_json::from_value::<Vec<WorkerMcpTool>>(tools)
-        .map_err(|_| diagnostic_error("The MCP server returned an invalid diagnostic response."))?
+    let started = std::time::Instant::now();
+    let check = match worker.mcp_doctor(&request.server).await {
+        Ok(value) => serde_json::from_value::<WorkerMcpHealthCheck>(value)
+            .map_err(|_| diagnostic_error("The worker returned an invalid MCP health report. Check that the desktop and bundled runtime versions match."))?,
+        Err(_) => WorkerMcpHealthCheck {
+            report: McpHealthReport {
+                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                failure: Some(McpDiagnosticFailure { code: McpDiagnosticCode::Runtime, http_status: None }),
+                ..Default::default()
+            },
+            tools: Vec::new(),
+        },
+    };
+    crate::mcp_health::record(
+        &mut state
+            .mcp_health_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        &request.server,
+        &check.report,
+    );
+    let tools = check
+        .tools
         .into_iter()
         .map(|tool| ManagedMcpToolDiagnosticDto {
             server: tool.server,
@@ -216,8 +242,10 @@ pub(crate) async fn diagnose_managed_mcp_server(
         .collect();
     Ok(ManagedMcpDiagnosticDto {
         server: request.server,
-        healthy: true,
+        healthy: check.report.healthy,
         tools,
+        message: crate::mcp_health::message(&check.report),
+        report: check.report,
     })
 }
 

@@ -242,6 +242,8 @@ impl ExternalHealth {
 
 /// Native-only authenticated clients and local process state shared by narrow commands.
 pub(crate) struct AppState {
+    pub(crate) mcp_health_history:
+        StdMutex<std::collections::VecDeque<crate::mcp_health::RecentMcpHealth>>,
     pub(crate) plugin_operations: StdMutex<HashMap<String, (String, watch::Sender<bool>)>>,
     targets: RwLock<HashMap<String, TargetHandle>>,
     selected_target_id: RwLock<Option<String>>,
@@ -402,6 +404,7 @@ impl Default for AppState {
         let (selection_updates, _) = watch::channel(0);
         Self {
             targets: RwLock::new(HashMap::new()),
+            mcp_health_history: StdMutex::new(std::collections::VecDeque::new()),
             selected_target_id: RwLock::new(None),
             plugin_operations: StdMutex::new(HashMap::new()),
             selection_epoch: AtomicU64::new(0),

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { McpHealthDetails } from "./McpHealthDetails";
+import type { ManagedMcpDiagnostic } from "../types";
 import {
   beginManagedMcpOAuth,
   completeManagedMcpOAuth,
@@ -23,6 +25,9 @@ export function PluginMcpControls({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [diagnostic, setDiagnostic] = useState<ManagedMcpDiagnostic | null>(
+    null,
+  );
   const [status, setStatus] = useState<ManagedMcpOAuthStatus | null>(null);
   const [login, setLogin] = useState<ManagedMcpOAuthLogin | null>(null);
   const [callback, setCallback] = useState("");
@@ -50,11 +55,14 @@ export function PluginMcpControls({
           disabled={busy || !enabled}
           onClick={() =>
             void run(async () => {
+              setDiagnostic(null);
+              setMessage("");
               const result = await diagnoseManagedMcpServer(targetId, server);
+              setDiagnostic(result);
               setMessage(
                 result.healthy
                   ? `${result.tools.length} allowlisted tools discovered.`
-                  : "Server diagnostic failed.",
+                  : (result.message ?? "Server diagnostic failed."),
               );
             })
           }
@@ -81,7 +89,11 @@ export function PluginMcpControls({
         </small>
       )}
       {busy && <p role="status">Checking MCP connection…</p>}
-      {message && <p role="status">{message}</p>}
+      {diagnostic ? (
+        <McpHealthDetails diagnostic={diagnostic} />
+      ) : (
+        message && <p role="status">{message}</p>
+      )}
       {error && <p role="alert">{error}</p>}
       {status && (
         <p>

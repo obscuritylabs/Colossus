@@ -1,4 +1,5 @@
 use super::*;
+mod diagnostics;
 use colossus_contracts::{ActorType, DecisionOutcome, SandboxBoundaryMode};
 use colossus_policy::{
     AllowApproval, BuiltInPolicy, EffectGateway, SafetyKernel, SandboxBoundaryGate,
@@ -1019,7 +1020,9 @@ async fn ephemeral_oauth_store_round_trips_without_a_state_path() {
     );
 }
 
-async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Option<Value>) {
+async fn read_http_request(
+    stream: &mut (impl tokio::io::AsyncRead + Unpin),
+) -> (String, Option<Value>) {
     use tokio::io::AsyncReadExt as _;
 
     let mut request = Vec::new();
@@ -1054,7 +1057,7 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Optio
 }
 
 async fn write_http_response(
-    stream: &mut tokio::net::TcpStream,
+    stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     status: &str,
     extra_headers: &str,
     body: &str,

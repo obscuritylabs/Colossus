@@ -1,4 +1,7 @@
 use super::*;
+use colossus_contracts::{
+    McpDiagnosticCode, McpDiagnosticConfiguration, McpDiagnosticStage, McpDiagnosticTransport,
+};
 use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
@@ -143,6 +146,32 @@ impl McpExecutor {
     pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
         self.tls_roots = tls_roots;
         self
+    }
+
+    /// Describe the configuration actually loaded by this adapter, without resolving secrets.
+    pub fn diagnostic_configuration(&self, name: &str) -> Option<McpDiagnosticConfiguration> {
+        let server = self.servers.get(name)?;
+        let mut fingerprints = self.tls_roots.fingerprints_sha256();
+        fingerprints.sort();
+        Some(McpDiagnosticConfiguration {
+            runtime_version: env!("CARGO_PKG_VERSION").into(),
+            transport: match server.transport {
+                McpTransportKind::StreamableHttp => McpDiagnosticTransport::StreamableHttp,
+                McpTransportKind::Stdio => McpDiagnosticTransport::Stdio,
+            },
+            endpoint_sha256: server
+                .url
+                .as_ref()
+                .map(|url| hex::encode(Sha256::digest(url.as_bytes()))),
+            additional_ca_certificates: self.tls_roots.len(),
+            additional_ca_sha256: (!fingerprints.is_empty())
+                .then(|| hex::encode(Sha256::digest(fingerprints.concat().as_bytes()))),
+            direct_http: server.transport == McpTransportKind::StreamableHttp,
+            credential_headers: server.credential_headers.len(),
+            oauth: server.oauth.is_some(),
+            allow_stateless: server.allow_stateless,
+            configured_timeout_ms: server.timeout_ms,
+        })
     }
 
     /// Configure the bounded network and environment grants used by operator OAuth commands.
@@ -1252,6 +1281,8 @@ pub(super) async fn execute_remote_operation<C>(
 where
     C: StreamableHttpClient + Send + Sync,
 {
+    let diagnostics = McpDiagnosticCapture::current();
+    diagnostics.stage(McpDiagnosticStage::Initialize);
     let endpoint = server
         .url
         .clone()
@@ -1279,6 +1310,7 @@ where
             info.protocol_version
         )));
     }
+    diagnostics.stage(McpDiagnosticStage::ListTools);
     let result = match operation {
         McpOperation::ListTools { cursor, .. } => service
             .list_tools(Some(
@@ -1493,6 +1525,8 @@ impl EffectExecutor for McpExecutor {
                 .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
             let http =
                 HardenedStreamableHttpClient::new(endpoint, &permit, &self.tls_roots).await?;
+            let diagnostics = McpDiagnosticCapture::current();
+            diagnostics.stage(McpDiagnosticStage::Credentials);
             let (headers, mut secrets) =
                 resolve_http_headers(&server, &permit, self.credentials.as_ref())?;
             let timeout = Duration::from_millis(permit.obligations().timeout_ms);
@@ -1540,8 +1574,10 @@ impl EffectExecutor for McpExecutor {
                 .await
             }
             .map_err(|_| {
+                diagnostics.fail(McpDiagnosticCode::Timeout, None);
                 remote_timeout_error(&input.operation, call_dispatched.load(Ordering::Acquire))
             })??;
+            diagnostics.stage(McpDiagnosticStage::ValidateResponse);
             return match (&input.operation, result) {
                 (McpOperation::ListTools { .. }, RemoteOperationResult::Tools(result)) => {
                     let page = parse_tools_result(result, &server)

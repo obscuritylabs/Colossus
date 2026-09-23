@@ -11,6 +11,10 @@ mod wire;
 pub use plugin_control::PluginManagementPrompt;
 
 pub use client::WorkerControlClient;
+pub use colossus_contracts::{
+    McpDiagnosticCode, McpDiagnosticConfiguration, McpDiagnosticFailure, McpDiagnosticStage,
+    McpDiagnosticTransport, McpHealthReport,
+};
 pub use colossus_contracts::{PluginInstallSource, PluginManagementRequest};
 pub use delegate::{
     WorkerDelegateActivity, WorkerDelegateActivityState, WorkerDelegateStatus,

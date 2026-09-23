@@ -129,6 +129,19 @@ impl WorkerControlClient {
         self.call(ControlOperation::McpServers).await
     }
 
+    /// Run an authorized health check with payload-free runtime diagnostics.
+    pub async fn mcp_doctor(&self, server: &str) -> Result<serde_json::Value, WorkerControlError> {
+        if !valid_mcp_server_name(server) {
+            return Err(WorkerControlError::Protocol(
+                "MCP server name is invalid".into(),
+            ));
+        }
+        self.call(ControlOperation::McpDoctor {
+            server: server.to_owned(),
+        })
+        .await
+    }
+
     /// Discover allowlist-filtered MCP tools through the live runtime boundary.
     pub async fn mcp_tools(
         &self,

@@ -70,6 +70,7 @@ struct DiagnosticsDocument {
     release: ReleaseMetadataDto,
     runtime: RuntimeHealthDto,
     recent_sanitized_errors: Vec<SanitizedDiagnosticError>,
+    recent_mcp_health_checks: Vec<crate::mcp_health::RecentMcpHealth>,
     privacy: &'static str,
 }
 
@@ -84,7 +85,14 @@ pub(crate) async fn export_diagnostics(
     state: State<'_, AppState>,
 ) -> Result<bool, CommandErrorDto> {
     let status = desktop_commands::diagnostics_status(&state).await?;
-    let document = diagnostics_document(&app, &status);
+    let mut document = diagnostics_document(&app, &status);
+    document.recent_mcp_health_checks = state
+        .mcp_health_history
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .cloned()
+        .collect();
     let encoded = serde_json::to_vec_pretty(&document).map_err(|_| diagnostics_error())?;
     if encoded.is_empty() || encoded.len() > MAX_DIAGNOSTICS_BYTES {
         return Err(diagnostics_error());
@@ -148,7 +156,7 @@ fn diagnostics_document(app: &AppHandle, status: &DesktopStatusDto) -> Diagnosti
         });
     }
     DiagnosticsDocument {
-        schema_version: 1,
+        schema_version: 2,
         application_version: app.package_info().version.to_string(),
         exported_at_unix_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -162,6 +170,7 @@ fn diagnostics_document(app: &AppHandle, status: &DesktopStatusDto) -> Diagnosti
             additional_ca_certificates: status.additional_ca_bundle.certificate_count,
         },
         recent_sanitized_errors,
+        recent_mcp_health_checks: Vec::new(),
         privacy: "Prompts, credentials, model output, headers, certificate paths, and filesystem paths are excluded.",
     }
 }

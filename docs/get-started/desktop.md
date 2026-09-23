@@ -223,6 +223,26 @@ validates it in private native storage and shows only its certificate count and 
 fingerprints. Import and removal restart Managed Local transactionally; the renderer
 never receives the original or private storage path.
 
+If an MCP server works in the CLI but fails in Desktop, run its workspace **Test**
+action and expand **Connection diagnostics**. The report comes from the active worker
+and includes the failing stage, a sanitized failure category, any HTTP status, elapsed
+time, runtime version, endpoint fingerprint, and the count and fingerprint of the
+additional CA roots actually loaded. The HTTP client uses direct connections with
+certificate verification; MCP subprocesses manage their own TLS configuration.
+
+On the same computer, run `colossus mcp doctor SERVER` with the CLI configuration that
+works. Compare `report.configuration` with the Desktop report. Different endpoint or
+CA fingerprints identify different effective configuration even if the Settings page
+looks similar. Matching fingerprints do not establish that the credentials or network
+permissions match. The doctor command performs ordinary authorized tool discovery and
+reports failures in `report.healthy` and `report.failure`.
+
+**Settings → Diagnostics → Export diagnostics** includes the last eight MCP health
+reports from the current Desktop process. Reproduce the failure before exporting.
+Reports exclude endpoint text, certificate paths, credential values, headers, and
+response bodies. The generic application version identifies the desktop shell; use
+the report's runtime version when comparing it with the CLI.
+
 ### 5. Check the signed update channel
 
 Only stable builds advertise an automatic update channel. Desktop does not perform a
