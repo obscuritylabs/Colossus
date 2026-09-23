@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "schema_disclosure.rs"]
+mod schema_disclosure;
+
 const DEFAULT_POLICY_INPUT_LIMIT: usize = 1024 * 1024;
 const DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT: usize = 8 * 1024 * 1024;
 pub(super) const PERMIT_LIFETIME_MS: i128 = 30_000;
@@ -543,7 +546,7 @@ impl SafetyKernel {
         if prepared.phase == EffectPhase::PreEffect {
             command_approval_context(&prepared)?;
         }
-        redact_hard_secrets(&mut prepared.content);
+        schema_disclosure::redact_request_content(&mut prepared)?;
         self.validate_policy_input_size(&prepared)?;
         Ok(prepared)
     }
@@ -1123,7 +1126,7 @@ fn redact_credential_headers(value: &mut Value) {
         return;
     };
     for child in object.values_mut() {
-        if !is_environment_credential_header_reference(child) {
+        if !is_credential_header_reference(child) {
             *child = redacted_placeholder(child);
         }
     }
@@ -1138,7 +1141,7 @@ fn redacted_placeholder(value: &Value) -> Value {
     })
 }
 
-fn is_environment_credential_header_reference(value: &Value) -> bool {
+fn is_credential_header_reference(value: &Value) -> bool {
     let Some(object) = value.as_object() else {
         return false;
     };
@@ -1147,9 +1150,10 @@ fn is_environment_credential_header_reference(value: &Value) -> bool {
         || object
             .keys()
             .any(|key| !matches!(key.as_str(), "reference" | "scheme"))
-        || !object
-            .get("reference")
-            .is_some_and(is_environment_credential_reference)
+        || !object.get("reference").is_some_and(|reference| {
+            is_environment_credential_reference(reference)
+                || is_host_credential_reference(reference)
+        })
     {
         return false;
     }
@@ -1162,6 +1166,20 @@ fn is_environment_credential_header_reference(value: &Value) -> bool {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             })
+    })
+}
+
+// Match the MCP host-reference grammar only for configured header references.
+// Do not grant arbitrary secret-named argument values a host-reference exemption.
+fn is_host_credential_reference(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| {
+        value.strip_prefix("host:").is_some_and(|identifier| {
+            !identifier.is_empty()
+                && identifier.len() <= 128
+                && identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
     })
 }
 

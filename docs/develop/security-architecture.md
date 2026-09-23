@@ -70,6 +70,25 @@ references. Filesystem reads, provider output, network responses, process output
 memory retrieval remain quarantined until mandatory post-effect policy permits release.
 A denial cannot leak private bytes through output, errors, audit payloads, or observers.
 
+Tool input schemas at the typed MCP invocation and provider tool-definition positions
+are declarations. Their property and definition names (including `apiKey` and
+`password`) retain their exact schema and hash through request preparation. Secret-named
+literal data in defaults and examples, and non-null defaults or value constraints on
+secret-named inputs, fail closed before policy or execution. Arbitrary argument objects
+named `input_schema` retain ordinary secret redaction. This exception does not release
+credential values supplied as tool arguments.
+Sensitive properties retain this check through document-local JSON-pointer references,
+including shared and recursive definitions. References that cannot be inspected locally
+fail closed in sensitive positions. Local URI fragments are percent-decoded before JSON
+Pointer traversal. Resource boundaries follow the declared schema dialect (`id` in
+Draft 4, `$id` in later drafts); unknown dialects fail closed.
+
+The configured top-level `credential_headers` map preserves strict `scheme` and
+`reference` objects for both `env:` references and opaque `host:` credential IDs.
+Host IDs use the MCP contract's bounded ASCII identifier grammar; they are handles,
+not credential values. Malformed references, extra fields, and nested argument
+lookalikes retain ordinary redaction. Credentials are resolved only after authorization.
+
 Provider text streaming preserves exact text and order while coalescing consecutive
 token-sized deltas into batches of at most 4 KiB or 100 ms before they enter post-effect
 release. A non-text event flushes the pending text first. Every resulting batch remains

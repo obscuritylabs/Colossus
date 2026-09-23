@@ -138,6 +138,17 @@ sandbox:
     let tools: Value = serde_json::from_slice(&tools.stdout).expect("tools JSON");
     assert_eq!(tools.as_array().expect("array").len(), 2);
     assert_eq!(tools[0]["name"], "echo");
+    // A credential-shaped property name describes an input; it is not a secret.
+    // The subsequent echo call must retain this exact schema and its bound hash.
+    assert_eq!(
+        tools[0]["input_schema"]["properties"]["apiKey"]["type"],
+        "string"
+    );
+    assert!(
+        tools[0]["input_schema"]["properties"]["apiKey"]
+            .get("redacted")
+            .is_none()
+    );
     assert_eq!(tools[1]["name"], "secret");
     assert!(
         !serde_json::to_string(&tools)
