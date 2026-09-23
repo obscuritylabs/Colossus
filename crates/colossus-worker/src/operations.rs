@@ -855,6 +855,11 @@ pub enum WorkerOperation {
         /// Optional exact server filter.
         server: Option<String>,
     },
+    /// Diagnose one configured MCP server through authorized tool discovery.
+    McpDoctor {
+        /// Configured server name.
+        server: String,
+    },
     /// Invoke one allowlisted MCP tool.
     McpCall {
         /// Exact server name.

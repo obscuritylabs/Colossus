@@ -27,6 +27,7 @@ jsonschema.workspace = true
 keyring.workspace = true
 redb.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 rmcp = { workspace = true, features = ["auth", "client", "transport-streamable-http-client"] }
 rustix.workspace = true
 serde.workspace = true
@@ -39,6 +40,8 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
+tokio-rustls.workspace = true
 colossus-testkit.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

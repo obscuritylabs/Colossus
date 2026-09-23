@@ -1153,6 +1153,9 @@ pub(super) async fn dispatch_to_worker_if_active(
             }
             let operation = match &command.command {
                 McpAction::Servers => WorkerOperation::McpServers,
+                McpAction::Doctor { server } => WorkerOperation::McpDoctor {
+                    server: server.clone(),
+                },
                 McpAction::Tools { server } => WorkerOperation::McpTools {
                     server: server.clone(),
                 },

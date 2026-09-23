@@ -156,6 +156,18 @@ sandbox:
             .contains("blocked")
     );
 
+    let healthy = run(binary, &config, &workspace, &["mcp", "doctor", "fixture"]);
+    assert!(
+        healthy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&healthy.stderr)
+    );
+    let healthy: Value = serde_json::from_slice(&healthy.stdout).expect("health report");
+    assert_eq!(healthy["report"]["healthy"], true);
+    assert_eq!(healthy["report"]["stage"], "complete");
+    assert_eq!(healthy["report"]["configuration"]["transport"], "stdio");
+    assert_eq!(healthy["tools"].as_array().unwrap().len(), 2);
+
     let denied = run(
         binary,
         &config,

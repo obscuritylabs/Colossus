@@ -1,4 +1,6 @@
-use colossus_network::{AdditionalRootCertificates, pinned_reqwest_client};
+use crate::diagnostics::{McpDiagnosticCapture, request_failure};
+use colossus_contracts::{McpDiagnosticCode, McpDiagnosticStage};
+use colossus_network::{AdditionalRootCertificates, PinnedHttpClientError, pinned_reqwest_client};
 use colossus_policy::{
     ExecutionError, ExecutionPermit, NetworkDestinationMatch, http_transport_authority_match,
     non_public_network_address,
@@ -27,6 +29,7 @@ pub(super) struct HardenedStreamableHttpClient {
     endpoint: Arc<str>,
     client: reqwest::Client,
     max_response_bytes: usize,
+    diagnostics: McpDiagnosticCapture,
 }
 
 impl HardenedStreamableHttpClient {
@@ -35,6 +38,8 @@ impl HardenedStreamableHttpClient {
         permit: &ExecutionPermit,
         tls_roots: &AdditionalRootCertificates,
     ) -> Result<Self, ExecutionError> {
+        let diagnostics = McpDiagnosticCapture::current();
+        diagnostics.stage(McpDiagnosticStage::ClientSetup);
         let url = Url::parse(endpoint).map_err(adapter_failure)?;
         let matched = http_transport_authority_match(permit.obligations(), endpoint)
             .map_err(adapter_failure)?
@@ -54,13 +59,23 @@ impl HardenedStreamableHttpClient {
             allow_non_public,
         )
         .await
-        .map_err(adapter_failure)?;
+        .map_err(|error| {
+            diagnostics.fail(
+                match &error {
+                    PinnedHttpClientError::Resolution(_) => McpDiagnosticCode::Dns,
+                    _ => McpDiagnosticCode::Configuration,
+                },
+                None,
+            );
+            adapter_failure(error)
+        })?;
         let max_response_bytes =
             usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
         Ok(Self {
             endpoint: endpoint.into(),
             client,
             max_response_bytes,
+            diagnostics,
         })
     }
 
@@ -74,6 +89,7 @@ impl HardenedStreamableHttpClient {
             endpoint: endpoint.into(),
             client,
             max_response_bytes,
+            diagnostics: McpDiagnosticCapture::current(),
         }
     }
 
@@ -103,6 +119,17 @@ impl HardenedStreamableHttpClient {
             builder = builder.header(name, value);
         }
         Ok(builder)
+    }
+
+    fn request_error(&self, error: reqwest::Error) -> StreamableHttpError<McpHttpClientError> {
+        self.diagnostics.fail(request_failure(&error), None);
+        StreamableHttpError::Client(McpHttpClientError::Request)
+    }
+
+    fn status_error(&self, status: StatusCode) -> StreamableHttpError<McpHttpClientError> {
+        self.diagnostics
+            .fail(McpDiagnosticCode::HttpStatus, Some(status.as_u16()));
+        unexpected_status(status)
     }
 }
 
@@ -143,15 +170,19 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         let response = request
             .send()
             .await
-            .map_err(|_| StreamableHttpError::Client(McpHttpClientError::Request))?;
+            .map_err(|error| self.request_error(error))?;
         if response.status() == StatusCode::METHOD_NOT_ALLOWED {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
         if !response.status().is_success() {
-            return Err(unexpected_status(response.status()));
+            return Err(self.status_error(response.status()));
         }
         require_content_type(&response, EVENT_STREAM_MIME_TYPE)?;
-        Ok(bounded_sse_stream(response, self.max_response_bytes))
+        Ok(bounded_sse_stream(
+            response,
+            self.max_response_bytes,
+            self.diagnostics.clone(),
+        ))
     }
 
     async fn delete_session(
@@ -166,11 +197,11 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             .header(HEADER_SESSION_ID, session_id.as_ref())
             .send()
             .await
-            .map_err(|_| StreamableHttpError::Client(McpHttpClientError::Request))?;
+            .map_err(|error| self.request_error(error))?;
         if response.status() == StatusCode::METHOD_NOT_ALLOWED || response.status().is_success() {
             return Ok(());
         }
-        Err(unexpected_status(response.status()))
+        Err(self.status_error(response.status()))
     }
 
     async fn post_message(
@@ -195,13 +226,17 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         let response = request
             .send()
             .await
-            .map_err(|_| StreamableHttpError::Client(McpHttpClientError::Request))?;
+            .map_err(|error| self.request_error(error))?;
         if response.status() == StatusCode::UNAUTHORIZED {
+            self.diagnostics
+                .fail(McpDiagnosticCode::HttpStatus, Some(401));
             return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
                 sanitized_auth_challenge(&response),
             )));
         }
         if response.status() == StatusCode::FORBIDDEN {
+            self.diagnostics
+                .fail(McpDiagnosticCode::HttpStatus, Some(403));
             return Err(StreamableHttpError::InsufficientScope(
                 InsufficientScopeError::new(sanitized_auth_challenge(&response), None),
             ));
@@ -211,10 +246,12 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
         if status == StatusCode::NOT_FOUND && session_was_attached {
+            self.diagnostics
+                .fail(McpDiagnosticCode::HttpStatus, Some(404));
             return Err(StreamableHttpError::SessionExpired);
         }
         if !status.is_success() {
-            return Err(unexpected_status(status));
+            return Err(self.status_error(status));
         }
         let one_way = matches!(
             message,
@@ -240,12 +277,13 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         match content_type.as_deref() {
             Some(value) if content_type_matches(value, EVENT_STREAM_MIME_TYPE) => {
                 Ok(StreamableHttpPostResponse::Sse(
-                    bounded_sse_stream(response, self.max_response_bytes),
+                    bounded_sse_stream(response, self.max_response_bytes, self.diagnostics.clone()),
                     session_id,
                 ))
             }
             Some(value) if content_type_matches(value, JSON_MIME_TYPE) => {
-                let bytes = bounded_body(response, self.max_response_bytes).await?;
+                let bytes =
+                    bounded_body(response, self.max_response_bytes, &self.diagnostics).await?;
                 if one_way && is_empty_body(&bytes) {
                     return Ok(StreamableHttpPostResponse::Accepted);
                 }
@@ -256,7 +294,8 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             // bounded body is the only way to tell an empty one-way acknowledgement
             // apart from a genuinely malformed payload.
             _ if one_way && declared_length.is_none() => {
-                let bytes = bounded_body(response, self.max_response_bytes).await?;
+                let bytes =
+                    bounded_body(response, self.max_response_bytes, &self.diagnostics).await?;
                 if is_empty_body(&bytes) {
                     Ok(StreamableHttpPostResponse::Accepted)
                 } else {
@@ -314,12 +353,17 @@ fn unexpected_status(status: StatusCode) -> StreamableHttpError<McpHttpClientErr
 async fn bounded_body(
     response: Response,
     limit: usize,
+    diagnostics: &McpDiagnosticCapture,
 ) -> Result<Vec<u8>, StreamableHttpError<McpHttpClientError>> {
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| StreamableHttpError::Client(McpHttpClientError::Request))?;
+        let chunk = chunk.map_err(|error| {
+            diagnostics.fail(request_failure(&error), None);
+            StreamableHttpError::Client(McpHttpClientError::Request)
+        })?;
         if bytes.len().saturating_add(chunk.len()) > limit {
+            diagnostics.fail(McpDiagnosticCode::ResponseTooLarge, None);
             return Err(StreamableHttpError::Client(
                 McpHttpClientError::ResponseTooLarge,
             ));
@@ -332,6 +376,7 @@ async fn bounded_body(
 fn bounded_sse_stream(
     response: Response,
     limit: usize,
+    diagnostics: McpDiagnosticCapture,
 ) -> BoxStream<'static, Result<Sse, SseError>> {
     let bounded = response
         .bytes_stream()
@@ -345,10 +390,12 @@ fn bounded_sse_stream(
                         Ok(chunk)
                     }
                     Ok(_) => {
+                        diagnostics.fail(McpDiagnosticCode::ResponseTooLarge, None);
                         state.1 = true;
                         Err(McpHttpClientError::ResponseTooLarge)
                     }
-                    Err(_) => {
+                    Err(error) => {
+                        diagnostics.fail(request_failure(&error), None);
                         state.1 = true;
                         Err(McpHttpClientError::Request)
                     }

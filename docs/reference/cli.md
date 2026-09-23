@@ -142,7 +142,7 @@ positional:
 | `plugins` | `list`, `show NAME`, `validate DIRECTORY`, `verify PATH`, `install (--directory|--reference|--layout|--archive)`, `enable NAME --digest DIGEST`, `disable NAME`, `update NAME REFERENCE`, `uninstall NAME --digest DIGEST [--purge-data]`, `gc`, `package DIRECTORY --output LAYOUT`, `push LAYOUT REFERENCE`, `pull REFERENCE --output LAYOUT`, `export NAME --output LAYOUT_TAR` |
 | `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
-| `mcp` | `servers`, `tools`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |
+| `mcp` | `servers`, `tools`, `doctor SERVER`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |
 | Top-level execution | `run [PROMPT]`, `echo MESSAGE`, `tui`, `worker` |
 
 ## Important defaults and bounds

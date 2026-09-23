@@ -8,9 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 22 includes frozen, typed prepared-command approval context.
+/// Version 23 includes the typed MCP health-check operation.
 /// Both sides reject mismatches during the handshake and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 22;
+pub const PROTOCOL_VERSION: u16 = 23;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 ///
@@ -77,6 +77,9 @@ pub(crate) enum ControlOperation {
         session_id: String,
     },
     McpServers,
+    McpDoctor {
+        server: String,
+    },
     McpTools {
         server: Option<String>,
     },
@@ -375,6 +378,13 @@ mod tests {
             })
             .expect("MCP tools"),
             serde_json::json!({ "operation": "mcp_tools", "server": "docs" })
+        );
+        assert_eq!(
+            serde_json::to_value(ControlOperation::McpDoctor {
+                server: "docs".into()
+            })
+            .expect("MCP doctor"),
+            serde_json::json!({ "operation": "mcp_doctor", "server": "docs" })
         );
         assert_eq!(
             serde_json::to_value(ControlOperation::McpAuthComplete {

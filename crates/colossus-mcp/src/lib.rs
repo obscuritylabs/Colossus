@@ -25,7 +25,9 @@ use std::{
 };
 use thiserror::Error;
 
+mod diagnostics;
 mod executor;
+pub use diagnostics::McpDiagnosticCapture;
 use executor::resolve_path;
 pub use executor::*;
 #[cfg(test)]

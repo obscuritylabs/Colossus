@@ -566,6 +566,9 @@ async fn dispatch_general(
             }))
         }
         WorkerOperation::McpServers => Ok(serde_json::to_value(runtime.mcp_servers()?)?),
+        WorkerOperation::McpDoctor { server } => {
+            Ok(serde_json::to_value(runtime.mcp_doctor(&server).await)?)
+        }
         WorkerOperation::McpTools { server } => Ok(serde_json::to_value(
             runtime.mcp_tools(server.as_deref()).await?,
         )?),

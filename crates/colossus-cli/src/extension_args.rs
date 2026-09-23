@@ -159,6 +159,8 @@ pub(super) struct McpCommand {
 
 #[derive(Subcommand)]
 pub(super) enum McpAction {
+    /// Check one server and report effective trust plus sanitized failure details.
+    Doctor { server: String },
     /// List configured server names and exact tool allowlists without launching them.
     Servers,
     /// Discover live allowlisted tool schemas through the audited sandbox.

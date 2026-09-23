@@ -1,4 +1,7 @@
 use super::*;
+use colossus_contracts::{
+    McpDiagnosticCode, McpDiagnosticConfiguration, McpDiagnosticStage, McpDiagnosticTransport,
+};
 use colossus_ports::{CredentialResolver, EnvironmentCredentialResolver};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
@@ -143,6 +146,32 @@ impl McpExecutor {
     pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
         self.tls_roots = tls_roots;
         self
+    }
+
+    /// Describe the configuration actually loaded by this adapter, without resolving secrets.
+    pub fn diagnostic_configuration(&self, name: &str) -> Option<McpDiagnosticConfiguration> {
+        let server = self.servers.get(name)?;
+        let mut fingerprints = self.tls_roots.fingerprints_sha256();
+        fingerprints.sort();
+        Some(McpDiagnosticConfiguration {
+            runtime_version: env!("CARGO_PKG_VERSION").into(),
+            transport: match server.transport {
+                McpTransportKind::StreamableHttp => McpDiagnosticTransport::StreamableHttp,
+                McpTransportKind::Stdio => McpDiagnosticTransport::Stdio,
+            },
+            endpoint_sha256: server
+                .url
+                .as_ref()
+                .map(|url| hex::encode(Sha256::digest(url.as_bytes()))),
+            additional_ca_certificates: self.tls_roots.len(),
+            additional_ca_sha256: (!fingerprints.is_empty())
+                .then(|| hex::encode(Sha256::digest(fingerprints.concat().as_bytes()))),
+            direct_http: server.transport == McpTransportKind::StreamableHttp,
+            credential_headers: server.credential_headers.len(),
+            oauth: server.oauth.is_some(),
+            allow_stateless: server.allow_stateless,
+            configured_timeout_ms: server.timeout_ms,
+        })
     }
 
     /// Configure the bounded network and environment grants used by operator OAuth commands.
@@ -1007,6 +1036,16 @@ fn process_stdout(bytes: &[u8], operation: &McpOperation) -> Result<Vec<u8>, Exe
         &result.observed_origins,
     );
     if result.timed_out || result.resource_limit_exceeded.is_some() || result.output_truncated {
+        McpDiagnosticCapture::current().fail(
+            if result.timed_out {
+                McpDiagnosticCode::Timeout
+            } else if result.output_truncated {
+                McpDiagnosticCode::ResponseTooLarge
+            } else {
+                McpDiagnosticCode::Process
+            },
+            None,
+        );
         return Err(operation_error(
             operation,
             "MCP process timed out, exceeded a resource limit, or truncated protocol output",
@@ -1018,6 +1057,7 @@ fn process_stdout(bytes: &[u8], operation: &McpOperation) -> Result<Vec<u8>, Exe
     if !result.success || result.exit_code != Some(0) {
         // A valid complete response is still considered below; absence remains unknown for calls.
         if response_value(&stdout, MCP_REQUEST_ID).is_err() {
+            McpDiagnosticCapture::current().fail(McpDiagnosticCode::Process, None);
             return Err(operation_error(
                 operation,
                 format!("MCP server exited with status {:?}", result.exit_code),
@@ -1077,6 +1117,7 @@ fn call_response_result(bytes: &[u8], id: i64) -> Result<CallToolResult, String>
 }
 
 fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
+    McpDiagnosticCapture::current().stage(McpDiagnosticStage::Initialize);
     let result: InitializeResult =
         serde_json::from_value(response_result(stdout, INITIALIZE_REQUEST_ID)?)
             .map_err(|error| format!("invalid MCP initialize result: {error}"))?;
@@ -1094,8 +1135,10 @@ fn validate_initialize(stdout: &[u8]) -> Result<(), String> {
 
 fn parse_tools(stdout: &[u8], server: &ConfiguredServer) -> Result<McpToolsPage, String> {
     validate_initialize(stdout)?;
+    McpDiagnosticCapture::current().stage(McpDiagnosticStage::ListTools);
     let result: ListToolsResult = serde_json::from_value(response_result(stdout, MCP_REQUEST_ID)?)
         .map_err(|error| format!("invalid MCP tools result: {error}"))?;
+    McpDiagnosticCapture::current().stage(McpDiagnosticStage::ValidateResponse);
     parse_tools_result(result, server)
 }
 
@@ -1252,6 +1295,8 @@ pub(super) async fn execute_remote_operation<C>(
 where
     C: StreamableHttpClient + Send + Sync,
 {
+    let diagnostics = McpDiagnosticCapture::current();
+    diagnostics.stage(McpDiagnosticStage::Initialize);
     let endpoint = server
         .url
         .clone()
@@ -1279,6 +1324,7 @@ where
             info.protocol_version
         )));
     }
+    diagnostics.stage(McpDiagnosticStage::ListTools);
     let result = match operation {
         McpOperation::ListTools { cursor, .. } => service
             .list_tools(Some(
@@ -1493,6 +1539,8 @@ impl EffectExecutor for McpExecutor {
                 .ok_or_else(|| failed("MCP Streamable HTTP server has no endpoint"))?;
             let http =
                 HardenedStreamableHttpClient::new(endpoint, &permit, &self.tls_roots).await?;
+            let diagnostics = McpDiagnosticCapture::current();
+            diagnostics.stage(McpDiagnosticStage::Credentials);
             let (headers, mut secrets) =
                 resolve_http_headers(&server, &permit, self.credentials.as_ref())?;
             let timeout = Duration::from_millis(permit.obligations().timeout_ms);
@@ -1540,8 +1588,10 @@ impl EffectExecutor for McpExecutor {
                 .await
             }
             .map_err(|_| {
+                diagnostics.fail(McpDiagnosticCode::Timeout, None);
                 remote_timeout_error(&input.operation, call_dispatched.load(Ordering::Acquire))
             })??;
+            diagnostics.stage(McpDiagnosticStage::ValidateResponse);
             return match (&input.operation, result) {
                 (McpOperation::ListTools { .. }, RemoteOperationResult::Tools(result)) => {
                     let page = parse_tools_result(result, &server)
@@ -1565,6 +1615,8 @@ impl EffectExecutor for McpExecutor {
                 )),
             };
         }
+        let diagnostics = McpDiagnosticCapture::current();
+        diagnostics.stage(McpDiagnosticStage::Credentials);
         let (mut environment, secrets) =
             resolve_environment(&server.environment, self.credentials.as_ref())?;
         for (name, value) in &server.literal_environment {
@@ -1592,7 +1644,14 @@ impl EffectExecutor for McpExecutor {
         };
         let mut process_request = request.clone();
         process_request.content = serde_json::to_value(process).map_err(failed)?;
-        let process_result = match self.process.execute(&process_request, permit).await {
+        diagnostics.stage(McpDiagnosticStage::Process);
+        let process_result = match self
+            .process
+            .execute(&process_request, permit)
+            .await
+            .inspect_err(|error| {
+                diagnostics.fail(crate::diagnostics::process_failure(error), None);
+            }) {
             Ok(result) => result,
             Err(ExecutionError::OutcomeUnknown(error)) => {
                 return Err(ExecutionError::OutcomeUnknown(error));

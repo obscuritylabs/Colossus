@@ -117,6 +117,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::NetworkGet { .. } => "network_get",
         WorkerOperation::McpServers => "mcp_servers",
         WorkerOperation::McpTools { .. } => "mcp_tools",
+        WorkerOperation::McpDoctor { .. } => "mcp_doctor",
         WorkerOperation::McpCall { .. } => "mcp_call",
         WorkerOperation::McpAuthBegin { .. } => "mcp_auth_begin",
         WorkerOperation::McpAuthComplete { .. } => "mcp_auth_complete",

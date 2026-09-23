@@ -1,4 +1,4 @@
-//! Opt-in credential-free acceptance against a public Streamable HTTP MCP server.
+//! Remote MCP diagnostics and opt-in credential-free public server acceptance.
 #![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
 #[path = "support/process.rs"]
@@ -106,4 +106,109 @@ fn cloudflare_docs_discovery_and_call_require_stateless_opt_in() {
         "{}",
         String::from_utf8_lossy(&audit.stderr)
     );
+}
+
+#[test]
+fn mcp_doctor_preserves_http_failure_and_policy_denial_without_remote_payloads() {
+    use std::{
+        io::{Read as _, Write as _},
+        net::TcpListener,
+        time::Duration,
+    };
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("local server");
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && started.elapsed() < Duration::from_secs(30) =>
+                {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) => panic!("health check did not reach fixture: {error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let mut bytes = [0; 4096];
+            let count = stream.read(&mut bytes).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&bytes[..count]);
+        }
+        let header_end = request
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        assert!(content_length < 64 * 1024);
+        while request.len() < header_end + content_length {
+            let mut bytes = [0; 4096];
+            let count = stream.read(&mut bytes).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&bytes[..count]);
+        }
+        stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer secret-challenge\r\nContent-Length: 11\r\nConnection: close\r\n\r\nsecret-body").unwrap();
+    });
+    let directory = process_support::tempdir().unwrap();
+    let workspace = directory.path().canonicalize().unwrap();
+    let config = workspace.join("config.yaml");
+    let origin = format!("http://{address}");
+    let mut settings = json!({
+        "schemaVersion": 3,
+        "storage": {"path": workspace.join("state.redb"), "keys": {"kind": "none"}},
+        "access": {"profile": "development"},
+        "policy": {"kind": "built_in", "require_post_effect": false},
+        "mcp": {"servers": {"fixture": {
+            "transport": "streamable_http", "url": format!("{origin}/mcp"),
+            "allowedTools": ["*"], "timeoutMs": 10000, "maxOutputBytes": 1048576
+        }}},
+        "sandbox": {
+            "backend": if cfg!(windows) {"windows_job"} else {"native"},
+            "networkDestinations": [origin], "timeoutMs": 10000, "maxOutputBytes": 1048576
+        }
+    });
+    fs::write(&config, settings.to_string()).unwrap();
+    let output = run(&config, &["mcp", "doctor", "fixture"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().unwrap();
+    let check: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(check["report"]["healthy"], false);
+    assert_eq!(check["report"]["stage"], "initialize");
+    assert_eq!(check["report"]["failure"]["httpStatus"], 401);
+    assert_eq!(check["report"]["configuration"]["directHttp"], true);
+    assert_eq!(check["tools"], json!([]));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("secret"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&address.to_string()));
+
+    settings["access"]["actions"] = json!({"deny": ["mcp.tools"]});
+    fs::write(&config, settings.to_string()).unwrap();
+    let output = run(&config, &["mcp", "doctor", "fixture"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let check: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(check["report"]["failure"]["code"], "policy");
+    assert!(check["report"]["failure"]["httpStatus"].is_null());
 }

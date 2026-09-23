@@ -366,6 +366,27 @@ export interface ManagedMcpDiagnostic {
   server: string;
   healthy: boolean;
   tools: ManagedMcpToolDiagnostic[];
+  message?: string;
+  report?: McpHealthReport;
+}
+
+export interface McpHealthReport {
+  healthy: boolean;
+  elapsedMs: number;
+  stage: string;
+  failure: { code: string; httpStatus: number | null } | null;
+  configuration: {
+    runtimeVersion: string;
+    transport: "streamable_http" | "stdio";
+    endpointSha256: string | null;
+    additionalCaCertificates: number;
+    additionalCaSha256: string | null;
+    directHttp: boolean;
+    credentialHeaders: number;
+    oauth: boolean;
+    allowStateless: boolean;
+    configuredTimeoutMs: number | null;
+  } | null;
 }
 
 export interface ManagedMcpOAuthStatus {
