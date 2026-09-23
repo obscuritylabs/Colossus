@@ -27,6 +27,9 @@ use std::{
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 const MCP_SECRET: &str = "risk-auto-mcp-secret-value";
+// Include cold home/plugin bootstrap under parallel suite load, as well as the
+// scenario itself. Individual runtime requests retain their configured deadlines.
+const PROVIDER_FIXTURE_LIFETIME: Duration = Duration::from_secs(60);
 
 fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
@@ -150,7 +153,7 @@ fn tool_server(
         })
     );
     let task = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + PROVIDER_FIXTURE_LIFETIME;
         let mut requests = Vec::new();
         while requests.len() < expected_requests && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
@@ -240,7 +243,7 @@ fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHa
     );
     let task = thread::spawn(move || {
         let expected_requests = if invalid_assessment { 2 } else { 4 };
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + PROVIDER_FIXTURE_LIFETIME;
         let mut requests = Vec::new();
         while requests.len() < expected_requests && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
@@ -333,7 +336,7 @@ fn risk_auto_mcp_server() -> (String, thread::JoinHandle<Vec<String>>) {
         // Keep the fixture alive through CLI startup, MCP discovery, risk review,
         // and the sandboxed call under parallel suite load. Each runtime request
         // retains its own timeout; this bounds only the test server's lifetime.
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + PROVIDER_FIXTURE_LIFETIME;
         let mut requests = Vec::new();
         while requests.len() < 3 && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {

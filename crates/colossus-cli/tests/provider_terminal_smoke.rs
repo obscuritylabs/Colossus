@@ -181,7 +181,8 @@ fn event_count(events: &[Value], event_type: &str) -> usize {
 }
 
 fn wait_for_worker(binary: &Path, config: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Allow cold plugin bootstrap while the other process fixtures start in parallel.
+    let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
         if run(binary, config, &["worker", "--status"])
             .status

@@ -15,7 +15,12 @@ desktop_required=false
 
 for changed_path in "$@"; do
     case "$changed_path" in
-        docs/* | documentation/* | README.md | CHANGELOG.md | SECURITY.md | AGENTS.md | zensical.toml | scripts/docs-site | scripts/generate-doc-redirects)
+        docs/*)
+            # Canonical docs are compiled into the bundled help skill.
+            docs_required=true
+            rust_required=true
+            ;;
+        documentation/* | README.md | CHANGELOG.md | SECURITY.md | AGENTS.md | zensical.toml | scripts/docs-site | scripts/generate-doc-redirects)
             docs_required=true
             ;;
         *)

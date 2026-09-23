@@ -29,8 +29,8 @@ pushed.
 ```mermaid
 flowchart LR
     PR["Pull request update"] --> C["Fail-closed path classifier"]
-    C -->|"documentation only"| D["Documentation build"]
-    C -->|"code, CI, dependency, or unknown"| L["Linux workspace validation"]
+    C -->|"documentation"| D["Documentation build"]
+    C -->|"bundled docs, code, CI, dependency, or unknown"| L["Linux workspace validation"]
     C -->|"API or SDK"| SDK["SDK generation + language packages"]
     C -->|"desktop renderer or bridge"| UI["Desktop renderer validation"]
     SDK --> L
@@ -80,8 +80,10 @@ linting recognizes it.
 
 ## Pull-request validation
 
-The classifier fails closed. Documentation-only paths build the documentation site and
-skip Rust. Code, configuration, build, release, CI, renamed unknown paths, and unknown
+The classifier fails closed. Changes under `docs/` build the documentation site and run
+Rust validation because the full tree is embedded in the bundled help skill. Other
+documentation-only paths, such as the root README and site configuration, skip Rust.
+Code, configuration, build, release, CI, renamed unknown paths, and unknown
 new paths run the complete Linux Rust gate. API and SDK paths additionally select SDK
 generation, compatibility, language tests, and release-package checks inside that job.
 Desktop application, launcher, and Rust SDK paths select renderer checks there and the

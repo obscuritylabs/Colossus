@@ -26,7 +26,7 @@ cp release/smoke-config.yaml "$smoke/config.yaml"
     "$binary" --version | grep '^colossus '
     "$binary" --config config.yaml config show >/dev/null
     "$binary" --config config.yaml plugins list >plugins.json
-    jq -e 'length == 1 and .[0].manifest.name == "colossus" and .[0].origin == "bundled" and .[0].available and ([.[0].skills[].id] | sort) == ["colossus/coding", "colossus/offline-dev", "colossus/plugin-authoring", "colossus/security-review"]' plugins.json >/dev/null
+    jq -e 'length == 1 and .[0].manifest.name == "colossus" and .[0].origin == "bundled" and .[0].available and ([.[0].skills[].id] | sort) == ["colossus/coding", "colossus/help", "colossus/offline-dev", "colossus/plugin-authoring", "colossus/security-review"]' plugins.json >/dev/null
     "$binary" --config config.yaml run connected >result.json
     jq -e '.output == "connected" and .profile == "echo" and .event_count >= 3' result.json >/dev/null
     "$binary" --config config.yaml audit verify >audit.json
@@ -76,7 +76,7 @@ cp release/smoke-config.yaml "$installed_smoke/config.yaml"
     export COLOSSUS_HOME="$installed_smoke/colossus-home"
     "$prefix/bin/colossus" --version | grep '^colossus '
     "$prefix/bin/colossus" --config config.yaml plugins list >plugins.json
-    jq -e '.[0].origin == "bundled" and .[0].available and (.[0].skills | length) == 4' plugins.json >/dev/null
+    jq -e '.[0].origin == "bundled" and .[0].available and (.[0].skills | length) == 5' plugins.json >/dev/null
     "$prefix/bin/colossus" --config config.yaml run installed-offline >result.json
     jq -e '.output == "installed-offline" and .profile == "echo" and .event_count >= 3' result.json >/dev/null
     "$prefix/bin/colossus" --config config.yaml audit verify >audit.json

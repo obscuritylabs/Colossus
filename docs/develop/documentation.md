@@ -83,6 +83,16 @@ Zensical route.
 
 ## Expected result
 
+The Rust build also embeds the complete `docs/` tree in the bundled `colossus/help`
+skill at `references/docs/`. This is a byte-preserving build input mapping, including
+assets, rather than a checked-in copy. Edit only the canonical files here. Cargo tracks
+the documentation directories and files so additions, edits, and removals refresh the
+snapshot. The build packages and compresses the complete OCI artifact once; executable
+startup loads the embedded artifact without repackaging the documentation. The
+bundled-plugin tests check the extracted snapshot against the source and
+ordinary directory packaging. Documentation-tree changes also select Rust validation
+because they change the executable's bundled plugin digest.
+
 The page is discoverable in the intended audience lane, has valid metadata, builds in
 strict mode, has no broken internal links or anchors, and contains no duplicated
 canonical contract.

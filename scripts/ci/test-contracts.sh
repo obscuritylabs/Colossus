@@ -14,11 +14,21 @@ expect_classification() {
     fi
 }
 
-expect_classification 'rust_required=false
+expect_classification 'rust_required=true
 docs_required=true
 dependency_required=false
 sdk_required=false
 desktop_required=false' docs/index.md README.md
+expect_classification 'rust_required=false
+docs_required=true
+dependency_required=false
+sdk_required=false
+desktop_required=false' README.md documentation/legacy-routes.tsv
+expect_classification 'rust_required=true
+docs_required=true
+dependency_required=false
+sdk_required=false
+desktop_required=false' docs/assets/brand/colossus-mark.svg
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
@@ -89,12 +99,12 @@ docs_required=false
 dependency_required=false
 sdk_required=false
 desktop_required=false' unknown/new-boundary.file
-expect_classification 'rust_required=false
+expect_classification 'rust_required=true
 docs_required=true
 dependency_required=false
 sdk_required=false
 desktop_required=false' docs/renamed.md
-expect_classification 'rust_required=false
+expect_classification 'rust_required=true
 docs_required=true
 dependency_required=false
 sdk_required=false

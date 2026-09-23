@@ -75,7 +75,7 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
     );
     let plugins = api.plugins(&authorized, false).await.expect("catalog");
     assert_eq!(plugins.len(), 1);
-    assert_eq!(plugins[0].skills.len(), 4);
+    assert_eq!(plugins[0].skills.len(), 5);
     assert!(plugins[0].actions.is_empty());
     let encoded = serde_json::to_string(&plugins).expect("inventory");
     assert!(!encoded.contains("instructions"));
@@ -132,6 +132,32 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
             .await
             .is_err()
     );
+    let help_id = "colossus/help";
+    let help_path = "references/docs/admin/troubleshooting.md";
+    let help_resources = api
+        .resources(&authorized, help_id, digest)
+        .await
+        .expect("bundled docs inventory");
+    assert!(
+        help_resources
+            .iter()
+            .any(|entry| entry.path == help_path && entry.text)
+    );
+    let help = api
+        .resource(&authorized, help_id, digest, help_path)
+        .await
+        .expect("bundled documentation read");
+    assert_eq!(
+        help.content,
+        include_str!("../../../docs/admin/troubleshooting.md")
+    );
+    assert_eq!(
+        api.resource(&unauthorized, help_id, digest, help_path)
+            .await
+            .expect_err("documentation requires scope")
+            .code,
+        ApiErrorCode::PermissionDenied
+    );
     runtime
         .manage_plugin(colossus_contracts::PluginManagementRequest::Disable {
             name: "colossus".into(),
@@ -161,6 +187,11 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
     assert!(!encoded.contains("instructions"));
     assert!(!encoded.contains(&root.display().to_string()));
     assert!(api.skill(&authorized, id, digest).await.is_err());
+    assert!(
+        api.resource(&authorized, help_id, digest, help_path)
+            .await
+            .is_err()
+    );
     runtime
         .manage_plugin(colossus_contracts::PluginManagementRequest::Enable {
             name: "colossus".into(),

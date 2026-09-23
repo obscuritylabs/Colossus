@@ -93,6 +93,12 @@ fn exercise(worker_host: bool) {
         "whole-plugin unit",
     );
     terminal.command("/plugin remove colossus/coding", "Active plugin skills");
+    terminal.command("/plugin use colossus/help", "Active plugin skills");
+    terminal.command(
+        "/plugin read colossus/help references/docs/admin/troubleshooting.md",
+        "vulnerability reports",
+    );
+    terminal.command("/plugin remove colossus/help", "Active plugin skills");
     terminal.command("/plugins disable colossus", "Active  no");
     terminal.command("/plugins", "disabled");
     terminal.resize(32, 55);
