@@ -8,6 +8,20 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.17] - 2026-09-23
+
+### Fixed
+
+- Preserved MCP tool schemas and host or environment credential-header references
+  through policy preparation so authenticated servers can discover and call tools.
+- Kept argument secrets redacted and rejected secret-bearing schema literals,
+  including values reached through local schema references.
+
+### Changed
+
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles, the
+  embedded core plugin, and the Desktop fixture to `0.10.10-preview.17`.
+
 ## [0.10.10-preview.16] - 2026-09-21
 
 ### Fixed
