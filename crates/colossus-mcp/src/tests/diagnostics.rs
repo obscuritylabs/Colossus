@@ -233,14 +233,19 @@ async fn imported_ca_changes_tls_failure_into_successful_mcp_discovery() {
     let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let roots =
         AdditionalRootCertificates::from_pem_bundle(certificate.cert.pem().as_bytes()).unwrap();
-    let server_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![certificate.cert.der().clone()],
-            rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der())
-                .into(),
-        )
-        .unwrap();
+    // Workspace feature unification can enable both Rustls crypto backends.
+    // Keep this fixture independent of process-global provider initialization.
+    let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![certificate.cert.der().clone()],
+        rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der()).into(),
+    )
+    .unwrap();
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
