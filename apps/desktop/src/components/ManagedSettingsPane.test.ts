@@ -21,6 +21,7 @@ import {
   buildManagedSettingsFixture,
   ExtensionCatalog,
   FieldGrid,
+  inheritedPluginValues,
   managedModel,
   managedModelConsumers,
   managedCredentialConsumers,
@@ -720,12 +721,77 @@ describe("ManagedSettingsPane", () => {
       tab: "sandbox",
       section: null,
     });
+    for (const descriptor of descriptors.filter(({ id }) =>
+      id.startsWith("plugins."),
+    )) {
+      expect(managedFieldDestination(descriptor)).toEqual({
+        tab: "plugins",
+        section: null,
+      });
+    }
     expect(
       advancedSectionContainsField(
         descriptors.filter(({ section }) => section === "Memory"),
         semantic.id,
       ),
     ).toBe(true);
+  });
+
+  it("previews inherited plugins from the accepted revision rather than the saved override or latest global revision", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const workspace = snapshot.spaces[0]!;
+    workspace.configuration.acceptedGlobalRevision = 3;
+    workspace.configuration.fieldOverrides = [
+      { fieldId: "plugins.exclude", value: ["workspace-only"] },
+    ];
+    workspace.effectiveValues = [
+      {
+        fieldId: "plugins.exclude",
+        value: ["workspace-only"],
+        source: "space",
+      },
+    ];
+    const current = snapshot.globalConfiguration.defaults.revisions[0]!.value;
+    current.fieldOverrides = [
+      { fieldId: "plugins.exclude", value: ["new-default"] },
+    ];
+    snapshot.globalConfiguration.defaults.revisions.push({
+      revision: 3,
+      value: {
+        ...current,
+        fieldOverrides: [
+          { fieldId: "plugins.exclude", value: ["accepted-default"] },
+        ],
+      },
+    });
+    const inherited = inheritedPluginValues(snapshot, workspace);
+    expect(inherited.get("plugins.exclude")).toEqual({
+      value: ["accepted-default"],
+      source: "global",
+    });
+    const descriptor = snapshot.fieldDescriptors.find(
+      ({ id }) => id === "plugins.exclude",
+    )!;
+    const markup = renderToStaticMarkup(
+      createElement(FieldGrid, {
+        descriptors: [descriptor],
+        values: {},
+        effective: inherited,
+        scope: "space",
+        onChange: vi.fn(),
+        onInherit: vi.fn(),
+      }),
+    );
+    expect(markup).toContain("accepted-default");
+    expect(markup).not.toContain("workspace-only");
+    expect(markup).not.toContain("new-default");
+    current.fieldOverrides.push({
+      fieldId: "plugins.include",
+      value: ["new-plugin"],
+    });
+    expect(
+      inheritedPluginValues(snapshot, workspace).has("plugins.include"),
+    ).toBe(false);
   });
 
   it("keeps all renderer markup free of secret inputs and values", () => {

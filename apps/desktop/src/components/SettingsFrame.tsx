@@ -26,6 +26,7 @@ const sectionIcons = {
   models: IconCpu,
   credentials: IconKey,
   mcp: IconPlugConnected,
+  plugins: IconPlugConnected,
   access: IconShield,
   sandbox: IconBox,
   search: IconSearch,
