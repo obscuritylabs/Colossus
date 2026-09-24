@@ -114,7 +114,12 @@ the explicit offline self-test when you only need to validate local startup.
 
 ### Manage inherited configuration
 
-Open **Settings** and switch between **Global** and **Workspace**. Global resources are
+Open **Settings** to enter its dedicated view. Choose **Global** or **Workspace** in
+the settings sidebar, then choose a category below. For Workspace settings, select
+the workspace in that same sidebar. The heading, search, and content area stay in
+place when you change scope. **Back to work** returns to your conversation.
+
+Global resources are
 immutable revisioned definitions for providers, models, credentials, MCP servers,
 search, and telemetry. A Workspace pins the exact revisions it uses. Saving a Global edit
 does not change a running Workspace; the Workspace shows an update and must review and apply it.
@@ -171,8 +176,12 @@ platform-isolated behavior: **Minimal** maps to **Offline isolated**, while
 **Development** and legacy `allow_all` map to **Workspace isolated**. Full access is
 intentionally unsafe: registered tools are allowed without built-in approval friction
 and may use ambient host filesystem, process, environment, and HTTP(S) resources. The
-interface keeps a persistent warning visible. Choose **Workspace isolated** or
-**Offline isolated** to restore platform containment; choose **Development** or
+warning banners at the top of the app are off by default. Enable
+**Show security warnings** under **Settings → Global → Desktop → Appearance**
+to display Full access and Developer Preview banners. This device-local preference
+persists across restarts and only
+controls banner visibility. Choose **Workspace isolated** or **Offline isolated**
+to restore platform containment; choose **Development** or
 **Minimal** to narrow tool decisions independently.
 
 Typing `/` at the start of the Work composer opens Desktop's bounded command menu.

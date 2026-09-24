@@ -78,6 +78,7 @@ test.beforeEach(async ({ page }) => {
       pluginFailure?: string;
       pluginPending?: (value: unknown) => void;
       pluginMcpEnabled?: boolean;
+      pluginMcpDiagnostic?: unknown;
       pluginHoldInventory?: boolean;
       pluginReleaseInventory?: (fail?: boolean) => void;
     };
@@ -127,7 +128,13 @@ test.beforeEach(async ({ page }) => {
             authenticated: false,
           };
         if (command === "diagnose_managed_mcp_server")
-          return { server: "colossus/docs", healthy: true, tools: [] };
+          return (
+            state.pluginMcpDiagnostic ?? {
+              server: "colossus/docs",
+              healthy: true,
+              tools: [],
+            }
+          );
         if (command === "read_plugin_preview") {
           const request = args.request as {
             kind: string;
@@ -204,6 +211,85 @@ test.beforeEach(async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /colossus 0\.10/u }),
   ).toBeVisible();
+});
+
+test("failed plugin MCP diagnostics keep TLS evidence readable before expansion", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.evaluate(() => {
+    const state = window as unknown as {
+      pluginMcpEnabled: boolean;
+      pluginMcpDiagnostic: unknown;
+    };
+    state.pluginMcpEnabled = true;
+    state.pluginMcpDiagnostic = {
+      server: "colossus/docs",
+      healthy: false,
+      tools: [],
+      message: "TLS verification failed. Check the imported PEM CA bundle.",
+      report: {
+        healthy: false,
+        elapsedMs: 87,
+        stage: "initialize",
+        failure: { code: "tls", httpStatus: null },
+        configuration: {
+          runtimeVersion: "0.10.10-preview.17",
+          transport: "streamable_http",
+          endpointSha256: "a".repeat(64),
+          additionalCaCertificates: 2,
+          additionalCaSha256: "b".repeat(64),
+          directHttp: true,
+          credentialHeaders: 1,
+          oauth: false,
+          allowStateless: false,
+          configuredTimeoutMs: 30_000,
+        },
+      },
+    };
+  });
+  await page
+    .getByRole("button", { name: "Refresh plugins", exact: true })
+    .click();
+  await page.getByRole("button", { name: /colossus 0\.10/u }).click();
+  const controls = page.getByRole("group", {
+    name: "colossus/docs connection",
+  });
+  await controls.getByRole("button", { name: "Test connection" }).click();
+  await expect(controls.getByRole("alert")).toContainText(
+    "imported PEM CA bundle",
+  );
+  await expect(
+    controls.getByText("2 additional CA certificates loaded"),
+  ).toBeVisible();
+  await expect(
+    controls.getByText("Direct HTTP", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    controls.getByText("Discovered tools", { exact: true }),
+  ).toHaveCount(0);
+  const report = controls.getByLabel(
+    "colossus/docs connection diagnostic report",
+  );
+  await expect(report).toBeHidden();
+  await controls.getByText("Connection diagnostics", { exact: true }).click();
+  await expect(report).toBeVisible();
+  expect(
+    await controls
+      .locator(".mcp-diagnostic-detail")
+      .evaluate((element) => element.scrollWidth - element.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  const accessibility = await new AxeBuilder({ page })
+    .include(".mcp-diagnostic-detail")
+    .analyze();
+  expect(
+    accessibility.violations.filter((item) =>
+      ["critical", "serious"].includes(item.impact ?? ""),
+    ),
+  ).toEqual([]);
+  await page.screenshot({
+    path: "output/playwright/mcp-diagnostics-failed.png",
+  });
 });
 
 test("plugin MCP diagnostics and OAuth require explicit server enablement", async ({

@@ -67,8 +67,10 @@ Fresh Managed Local settings default to **Allow all** access with the explicitly
 isolation: **Minimal** maps to **Offline isolated**, while **Development** and legacy
 `allow_all` map to **Workspace isolated**. Setup and Settings let you change either axis
 independently. Full access can reach host files, environment, executables, and network
-outside the selected workspace, and Desktop keeps a persistent warning visible while
-that Managed Local runtime is active. Offline isolated hides the generic model-visible
+outside the selected workspace. Warning banners at the top of the app are off by
+default. Enable
+**Show security warnings** in **Settings → Global → Desktop → Appearance** to display
+them. This changes only their visibility. Offline isolated hides the generic model-visible
 HTTP and fetch tools, but it is not an air gap: the exact configured provider and
 authentication or refresh destinations remain available.
 
@@ -86,7 +88,10 @@ Provider credentials are collected by Windows Credential UI with UI persistence 
 then stored in Windows Credential Manager. Intermediate credential buffers are zeroized.
 Credentials, prompts, model output, and private paths are not included in diagnostics.
 
-The enhanced Settings pane uses the same Windows storage and credential boundary.
+Settings opens in a dedicated view with its own sidebar. Choose **Global** or
+**Workspace**, select a workspace when needed, and navigate the categories below.
+Use **Back to work** to return to your conversation. This view uses the same Windows
+storage and credential boundary.
 Global provider, model, MCP, search, telemetry, and credential definitions are
 revisioned; each Workspace pins the revisions it has accepted. Repository configuration is
 inspected by the sealed sidecar parser, and imported `env:` credential references must

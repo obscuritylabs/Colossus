@@ -1,3 +1,4 @@
+import { SettingsFrame } from "./SettingsFrame";
 import { McpHealthDetails } from "./McpHealthDetails";
 import {
   IconActivityHeartbeat,
@@ -8,6 +9,7 @@ import {
   IconCloud,
   IconCpu,
   IconDatabase,
+  IconDownload,
   IconEdit,
   IconFileImport,
   IconFolder,
@@ -22,12 +24,12 @@ import {
   IconShield,
   IconTerminal2,
   IconTrash,
-  IconWorld,
   IconX,
 } from "@tabler/icons-react";
 import {
   type InputHTMLAttributes,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -123,6 +125,7 @@ interface ManagedSettingsPaneProps {
   connecting: boolean;
   updateChecking: boolean;
   updateMessage: string;
+  onReturnToWork?: (() => void) | undefined;
   onChooseWorkspace: () => void;
   onConfigureManaged: () => void;
   onRestartManaged: () => void;
@@ -134,6 +137,7 @@ interface ManagedSettingsPaneProps {
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onExportDiagnostics: () => void;
 }
 
 interface DefaultsDraft {
@@ -1505,6 +1509,7 @@ function mcpEntry(
 }
 
 export function ManagedSettingsPane({
+  onReturnToWork,
   desktop,
   connecting,
   updateChecking,
@@ -1520,6 +1525,7 @@ export function ManagedSettingsPane({
   onInstallUpdate,
   onImportCaBundle,
   onRemoveCaBundle,
+  onExportDiagnostics,
 }: ManagedSettingsPaneProps) {
   const initial = useMemo(
     () => buildManagedSettingsFixture(desktop),
@@ -1996,18 +2002,25 @@ export function ManagedSettingsPane({
     await runMcpDiagnostic(async () => {
       const diagnostic: ManagedMcpDiagnostic = isTauriRuntime()
         ? await diagnoseManagedMcpServer(selectedSpace.id, server)
-        : {
-            server,
-            healthy: true,
-            tools: [
-              {
-                server,
-                name: "search",
-                title: "Search",
-                description: "Fixture allowlisted search tool.",
-              },
-            ],
-          };
+        : import.meta.env.DEV
+          ? (await import("../dev/mcp-health-fixture")).buildMcpHealthFixture(
+              server,
+              snapshot?.globalConfiguration.mcpServers
+                .map(currentValue)
+                .find((entry) => entry.name === server)?.transport ?? "stdio",
+            )
+          : {
+              server,
+              healthy: true,
+              tools: [
+                {
+                  server,
+                  name: "search",
+                  title: "Search",
+                  description: "Fixture allowlisted search tool.",
+                },
+              ],
+            };
       setMcpDiagnostics((current) => ({ ...current, [server]: diagnostic }));
       pushToast(
         diagnostic.healthy
@@ -2474,78 +2487,93 @@ export function ManagedSettingsPane({
   );
 
   return (
-    <div className="managed-settings-shell">
-      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
-      <header className="managed-settings-header">
-        <div>
-          <p className="surface-breadcrumb">
-            Settings /{" "}
-            {scope === "global"
-              ? "Global configuration"
-              : (selectedSpace?.name ?? "Workspace")}
-          </p>
-          <h2>
-            {scope === "global"
-              ? "Global configuration"
-              : "Workspace configuration"}
-          </h2>
-          <div
-            className="managed-scope-switch"
-            role="group"
-            aria-label="Configuration scope"
-          >
-            <button
-              type="button"
-              className={scope === "global" ? "is-active" : ""}
-              aria-pressed={scope === "global"}
-              onClick={() => {
-                setFocusedFieldId(null);
-                setScope("global");
-              }}
+    <SettingsFrame
+      scope={scope}
+      onScopeChange={(next) => {
+        setFocusedFieldId(null);
+        setQuery("");
+        setScope(next);
+      }}
+      query={query}
+      onQueryChange={(value) => {
+        setFocusedFieldId(null);
+        setQuery(value);
+      }}
+      tabs={scope === "global" ? GLOBAL_TABS : SPACE_TABS}
+      activeTab={scope === "global" ? globalTab : spaceTab}
+      onTabChange={(tab) => {
+        setQuery("");
+        setFocusedFieldId(null);
+        if (scope === "global") setGlobalTab(tab as GlobalTab);
+        else setSpaceTab(tab as SpaceTab);
+      }}
+      onReturnToWork={onReturnToWork}
+      workspaceContext={
+        <div className="space-settings-context">
+          <label>
+            <span>Workspace</span>
+            <DropdownSelect
+              value={selectedSpace?.id ?? ""}
+              disabled={
+                busy ||
+                snapshot.spaces.filter((candidate) => !candidate.archived)
+                  .length === 0
+              }
+              onChange={(event) => setSelectedSpaceId(event.target.value)}
             >
-              <IconWorld size={16} aria-hidden="true" />
-              Global
-            </button>
-            <button
-              type="button"
-              className={scope === "space" ? "is-active" : ""}
-              aria-pressed={scope === "space"}
-              onClick={() => {
-                setFocusedFieldId(null);
-                setScope("space");
-              }}
-            >
-              <IconFolder size={16} aria-hidden="true" />
-              Workspace
-            </button>
-          </div>
+              {snapshot.spaces
+                .filter((candidate) => !candidate.archived)
+                .map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </DropdownSelect>
+          </label>
+          {selectedSpace ? (
+            <RuntimeStatus space={selectedSpace} />
+          ) : (
+            <small>No workspaces available</small>
+          )}
         </div>
-        <label className="managed-settings-search">
-          <IconSearch size={17} aria-hidden="true" />
-          <span className="sr-only">Search settings</span>
-          <input
-            type="search"
-            value={query}
-            placeholder="Search every setting"
-            onChange={(event) => {
-              setFocusedFieldId(null);
-              setQuery(event.target.value);
-            }}
-          />
-          {query ? (
-            <button
-              type="button"
-              aria-label="Clear settings search"
-              onClick={() => {
-                setFocusedFieldId(null);
-                setQuery("");
-              }}
-            >
-              <IconX size={15} aria-hidden="true" />
-            </button>
+      }
+    >
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      {!query ? (
+        <div className="settings-page-context">
+          <p className="surface-breadcrumb">
+            {scope === "global"
+              ? "Global / Shared resources & defaults"
+              : `Workspace / ${selectedSpace?.name ?? "Select a workspace"}`}
+          </p>
+          {scope === "space" && selectedSpace ? (
+            <div className="settings-context-actions">
+              <button
+                className="button secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void inspectRepositoryImport()}
+              >
+                <IconFileImport size={16} aria-hidden="true" />
+                {selectedSpace.configuration.import
+                  ? "Re-import config"
+                  : "Import config"}
+              </button>
+              {selectedSpace.pendingGlobalRevision ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void applyPendingRevision()}
+                >
+                  <IconRefresh size={16} aria-hidden="true" />
+                  Review and apply r{selectedSpace.pendingGlobalRevision}
+                </button>
+              ) : null}
+            </div>
           ) : null}
-        </label>
-      </header>
+        </div>
+      ) : null}
 
       {failure ? (
         <p className="managed-settings-message is-error" role="alert">
@@ -2583,11 +2611,6 @@ export function ManagedSettingsPane({
         />
       ) : scope === "global" ? (
         <>
-          <SettingsTabs
-            tabs={GLOBAL_TABS}
-            active={globalTab}
-            onChange={(tab) => setGlobalTab(tab as GlobalTab)}
-          />
           <GlobalSettingsBody
             tab={globalTab}
             snapshot={snapshot}
@@ -2641,6 +2664,7 @@ export function ManagedSettingsPane({
             onInstallUpdate={onInstallUpdate}
             onImportCaBundle={onImportCaBundle}
             onRemoveCaBundle={onRemoveCaBundle}
+            onExportDiagnostics={onExportDiagnostics}
           />
           {globalTab === "defaults" ? (
             <SettingsActionBar
@@ -2655,56 +2679,6 @@ export function ManagedSettingsPane({
         </>
       ) : (
         <>
-          <div className="space-settings-context">
-            <label>
-              <span>Workspace</span>
-              <DropdownSelect
-                value={selectedSpace?.id ?? ""}
-                onChange={(event) => setSelectedSpaceId(event.target.value)}
-              >
-                {snapshot.spaces
-                  .filter((candidate) => !candidate.archived)
-                  .map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-              </DropdownSelect>
-            </label>
-            {selectedSpace ? <RuntimeStatus space={selectedSpace} /> : null}
-            {selectedSpace ? (
-              <button
-                className="button secondary"
-                type="button"
-                disabled={busy}
-                onClick={() => void inspectRepositoryImport()}
-              >
-                <IconFileImport size={16} aria-hidden="true" />
-                {selectedSpace.configuration.import
-                  ? "Re-import config"
-                  : "Import config"}
-              </button>
-            ) : null}
-            {selectedSpace?.pendingGlobalRevision ? (
-              <button
-                className="button primary"
-                type="button"
-                disabled={busy}
-                onClick={() => void applyPendingRevision()}
-              >
-                <IconRefresh size={16} aria-hidden="true" />
-                Review and apply r{selectedSpace.pendingGlobalRevision}
-              </button>
-            ) : null}
-          </div>
-          <SettingsTabs
-            tabs={SPACE_TABS}
-            active={spaceTab}
-            onChange={(tab) => {
-              setFocusedFieldId(null);
-              setSpaceTab(tab as SpaceTab);
-            }}
-          />
           {selectedSpace ? (
             <SpaceSettingsBody
               tab={spaceTab}
@@ -2800,33 +2774,7 @@ export function ManagedSettingsPane({
           onDelete={() => void removeMcp()}
         />
       ) : null}
-    </div>
-  );
-}
-
-function SettingsTabs({
-  tabs,
-  active,
-  onChange,
-}: {
-  tabs: ReadonlyArray<{ id: string; label: string }>;
-  active: string;
-  onChange: (tab: string) => void;
-}) {
-  return (
-    <nav className="managed-settings-tabs" aria-label="Settings sections">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          className={active === tab.id ? "is-active" : ""}
-          aria-current={active === tab.id ? "page" : undefined}
-          onClick={() => onChange(tab.id)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </nav>
+    </SettingsFrame>
   );
 }
 
@@ -2876,6 +2824,7 @@ function GlobalSettingsBody({
   onInstallUpdate,
   onImportCaBundle,
   onRemoveCaBundle,
+  onExportDiagnostics,
 }: {
   tab: GlobalTab;
   snapshot: ManagedSettingsSnapshot;
@@ -2922,6 +2871,7 @@ function GlobalSettingsBody({
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onExportDiagnostics: () => void;
 }) {
   const global = snapshot.globalConfiguration;
   if (tab === "mcp") {
@@ -4134,6 +4084,7 @@ function GlobalSettingsBody({
       onInstallUpdate={onInstallUpdate}
       onImportCaBundle={onImportCaBundle}
       onRemoveCaBundle={onRemoveCaBundle}
+      onExportDiagnostics={onExportDiagnostics}
     />
   );
 }
@@ -4358,7 +4309,6 @@ export function SpaceSettingsBody({
             ) : null}
           </div>
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4470,7 +4420,6 @@ export function SpaceSettingsBody({
             })}
           </div>
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4553,7 +4502,6 @@ export function SpaceSettingsBody({
             </>
           ) : null}
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4593,7 +4541,7 @@ export function SpaceSettingsBody({
   }
   if (tab === "access" || tab === "runtime") {
     return (
-      <section className="managed-settings-layout">
+      <section className="managed-settings-layout settings-runtime-layout">
         <div className="managed-settings-body">
           <div className="managed-section-heading">
             <div>
@@ -4601,9 +4549,17 @@ export function SpaceSettingsBody({
               <h3>
                 {tab === "access" ? "Access and authority" : "Runtime defaults"}
               </h3>
+              <p className="managed-heading-copy">
+                Configure default behavior for this workspace.
+              </p>
             </div>
           </div>
+          <p className="settings-inheritance-note">
+            Changes here apply only to {selectedSpace.name}. Unchanged settings
+            keep their inherited value.
+          </p>
           <AuthorityControls
+            explainPermissions={tab === "access"}
             access={draft.accessProfile}
             boundary={draft.executionBoundary}
             terminal={draft.terminalEnabled}
@@ -4633,7 +4589,6 @@ export function SpaceSettingsBody({
             />
           ) : null}
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4845,7 +4800,6 @@ export function SpaceSettingsBody({
             ))}
           </div>
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4860,6 +4814,12 @@ export function SpaceSettingsBody({
         <div>
           <p className="eyebrow">Sparse Workspace overrides</p>
           <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
+          {tab === "sandbox" ? (
+            <p className="managed-heading-copy">
+              Filesystem and network rules apply to isolated execution. Select
+              the execution boundary in Access.
+            </p>
+          ) : null}
         </div>
       </div>
       {tab === "advanced" ? (
@@ -5065,6 +5025,7 @@ function matchesExtensionSection(section: string) {
 }
 
 function AuthorityControls({
+  explainPermissions = false,
   access,
   boundary,
   terminal,
@@ -5072,6 +5033,7 @@ function AuthorityControls({
   onBoundary,
   onTerminal,
 }: {
+  explainPermissions?: boolean;
   access: AccessProfile | null;
   boundary: ExecutionBoundary | null;
   terminal: boolean | null;
@@ -5079,6 +5041,7 @@ function AuthorityControls({
   onBoundary: (value: ExecutionBoundary | null) => void;
   onTerminal: (value: boolean | null) => void;
 }) {
+  const boundaryHelpId = useId();
   return (
     <div className="authority-control-grid">
       <label>
@@ -5106,6 +5069,7 @@ function AuthorityControls({
         <span>Execution boundary</span>
         <DropdownSelect
           aria-label="Execution boundary"
+          aria-describedby={boundaryHelpId}
           value={boundary ?? "inherit"}
           onChange={(event) =>
             onBoundary(
@@ -5120,8 +5084,10 @@ function AuthorityControls({
           <option value="workspace_isolated">Workspace isolated</option>
           <option value="full_access">Full access</option>
         </DropdownSelect>
-        <small>
-          Choose how strongly tool and process execution is isolated.
+        <small id={boundaryHelpId}>
+          {explainPermissions
+            ? "Choose how tools and processes are isolated. Full access disables filesystem and network isolation and requires native confirmation."
+            : "Choose how strongly tool and process execution is isolated."}
         </small>
       </label>
       <label>
@@ -5390,75 +5356,6 @@ function RuntimeStatus({
     <span className={`status-chip ${tone}`} title={space.statusMessage}>
       {space.status.replaceAll("_", " ")}
     </span>
-  );
-}
-
-function AuthoritySummary({
-  selectedSpace,
-  draft,
-}: {
-  selectedSpace: ManagedSpaceConfigurationSnapshot;
-  draft: SpaceDraft;
-}) {
-  const boundary =
-    draft.executionBoundary ??
-    String(
-      selectedSpace.effectiveValues.find(
-        (value) => value.fieldId === "sandbox.executionBoundary",
-      )?.value ?? "workspace_isolated",
-    );
-  return (
-    <aside className="authority-summary" aria-label="Authority summary">
-      <h3>Authority summary</h3>
-      <AuthorityItem
-        icon={<IconCpu size={18} />}
-        label="Process"
-        value={draft.accessProfile?.replace("_", " ") ?? "Inherited"}
-      />
-      <AuthorityItem
-        icon={<IconNetwork size={18} />}
-        label="Network"
-        value={
-          boundary === "offline_isolated" ? "Offline" : "Managed destinations"
-        }
-      />
-      <AuthorityItem
-        icon={<IconTerminal2 size={18} />}
-        label="Environment"
-        value={draft.terminalEnabled ? "Local terminal" : "Managed variables"}
-      />
-      <AuthorityItem
-        icon={<IconFolder size={18} />}
-        label="Filesystem"
-        value={boundary === "full_access" ? "Host access" : "Workspace root"}
-      />
-      {boundary === "full_access" ? (
-        <p className="authority-warning">
-          <IconAlertTriangle size={17} />
-          Full access requires native confirmation.
-        </p>
-      ) : null}
-    </aside>
-  );
-}
-
-function AuthorityItem({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="authority-item">
-      <span>{icon}</span>
-      <div>
-        <strong>{label}</strong>
-        <small>{value}</small>
-      </div>
-    </div>
   );
 }
 
@@ -7880,6 +7777,28 @@ function DesktopSettings(
                   Remove bundle
                 </button>
               ) : null}
+            </div>
+          </div>
+          <div className="managed-list-row desktop-control-row" role="listitem">
+            <span className="resource-icon">
+              <IconDownload size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <strong>Diagnostics</strong>
+              <small>
+                Export sanitized runtime health and recent MCP checks for
+                support.
+              </small>
+            </div>
+            <span className="status-chip tone-neutral">Local support</span>
+            <div className="resource-actions">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={props.onExportDiagnostics}
+              >
+                Export diagnostics
+              </button>
             </div>
           </div>
           <div className="managed-list-row desktop-control-row" role="listitem">

@@ -8,6 +8,7 @@ export type TextSizePreference = (typeof TEXT_SIZE_OPTIONS)[number];
 export interface AppearancePreference {
   colorTheme: ColorThemePreference;
   textSize: TextSizePreference;
+  showSecurityWarnings: boolean;
 }
 
 export interface AppearanceStorage {
@@ -45,6 +46,7 @@ export const APPEARANCE_STORAGE_KEY = "colossus.desktop.appearance.v1";
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   colorTheme: "system",
   textSize: "comfortable",
+  showSecurityWarnings: false,
 };
 
 function includes<const T extends readonly string[]>(
@@ -69,6 +71,7 @@ export function parseAppearancePreference(
       textSize: includes(TEXT_SIZE_OPTIONS, value.textSize)
         ? value.textSize
         : DEFAULT_APPEARANCE.textSize,
+      showSecurityWarnings: value.showSecurityWarnings === true,
     };
   } catch {
     return DEFAULT_APPEARANCE;

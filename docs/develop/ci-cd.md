@@ -232,7 +232,8 @@ ad-hoc signature does not establish publisher identity. The workflow names it
 `Colossus-Desktop-DEVELOPER-PREVIEW-vX.Y.Z-preview.N-aarch64-apple-darwin.zip`, includes
 an adjacent SHA-256 sidecar, sets GitHub prerelease metadata, and labels the draft
 **Colossus vX.Y.Z-preview.N - Developer Preview (Unnotarized)**. The native compile-time
-channel also drives a persistent in-app warning. Production Desktop signing,
+channel also supplies the in-app banner, shown when **Show security warnings** is enabled
+in Desktop appearance settings (off by default). Production Desktop signing,
 notarization, and update authority remain a separate release track from the stable core.
 
 Within `release.yml`, only the draft job receives `contents: write`. After the selected
