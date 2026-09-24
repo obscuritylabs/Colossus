@@ -914,6 +914,7 @@ impl WorkerPromptHandler for FailingSocketPromptHandler {
 struct HostedWorkerFixture {
     _directory: tempfile::TempDir,
     client: WorkerClient,
+    control: colossus_worker_protocol::WorkerControlClient,
     shutdown: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<Result<(), WorkerError>>,
 }
@@ -972,6 +973,17 @@ async fn hosted_worker_fixture_with_home(
     .await
     .expect("bound worker fixture server");
     let client = WorkerClient::from_config(&config).expect("worker fixture client");
+    let authentication = WorkerAuthenticationKey::load(
+        &config
+            .worker_ipc_auth_path()
+            .expect("worker fixture authentication path"),
+    )
+    .expect("worker fixture authentication");
+    let control = colossus_worker_protocol::WorkerControlClient::new(
+        client.endpoint(),
+        zeroize::Zeroizing::new(*authentication.expose()),
+    )
+    .expect("native worker control client");
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server_task = tokio::spawn(server.serve_until(async move {
         let _ = shutdown_rx.await;
@@ -983,6 +995,7 @@ async fn hosted_worker_fixture_with_home(
     HostedWorkerFixture {
         _directory: directory,
         client,
+        control,
         shutdown: shutdown_tx,
         server: server_task,
     }
@@ -990,6 +1003,21 @@ async fn hosted_worker_fixture_with_home(
 
 async fn hosted_worker_fixture() -> HostedWorkerFixture {
     hosted_worker_fixture_with_configure(|_| {}).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_provider_and_model_diagnostics_authenticate_against_the_real_worker() {
+    let fixture = hosted_worker_fixture().await;
+    let provider = fixture.control.provider_doctor("echo").await;
+    let model = fixture.control.model_doctor("echo").await;
+    fixture.stop().await;
+
+    let provider = provider.expect("native provider diagnostic authenticates");
+    let model = model.expect("native model diagnostic authenticates");
+    assert_eq!(provider["ready"], true);
+    assert_eq!(model["ready"], true);
+    assert!(!provider.to_string().contains("provider_response"));
+    assert!(!model.to_string().contains("provider_response"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
