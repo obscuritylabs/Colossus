@@ -40,13 +40,14 @@ The root `mise.toml` is an opt-in bootstrap for Node, Python, Go, actionlint,
 cargo-deny and cargo-audit. It reads Rust from `rust-toolchain.toml`; it does not
 install native system libraries, Docker, SDK-local generators or the fuzz nightly.
 See the [toolchain inventory](toolchain-inventory.md) for declarations and check owners.
-CI and devcontainer provisioning still use their existing pins.
+PR jobs consume this inventory; retained workflow and devcontainer pins are checked
+for drift. The PR setup action pins mise itself and its executable checksum.
 
 With mise already installed, inspect the repository configuration before trusting it:
 
 ```bash
 mise trust mise.toml
-mise install
+mise install --locked
 mise exec -- cargo xtask check workflows
 ```
 
@@ -55,7 +56,9 @@ Plain Cargo and script commands remain supported without mise. A shell-level
 `rustup show active-toolchain` when diagnosing a mismatch. Initial installation needs
 network access. An offline setup must already contain the tools, package caches and
 native dependencies; the offline runtime does not imply offline tool installation.
-The repository does not yet pin the mise executable or supply backend/platform locks.
+Use the mise release declared in `.github/actions/setup-toolchain/action.yml`.
+The checked-in lock covers Linux x64, macOS ARM64 and Windows x64; see the inventory
+for backend verification and the native macOS cargo-audit source build.
 
 `AGENTS.md` is the canonical agent guide and `CLAUDE.md` is a relative symlink to it.
 On Windows, enable symlink support before checkout (for example, Developer Mode and
