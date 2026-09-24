@@ -662,35 +662,59 @@ fn change_classifier_and_gates_fail_closed() {
     assert!(status.success());
 }
 
-#[test]
-fn every_workflow_action_is_immutably_pinned() {
-    let workflows = repository_root().join(".github/workflows");
-    for entry in fs::read_dir(workflows).expect("read workflows") {
-        let path = entry.expect("workflow entry").path();
-        if path.extension().and_then(|value| value.to_str()) != Some("yml") {
+fn assert_action_pins(path: &Path, visited: &mut BTreeSet<std::path::PathBuf>) {
+    let path = path
+        .canonicalize()
+        .expect("resolve workflow or local action");
+    assert!(path.starts_with(repository_root().canonicalize().expect("repository root")));
+    if !visited.insert(path.clone()) {
+        return;
+    }
+    let source = fs::read_to_string(&path).expect("read workflow or action");
+    for line in source.lines() {
+        let Some(action) = line.trim().strip_prefix("uses: ") else {
+            continue;
+        };
+        if let Some(local) = action.strip_prefix("./") {
+            // Local actions are bound to checkout, but their dependencies still
+            // need immutable external references. Follow rather than skip them.
+            assert!(!local.contains(".."), "local action escapes checkout");
+            let directory = repository_root().join(local);
+            let manifest = if directory.join("action.yml").is_file() {
+                directory.join("action.yml")
+            } else {
+                directory.join("action.yaml")
+            };
+            assert_action_pins(&manifest, visited);
             continue;
         }
-        let source = fs::read_to_string(&path).expect("read workflow");
-        for line in source.lines() {
-            let Some(action) = line.trim().strip_prefix("uses: ") else {
-                continue;
-            };
-            let reference = action
-                .split_once('@')
-                .unwrap_or_else(|| panic!("action is missing a reference in {path:?}: {action}"))
-                .1
-                .split_whitespace()
-                .next()
-                .expect("action reference");
-            assert_eq!(reference.len(), 40, "action is not SHA-pinned: {action}");
-            assert!(
-                reference.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                "action is not SHA-pinned: {action}"
-            );
-            assert!(
-                action.contains(" # "),
-                "action pin is missing its audited release comment: {action}"
-            );
+        let reference = action
+            .split_once('@')
+            .unwrap_or_else(|| panic!("action is missing a reference in {path:?}: {action}"))
+            .1
+            .split_whitespace()
+            .next()
+            .expect("action reference");
+        assert_eq!(reference.len(), 40, "action is not SHA-pinned: {action}");
+        assert!(
+            reference.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "action is not SHA-pinned: {action}"
+        );
+        assert!(
+            action.contains(" # "),
+            "action pin is missing its audited release comment: {action}"
+        );
+    }
+}
+
+#[test]
+fn every_workflow_action_is_immutably_pinned() {
+    let mut visited = BTreeSet::new();
+    for entry in fs::read_dir(repository_root().join(".github/workflows")).expect("read workflows")
+    {
+        let path = entry.expect("workflow entry").path();
+        if path.extension().and_then(|value| value.to_str()) == Some("yml") {
+            assert_action_pins(&path, &mut visited);
         }
     }
 }

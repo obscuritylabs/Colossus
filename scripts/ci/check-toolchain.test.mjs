@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -11,6 +12,11 @@ const files = ['mise.toml', 'mise.lock', 'rust-toolchain.toml', 'Dockerfile', '.
 
 test('repository provisioning agrees with the inventory', () => {
   assert.deepEqual(checkToolchain(root), []);
+});
+
+test('CLI resolves the repository independently of the caller directory', () => {
+  const result = spawnSync(process.execPath, [resolve(root, 'scripts/ci/check-toolchain.mjs')], { cwd: tmpdir(), encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 for (const [name, file, before, after, diagnostic] of [
