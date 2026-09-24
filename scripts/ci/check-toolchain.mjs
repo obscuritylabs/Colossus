@@ -134,7 +134,7 @@ export function checkToolchain(root) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const errors = checkToolchain(process.argv[2] ?? process.cwd());
+    const errors = checkToolchain(process.argv[2] ?? fileURLToPath(new URL('../..', import.meta.url)));
     if (errors.length) throw new Error(errors.join('\n'));
     console.log('Toolchain inventory, retained consumers and platform locks agree.');
   } catch (error) {
