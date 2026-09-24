@@ -45,6 +45,14 @@ Public API clients can request unavailable metadata with `include_disabled`; ins
 and resource reads still require the plugin to be available in the workspace. An empty
 kind filter or `EXTENSION_KIND_UNSPECIFIED` includes Agent Plugins.
 
+Open **Settings → Global → Plugins** for shared plugin defaults, inclusion and
+exclusion lists, trust profiles, OCI registries, and plugin MCP server overlays.
+**Settings → Workspace → Plugins** shows the same controls for the selected workspace,
+with each value's source and an **Inherit** action to remove an override. Save global
+changes, then review and apply the new revision in existing workspaces; workspace edits
+use **Apply Workspace changes**. These settings configure the runtime; installing,
+updating, and activating packages remains in **Plugins** in the main navigation.
+
 Use **Use in this conversation** for a sticky selection, or start one message with
 `@colossus/plugin-authoring` for a message-only selection. Sticky and message selections
 are combined without duplicates. Unknown mentions remain ordinary text. New conversations

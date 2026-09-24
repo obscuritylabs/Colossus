@@ -104,6 +104,7 @@ type GlobalTab =
   | "models"
   | "credentials"
   | "mcp"
+  | "plugins"
   | "search"
   | "telemetry"
   | "defaults"
@@ -112,6 +113,7 @@ type SpaceTab =
   | "runtime"
   | "providers"
   | "mcp"
+  | "plugins"
   | "access"
   | "sandbox"
   | "search"
@@ -237,6 +239,7 @@ const GLOBAL_TABS: ReadonlyArray<{ id: GlobalTab; label: string }> = [
   { id: "models", label: "Models" },
   { id: "credentials", label: "Credentials" },
   { id: "mcp", label: "MCP" },
+  { id: "plugins", label: "Plugins" },
   { id: "search", label: "Search" },
   { id: "telemetry", label: "Telemetry" },
   { id: "defaults", label: "Defaults" },
@@ -247,6 +250,7 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "runtime", label: "Runtime" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
+  { id: "plugins", label: "Plugins" },
   { id: "access", label: "Access" },
   { id: "sandbox", label: "Sandbox" },
   { id: "search", label: "Search" },
@@ -257,9 +261,12 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
 ];
 
 export function managedFieldDestination(descriptor: ManagedFieldDescriptor): {
-  tab: "sandbox" | "research" | "advanced" | "runtime";
+  tab: "sandbox" | "research" | "advanced" | "runtime" | "plugins";
   section: string | null;
 } {
+  if (descriptor.id.startsWith("plugins.")) {
+    return { tab: "plugins", section: null };
+  }
   if (descriptor.id.startsWith("sandbox.")) {
     return { tab: "sandbox", section: null };
   }
@@ -1123,6 +1130,20 @@ function defaultOverrides(
   );
 }
 
+export function inheritedPluginValues(
+  snapshot: ManagedSettingsSnapshot,
+  space: ManagedSpaceConfigurationSnapshot,
+) {
+  const accepted = snapshot.globalConfiguration.defaults.revisions.find(
+    ({ revision }) => revision === space.configuration.acceptedGlobalRevision,
+  );
+  return new Map(
+    (accepted?.value.fieldOverrides ?? [])
+      .filter(({ fieldId }) => fieldId.startsWith("plugins."))
+      .map(({ fieldId, value }) => [fieldId, { value, source: "global" }]),
+  );
+}
+
 function overrideMap(overrides: readonly ManagedFieldOverride[]) {
   return Object.fromEntries(
     overrides.map((override) => [override.fieldId, override.value]),
@@ -1648,7 +1669,7 @@ export function ManagedSettingsPane({
   }, [selectedSpace]);
 
   useEffect(() => {
-    if (spaceTab !== "advanced" || !selectedSpace) return;
+    if (!["advanced", "plugins"].includes(spaceTab) || !selectedSpace) return;
     if (selectedSpace.status !== "active") {
       setExtensionInventory(null);
       setExtensionInventorySpaceId("");
@@ -1659,7 +1680,7 @@ export function ManagedSettingsPane({
   }, [spaceTab, selectedSpace?.id, selectedSpace?.status]);
 
   useEffect(() => {
-    if (!focusedFieldId || query || scope !== "space") return;
+    if (!focusedFieldId || query) return;
     const frame = window.requestAnimationFrame(() => {
       const target = document.getElementById(
         managedFieldElementId(focusedFieldId),
@@ -1668,7 +1689,7 @@ export function ManagedSettingsPane({
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [focusedFieldId, query, scope, spaceTab]);
+  }, [focusedFieldId, query, scope, spaceTab, globalTab]);
 
   const defaultsDirty =
     JSON.stringify(defaults) !== JSON.stringify(defaultsDraft(snapshot));
@@ -2586,13 +2607,17 @@ export function ManagedSettingsPane({
           onOpen={(result) => {
             setQuery("");
             if (result.scope === "field") {
-              setScope("space");
               const descriptor = descriptors.find(
                 (candidate) => candidate.id === result.id,
               );
               if (!descriptor) return;
               const destination = managedFieldDestination(descriptor);
               setFocusedFieldId(result.id);
+              if (destination.tab === "plugins" && scope === "global") {
+                setGlobalTab("plugins");
+                return;
+              }
+              setScope("space");
               if (destination.section) {
                 const section = destination.section;
                 setExpandedAdvancedSections((current) => {
@@ -2617,6 +2642,7 @@ export function ManagedSettingsPane({
             defaults={defaults}
             setDefaults={setDefaults}
             descriptors={descriptors}
+            focusedFieldId={focusedFieldId}
             busy={busy}
             mcpEditor={mcpEditor}
             setMcpEditor={setMcpEditor}
@@ -2666,7 +2692,7 @@ export function ManagedSettingsPane({
             onRemoveCaBundle={onRemoveCaBundle}
             onExportDiagnostics={onExportDiagnostics}
           />
-          {globalTab === "defaults" ? (
+          {globalTab === "defaults" || globalTab === "plugins" ? (
             <SettingsActionBar
               dirty={defaultsDirty}
               busy={busy}
@@ -2784,6 +2810,7 @@ function GlobalSettingsBody({
   defaults,
   setDefaults,
   descriptors,
+  focusedFieldId,
   busy,
   mcpEditor,
   setMcpEditor,
@@ -2831,6 +2858,7 @@ function GlobalSettingsBody({
   defaults: DefaultsDraft;
   setDefaults: (draft: DefaultsDraft) => void;
   descriptors: ManagedFieldDescriptor[];
+  focusedFieldId: string | null;
   busy: boolean;
   mcpEditor: McpEditorDraft | null;
   setMcpEditor: (draft: McpEditorDraft | null) => void;
@@ -2874,6 +2902,28 @@ function GlobalSettingsBody({
   onExportDiagnostics: () => void;
 }) {
   const global = snapshot.globalConfiguration;
+  if (tab === "plugins") {
+    return (
+      <PluginSettingsBody
+        descriptors={descriptors}
+        values={defaults.fields}
+        effective={new Map()}
+        scope="global"
+        focusedFieldId={focusedFieldId}
+        onChange={(id, value) =>
+          setDefaults({
+            ...defaults,
+            fields: { ...defaults.fields, [id]: value },
+          })
+        }
+        onInherit={(id) => {
+          const fields = { ...defaults.fields };
+          delete fields[id];
+          setDefaults({ ...defaults, fields });
+        }}
+      />
+    );
+  }
   if (tab === "mcp") {
     return (
       <section className="managed-settings-body" aria-labelledby="mcp-heading">
@@ -3225,6 +3275,9 @@ function GlobalSettingsBody({
     );
   }
   if (tab === "defaults") {
+    const defaultDescriptors = descriptors.filter(
+      (descriptor) => !descriptor.id.startsWith("plugins."),
+    );
     return (
       <section className="managed-settings-body">
         <div className="managed-section-heading">
@@ -3251,7 +3304,9 @@ function GlobalSettingsBody({
           }
         />
         <FieldGrid
-          descriptors={descriptors.filter((descriptor) => !descriptor.advanced)}
+          descriptors={defaultDescriptors.filter(
+            (descriptor) => !descriptor.advanced,
+          )}
           values={defaults.fields}
           effective={new Map()}
           scope="global"
@@ -3271,12 +3326,15 @@ function GlobalSettingsBody({
           <summary>
             <span>Advanced defaults</span>
             <small>
-              {descriptors.filter((descriptor) => descriptor.advanced).length}{" "}
+              {
+                defaultDescriptors.filter((descriptor) => descriptor.advanced)
+                  .length
+              }{" "}
               settings
             </small>
           </summary>
           <FieldGrid
-            descriptors={descriptors.filter(
+            descriptors={defaultDescriptors.filter(
               (descriptor) => descriptor.advanced,
             )}
             values={defaults.fields}
@@ -4148,6 +4206,30 @@ export function SpaceSettingsBody({
   extensionInventoryBusy: boolean;
   onRefreshExtensionInventory: () => void;
 }) {
+  if (tab === "plugins") {
+    return (
+      <PluginSettingsBody
+        descriptors={descriptors}
+        values={draft.fields}
+        effective={inheritedPluginValues(snapshot, selectedSpace)}
+        scope="space"
+        workspaceName={selectedSpace.name}
+        focusedFieldId={focusedFieldId}
+        onChange={(id, value) =>
+          setDraft({ ...draft, fields: { ...draft.fields, [id]: value } })
+        }
+        onInherit={(id) => removeDraftField(draft, setDraft, id)}
+      >
+        <ExtensionCatalog
+          section="Plugins"
+          inventory={extensionInventory}
+          busy={extensionInventoryBusy}
+          runtimeActive={selectedSpace.status === "active"}
+          onRefresh={onRefreshExtensionInventory}
+        />
+      </PluginSettingsBody>
+    );
+  }
   if (tab === "mcp") {
     return (
       <section className="managed-settings-layout">
@@ -4576,6 +4658,7 @@ export function SpaceSettingsBody({
               descriptors={descriptors.filter(
                 (descriptor) =>
                   !descriptor.advanced &&
+                  !descriptor.id.startsWith("plugins.") &&
                   !descriptor.id.startsWith("research."),
               )}
               values={draft.fields}
@@ -4804,6 +4887,7 @@ export function SpaceSettingsBody({
     );
   }
   const filtered = descriptors.filter((descriptor) => {
+    if (descriptor.id.startsWith("plugins.")) return false;
     if (tab === "sandbox") return descriptor.id.startsWith("sandbox.");
     if (tab === "research") return descriptor.id.startsWith("research.");
     return descriptor.advanced;
@@ -4823,12 +4907,7 @@ export function SpaceSettingsBody({
         </div>
       </div>
       {tab === "advanced" ? (
-        [
-          ...new Set([
-            ...filtered.map((descriptor) => descriptor.section),
-            "Plugins",
-          ]),
-        ]
+        [...new Set(filtered.map((descriptor) => descriptor.section))]
           .sort()
           .map((section) => {
             const sectionDescriptors = filtered.filter(
@@ -4851,11 +4930,7 @@ export function SpaceSettingsBody({
               >
                 <summary>
                   <span>{section}</span>
-                  <small>
-                    {section === "Plugins"
-                      ? "Live catalog"
-                      : `${sectionDescriptors.length} settings`}
-                  </small>
+                  <small>{sectionDescriptors.length} settings</small>
                 </summary>
                 {sectionDescriptors.length > 0 ? (
                   <FieldGrid
@@ -4902,6 +4977,50 @@ export function SpaceSettingsBody({
           title={`No ${tab} overrides`}
         />
       ) : null}
+    </section>
+  );
+}
+
+function PluginSettingsBody({
+  scope,
+  workspaceName,
+  children,
+  ...fields
+}: React.ComponentProps<typeof FieldGrid> & {
+  workspaceName?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section className="managed-settings-body plugin-settings">
+      <div className="managed-section-heading">
+        <div>
+          <p className="eyebrow">
+            {scope === "global"
+              ? "Shared plugin defaults"
+              : "Workspace overrides"}
+          </p>
+          <h3>Plugins</h3>
+          <p className="managed-heading-copy">
+            Choose available plugins and configure registries, verification, and
+            plugin-provided MCP servers.
+          </p>
+        </div>
+      </div>
+      <p className="settings-inheritance-note">
+        {scope === "global"
+          ? "Set defaults for workspaces. Existing workspaces review and apply global changes."
+          : `Changes apply to ${workspaceName}. Use Inherit to restore the value from its accepted global configuration.`}{" "}
+        Install, update, and activate packages from Plugins in the main
+        navigation.
+      </p>
+      <FieldGrid
+        {...fields}
+        scope={scope}
+        descriptors={fields.descriptors.filter((descriptor) =>
+          descriptor.id.startsWith("plugins."),
+        )}
+      />
+      {children}
     </section>
   );
 }
