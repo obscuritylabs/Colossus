@@ -42,7 +42,7 @@ jobs:
       - name: Install workflow tools
         uses: ./.github/actions/setup-toolchain
         with:
-          tools: node aqua:rhysd/actionlint
+          tools: node aqua:rhysd/actionlint python
 
       - name: Test proposed CI classification and gate contracts
         run: ./scripts/ci/test-contracts.sh
