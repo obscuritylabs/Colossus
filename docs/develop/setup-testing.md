@@ -17,6 +17,9 @@ test loop.
 - Rust `1.96` with edition `2024` support.
 - Git and the native build dependencies required by your platform.
 - A source checkout at the repository root.
+- Permission for test processes to bind local loopback sockets. Integration tests
+  start temporary servers; sandbox restrictions otherwise fail with
+  `Operation not permitted`.
 
 The tracked development container is the supported ready-to-build Linux environment.
 It uses digest-pinned official Debian Bookworm base images and a locked Rust feature,
