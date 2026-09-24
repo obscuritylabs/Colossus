@@ -294,6 +294,75 @@ test("settings dropdowns use styled app-owned menus with keyboard support", asyn
   await expect(page.getByRole("listbox")).toHaveCount(0);
 });
 
+test("security warning banners are opt-in and persist across reloads", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  const banner = page.getByRole("alert", {
+    name: "Unsafe Managed Local execution boundary",
+  });
+  const shell = page.locator(".app-shell");
+  const openAppearance = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Global", exact: true }).click();
+    await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  };
+  const toggle = page.getByRole("switch", { name: "Show security warnings" });
+
+  await expect(banner).toHaveCount(0);
+  await expect(shell).toHaveCSS("padding-top", "0px");
+  await openAppearance();
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(banner).toBeVisible();
+  await expect(shell).toHaveClass(/app-shell--unsafe-execution/u);
+
+  await page.reload();
+  await expect(banner).toBeVisible();
+  await openAppearance();
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await expect(banner).toHaveCount(0);
+  await expect(shell).toHaveCSS("padding-top", "0px");
+
+  await page.reload();
+  await expect(banner).toHaveCount(0);
+  await openAppearance();
+  await expect(toggle).not.toBeChecked();
+});
+
+test("Desktop settings exposes diagnostics export through the native command", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Desktop", exact: true }).click();
+  await page.evaluate(() => {
+    const state = window as unknown as {
+      diagnosticCommands: string[];
+      __TAURI_INTERNALS__: { invoke: (command: string) => Promise<boolean> };
+    };
+    state.diagnosticCommands = [];
+    state.__TAURI_INTERNALS__ = {
+      invoke: async (command) => {
+        state.diagnosticCommands.push(command);
+        return true;
+      },
+    };
+  });
+  await page.getByRole("button", { name: "Export diagnostics" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { diagnosticCommands: string[] })
+            .diagnosticCommands,
+      ),
+    )
+    .toEqual(["export_diagnostics"]);
+});
+
 test("appearance preferences are readable, consistent, and persistent", async ({
   page,
 }) => {
@@ -457,16 +526,6 @@ test("appearance preferences are readable, consistent, and persistent", async ({
     expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
   }
 
-  const compactNavigationBounds = await page
-    .getByRole("button", { name: "Open Workspace navigation", exact: true })
-    .evaluate((element) => element.getBoundingClientRect().toJSON());
-  const compactHeadingBounds = await page
-    .getByRole("heading", { name: "Desktop settings", exact: true })
-    .evaluate((element) => element.getBoundingClientRect().toJSON());
-  expect(compactNavigationBounds.right).toBeLessThanOrEqual(
-    compactHeadingBounds.left,
-  );
-
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator("html")).toHaveAttribute("data-text-size", "large");
@@ -502,7 +561,10 @@ test("light theme keeps session inspection surfaces readable", async ({
     .getByRole("option", { name: "Light", exact: true })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Settings navigation" })
+    .getByRole("button", { name: "Back to work", exact: true })
+    .click();
 
   await page.getByRole("button", { name: "Topology", exact: true }).click();
   await expect(page.locator(".session-map-stage")).toHaveCSS(
@@ -569,7 +631,10 @@ test("light theme keeps workspace shell surfaces readable", async ({
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Settings navigation" })
+    .getByRole("button", { name: "Back to work", exact: true })
+    .click();
   await expect(
     page
       .getByRole("navigation", { name: "Workspace destinations" })
@@ -612,21 +677,16 @@ test("light theme keeps workspace shell surfaces readable", async ({
     ),
   ).toEqual([]);
 
+  const sidebarColor = await page
+    .locator(".work-sidebar")
+    .evaluate((sidebar) => getComputedStyle(sidebar).backgroundColor);
   await page
     .locator(".space-destinations")
     .getByRole("button", { name: "Settings", exact: true })
     .click();
-  await expect(page.locator(".space-settings-context")).toHaveCSS(
+  await expect(page.locator(".settings-sidebar")).toHaveCSS(
     "background-color",
-    "rgb(237, 243, 249)",
-  );
-  await expect(page.locator(".authority-summary")).toHaveCSS(
-    "background-color",
-    "rgb(240, 244, 248)",
-  );
-  await expect(page.locator(".authority-item").first()).toHaveCSS(
-    "background-color",
-    "rgb(255, 255, 255)",
+    sidebarColor,
   );
   await expect(page.locator(".managed-settings-actions")).toHaveCSS(
     "background-color",
@@ -657,7 +717,10 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
     .getByRole("listbox")
     .getByRole("option", { name: "Light", exact: true })
     .click();
-  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Settings navigation" })
+    .getByRole("button", { name: "Back to work", exact: true })
+    .click();
 
   await page
     .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
@@ -746,7 +809,10 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
     .getByRole("listbox")
     .getByRole("option", { name: "Dark", exact: true })
     .click();
-  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Settings navigation" })
+    .getByRole("button", { name: "Back to work", exact: true })
+    .click();
   await page
     .getByRole("button", { name: /Open artifacts panel, 3 artifacts/u })
     .click();
@@ -1290,7 +1356,7 @@ test("every settings tab fills the viewport and keeps actions anchored", async (
 }) => {
   await page.setViewportSize({ width: 1280, height: 1100 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const scrollPane = page.locator(".settings-scroll");
+  const scrollPane = page.locator(".settings-main");
   const sectionTabs = page.getByRole("navigation", {
     name: "Settings sections",
   });
@@ -1380,7 +1446,9 @@ test("every settings tab fills the viewport and keeps actions anchored", async (
     ).toBeLessThanOrEqual(1);
   }
 
-  await sectionTabs.getByRole("button", { name: "MCP", exact: true }).click();
+  await sectionTabs
+    .getByRole("button", { name: "Sandbox", exact: true })
+    .click();
   const scrollMetrics = await scrollPane.evaluate((element) => {
     element.scrollTop = Math.floor(element.scrollHeight / 2);
     return {

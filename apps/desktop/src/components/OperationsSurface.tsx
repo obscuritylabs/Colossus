@@ -45,6 +45,7 @@ interface OperationsSurfaceProps {
   demoParticipants: readonly AgentParticipant[] | null;
   workNavigationOpen: boolean;
   onOpenWorkNavigation: () => void;
+  onReturnToWork?: (() => void) | undefined;
   onConnect: () => void;
   onOpenRun: (run: Run) => void;
   onSelectTarget: (targetId: string) => void;
@@ -514,6 +515,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
 }
 
 function SettingsView({
+  onReturnToWork,
   connection,
   desktop,
   connecting,
@@ -535,6 +537,7 @@ function SettingsView({
   onRemoveCaBundle,
 }: Pick<
   OperationsSurfaceProps,
+  | "onReturnToWork"
   | "connection"
   | "desktop"
   | "connecting"
@@ -581,6 +584,7 @@ function SettingsView({
     <>
       <div className="overview-scroll settings-scroll" tabIndex={0}>
         <ManagedSettingsPane
+          onReturnToWork={onReturnToWork}
           desktop={desktop}
           connecting={connecting}
           updateChecking={updateChecking}
@@ -596,6 +600,7 @@ function SettingsView({
           onInstallUpdate={onInstallUpdate}
           onImportCaBundle={onImportCaBundle}
           onRemoveCaBundle={onRemoveCaBundle}
+          onExportDiagnostics={onExportDiagnostics}
         />
         <section className="settings-card">
           <div className="settings-card-icon">
@@ -980,18 +985,20 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
 
   return (
     <main className="operations-surface" id="primary-workspace" tabIndex={-1}>
-      <button
-        ref={navigationTriggerRef}
-        className="button secondary compact work-navigation-button operations-navigation-button"
-        type="button"
-        aria-label="Open Workspace navigation"
-        aria-controls="work-navigation"
-        aria-expanded={props.workNavigationOpen}
-        onClick={props.onOpenWorkNavigation}
-      >
-        <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
-        <span className="compact-action-copy">Workspaces</span>
-      </button>
+      {props.surface !== "settings" ? (
+        <button
+          ref={navigationTriggerRef}
+          className="button secondary compact work-navigation-button operations-navigation-button"
+          type="button"
+          aria-label="Open Workspace navigation"
+          aria-controls="work-navigation"
+          aria-expanded={props.workNavigationOpen}
+          onClick={props.onOpenWorkNavigation}
+        >
+          <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
+          <span className="compact-action-copy">Workspaces</span>
+        </button>
+      ) : null}
       {props.surface === "fleet" ? <FleetView {...props} /> : null}
       {props.surface === "plugins" ? (
         <PluginsSurface
@@ -1012,6 +1019,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "connections" ? <ConnectionsView {...props} /> : null}
       {props.surface === "settings" ? (
         <SettingsView
+          onReturnToWork={props.onReturnToWork}
           connection={props.connection}
           desktop={props.desktop}
           connecting={props.connecting}

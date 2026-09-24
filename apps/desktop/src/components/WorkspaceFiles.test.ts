@@ -20,6 +20,7 @@ function renderFiles(available: boolean): string {
         initialPreference: {
           colorTheme: "light",
           textSize: "comfortable",
+          showSecurityWarnings: false,
         },
       },
       createElement(WorkspaceFiles, {

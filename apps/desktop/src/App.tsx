@@ -67,7 +67,6 @@ import type {
 import {
   ExecutionBoundaryBanner,
   executionBoundaryBannerVisible,
-  managedRuntimeBoundaryActive,
 } from "./components/ExecutionBoundaryBanner";
 import { OperationsSurface } from "./components/OperationsSurface";
 import { pluginSelectionKey } from "./plugins";
@@ -89,6 +88,7 @@ import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
 import { managedOnboardingRequired } from "./onboarding";
+import { useAppearance } from "./theme/AppearanceProvider";
 import {
   parseDesktopSlashCommand,
   type DesktopSlashAction,
@@ -829,6 +829,7 @@ type RunSubmissionResult =
   | { type: "stale" };
 
 export default function App() {
+  const { showSecurityWarnings } = useAppearance();
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE
@@ -4763,16 +4764,19 @@ export default function App() {
   );
   const onboardingRequired = managedOnboardingRequired(desktop);
   const onboardingActive = showOnboarding || onboardingRequired;
-  const developerPreview = releaseChannel === "developer_preview";
-  const unsafeExecutionBannerVisible = executionBoundaryBannerVisible(
-    desktop.managedState,
-    desktop.executionBoundary,
-  );
+  const developerPreview =
+    showSecurityWarnings && releaseChannel === "developer_preview";
+  const unsafeExecutionBannerVisible =
+    showSecurityWarnings &&
+    executionBoundaryBannerVisible(
+      desktop.managedState,
+      desktop.executionBoundary,
+    );
 
   return (
     <div
       ref={appShellRef}
-      className={`app-shell${developerPreview ? " app-shell--developer-preview" : ""}${unsafeExecutionBannerVisible ? " app-shell--unsafe-execution" : ""}`}
+      className={`app-shell${surface === "settings" && !onboardingActive ? " app-shell--settings" : ""}${developerPreview ? " app-shell--developer-preview" : ""}${unsafeExecutionBannerVisible ? " app-shell--unsafe-execution" : ""}`}
       style={
         workSidebarWidthRef.current === null
           ? undefined
@@ -4784,12 +4788,14 @@ export default function App() {
       <a className="skip-link" href="#primary-workspace">
         Skip to workspace
       </a>
-      <ReleaseChannelBanner
-        releaseChannel={releaseChannel}
-        releaseMetadata={releaseMetadata}
-      />
+      {showSecurityWarnings && (
+        <ReleaseChannelBanner
+          releaseChannel={releaseChannel}
+          releaseMetadata={releaseMetadata}
+        />
+      )}
       <ExecutionBoundaryBanner
-        active={managedRuntimeBoundaryActive(desktop.managedState)}
+        active={unsafeExecutionBannerVisible}
         boundary={desktop.executionBoundary}
       />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
@@ -4804,7 +4810,7 @@ export default function App() {
         />
       ) : null}
 
-      {onboardingActive ? null : (
+      {onboardingActive || surface === "settings" ? null : (
         <WorkSidebar
           runs={chat.recentRuns}
           spaces={desktop.spaces}
@@ -5036,6 +5042,7 @@ export default function App() {
         />
       ) : (
         <OperationsSurface
+          onReturnToWork={() => selectSurface("work")}
           pluginSelections={pluginSelections}
           onUsePluginSkill={(id) => {
             setConversationSkills((current) => ({

@@ -201,8 +201,9 @@ COLOSSUS_DESKTOP_SIGNING_IDENTITY=- \
 
 The Developer Preview retains strict signature, fixed identifier, sealed-manifest, and
 nested-binary hash verification, but ad-hoc signing does not establish Apple publisher
-identity and the app is not notarized. The native release channel keeps a persistent
-warning visible in the application. The separate `validation_only` channel also requires
+identity and the app is not notarized. The native release channel supplies the Developer
+Preview banner, shown when **Show security warnings** is enabled in Desktop appearance
+settings (off by default). The separate `validation_only` channel also requires
 the `ADHOC` sentinel and identity `-`, but its runtime intentionally rejects Managed Local
 startup. Stable packaging rejects both ad-hoc channels, and stable release publication
 for the production Desktop track still requires Developer ID plus notarization.

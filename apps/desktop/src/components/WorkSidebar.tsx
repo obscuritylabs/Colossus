@@ -1397,6 +1397,7 @@ export function WorkSidebar({
         {visibleDestinations.map(({ id, label, Icon }) => (
           <button
             type="button"
+            className="sidebar-nav-item"
             key={id}
             aria-label={label}
             aria-current={surface === id ? "page" : undefined}

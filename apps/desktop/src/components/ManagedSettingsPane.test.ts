@@ -174,6 +174,7 @@ function renderPane(): string {
       onInstallUpdate: vi.fn(),
       onImportCaBundle: vi.fn(),
       onRemoveCaBundle: vi.fn(),
+      onExportDiagnostics: vi.fn(),
     }),
   );
 }
@@ -577,6 +578,10 @@ describe("ManagedSettingsPane", () => {
     const markup = renderPane();
 
     expect(markup).toContain('aria-label="Configuration scope"');
+    expect(markup).toContain("<h2>Settings</h2>");
+    expect(markup).toContain('aria-label="Settings navigation"');
+    expect(markup).toContain("Shared resources &amp; defaults");
+    expect(markup).toContain("Settings for one workspace");
     expect(markup).toContain("Global");
     expect(markup).toContain("Workspace");
     expect(markup).not.toContain(">space<");
@@ -584,7 +589,6 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain('role="combobox"');
     expect(markup).not.toContain("<select");
     expect(markup).toContain("built in");
-    expect(markup).toContain("Authority summary");
     expect(markup).toContain("No local changes");
     expect(markup).toContain('disabled=""');
   });

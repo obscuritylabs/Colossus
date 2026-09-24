@@ -28,6 +28,7 @@ interface AppearanceContextValue extends AppearancePreference {
   resolvedColorTheme: ResolvedColorTheme;
   setColorTheme: (theme: ColorThemePreference) => void;
   setTextSize: (size: TextSizePreference) => void;
+  setShowSecurityWarnings: (show: boolean) => void;
 }
 
 const AppearanceContext = createContext<AppearanceContextValue | null>(null);
@@ -104,6 +105,8 @@ export function AppearanceProvider({
         setPreference((current) => ({ ...current, colorTheme })),
       setTextSize: (textSize) =>
         setPreference((current) => ({ ...current, textSize })),
+      setShowSecurityWarnings: (showSecurityWarnings) =>
+        setPreference((current) => ({ ...current, showSecurityWarnings })),
     }),
     [preference, systemPrefersDark],
   );
