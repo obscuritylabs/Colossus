@@ -71,8 +71,8 @@ when cross-platform locking; the tool’s OS restriction controls installation. 
 mise archive checksums; the Rust lock records the channel, profile and components.
 Other release architectures continue using their existing setup until separately verified.
 
-PR setup installs only the job's requested tools: Node/actionlint for workflow
-contracts, Rust plus conditionally selected SDK/Desktop languages for validation,
+PR setup installs only the job's requested tools: Node/actionlint/Python for workflow
+contracts (including Python source-archive tests), Rust plus conditionally selected SDK/Desktop languages for validation,
 Rust for docs, and Rust/deny/audit for dependency policy. Mise caches installed tools;
 separate npm, pip and Go caches retain package reuse. Existing sccache and Cargo registry
 caches remain independent. Direct bin paths avoid auto-installing unselected tools
