@@ -139,9 +139,9 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "cargo xtask check desktop",
         "cargo xtask check dependencies",
         "release/install-apparmor.sh",
-        "ACTIONLINT_VERSION: 1.7.12",
-        "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
-        "sha256sum --check --strict",
+        "uses: ./.github/actions/setup-toolchain",
+        "tools: node aqua:rhysd/actionlint",
+        "tools: rust aqua:EmbarkStudios/cargo-deny aqua:rustsec/rustsec/cargo-audit",
         "--diff-filter=ACDMRTUXB",
         "ref: ${{ github.event.pull_request.base.sha }}",
         "path: .ci-trusted",
@@ -156,13 +156,26 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "! grep -q '^desktop_required='",
         "sdk_required=true",
         "desktop_required=true",
-        "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
-        "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0",
-        "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0",
         "true:success",
     ] {
         assert!(source.contains(required), "PR tier is missing {required}");
     }
+    let setup = named_step(job(jobs, "rust"), "Install selected language toolchains");
+    let tools = field(mapping(field(setup, "with"), "toolchain inputs"), "tools")
+        .as_str()
+        .expect("selected tools expression");
+    assert!(tools.starts_with("rust "));
+    assert!(tools.contains("(needs.classify.outputs.sdk_required == 'true' || needs.classify.outputs.desktop_required == 'true') && 'node' || ''"));
+    assert!(tools.contains("needs.classify.outputs.sdk_required == 'true' && 'python go' || ''"));
+    let setup_source =
+        fs::read_to_string(repository_root().join(".github/actions/setup-toolchain/action.yml"))
+            .expect("read shared PR setup");
+    assert!(setup_source.contains("install_args: --locked ${{ inputs.tools }}"));
+    assert!(setup_source.contains("add_shims_to_path: false"));
+    let lock = fs::read_to_string(repository_root().join("mise.lock")).expect("read tool locks");
+    assert!(
+        lock.contains("sha256:8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8")
+    );
 }
 
 #[test]
@@ -649,35 +662,59 @@ fn change_classifier_and_gates_fail_closed() {
     assert!(status.success());
 }
 
-#[test]
-fn every_workflow_action_is_immutably_pinned() {
-    let workflows = repository_root().join(".github/workflows");
-    for entry in fs::read_dir(workflows).expect("read workflows") {
-        let path = entry.expect("workflow entry").path();
-        if path.extension().and_then(|value| value.to_str()) != Some("yml") {
+fn assert_action_pins(path: &Path, visited: &mut BTreeSet<std::path::PathBuf>) {
+    let path = path
+        .canonicalize()
+        .expect("resolve workflow or local action");
+    assert!(path.starts_with(repository_root().canonicalize().expect("repository root")));
+    if !visited.insert(path.clone()) {
+        return;
+    }
+    let source = fs::read_to_string(&path).expect("read workflow or action");
+    for line in source.lines() {
+        let Some(action) = line.trim().strip_prefix("uses: ") else {
+            continue;
+        };
+        if let Some(local) = action.strip_prefix("./") {
+            // Local actions are bound to checkout, but their dependencies still
+            // need immutable external references. Follow rather than skip them.
+            assert!(!local.contains(".."), "local action escapes checkout");
+            let directory = repository_root().join(local);
+            let manifest = if directory.join("action.yml").is_file() {
+                directory.join("action.yml")
+            } else {
+                directory.join("action.yaml")
+            };
+            assert_action_pins(&manifest, visited);
             continue;
         }
-        let source = fs::read_to_string(&path).expect("read workflow");
-        for line in source.lines() {
-            let Some(action) = line.trim().strip_prefix("uses: ") else {
-                continue;
-            };
-            let reference = action
-                .split_once('@')
-                .unwrap_or_else(|| panic!("action is missing a reference in {path:?}: {action}"))
-                .1
-                .split_whitespace()
-                .next()
-                .expect("action reference");
-            assert_eq!(reference.len(), 40, "action is not SHA-pinned: {action}");
-            assert!(
-                reference.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                "action is not SHA-pinned: {action}"
-            );
-            assert!(
-                action.contains(" # "),
-                "action pin is missing its audited release comment: {action}"
-            );
+        let reference = action
+            .split_once('@')
+            .unwrap_or_else(|| panic!("action is missing a reference in {path:?}: {action}"))
+            .1
+            .split_whitespace()
+            .next()
+            .expect("action reference");
+        assert_eq!(reference.len(), 40, "action is not SHA-pinned: {action}");
+        assert!(
+            reference.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "action is not SHA-pinned: {action}"
+        );
+        assert!(
+            action.contains(" # "),
+            "action pin is missing its audited release comment: {action}"
+        );
+    }
+}
+
+#[test]
+fn every_workflow_action_is_immutably_pinned() {
+    let mut visited = BTreeSet::new();
+    for entry in fs::read_dir(repository_root().join(".github/workflows")).expect("read workflows")
+    {
+        let path = entry.expect("workflow entry").path();
+        if path.extension().and_then(|value| value.to_str()) == Some("yml") {
+            assert_action_pins(&path, &mut visited);
         }
     }
 }

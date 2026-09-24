@@ -164,3 +164,5 @@ fi
 "${NODE:-node}" --test "$script_dir/sdk-release.test.mjs"
 "${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-oci.test.mjs"
+"${NODE:-node}" "$script_dir/check-toolchain.mjs"
+"${NODE:-node}" --test "$script_dir/check-toolchain.test.mjs"
