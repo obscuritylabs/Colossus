@@ -20,3 +20,6 @@ apps/desktop/artifact-audit/
 .colossus/secure-anchor.dev.json
 .colossus/*.redb*
 .colossus/*memory-index/
+
+# Local planning notes and task handoffs.
+/.local

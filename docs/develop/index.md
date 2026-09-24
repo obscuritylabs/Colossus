@@ -14,6 +14,8 @@ operation stay in [Get started](../get-started/index.md) and
 - [Contributing](contributing.md) explains repository conventions and change ownership.
 - [Source setup and test tiers](setup-testing.md) provides a reproducible development
   loop.
+- [Toolchain inventory](toolchain-inventory.md) maps provisioning owners, consumers,
+  verification and platform requirements.
 - [Tiered CI/CD](ci-cd.md) explains the cost-bounded PR, pre-merge, and release gates.
 - [Core release operations](releasing.md) covers registry bootstrap, stable CLI/SDK
   publication, and partial-release recovery.
