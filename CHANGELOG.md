@@ -8,6 +8,25 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.18] - 2026-09-24
+
+### Added
+
+- Added `colossus mcp doctor SERVER` and Desktop connection diagnostics with failure
+  stages, sanitized error categories, runtime versions, and endpoint and CA fingerprints.
+- Included recent MCP health reports in Desktop diagnostic exports while excluding
+  credentials, endpoint text, certificate paths, headers, and response bodies.
+
+### Changed
+
+- Unified Desktop Settings in a dedicated view with consistent Global and Workspace
+  navigation, workspace selection, contextual help, and a Back to work action.
+- Made top-of-app security banners opt-in through the persistent Show security
+  warnings appearance setting, without changing runtime protections.
+- Improved MCP diagnostic layout, tool discovery counts, and export access.
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles, the
+  embedded core plugin, and Desktop fixtures to `0.10.10-preview.18`.
+
 ## [0.10.10-preview.17] - 2026-09-23
 
 ### Fixed
