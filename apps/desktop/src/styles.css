@@ -11193,11 +11193,11 @@ textarea {
 }
 
 .mcp-health-summary .is-healthy {
-  color: var(--success);
+  color: var(--green-text);
 }
 
 .mcp-health-summary .is-failed {
-  color: var(--danger);
+  color: var(--red-text);
 }
 
 .mcp-health-summary > div {
