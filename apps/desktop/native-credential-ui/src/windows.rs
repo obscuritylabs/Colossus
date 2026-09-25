@@ -1,5 +1,7 @@
 //! A modeless, owned Win32 form driven by the existing Tauri event loop.
 
+#[cfg(feature = "native-test-driver")]
+pub(crate) mod acceptance;
 mod controls;
 mod input;
 #[cfg(test)]

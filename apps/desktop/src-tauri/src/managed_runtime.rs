@@ -11,6 +11,9 @@ use colossus_sdk::{
     SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
+#[cfg(all(test, any(windows, target_os = "macos")))]
+#[path = "managed_runtime/credential_acceptance.rs"]
+mod credential_acceptance;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -85,6 +85,14 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 tempfile = "3.23.0"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+keyring-core = "=1.0.0"
+windows-native-keyring-store = "=1.1.0"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+keyring-core = "=1.0.0"
+apple-native-keyring-store = { version = "=1.0.1", features = ["keychain"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 

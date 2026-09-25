@@ -23,3 +23,10 @@ pub use prompt::{PromptError, prompt};
 pub fn run_native_macos_acceptance() {
     macos::tests::run();
 }
+
+/// Exercise native clipboard and keyboard messages in an isolated window station.
+/// This entry point exists only in explicitly enabled native test builds.
+#[cfg(all(windows, feature = "native-test-driver"))]
+pub fn run_native_windows_acceptance() {
+    windows::acceptance::run();
+}

@@ -198,6 +198,10 @@ jobs:
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Test the desktop native bridge
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Exercise credential persistence through the managed sidecar and MCP
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-aarch64-apple-darwin
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp -- --ignored --exact
       - name: Test native secure credential entry
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib
       - name: Lint native credential controls and acceptance driver
@@ -334,12 +338,20 @@ jobs:
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Exercise Windows credential persistence through the managed sidecar and MCP
+        if: steps.desktop_prepare.outcome == 'success'
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp -- --ignored --exact
       - name: Test Windows native secure credential entry
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib
       - name: Lint Windows native credential controls
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --all-targets --all-features -- -D warnings
+      - name: Test Windows credential paste and keyboard controls
+        if: steps.desktop_prepare.outcome == 'success'
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-windows
       - name: Install Chromium for Windows plugin acceptance
         if: steps.desktop_prepare.outcome == 'success'
         working-directory: apps/desktop

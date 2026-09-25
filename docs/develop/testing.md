@@ -275,11 +275,24 @@ failure; separate tests cover ownership conflicts, tampering, and unsafe paths.
 Desktop's private native UI crate has Windows real-control tests. Its AppKit driver
 must run on the process main thread:
 `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-macos`.
+The Windows driver uses an isolated window station and clipboard to exercise native
+paste and keyboard messages without changing the user's clipboard:
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-windows`.
 Both platform lanes own these checks. Manual acceptance additionally pastes 761, 762,
 2,560, 2,561, 8,192, and 65,536 bytes, rejects 65,537, tests keyboard navigation,
 cancellation and parent closure, and follows save/restart/load through a real MCP
 discovery and tool call. Record actual Splunk deployment acceptance separately;
 synthetic loopback credentials do not prove a deployment's header limits.
+
+Both Desktop platform lanes also run the native backend acceptance test
+`managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp`
+with `--lib -- --ignored --exact` and `COLOSSUS_ACCEPTANCE_SIDECAR` set to the absolute
+path of the prepared matching sidecar. Separate processes save and reopen 8,192- and
+65,536-byte synthetic credentials through Desktop's vault, use production bootstrap
+construction, and verify exact provider and MCP discovery/tool-call authorization at
+a loopback server. The fixture checks renderer metadata, released output, and generated
+files for plaintext and removes only its generated platform key and private home.
+This backend test is separate from native input and physical Desktop acceptance.
 
 Windows release smoke fixtures use fresh owner-private directories under the current
 user profile, not the runner's potentially shared temporary directory. The Windows

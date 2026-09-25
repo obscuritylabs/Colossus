@@ -8,7 +8,17 @@ license = "Apache-2.0"
 workspace = "../src-tauri"
 
 [features]
-native-test-driver = []
+native-test-driver = [
+    "windows-sys/Win32_Security",
+    "windows-sys/Win32_System_StationsAndDesktops",
+    "windows-sys/Win32_System_Threading",
+]
+
+[[test]]
+name = "native-windows"
+path = "tests/native_windows.rs"
+harness = false
+required-features = ["native-test-driver"]
 
 [[test]]
 name = "native-macos"

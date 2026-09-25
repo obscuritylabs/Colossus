@@ -821,6 +821,7 @@ name = "colossus-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apple-native-keyring-store",
  "base64 0.22.1",
  "colossus-codex-auth",
  "colossus-contracts",
@@ -838,6 +839,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "hex",
+ "keyring-core",
  "minisign-verify",
  "nix 0.31.3",
  "portable-pty",
@@ -859,6 +861,7 @@ dependencies = [
  "tokio-rustls",
  "url",
  "uuid",
+ "windows-native-keyring-store",
  "zeroize",
 ]
 
