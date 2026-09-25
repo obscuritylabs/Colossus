@@ -3,15 +3,15 @@
 use super::{CANCEL_ID, INPUT_ID, SAVE_ID, Session, input, wide};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::{
-    Foundation::HWND,
+    Foundation::{HWND, RECT},
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         Controls::{EM_SETCUEBANNER, EM_SETLIMITTEXT},
         Input::KeyboardAndMouse::EnableWindow,
         Shell::SetWindowSubclass,
         WindowsAndMessaging::{
-            BS_OWNERDRAW, CreateWindowExW, ES_AUTOHSCROLL, ES_PASSWORD, MoveWindow, SendMessageW,
-            WM_SETFONT, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+            BS_OWNERDRAW, CreateWindowExW, ES_AUTOHSCROLL, ES_PASSWORD, GetClientRect, MoveWindow,
+            SendMessageW, WM_SETFONT, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
         },
     },
 };
@@ -88,35 +88,83 @@ pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
         }
     }
     unsafe {
-        layout(pointer);
+        layout(window, pointer);
         EnableWindow(session.save, 0);
     }
     true
 }
 
-pub(super) unsafe fn layout(pointer: *const Session) {
+pub(super) unsafe fn layout(window: HWND, pointer: *const Session) {
     let session = unsafe { &*pointer };
     let visual = &session.visuals;
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(window, &raw mut client) } == 0 {
+        return;
+    }
+    // Windows may cap an owned form to a small monitor/RDP desktop. Scale fonts
+    // vertically as requested, but lay out horizontally in the actual client area.
+    let left = visual.px(28);
+    let content_width = (client.right - visual.px(56)).max(1);
     for (handle, bounds, font) in [
-        (session.heading, [28, 28, 504, 28], visual.heading_font),
-        (session.description, [28, 66, 504, 34], visual.body_font),
-        (session.label, [28, 110, 504, 20], visual.body_font),
-        (session.input, [40, 148, 480, 20], visual.body_font),
-        (session.status, [28, 188, 504, 18], visual.caption_font),
-        (session.error, [28, 208, 504, 28], visual.caption_font),
-        (session.save, [300, 256, 108, 40], visual.body_font),
-        (session.cancel, [420, 256, 112, 40], visual.body_font),
+        (
+            session.heading,
+            [left, visual.px(28), content_width, visual.px(28)],
+            visual.heading_font,
+        ),
+        (
+            session.description,
+            [left, visual.px(66), content_width, visual.px(34)],
+            visual.body_font,
+        ),
+        (
+            session.label,
+            [left, visual.px(110), content_width, visual.px(20)],
+            visual.body_font,
+        ),
+        (
+            session.input,
+            [
+                visual.px(40),
+                visual.px(148),
+                (client.right - visual.px(80)).max(1),
+                visual.px(20),
+            ],
+            visual.body_font,
+        ),
+        (
+            session.status,
+            [left, visual.px(188), content_width, visual.px(18)],
+            visual.caption_font,
+        ),
+        (
+            session.error,
+            [left, visual.px(208), content_width, visual.px(28)],
+            visual.caption_font,
+        ),
+        (
+            session.save,
+            [
+                client.right - visual.px(260),
+                visual.px(256),
+                visual.px(108),
+                visual.px(40),
+            ],
+            visual.body_font,
+        ),
+        (
+            session.cancel,
+            [
+                client.right - visual.px(140),
+                visual.px(256),
+                visual.px(112),
+                visual.px(40),
+            ],
+            visual.body_font,
+        ),
     ] {
         if !handle.is_null() {
             unsafe {
-                MoveWindow(
-                    handle,
-                    visual.px(bounds[0]),
-                    visual.px(bounds[1]),
-                    visual.px(bounds[2]),
-                    visual.px(bounds[3]),
-                    1,
-                );
+                MoveWindow(handle, bounds[0], bounds[1], bounds[2], bounds[3], 1);
                 SendMessageW(handle, WM_SETFONT, font as usize, 1);
             }
         }

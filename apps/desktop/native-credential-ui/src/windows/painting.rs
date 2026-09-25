@@ -20,7 +20,7 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             GetClientRect, GetParent, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CTLCOLOREDIT,
             WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_KILLFOCUS,
-            WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETTINGCHANGE, WM_THEMECHANGED,
+            WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_THEMECHANGED,
         },
     },
 };
@@ -39,6 +39,13 @@ pub(super) unsafe fn handle(
                 paint(window, pointer);
             }
             Some(0)
+        }
+        WM_SIZE => {
+            unsafe {
+                controls::layout(window, pointer);
+                InvalidateRect(window, null(), 1);
+            }
+            None
         }
         WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC => {
             Some(unsafe { control_color(message, wparam as HDC, lparam as HWND, pointer) })
@@ -94,7 +101,7 @@ unsafe fn refresh(window: HWND, pointer: *mut Session, dpi: u32) {
     // Replace every control font before releasing the old GDI resources.
     let previous = unsafe { std::ptr::replace(&raw mut (*pointer).visuals, replacement) };
     unsafe {
-        controls::layout(pointer);
+        controls::layout(window, pointer);
         (*pointer).visuals.apply_titlebar(window);
         InvalidateRect(window, null(), 1);
     }
@@ -145,7 +152,7 @@ unsafe fn paint(window: HWND, pointer: *const Session) {
     let field = RECT {
         left: visual.px(28),
         top: visual.px(136),
-        right: visual.px(532),
+        right: (bounds.right - visual.px(28)).max(visual.px(28) + 1),
         bottom: visual.px(180),
     };
     let border = if unsafe { (*pointer).has_error.get() } {
@@ -168,7 +175,7 @@ unsafe fn paint(window: HWND, pointer: *const Session) {
     let divider = RECT {
         left: visual.px(28),
         top: visual.px(240),
-        right: visual.px(532),
+        right: (bounds.right - visual.px(28)).max(visual.px(28) + 1),
         bottom: visual.px(240) + 1,
     };
     let brush = unsafe { CreateSolidBrush(color(visual.colors.border)) };

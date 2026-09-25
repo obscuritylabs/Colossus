@@ -3,14 +3,15 @@
 use super::{Dialog, Session, key, read_text};
 use crate::{ColorScheme, DialogAppearance, TextSize};
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT, RECT},
+    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{ClientToScreen, UpdateWindow},
     UI::{
         Controls::EM_GETPASSWORDCHAR,
         Input::KeyboardAndMouse::GetFocus,
+        Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
-            GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect, SendMessageW,
-            WM_DPICHANGED, WM_THEMECHANGED,
+            GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect, MINMAXINFO,
+            SendMessageW, WM_DPICHANGED, WM_GETMINMAXINFO, WM_THEMECHANGED,
         },
     },
 };
@@ -22,6 +23,12 @@ pub(super) fn run() {
                 color_scheme,
                 text_size,
             });
+            // Reproduce the limited desktop width used by headless/RDP hosts,
+            // independently of the developer's physical monitor resolution.
+            assert_ne!(
+                unsafe { SetWindowSubclass(dialog.window, Some(limit_width), 2, 0) },
+                0
+            );
             dialog.paste("SYNTHETIC-APPEARANCE");
             let session =
                 unsafe { GetWindowLongPtrW(dialog.window, GWLP_USERDATA) } as *const Session;
@@ -63,17 +70,23 @@ fn assert_layout(window: HWND, session: &Session) {
     assert_ne!(unsafe { GetClientRect(window, &raw mut client) }, 0);
     assert_ne!(unsafe { ClientToScreen(window, &raw mut origin) }, 0);
     let mut previous_bottom = origin.y;
-    for handle in [
-        session.heading,
-        session.description,
-        session.label,
-        session.input,
-        session.status,
-        session.error,
-        session.save,
+    for (name, handle) in [
+        ("heading", session.heading),
+        ("description", session.description),
+        ("label", session.label),
+        ("input", session.input),
+        ("count", session.status),
+        ("error", session.error),
+        ("save", session.save),
     ] {
         let bounds = bounds(handle);
-        assert!(bounds.left >= origin.x && bounds.right <= origin.x + client.right);
+        assert!(
+            bounds.left >= origin.x && bounds.right <= origin.x + client.right,
+            "{name} horizontal bounds {:?} outside client {:?} at DPI {}",
+            (bounds.left, bounds.right),
+            (origin.x, origin.x + client.right),
+            session.visuals.dpi,
+        );
         assert!(bounds.top >= previous_bottom && bounds.bottom <= origin.y + client.bottom);
         assert!(bounds.right > bounds.left && bounds.bottom > bounds.top);
         previous_bottom = bounds.bottom;
@@ -82,6 +95,21 @@ fn assert_layout(window: HWND, session: &Session) {
     let cancel = bounds(session.cancel);
     assert!(cancel.left > save.right && cancel.right <= origin.x + client.right);
     assert_eq!((save.top, save.bottom), (cancel.top, cancel.bottom));
+}
+
+unsafe extern "system" fn limit_width(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    let result = unsafe { DefSubclassProc(window, message, wparam, lparam) };
+    if message == WM_GETMINMAXINFO {
+        unsafe { (*(lparam as *mut MINMAXINFO)).ptMaxTrackSize.x = 1024 };
+    }
+    result
 }
 
 fn bounds(window: HWND) -> RECT {

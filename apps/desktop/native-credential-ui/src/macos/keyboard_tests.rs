@@ -1,6 +1,6 @@
 use super::{
     Arc, AtomicBool, Completion, DefinedClass, MainThreadMarker, NSWindow, PromptError, Retained,
-    controller, current_text, insert, open_sheet, parent,
+    accessibility_tests, controller, current_text, insert, open_sheet, parent,
 };
 use crate::DialogAppearance;
 use objc2_app_kit::{
@@ -16,6 +16,7 @@ pub(super) fn run(mtm: MainThreadMarker) {
 
 fn keyboard_save(mtm: MainThreadMarker) {
     let parent = parent(mtm);
+    parent.makeKeyAndOrderFront(None);
     let (completion, mut result) = Completion::acquire().unwrap();
     open_sheet(
         &parent,
@@ -34,29 +35,14 @@ fn keyboard_save(mtm: MainThreadMarker) {
             session.save.clone(),
         )
     };
-    assert_eq!(
-        input.accessibilityLabel().as_deref(),
-        Some(ns_string!("Token"))
-    );
-    assert!(input.isAccessibilityElement());
-    assert_eq!(
-        input.accessibilitySubrole().as_deref(),
-        Some(ns_string!("AXSecureTextField"))
-    );
-    assert!(!save.isAccessibilityEnabled());
+    accessibility_tests::secure_input(&input);
+    accessibility_tests::save_enabled(&save, false);
     panel.performKeyEquivalent(&key(&panel, "\r", 36, false));
     assert!(result.try_recv().is_err(), "empty Return must not save");
 
     insert(&input.currentEditor().unwrap(), "SYNTHETIC-KEYBOARD");
-    assert!(save.isAccessibilityEnabled());
-    assert!(
-        input.accessibilityValue().is_none_or(|value| {
-            value
-                .downcast_ref::<NSString>()
-                .is_none_or(|text| text != ns_string!("SYNTHETIC-KEYBOARD"))
-        }),
-        "secure input must not expose plaintext through accessibility"
-    );
+    accessibility_tests::save_enabled(&save, true);
+    accessibility_tests::secure_input(&input);
     traversal(&panel, &input, &save, mtm);
     assert_eq!(current_text(&input).to_string(), "SYNTHETIC-KEYBOARD");
     assert!(panel.performKeyEquivalent(&key(&panel, "\r", 36, false)));
@@ -108,6 +94,7 @@ fn same_responder(left: &NSResponder, right: &NSResponder) -> bool {
 
 fn keyboard_cancel(mtm: MainThreadMarker) {
     let parent = parent(mtm);
+    parent.makeKeyAndOrderFront(None);
     let (completion, mut result) = Completion::acquire().unwrap();
     open_sheet(
         &parent,

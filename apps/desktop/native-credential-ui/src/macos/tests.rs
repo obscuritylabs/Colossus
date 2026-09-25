@@ -4,16 +4,20 @@ use super::{
     PromptError, Retained, current_text, msg_send, ns_string, open_sheet, rect,
 };
 use crate::{ColorScheme, DialogAppearance, TextSize};
-use objc2_app_kit::NSApplication;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use objc2_foundation::NSRange;
 
+#[path = "accessibility_tests.rs"]
+mod accessibility_tests;
 #[path = "keyboard_tests.rs"]
 mod keyboard_tests;
 
 pub(crate) fn run() {
     let mtm =
         MainThreadMarker::new().expect("AppKit acceptance must run on the process main thread");
-    let _application = NSApplication::sharedApplication(mtm);
+    let application = NSApplication::sharedApplication(mtm);
+    assert!(application.setActivationPolicy(NSApplicationActivationPolicy::Regular));
+    application.finishLaunching();
     for (length, color_scheme, text_size) in [
         (761, ColorScheme::Light, TextSize::Compact),
         (762, ColorScheme::Dark, TextSize::Compact),
