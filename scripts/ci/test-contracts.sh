@@ -100,6 +100,34 @@ dependency_required=false
 sdk_required=false
 desktop_required=false' docs/deleted.md
 
+# Exercise each path independently so another changed file cannot hide a
+# missing selector. Classification is path-based for additions, edits and deletes.
+for shared_toolchain_path in \
+    mise.toml mise.lock mise.ci.toml .mise.toml .mise.lock .mise.ci.toml \
+    .mise/config.toml .mise/tasks/docs/build mise-tasks/docs/build \
+    .github/actions/setup/action.yml .github/actions/setup/install.sh \
+    .devcontainer/Dockerfile .devcontainer/devcontainer.json \
+    .devcontainer/devcontainer-lock.json rust-toolchain rust-toolchain.toml
+do
+    expect_classification 'rust_required=true
+docs_required=true
+dependency_required=true
+sdk_required=true
+desktop_required=true' "$shared_toolchain_path"
+done
+
+expect_classification 'rust_required=false
+docs_required=true
+dependency_required=false
+sdk_required=false
+desktop_required=false' CLAUDE.md
+
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=false' unrelated/mise.toml
+
 if $script_dir/classify-changes.sh >/dev/null 2>&1; then
     printf 'empty change classification unexpectedly succeeded\n' >&2
     exit 1
