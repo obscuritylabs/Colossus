@@ -866,7 +866,8 @@ test("provider enrollment and external trust stay behind native UI", () => {
   const onboarding = read("apps/desktop/src/components/OnboardingSurface.tsx");
   assert.doesNotMatch(onboarding, /type=["']password["']|API base URL/u);
   assert.match(onboarding, /native secure prompt/u);
-  assert.match(onboarding, /WebView or renderer IPC/u);
+  assert.match(onboarding, /Your API key stays outside the page/u);
+  assert.match(onboarding, /encrypted credential vault/u);
   const modelEditor = read(
     "apps/desktop/src/components/ModelConfigurationEditor.tsx",
   );
