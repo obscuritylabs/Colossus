@@ -67,6 +67,8 @@ const COMMANDS: &[&str] = &[
     "reenter_managed_credential",
     "delete_managed_credential",
     "configure_managed_runtime",
+    "discover_managed_provider_models",
+    "get_provider_presets",
     "apply_managed_model_configuration",
     "run_managed_self_test",
     "restart_managed_runtime",

@@ -43,6 +43,24 @@ impl CredentialAvailability {
 }
 
 impl DesktopCredentials {
+    #[cfg(all(test, any(windows, target_os = "macos")))]
+    pub(crate) fn with_test_key_store(
+        settings: &SettingsStore,
+        keys: Arc<dyn colossus_credentials::PlatformKeyStore>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            root: settings.application_root().to_owned(),
+            vault: Arc::new(
+                PlatformCredentialVault::with_key_store(
+                    ConfinedRoot::bind(settings.application_root()).expect("private test root"),
+                    "desktop-manual",
+                    keys,
+                )
+                .expect("test vault"),
+            ),
+        })
+    }
+
     /// Call only on a blocking worker; used by settings transactions.
     pub(crate) fn write_blocking(&self, id: &str, value: &str) -> Result<(), CommandErrorDto> {
         let secret = HostSecret::new(value.to_owned()).map_err(credential_error)?;

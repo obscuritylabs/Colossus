@@ -466,6 +466,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 
     assert!(welcome_ready, "{welcome}");
@@ -682,6 +683,7 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         String::from_utf8_lossy(&output.lock().expect("output"))
     );
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 
     let raw = output.lock().expect("output");
@@ -836,6 +838,7 @@ fn submitted_input_history_traverses_repeatedly_and_completion_keeps_key_precede
         String::from_utf8_lossy(&output.lock().expect("output"))
     );
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 }
 
@@ -936,6 +939,7 @@ fn completed_streaming_output_moves_immediately_into_native_scrollback() {
     let status = child.wait().expect("fixture status");
     assert!(status.success());
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 }
 
@@ -1152,6 +1156,7 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
     let status = child.wait().expect("fixture status");
     assert!(status.success());
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 }
 
@@ -1264,6 +1269,7 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
     let status = child.wait().expect("fixture status");
     assert!(status.success());
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 }
 
@@ -1372,6 +1378,7 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
     let status = child.wait().expect("fixture status");
     assert!(status.success());
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 }
 
@@ -1470,6 +1477,7 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
     let status = child.wait().expect("fixture status");
     assert!(status.success());
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
 }
 
@@ -1560,6 +1568,7 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     let status = child.wait().expect("fixture status");
     assert!(status.success());
     drop(writer);
+    drop(pair.master);
     reader_thread.join().expect("reader thread");
     let raw = output.lock().expect("output");
     assert!(

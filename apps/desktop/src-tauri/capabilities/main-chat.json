@@ -56,6 +56,8 @@
     "allow-reenter-managed-credential",
     "allow-delete-managed-credential",
     "allow-configure-managed-runtime",
+    "allow-discover-managed-provider-models",
+    "allow-get-provider-presets",
     "allow-apply-managed-model-configuration",
     "allow-run-managed-self-test",
     "allow-restart-managed-runtime",

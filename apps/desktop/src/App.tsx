@@ -87,7 +87,10 @@ import { WorkSurface } from "./components/WorkSurface";
 import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
-import { managedOnboardingRequired } from "./onboarding";
+import {
+  managedOnboardingRequired,
+  managedSetupLaunchFailure,
+} from "./onboarding";
 import { useAppearance } from "./theme/AppearanceProvider";
 import {
   parseDesktopSlashCommand,
@@ -365,8 +368,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
       : [],
     roles: FIXTURE_MODE ? { primary: "primary" } : {},
   },
-  accessProfile: "allow_all",
-  executionBoundary: "full_access",
+  accessProfile: FIXTURE_MODE ? "allow_all" : "minimal",
+  executionBoundary: FIXTURE_MODE ? "full_access" : "offline_isolated",
   approvalMode: "ask",
   terminalEnabled: false,
   additionalCaBundle: {
@@ -3391,8 +3394,10 @@ export default function App() {
       }
       const status = await configureManagedRuntime(request);
       await acceptDesktopStatus(status, true);
-      setShowOnboarding(false);
-      return status.connection.state === "connected";
+      const failure = managedSetupLaunchFailure(status);
+      setShowOnboarding(failure !== null);
+      setActionError(failure);
+      return failure === null;
     } catch (error: unknown) {
       const failure = commandError(error);
       markConnectionFailure(failure);
@@ -3456,8 +3461,10 @@ export default function App() {
       }
       const status = await applyManagedModelConfiguration(request);
       await acceptDesktopStatus(status, true);
-      setShowOnboarding(false);
-      return status.connection.state === "connected";
+      const failure = managedSetupLaunchFailure(status);
+      setShowOnboarding(failure !== null);
+      setActionError(failure);
+      return failure === null;
     } catch (error: unknown) {
       const failure = commandError(error);
       markConnectionFailure(failure);
@@ -4881,7 +4888,14 @@ export default function App() {
         <OnboardingSurface
           desktop={desktop}
           busy={connecting}
-          error={actionError?.message ?? ""}
+          error={[
+            actionError?.message,
+            ...(actionError?.violations.map(
+              (violation) => violation.description,
+            ) ?? []),
+          ]
+            .filter(Boolean)
+            .join(" ")}
           onChooseWorkspace={handleChooseWorkspace}
           onConfigure={handleConfigureManaged}
           onApplyConfiguration={handleApplyManagedModelConfiguration}

@@ -20,6 +20,7 @@ mod mcp_health;
 mod plugin_adapter;
 mod plugin_commands;
 mod plugin_selection;
+mod provider_catalog;
 mod provider_enrollment;
 mod run_list;
 mod space_search;
@@ -64,6 +65,7 @@ use plugin_commands::{
     cancel_plugin_operation, get_plugin_inventory, manage_plugin, read_plugin_preview,
 };
 use plugin_selection::resolve_plugin_selection;
+use provider_catalog::{discover_managed_provider_models, get_provider_presets};
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -152,6 +154,8 @@ pub fn run() {
             reenter_managed_credential,
             delete_managed_credential,
             configure_managed_runtime,
+            discover_managed_provider_models,
+            get_provider_presets,
             apply_managed_model_configuration,
             restart_managed_runtime,
             run_managed_self_test,

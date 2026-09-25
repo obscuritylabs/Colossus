@@ -839,6 +839,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "hex",
+ "keyring",
  "keyring-core",
  "minisign-verify",
  "nix 0.31.3",

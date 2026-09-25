@@ -465,7 +465,7 @@ pub struct SearchProfileSummary {
 }
 
 /// One model visible through a provider catalog endpoint.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderModelInfo {
     /// Provider model identifier.
@@ -474,6 +474,30 @@ pub struct ProviderModelInfo {
     pub object: Option<String>,
     /// Owning organization when supplied.
     pub owned_by: Option<String>,
+    /// Bounded provider-supplied display name, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Bounded provider-supplied plain-text description, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Advertised context window; absence means the catalog did not declare it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u64>,
+    /// Advertised output ceiling, independent of the user's configured allocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    /// Advertised tool-call support; absence is unknown rather than unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<bool>,
+    /// Advertised image-input support; absence is unknown rather than unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_inputs: Option<bool>,
+    /// Advertised streaming support; absence is unknown rather than unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streaming: Option<bool>,
+    /// Explicit advertised reasoning efforts understood by this version of Colossus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_reasoning_efforts: Vec<ReasoningEffort>,
 }
 
 /// Explicitly requested, bounded diagnostics for one non-success provider response.

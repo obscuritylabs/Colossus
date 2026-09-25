@@ -11,6 +11,12 @@ Every model-backed Colossus workflow resolves a logical role to a model profile,
 uses that model profile's provider connection. Choose the access method you already
 have; you do not need to learn the complete configuration schema first.
 
+Start a new configuration with `colossus provider setup`, or choose a provider from
+Desktop's setup dropdown and load its models. Both interfaces use the same preset
+catalog. `colossus provider presets` lists service URLs and environment-variable
+hints, while `colossus provider discover --preset ID` loads model cards before a
+model is configured. See [guided setup](../../get-started/connect-model.md#guided-setup).
+
 ## Choose your provider path
 
 | Access method | Credential in Colossus | Provider kind | Best fit | Guide |

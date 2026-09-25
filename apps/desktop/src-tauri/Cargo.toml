@@ -80,6 +80,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 colossus-windows-native = { version = "=0.10.10-preview.19", path = "../../../crates/colossus-windows-native" }
 
 [dev-dependencies]
+keyring = "4.1.4"
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.23.0"

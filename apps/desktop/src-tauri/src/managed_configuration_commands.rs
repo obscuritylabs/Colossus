@@ -403,33 +403,55 @@ pub(crate) async fn create_managed_credential(
     let mut settings = store.load()?;
     ensure_global_revision(&settings, request.expected_revision)?;
     validate_label(&request.label)?;
+    enroll_credential(
+        window,
+        &state,
+        &store,
+        &mut settings,
+        &request.label,
+        request.kind,
+        appearance,
+    )
+    .await?;
+    snapshot(state.inner(), &settings).await
+}
+
+pub(crate) async fn enroll_credential(
+    window: tauri::WebviewWindow,
+    state: &AppState,
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    label: &str,
+    kind: CredentialKindSetting,
+    appearance: provider_enrollment::DialogAppearanceInput,
+) -> Result<String, CommandErrorDto> {
     let credential_id = Uuid::now_v7().to_string();
     let secret =
         provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
-    let credentials = DesktopCredentials::for_settings(&state, &store)?;
-    stage_credential_write(&store, &mut settings, &credential_id)?;
+    let credentials = DesktopCredentials::for_settings(state, store)?;
+    stage_credential_write(store, settings, &credential_id)?;
     credentials.write(&credential_id, secret).await?;
     settings
         .global_configuration
         .credentials
         .push(CredentialMetadataSetting {
             id: credential_id.clone(),
-            label: request.label,
-            kind: request.kind,
+            label: label.into(),
+            kind,
             backend: CredentialBackendSetting::Desktop,
             created_at_ms: unix_time_millis(),
         });
     let previous_revision = settings.global_configuration.revision;
     bump_global_revision(&mut settings.global_configuration)?;
-    advance_unaffected_spaces(&mut settings, previous_revision, &BTreeSet::new());
+    advance_unaffected_spaces(settings, previous_revision, &BTreeSet::new());
     settings
         .pending_provider_cleanup_ids
         .retain(|id| id != &credential_id);
-    if let Err(error) = store.save(&settings) {
+    if let Err(error) = store.save(settings) {
         credentials.delete(&credential_id).await?;
         return Err(error);
     }
-    snapshot(state.inner(), &settings).await
+    Ok(credential_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]

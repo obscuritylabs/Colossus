@@ -7,6 +7,15 @@ use super::{
     validate_model_transcript,
 };
 
+#[test]
+fn legacy_model_card_contract_keeps_unknown_fields_absent() {
+    let legacy = serde_json::json!({"id": "model", "object": "model", "owned_by": "owner"});
+    let card: super::ProviderModelInfo =
+        serde_json::from_value(legacy.clone()).expect("legacy card");
+    assert_eq!(card.tool_calls, None);
+    assert_eq!(serde_json::to_value(card).expect("card JSON"), legacy);
+}
+
 fn image_reference() -> ModelImageReference {
     ModelImageReference {
         artifact_id: format!("artifact-{}", "1".repeat(64)),

@@ -6,6 +6,8 @@ import type { DesktopStatus, ManagedModelConfiguration } from "../types";
 import {
   ModelConfigurationEditor,
   changeProviderProtocol,
+  renameProviderProfile,
+  renameModelProfile,
   submitModelConfiguration,
 } from "./ModelConfigurationEditor";
 import type { EditableProvider } from "./ModelConfigurationEditor";
@@ -88,6 +90,113 @@ const desktop: DesktopStatus = {
 };
 
 describe("ModelConfigurationEditor", () => {
+  it("keeps saved credential profile IDs stable until discovery supplies a reusable reference", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ModelConfigurationEditor, {
+        desktop: {
+          ...desktop,
+          managedModelConfiguration: {
+            ...desktop.managedModelConfiguration,
+            providers: desktop.managedModelConfiguration.providers.map(
+              (provider) => ({ ...provider, hasCredential: true }),
+            ),
+          },
+        },
+        busy: false,
+        onApply: vi.fn(),
+        onCodexLogin: vi.fn(),
+        onCodexLogout: vi.fn(),
+      }),
+    );
+    expect(markup).toMatch(/<input[^>]*readOnly=""[^>]*value="local-provider"/);
+    expect(markup).toContain(
+      "Load models before renaming this saved connection",
+    );
+  });
+
+  it("keeps model and role references attached when profile IDs change", () => {
+    const providers: EditableProvider[] =
+      desktop.managedModelConfiguration.providers.map((provider) => ({
+        ...provider,
+        credentialAction: "none",
+      }));
+    const renamedProvider = renameProviderProfile(
+      { providers, models: desktop.managedModelConfiguration.models },
+      0,
+      "renamed-provider",
+    );
+    expect(renamedProvider.providers[0]?.profile).toBe("renamed-provider");
+    expect(renamedProvider.models[0]?.providerProfile).toBe("renamed-provider");
+    expect(renamedProvider.models[0]?.model).toBe("example-model");
+    const renamedModel = renameModelProfile(
+      renamedProvider.models,
+      {
+        primary: "primary",
+        research_worker: "primary",
+        risk_evaluator: "other-model",
+      },
+      0,
+      "renamed-model",
+    );
+    expect(renamedModel.models[0]?.profile).toBe("renamed-model");
+    expect(renamedModel.roles).toEqual({
+      primary: "renamed-model",
+      research_worker: "renamed-model",
+      risk_evaluator: "other-model",
+    });
+    const modelsWithAnother = [
+      ...renamedModel.models,
+      { ...renamedModel.models[0]!, profile: "other-model" },
+    ];
+    expect(
+      renameModelProfile(
+        modelsWithAnother,
+        renamedModel.roles,
+        0,
+        "other-model",
+      ),
+    ).toEqual({ models: modelsWithAnother, roles: renamedModel.roles });
+  });
+
+  it("requires referenced providers and models to be reassigned before removal", () => {
+    const configuration = desktop.managedModelConfiguration;
+    const markup = renderToStaticMarkup(
+      createElement(ModelConfigurationEditor, {
+        desktop: {
+          ...desktop,
+          managedModelConfiguration: {
+            providers: [
+              ...configuration.providers,
+              { ...configuration.providers[0]!, profile: "second-provider" },
+            ],
+            models: [
+              ...configuration.models,
+              {
+                ...configuration.models[0]!,
+                profile: "second-model",
+                providerProfile: "second-provider",
+              },
+            ],
+            roles: { primary: "primary", research_worker: "second-model" },
+          },
+        },
+        busy: false,
+        onApply: vi.fn(),
+        onCodexLogin: vi.fn(),
+        onCodexLogout: vi.fn(),
+      }),
+    );
+    expect(
+      markup.match(/<button[^>]*disabled=""[^>]*>Remove provider<\/button>/g),
+    ).toHaveLength(2);
+    expect(
+      markup.match(/<button[^>]*disabled=""[^>]*>Remove model<\/button>/g),
+    ).toHaveLength(2);
+    expect(markup).toContain(
+      "Assign this model’s roles to another model before removing it.",
+    );
+  });
+
   it("renders safe provider/model metadata and every supported role", () => {
     const markup = renderToStaticMarkup(
       createElement(ModelConfigurationEditor, {
@@ -102,23 +211,27 @@ describe("ModelConfigurationEditor", () => {
 
     expect(markup).toContain("http://127.0.0.1:11434/v1");
     expect(markup).toContain("example-model");
-    expect(markup).toContain("No credential");
+    expect(markup).toContain("No API key required");
     expect(markup).toContain("Automatic · 15 minutes");
     expect(markup).toContain('role="combobox"');
     expect(markup).toContain("OpenAI-compatible");
     expect(markup).toContain("Reasoning effort");
     expect(markup).toContain("Provider default");
-    expect(markup).toContain("Unsafe: Full access.");
-    expect(markup).toContain("Approval mode is configured separately.");
-    expect(markup).not.toContain("Custom timeout (ms)");
+    expect(markup).toContain("Full access is unsafe.");
+    expect(markup).toContain("Approval settings still apply.");
+    expect(markup).not.toContain("Custom timeout (milliseconds)");
+    expect(markup).toContain("Advanced model setup");
+    expect(markup).toContain("Tool access");
+    expect(markup).toContain("Command isolation");
+    expect(markup).not.toContain("Managed Local");
     for (const role of [
-      "primary",
-      "risk evaluator",
-      "context summarizer",
-      "subagent default",
-      "research planner",
-      "research worker",
-      "research synthesizer",
+      "Primary",
+      "Risk evaluator",
+      "Context summarizer",
+      "Default subagent",
+      "Research planner",
+      "Research worker",
+      "Research synthesizer",
     ]) {
       expect(markup).toContain(role);
     }
@@ -184,7 +297,7 @@ describe("ModelConfigurationEditor", () => {
 
     expect(changed.providers[0]).toMatchObject({
       providerKind: "open_ai_codex",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
+      baseUrl: "",
       credentialAction: "none",
     });
     expect(changed.models.map((model) => model.model)).toEqual([
@@ -208,7 +321,7 @@ describe("ModelConfigurationEditor", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it("disables Apply when a model identifier contains only whitespace", () => {
+  it("disables Save and start when a model identifier contains only whitespace", () => {
     const markup = renderToStaticMarkup(
       createElement(ModelConfigurationEditor, {
         desktop: {
@@ -230,7 +343,7 @@ describe("ModelConfigurationEditor", () => {
     );
 
     expect(markup).toContain(
-      '<button class="button primary onboarding-launch" disabled="">Apply model configuration</button>',
+      '<button class="button primary onboarding-launch" disabled="">Save and start</button>',
     );
   });
 });

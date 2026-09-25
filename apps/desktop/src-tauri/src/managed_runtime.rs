@@ -11,9 +11,14 @@ use colossus_sdk::{
     SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
 };
 use colossus_worker_protocol::{WorkerControlClient, worker_ipc_endpoint};
+mod provider_catalog;
+pub(crate) use provider_catalog::discover_provider_models;
 #[cfg(all(test, any(windows, target_os = "macos")))]
 #[path = "managed_runtime/credential_acceptance.rs"]
 mod credential_acceptance;
+#[cfg(all(test, unix))]
+#[path = "managed_runtime/test_directory_cleanup.rs"]
+mod test_directory_cleanup;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},

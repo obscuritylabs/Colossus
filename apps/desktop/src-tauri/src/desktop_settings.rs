@@ -724,6 +724,11 @@ impl SettingsStore {
         Ok(store)
     }
 
+    #[cfg(test)]
+    pub(crate) fn open_test_home(root: PathBuf) -> Result<Self, CommandErrorDto> {
+        Self::open_home(ColossusHome::ensure_at(root).map_err(home_storage_error)?)
+    }
+
     pub(crate) fn home_root(&self) -> Result<&Path, CommandErrorDto> {
         self.home
             .as_ref()

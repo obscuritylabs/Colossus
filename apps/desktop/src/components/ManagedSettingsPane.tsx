@@ -52,6 +52,7 @@ import {
   diagnoseManagedProvider,
   diagnoseManagedSearch,
   diagnoseManagedTelemetry,
+  discoverManagedProviderModels,
   getManagedExtensionInventory,
   getManagedConfiguration,
   inspectRepositoryConfiguration,
@@ -97,6 +98,13 @@ import type {
 } from "../types";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { DropdownSelect } from "./DropdownSelect";
+import { ProviderPresetSelect } from "./ProviderPresetSelect";
+import { ProviderModelPicker } from "./ProviderModelPicker";
+import {
+  presetProviderKind,
+  resetModelMetadata,
+  selectCatalogModel,
+} from "../providerCatalog";
 import { ToastRegion, useToastQueue } from "./ToastRegion";
 
 type SettingsScope = "global" | "space";
@@ -330,10 +338,10 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   profile: "",
   providerProfile: "",
   model: "",
-  contextWindowTokens: 128_000,
-  maxOutputTokens: 16_384,
-  toolCalls: true,
-  streaming: true,
+  contextWindowTokens: 32_768,
+  maxOutputTokens: 4_096,
+  toolCalls: false,
+  streaming: false,
   imageInputs: false,
   reasoningEffort: null,
 };
@@ -1568,7 +1576,9 @@ export function ManagedSettingsPane({
     desktop.selectedSpaceId ?? initial.spaces[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [actionBusy, setBusy] = useState(false);
+  const busy = actionBusy || connecting;
+  const actionInFlight = useRef(false);
   const [failure, setFailure] = useState("");
   const { dismissToast, pushToast, toasts } = useToastQueue();
   const [defaults, setDefaults] = useState(() => defaultsDraft(initial));
@@ -1707,12 +1717,40 @@ export function ManagedSettingsPane({
     selectedSpace?.effectiveValues.map((value) => [value.fieldId, value]) ?? [],
   );
 
+  function beginAction() {
+    if (actionInFlight.current || connecting) return false;
+    actionInFlight.current = true;
+    setBusy(true);
+    return true;
+  }
+
+  function endAction() {
+    actionInFlight.current = false;
+    setBusy(false);
+  }
+
+  async function discoverModels(
+    request: Parameters<typeof discoverManagedProviderModels>[0],
+  ) {
+    if (!beginAction()) {
+      throw new Error(
+        "Wait for the current settings operation to finish, then retry.",
+      );
+    }
+    try {
+      // Switching Settings tabs unmounts the picker, but its native request continues.
+      return await discoverManagedProviderModels(request);
+    } finally {
+      endAction();
+    }
+  }
+
   async function perform(
     action: () => Promise<ManagedSettingsSnapshot>,
     fixtureAction: () => ManagedSettingsSnapshot,
     success: string,
   ) {
-    setBusy(true);
+    if (!beginAction()) return false;
     setFailure("");
     try {
       const next = isTauriRuntime() ? await action() : fixtureAction();
@@ -1731,7 +1769,7 @@ export function ManagedSettingsPane({
       );
       return false;
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1924,7 +1962,7 @@ export function ManagedSettingsPane({
 
   async function inspectRepositoryImport() {
     if (!selectedSpace) return;
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       const proposal = isTauriRuntime()
@@ -1957,7 +1995,7 @@ export function ManagedSettingsPane({
           : "Repository configuration inspection failed.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1978,7 +2016,7 @@ export function ManagedSettingsPane({
       setFailure("Enter a new profile name for every rename decision.");
       return;
     }
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       if (isTauriRuntime()) {
@@ -2013,7 +2051,7 @@ export function ManagedSettingsPane({
           : "Repository configuration could not be applied.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -2113,7 +2151,7 @@ export function ManagedSettingsPane({
   }
 
   async function runMcpDiagnostic(operation: () => Promise<void>) {
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       await operation();
@@ -2124,7 +2162,7 @@ export function ManagedSettingsPane({
           : "The managed MCP operation failed.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -2276,7 +2314,8 @@ export function ManagedSettingsPane({
   }
 
   async function saveProvider() {
-    if (!providerEditor) return;
+    if (!providerEditor || busy) return;
+    const submitted = providerEditor;
     const provider = managedProvider(providerEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
@@ -2284,7 +2323,7 @@ export function ManagedSettingsPane({
       label: providerEditor.label,
       provider,
     };
-    await perform(
+    const saved = await perform(
       () => upsertGlobalProvider(request),
       () =>
         fixtureRevision((draft) => {
@@ -2297,11 +2336,14 @@ export function ManagedSettingsPane({
         }),
       "Provider saved.",
     );
-    setProviderEditor(null);
+    if (saved) {
+      setProviderEditor((current) => (current === submitted ? null : current));
+    }
   }
 
   async function saveModel() {
-    if (!modelEditor) return;
+    if (!modelEditor || busy) return;
+    const submitted = modelEditor;
     const model = managedModel(modelEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
@@ -2309,7 +2351,7 @@ export function ManagedSettingsPane({
       label: modelEditor.label,
       model,
     };
-    await perform(
+    const saved = await perform(
       () => upsertGlobalModel(request),
       () =>
         fixtureRevision((draft) => {
@@ -2322,7 +2364,9 @@ export function ManagedSettingsPane({
         }),
       "Model saved.",
     );
-    setModelEditor(null);
+    if (saved) {
+      setModelEditor((current) => (current === submitted ? null : current));
+    }
   }
 
   async function saveSearch() {
@@ -2685,6 +2729,7 @@ export function ManagedSettingsPane({
             modelEditor={modelEditor}
             setModelEditor={setModelEditor}
             onSaveModel={() => void saveModel()}
+            onDiscoverModels={discoverModels}
             searchEditor={searchEditor}
             setSearchEditor={setSearchEditor}
             onSaveSearch={() => void saveSearch()}
@@ -2701,7 +2746,7 @@ export function ManagedSettingsPane({
             onDeleteCredential={(id) => void removeCredential(id)}
             onConfigureManaged={onConfigureManaged}
             desktop={desktop}
-            connecting={connecting}
+            connecting={busy}
             updateChecking={updateChecking}
             updateMessage={updateMessage}
             externalTargets={externalTargets}
@@ -2847,6 +2892,7 @@ function GlobalSettingsBody({
   modelEditor,
   setModelEditor,
   onSaveModel,
+  onDiscoverModels,
   searchEditor,
   setSearchEditor,
   onSaveSearch,
@@ -2896,6 +2942,7 @@ function GlobalSettingsBody({
   modelEditor: ModelEditorDraft | null;
   setModelEditor: (draft: ModelEditorDraft | null) => void;
   onSaveModel: () => void;
+  onDiscoverModels: typeof discoverManagedProviderModels;
   searchEditor: SearchEditorDraft | null;
   setSearchEditor: (draft: SearchEditorDraft | null) => void;
   onSaveSearch: () => void;
@@ -3494,7 +3541,7 @@ function GlobalSettingsBody({
           <button
             className="button primary"
             type="button"
-            disabled={Boolean(modelEditor)}
+            disabled={busy || Boolean(modelEditor)}
             onClick={() =>
               setModelEditor({
                 ...EMPTY_MODEL_DRAFT,
@@ -3510,11 +3557,14 @@ function GlobalSettingsBody({
         {modelEditor ? (
           <ModelEditor
             draft={modelEditor}
+            workspaceId={desktop.workspace?.workspaceId ?? null}
+            catalogRevision={global.revision}
             providers={global.providers.filter((entry) => !entry.archived)}
             busy={busy}
             onChange={setModelEditor}
             onCancel={() => setModelEditor(null)}
             onSave={onSaveModel}
+            onDiscoverModels={onDiscoverModels}
           />
         ) : null}
         <section
@@ -3611,6 +3661,7 @@ function GlobalSettingsBody({
                       className="button secondary"
                       type="button"
                       aria-label={`Edit ${entry.label}`}
+                      disabled={busy}
                       onClick={() => setModelEditor(modelDraft(entry))}
                     >
                       <IconEdit size={15} aria-hidden="true" /> Edit
@@ -3700,7 +3751,7 @@ function GlobalSettingsBody({
           <button
             className="button primary"
             type="button"
-            disabled={Boolean(providerEditor)}
+            disabled={busy || Boolean(providerEditor)}
             onClick={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
           >
             <IconPlus size={16} /> Add provider
@@ -3796,6 +3847,7 @@ function GlobalSettingsBody({
                       className="button secondary"
                       type="button"
                       aria-label={`Edit ${entry.label}`}
+                      disabled={busy}
                       onClick={() => setProviderEditor(providerDraft(entry))}
                     >
                       <IconEdit size={15} aria-hidden="true" /> Edit
@@ -6543,7 +6595,7 @@ function ProviderEditor({
       aria-labelledby="provider-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        if (!busy) onSave();
       }}
     >
       <div className="provider-editor-heading">
@@ -6561,6 +6613,7 @@ function ProviderEditor({
           className="icon-button"
           type="button"
           aria-label="Close provider editor"
+          disabled={busy}
           onClick={onCancel}
         >
           <IconX size={17} />
@@ -6580,6 +6633,7 @@ function ProviderEditor({
           <label>
             <span>Display label</span>
             <input
+              disabled={busy}
               value={draft.label}
               placeholder="For example, OpenRouter production"
               aria-describedby="provider-label-help"
@@ -6593,6 +6647,7 @@ function ProviderEditor({
           <label>
             <span>Profile ID</span>
             <input
+              disabled={busy}
               value={draft.profile}
               placeholder="openrouter-production"
               aria-describedby="provider-profile-help"
@@ -6615,10 +6670,26 @@ function ProviderEditor({
           <h5 id="provider-editor-connection-heading">Connection</h5>
           <p>Choose the provider API format and endpoint.</p>
         </div>
+        <ProviderPresetSelect
+          kind={draft.kind}
+          baseUrl={draft.baseUrl}
+          busy={busy}
+          onSelect={(preset) =>
+            onChange({
+              ...draft,
+              kind: presetProviderKind(preset),
+              baseUrl: preset.baseUrl ?? "",
+              label: draft.label || preset.label,
+              profile: draft.profile || preset.id,
+              credentialId: "",
+            })
+          }
+        />
         <div className="provider-editor-grid provider-connection-grid">
           <label>
             <span>Adapter</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.kind}
               aria-describedby="provider-adapter-help"
               onChange={(event) =>
@@ -6642,7 +6713,7 @@ function ProviderEditor({
               value={
                 codex ? "https://chatgpt.com/backend-api/codex" : draft.baseUrl
               }
-              disabled={codex}
+              disabled={busy || codex}
               aria-describedby="provider-endpoint-help"
               required
               onChange={(event) =>
@@ -6670,7 +6741,7 @@ function ProviderEditor({
             <span>Credential reference</span>
             <DropdownSelect
               value={codex ? "" : draft.credentialId}
-              disabled={codex}
+              disabled={busy || codex}
               aria-describedby="provider-credential-help"
               onChange={(event) =>
                 onChange({ ...draft, credentialId: event.target.value })
@@ -6717,6 +6788,7 @@ function ProviderEditor({
           <label>
             <span>Request timeout (ms)</span>
             <input
+              disabled={busy}
               type="number"
               min={1}
               max={3_600_000}
@@ -6740,7 +6812,12 @@ function ProviderEditor({
         </div>
       </section>
       <div className="mcp-editor-actions">
-        <button className="button secondary" type="button" onClick={onCancel}>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
         <button className="button primary" type="submit" disabled={busy}>
@@ -6752,31 +6829,53 @@ function ProviderEditor({
   );
 }
 
+function resetModelDraft(draft: ModelEditorDraft): ModelEditorDraft {
+  const model = resetModelMetadata(managedModel(draft));
+  return { ...draft, ...model, ...model.capabilities };
+}
+
 function ModelEditor({
   draft,
+  workspaceId,
+  catalogRevision,
   providers,
   busy,
   onChange,
   onCancel,
   onSave,
+  onDiscoverModels,
 }: {
   draft: ModelEditorDraft;
+  workspaceId: string | null;
+  catalogRevision: number;
   providers: CatalogEntry<ManagedProviderCatalogValue>[];
   busy: boolean;
   onChange: (draft: ModelEditorDraft) => void;
   onCancel: () => void;
   onSave: () => void;
+  onDiscoverModels: typeof discoverManagedProviderModels;
 }) {
+  const provider = providers
+    .map(currentValue)
+    .find((candidate) => candidate.profile === draft.providerProfile);
   const title = draft.resourceId
     ? `Edit ${draft.label || "model"}`
     : "Add model";
+  const connectionKey = JSON.stringify([
+    workspaceId,
+    catalogRevision,
+    provider?.profile,
+    provider?.kind,
+    provider?.baseUrl,
+    provider?.credentialId,
+  ]);
   return (
     <form
       className="mcp-editor catalog-editor model-editor"
       aria-labelledby="model-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        if (!busy) onSave();
       }}
     >
       <div className="model-editor-heading">
@@ -6791,6 +6890,7 @@ function ModelEditor({
           className="icon-button"
           type="button"
           aria-label="Close model editor"
+          disabled={busy}
           onClick={onCancel}
         >
           <IconX size={17} />
@@ -6810,6 +6910,7 @@ function ModelEditor({
           <label>
             <span>Display label</span>
             <input
+              disabled={busy}
               value={draft.label}
               placeholder="For example, Primary reasoning model"
               aria-describedby="model-label-help"
@@ -6823,6 +6924,7 @@ function ModelEditor({
           <label>
             <span>Profile ID</span>
             <input
+              disabled={busy}
               value={draft.profile}
               placeholder="primary-reasoning"
               aria-describedby="model-profile-help"
@@ -6849,11 +6951,16 @@ function ModelEditor({
           <label>
             <span>Provider profile</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.providerProfile}
               aria-describedby="model-provider-help"
               required
               onChange={(event) =>
-                onChange({ ...draft, providerProfile: event.target.value })
+                onChange({
+                  ...resetModelDraft(draft),
+                  providerProfile: event.target.value,
+                  model: "",
+                })
               }
             >
               <option value="">Select provider</option>
@@ -6873,12 +6980,16 @@ function ModelEditor({
           <label>
             <span>Model identifier</span>
             <input
+              disabled={busy}
               value={draft.model}
               placeholder="Provider-specific model name"
               aria-describedby="model-identifier-help"
               required
               onChange={(event) =>
-                onChange({ ...draft, model: event.target.value })
+                onChange({
+                  ...resetModelDraft(draft),
+                  model: event.target.value,
+                })
               }
             />
             <small id="model-identifier-help">
@@ -6886,6 +6997,41 @@ function ModelEditor({
             </small>
           </label>
         </div>
+        <ProviderModelPicker
+          key={connectionKey}
+          connectionKey={connectionKey}
+          model={draft.model}
+          disabled={busy || workspaceId === null || provider === undefined}
+          onLoad={async () => {
+            if (workspaceId === null || !provider) return [];
+            const result = await onDiscoverModels({
+              workspaceId,
+              providerKind: provider.kind,
+              baseUrl: provider.baseUrl,
+              credentialAction: provider.credentialId ? "reuse" : "none",
+              ...(provider.credentialId
+                ? { credentialId: provider.credentialId }
+                : {}),
+            });
+            if (result.errorMessage) throw new Error(result.errorMessage);
+            return result.models;
+          }}
+          onSelect={(entry) => {
+            const selected = selectCatalogModel(managedModel(draft), entry);
+            onChange({
+              ...draft,
+              ...selected,
+              ...selected.capabilities,
+              label: draft.label || entry.display_name || entry.id,
+              profile:
+                draft.profile ||
+                entry.id.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 64),
+            });
+          }}
+        />
+        {workspaceId === null ? (
+          <p>Choose a Workspace to load this provider’s models.</p>
+        ) : null}
       </section>
       <section
         className="model-editor-section"
@@ -6901,6 +7047,7 @@ function ModelEditor({
           <label>
             <span>Context window (tokens)</span>
             <input
+              disabled={busy}
               type="number"
               min={1_024}
               value={draft.contextWindowTokens}
@@ -6919,6 +7066,7 @@ function ModelEditor({
           <label>
             <span>Maximum output (tokens)</span>
             <input
+              disabled={busy}
               type="number"
               min={1}
               value={draft.maxOutputTokens}
@@ -6947,6 +7095,7 @@ function ModelEditor({
         <div className="model-capability-grid">
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.toolCalls}
               onChange={(event) =>
                 onChange({ ...draft, toolCalls: event.target.checked })
@@ -6959,6 +7108,7 @@ function ModelEditor({
           </label>
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.streaming}
               onChange={(event) =>
                 onChange({ ...draft, streaming: event.target.checked })
@@ -6971,6 +7121,7 @@ function ModelEditor({
           </label>
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.imageInputs}
               onChange={(event) =>
                 onChange({ ...draft, imageInputs: event.target.checked })
@@ -6986,6 +7137,7 @@ function ModelEditor({
           <label>
             <span>Reasoning effort</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.reasoningEffort ?? "inherit"}
               aria-describedby="model-reasoning-help"
               onChange={(event) =>
@@ -7022,7 +7174,12 @@ function ModelEditor({
         </div>
       </section>
       <div className="mcp-editor-actions">
-        <button className="button secondary" type="button" onClick={onCancel}>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
         <button className="button primary" type="submit" disabled={busy}>

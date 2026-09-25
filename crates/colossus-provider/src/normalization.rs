@@ -841,47 +841,6 @@ pub(super) fn usage_detail(
         .transpose()
 }
 
-pub(super) fn normalize_models(bytes: &[u8]) -> Result<Vec<ProviderModelInfo>, ProviderError> {
-    let data: Value = serde_json::from_slice(bytes)
-        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
-    let (models, identifier_field) = data
-        .get("data")
-        .and_then(Value::as_array)
-        .map(|models| (models, "id"))
-        .or_else(|| {
-            data.get("models")
-                .and_then(Value::as_array)
-                .map(|models| (models, "slug"))
-        })
-        .ok_or_else(|| {
-            ProviderError::Malformed("models payload has no data or models array".into())
-        })?;
-    let mut output = models
-        .iter()
-        .filter_map(|model| {
-            let model = model.as_object()?;
-            Some(ProviderModelInfo {
-                id: model.get(identifier_field)?.as_str()?.to_owned(),
-                object: model
-                    .get("object")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                owned_by: model
-                    .get("owned_by")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            })
-        })
-        .collect::<Vec<_>>();
-    output.sort_by(|left, right| left.id.cmp(&right.id));
-    if output.is_empty() {
-        return Err(ProviderError::Malformed(
-            "models payload contains no valid model records".into(),
-        ));
-    }
-    Ok(output)
-}
-
 pub(super) fn function_call_event(
     call_id: Option<&Value>,
     name: Option<&Value>,

@@ -151,6 +151,14 @@ commands dispatch it without receiving secret values from the renderer.
 - Desktop Codex account commands remain native interface adapters: they delegate login
   and logout to `colossus-codex-auth`, while runtime/provider construction stays in the
   sidecar and `colossus-runtime`. The renderer receives status only.
+- Provider setup choices belong to the shared credential-free contracts catalog.
+  CLI and Desktop expose these presets separately from Chat Completions, Responses,
+  and Codex protocols. Catalog discovery runs through the existing runtime provider
+  effect gateway, including before a model is selected; an offline echo route allows
+  the connection to be inspected without a fabricated model ID or generation.
+  Provider adapters normalize bounded, optional model-card metadata. Missing limits
+  or capabilities remain distinguishable from provider-declared values, and model
+  selection never grants tools or changes policy based on remote descriptions.
 - Top-level user-facing runs snapshot bounded home and repository `AGENTS.md`
   instructions before provider execution. Goal iterations and delegated subagents
   carry that immutable snapshot and provenance; internal risk, summarization, and

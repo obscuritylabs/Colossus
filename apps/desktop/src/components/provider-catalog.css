@@ -1,0 +1,113 @@
+.provider-preset-control,
+.provider-model-picker {
+  min-width: 0;
+}
+
+.provider-preset-control > label {
+  display: grid;
+  gap: 7px;
+}
+
+.provider-model-picker {
+  display: grid;
+  color: var(--text);
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-inset);
+}
+
+.provider-catalog-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-catalog-heading h4,
+.provider-catalog-heading p,
+.provider-catalog-count,
+.provider-catalog-note {
+  margin: 0;
+}
+
+.provider-catalog-heading p,
+.provider-catalog-count,
+.provider-catalog-note,
+.provider-model-overrides > p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-model-search {
+  display: grid;
+  gap: 6px;
+}
+
+.provider-model-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 8px;
+  max-height: 350px;
+  overflow: auto;
+  padding: 3px;
+}
+
+.provider-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.provider-model-card:hover {
+  background: var(--surface-hover);
+}
+
+.provider-model-card.is-selected {
+  border-color: var(--cyan);
+  box-shadow: inset 0 0 0 1px var(--cyan);
+}
+
+.provider-model-id,
+.provider-model-description,
+.provider-model-facts {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-model-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.provider-model-overrides > summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.provider-fields label.provider-credential-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.provider-fields .provider-credential-toggle input[type="checkbox"] {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+}

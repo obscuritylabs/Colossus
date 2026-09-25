@@ -29,6 +29,63 @@ OpenRouter, local servers, and other compatible endpoints separately.
 
 ## Steps
 
+### Guided setup
+
+For a new configuration, run `colossus provider setup`. In a terminal, choose a
+provider from the shared preset list, load its model catalog, and select a model by
+number or ID. Authenticate first using `colossus codex login` for Codex, or set the
+environment variable shown by `colossus provider presets` for an API-key service.
+Keys are never command-line arguments or YAML values.
+
+```bash
+colossus provider presets
+colossus provider discover --preset openrouter
+colossus provider setup --preset openrouter
+```
+
+Presets include Codex, OpenAI, OpenRouter, Groq, Together AI, DeepSeek, Mistral,
+Ollama, and LM Studio. Choose `custom-chat` or `custom-responses` for another
+compatible service and supply its API **base** URL, including any version prefix:
+
+```bash
+colossus provider discover --preset custom-responses \
+  --base-url http://localhost:1234/v1 --no-credential
+```
+
+Model cards retain provider-reported names, descriptions, context/output limits,
+capabilities, and reasoning options when available. A bare `/models` response may
+contain only IDs; Colossus does not infer missing capabilities from a model name.
+Setup uses 32,768 context and 4,096 output tokens when metadata is absent (with a
+smaller output reservation for small contexts). Unknown capabilities remain off.
+Pass `--context-window-tokens`, `--max-output-tokens`, `--tool-calls true`,
+`--streaming true`, or `--image-inputs true` to declare supported features.
+
+For manual or unattended setup, `--model` skips catalog discovery. This also works
+when a server supports generation but has no model-list endpoint:
+
+```bash
+colossus --config new-provider.yaml provider setup --preset custom-chat \
+  --base-url https://gateway.example.com/v1 --credential-env PROVIDER_API_KEY \
+  --model YOUR_MODEL_ID --context-window-tokens 128000 \
+  --max-output-tokens 16000 --tool-calls true --streaming true
+```
+
+Setup creates a user-level configuration, or a repository configuration with
+`--local`. It refuses to overwrite an existing file; use `--config NEW_PATH` to
+prepare a separate configuration. `provider discover` works before configuration
+exists and sends only a catalog request through the normal policy and audit path.
+Discovery evidence uses a separate `provider-discovery.redb` journal in the CLI
+workspace partition. For an existing configuration, `provider models PROFILE`
+loads the same normalized cards using that configured connection.
+
+In Desktop, select a provider during setup, enter a custom base URL if needed, then
+choose **Load models**. API keys are entered in the native credential prompt and
+Codex uses its account sign-in. Select a model card to fill advertised metadata;
+manual model entry and advanced overrides remain available. Switching connections
+clears the prior catalog so results from another provider cannot be selected.
+
+The following steps document manual configuration and credential setup in detail.
+
 ### 1. Authenticate without placing a credential in YAML
 
 For a Codex subscription, install the official Codex CLI and let it own the ChatGPT

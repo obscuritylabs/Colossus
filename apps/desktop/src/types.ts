@@ -269,6 +269,16 @@ export interface ConfigureManagedRuntimeRequest {
   accessProfile: AccessProfile;
   executionBoundary: ExecutionBoundary;
   replaceCredential: boolean;
+  baseUrl?: string;
+  credentialId?: string;
+  noCredential?: boolean;
+  modelMetadata?: {
+    contextWindowTokens: number;
+    maxOutputTokens: number;
+    toolCalls: boolean;
+    imageInputs: boolean;
+    streaming: boolean;
+  };
 }
 
 export type CredentialAction = "none" | "reuse" | "replace";
@@ -279,6 +289,7 @@ export interface ManagedProviderConfigurationInput {
   baseUrl: string;
   timeoutMs: number | null;
   credentialAction: CredentialAction;
+  credentialId?: string;
 }
 
 export interface ApplyManagedModelConfigurationRequest {
