@@ -41,6 +41,51 @@ impl Drop for Parent {
 }
 
 #[test]
+fn native_dialog_has_a_title_and_stays_in_the_owner_monitor_work_area() {
+    let _ownership = TEST_OWNERSHIP.lock().unwrap();
+    let parent = Parent::new();
+    let (completion, mut result) = Completion::acquire().unwrap();
+    let window = unsafe {
+        create(
+            parent.0,
+            Arc::new(AtomicBool::new(false)),
+            completion,
+            false,
+        )
+    }
+    .unwrap();
+    let mut title = [0_u16; 128];
+    let copied = unsafe { GetWindowTextW(window, title.as_mut_ptr(), 128) };
+    assert_eq!(
+        String::from_utf16(&title[..usize::try_from(copied).unwrap()]).unwrap(),
+        "Save a Colossus credential"
+    );
+    let mut bounds = RECT::default();
+    assert_ne!(unsafe { GetWindowRect(window, &raw mut bounds) }, 0);
+    let mut monitor = MONITORINFO {
+        cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap(),
+        ..Default::default()
+    };
+    assert_ne!(
+        unsafe {
+            GetMonitorInfoW(
+                MonitorFromWindow(parent.0, MONITOR_DEFAULTTONEAREST),
+                &raw mut monitor,
+            )
+        },
+        0
+    );
+    assert!(bounds.left >= monitor.rcWork.left);
+    assert!(bounds.top >= monitor.rcWork.top);
+    assert!(bounds.right <= monitor.rcWork.right);
+    assert!(bounds.bottom <= monitor.rcWork.bottom);
+    unsafe {
+        DestroyWindow(window);
+    }
+    assert!(matches!(result.try_recv(), Ok(Err(PromptError::Cancelled))));
+}
+
+#[test]
 fn native_edit_accepts_exact_boundary_values_without_default_32k_truncation() {
     let _ownership = TEST_OWNERSHIP.lock().unwrap();
     for length in [761, 762, 2_560, 2_561, 8_192, 65_536] {

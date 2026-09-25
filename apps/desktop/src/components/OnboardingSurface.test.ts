@@ -165,7 +165,7 @@ describe("OnboardingSurface", () => {
     expect(markup).not.toContain("Unsafe: Full access.");
     expect(markup).toContain("Replace the stored API key");
     expect(markup).toContain(
-      "The existing provider key remains in the OS keychain.",
+      "The existing provider key remains in the encrypted credential vault.",
     );
     expect(markup).toContain('type="checkbox"');
     expect(markup).not.toContain('type="checkbox" checked=""');

@@ -47,7 +47,7 @@ colossus-credentials = { version = "=0.10.10-preview.18", path = "../../../crate
 colossus-home = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-home" }
 colossus-media = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-media" }
 colossus-network = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-network" }
-colossus-native-credential-ui = { path = "../native-credential-ui" }
+colossus-native-credential-ui = { version = "=0.1.0", path = "../native-credential-ui" }
 colossus-ports = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-ports" }
 colossus-sdk = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
 colossus-sidecar-protocol = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-sidecar-protocol" }

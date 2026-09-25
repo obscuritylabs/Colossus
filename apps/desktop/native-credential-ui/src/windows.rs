@@ -16,15 +16,17 @@ use std::{
     },
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    Graphics::Gdi::COLOR_WINDOW,
+    Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
+    Graphics::Gdi::{
+        COLOR_WINDOW, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    },
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         Input::KeyboardAndMouse::{EnableWindow, SetFocus},
         WindowsAndMessaging::{
-            BN_CLICKED, CREATESTRUCTW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
-            DestroyWindow, EN_CHANGE, GWLP_USERDATA, GetWindowLongPtrW, GetWindowTextLengthW,
-            GetWindowTextW, IDC_ARROW, IsWindow, KillTimer, LoadCursorW, RegisterClassW, SW_SHOW,
+            BN_CLICKED, CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE,
+            GWLP_USERDATA, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+            IDC_ARROW, IsWindow, KillTimer, LoadCursorW, RegisterClassW, SW_SHOW,
             SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_CLOSE,
             WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ENDSESSION, WM_NCCREATE, WM_NCDESTROY, WM_TIMER,
             WNDCLASSW, WS_CAPTION, WS_EX_DLGMODALFRAME, WS_SYSMENU,
@@ -37,6 +39,8 @@ const INPUT_ID: usize = 101;
 const SAVE_ID: usize = 102;
 const CANCEL_ID: usize = 103;
 const POLL_TIMER: usize = 1;
+const WINDOW_WIDTH: i32 = 620;
+const WINDOW_HEIGHT: i32 = 255;
 
 struct Session {
     parent: HWND,
@@ -104,16 +108,17 @@ unsafe fn create(
         result: RefCell::new(None),
     });
     let pointer = Box::into_raw(session);
+    let (left, top) = unsafe { initial_position(parent) };
     let window = unsafe {
         CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             class.as_ptr(),
             wide("Save a Colossus credential").as_ptr(),
             WS_CAPTION | WS_SYSMENU,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            620,
-            255,
+            left,
+            top,
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
             parent,
             null_mut(),
             instance,
@@ -144,6 +149,31 @@ unsafe fn create(
     Some(window)
 }
 
+unsafe fn initial_position(parent: HWND) -> (i32, i32) {
+    let mut bounds = RECT::default();
+    let mut monitor = MONITORINFO {
+        cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).expect("monitor structure size"),
+        ..Default::default()
+    };
+    if unsafe { GetWindowRect(parent, &raw mut bounds) } == 0
+        || unsafe {
+            GetMonitorInfoW(
+                MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST),
+                &raw mut monitor,
+            )
+        } == 0
+    {
+        return (0, 0);
+    }
+    let work = monitor.rcWork;
+    let left = bounds.left + (bounds.right - bounds.left - WINDOW_WIDTH) / 2;
+    let top = bounds.top + (bounds.bottom - bounds.top - WINDOW_HEIGHT) / 2;
+    (
+        left.clamp(work.left, (work.right - WINDOW_WIDTH).max(work.left)),
+        top.clamp(work.top, (work.bottom - WINDOW_HEIGHT).max(work.top)),
+    )
+}
+
 unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
@@ -161,7 +191,8 @@ unsafe extern "system" fn window_proc(
         unsafe {
             SetWindowLongPtrW(window, GWLP_USERDATA, creation.lpCreateParams as isize);
         }
-        return 1;
+        // Preserve native non-client initialization, including the window title.
+        return unsafe { DefWindowProcW(window, message, wparam, lparam) };
     }
     let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *mut Session;
     if pointer.is_null() {
