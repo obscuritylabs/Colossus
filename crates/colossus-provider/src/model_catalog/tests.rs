@@ -49,6 +49,28 @@ fn codex_cards_preserve_names_context_and_supported_reasoning() {
 }
 
 #[test]
+fn codex_catalog_preserves_new_model_families_without_a_local_allowlist() {
+    let ids = ["gpt-5.6", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol"];
+    let models = normalize(json!({"models": ids.map(|id| json!({
+        "slug": id, "display_name": id,
+        "supported_reasoning_levels": [{"effort": "high"}],
+        "future_catalog_field": {"enabled": true}
+    }))}));
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert!(
+        models
+            .iter()
+            .all(|model| { model.supported_reasoning_efforts == vec![ReasoningEffort::High] })
+    );
+}
+
+#[test]
 fn sparse_and_malformed_metadata_stay_unknown() {
     let models = normalize(json!({"data": [
         {"id": "gpt-looking-name"},

@@ -220,6 +220,16 @@ test("catalog loading locks conflicting actions and workspace changes ignore pen
   await expect(
     page.getByRole("button", { name: "Loading models…" }),
   ).toBeVisible();
+  const loading = page.getByRole("status").filter({
+    hasText: "Loading models from your provider…",
+  });
+  await expect(loading).toBeVisible();
+  await expect(loading.locator("svg")).toBeVisible();
+  await expect(loading.locator("svg")).toHaveCSS("animation-name", "spin");
+  await expect(page.locator(".provider-model-picker")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
   await expect(page.getByLabel("API base URL", { exact: true })).toBeDisabled();
   for (const name of [
     "Choose another folder",
@@ -232,6 +242,7 @@ test("catalog loading locks conflicting actions and workspace changes ignore pen
     ).toBeDisabled();
   }
   await page.getByRole("button", { name: "Switch workspace fixture" }).click();
+  await expect(loading).toHaveCount(0);
   await page.evaluate(() =>
     (
       window as unknown as { releaseSlowCatalog: () => void }
@@ -245,6 +256,11 @@ test("catalog loading locks conflicting actions and workspace changes ignore pen
   );
   await page.getByRole("button", { name: "Load models", exact: true }).click();
   await page.getByRole("button", { name: /Compact Reasoner/ }).click();
+  await expect(loading).toHaveCount(0);
+  await expect(page.locator(".provider-model-picker")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
   await page
     .getByLabel("Model ID", { exact: true })
     .fill("private-manual-model");

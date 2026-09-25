@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { IconLoader2 } from "@tabler/icons-react";
 import {
   filterCatalogModels,
   type ProviderCatalogModel,
@@ -102,10 +103,16 @@ export function ProviderModelPicker({
         </button>
       </div>
       {state === "loading" ? (
-        <p className="provider-catalog-note" role="status">
-          Connecting to your provider. If a Colossus window is waiting for your
-          input, complete or cancel it to continue.
-        </p>
+        <div className="provider-catalog-loading" role="status">
+          <IconLoader2 className="spin-icon" size={20} aria-hidden="true" />
+          <div>
+            <strong>Loading models from your provider…</strong>
+            <p className="provider-catalog-note">
+              If a Colossus window is waiting for your input, complete or cancel
+              it to continue.
+            </p>
+          </div>
+        </div>
       ) : null}
       {state === "error" ? (
         <p role="alert" className="page-error">
