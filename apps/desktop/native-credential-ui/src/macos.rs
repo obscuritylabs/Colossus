@@ -255,12 +255,10 @@ fn open_sheet(
         content.addSubview(&cancel);
     }
     panel.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
-    // SAFETY: Each target is a live view retained by this sheet for the key loop.
-    unsafe {
-        input.setNextKeyView(Some(&save));
-        save.setNextKeyView(Some(&cancel));
-        cancel.setNextKeyView(Some(&input));
-    }
+    // Let AppKit maintain the loop as it inserts/removes the shared field editor
+    // and applies the user's full-keyboard-access preference.
+    panel.setInitialFirstResponder(Some(&input));
+    panel.setAutorecalculatesKeyViewLoop(true);
     // SAFETY: Timer's selector is implemented above with the required NSTimer
     // argument. Invalidating it during finish breaks its retained-target cycle.
     let timer = unsafe {

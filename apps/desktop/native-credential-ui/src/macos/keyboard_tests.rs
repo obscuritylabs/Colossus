@@ -5,11 +5,15 @@ use super::{
 use crate::DialogAppearance;
 use objc2_app_kit::{
     NSApplication, NSButton, NSEvent, NSEventModifierFlags, NSEventType, NSResponder,
-    NSSecureTextField, NSView,
+    NSSecureTextField,
 };
 use objc2_foundation::{NSPoint, NSString, ns_string};
 
 pub(super) fn run(mtm: MainThreadMarker) {
+    println!(
+        "AppKit full keyboard access: {}",
+        NSApplication::sharedApplication(mtm).isFullKeyboardAccessEnabled()
+    );
     keyboard_save(mtm);
     keyboard_cancel(mtm);
 }
@@ -25,7 +29,7 @@ fn keyboard_save(mtm: MainThreadMarker) {
         completion,
         DialogAppearance::default(),
     );
-    let (panel, input, save) = {
+    let (panel, input, save, status) = {
         let controller = controller();
         let borrowed = controller.ivars().session.borrow();
         let session = borrowed.as_ref().unwrap();
@@ -33,8 +37,11 @@ fn keyboard_save(mtm: MainThreadMarker) {
             session.panel.clone(),
             session.input.clone(),
             session.save.clone(),
+            session.status.clone(),
         )
     };
+    panel.makeKeyAndOrderFront(None);
+    assert!(input.currentEditor().is_some());
     accessibility_tests::secure_input(&input);
     accessibility_tests::button_enabled(&save, ns_string!("Save"), false);
     panel.performKeyEquivalent(&key(&panel, "\r", 36, false));
@@ -45,6 +52,11 @@ fn keyboard_save(mtm: MainThreadMarker) {
     accessibility_tests::secure_input(&input);
     traversal(&panel, &input, &save, mtm);
     assert_eq!(current_text(&input).to_string(), "SYNTHETIC-KEYBOARD");
+    assert_eq!(
+        status.stringValue().length(),
+        0,
+        "navigation must not submit invalid text edits"
+    );
     assert!(panel.performKeyEquivalent(&key(&panel, "\r", 36, false)));
     assert_eq!(
         result.try_recv().unwrap().unwrap().expose(),
@@ -55,18 +67,36 @@ fn keyboard_save(mtm: MainThreadMarker) {
 }
 
 fn traversal(panel: &NSWindow, input: &NSSecureTextField, save: &NSButton, mtm: MainThreadMarker) {
-    // SAFETY: Production explicitly retains every target in this key-view loop.
-    let cancel = unsafe {
-        let next = input.nextKeyView().unwrap();
-        assert!(same_view(&next, save));
-        let cancel = save.nextKeyView().unwrap();
-        assert!(same_view(&cancel.nextKeyView().unwrap(), input));
-        assert!(same_view(&input.previousKeyView().unwrap(), &cancel));
-        cancel
-    };
+    let views = panel.contentView().unwrap().subviews();
+    let cancel = (0..views.count())
+        .find_map(|index| {
+            views
+                .objectAtIndex(index)
+                .downcast::<NSButton>()
+                .ok()
+                .filter(|button| &*button.title() == ns_string!("Cancel"))
+        })
+        .expect("Cancel button in the sheet");
+    accessibility_tests::button_enabled(&cancel, ns_string!("Cancel"), true);
+    // While editing, AppKit inserts a shared field editor into its responder/key
+    // structure. Verify delivered keyboard behavior, not intermediate pointers.
     panel.sendEvent(&key(panel, "\t", 48, false));
     if NSApplication::sharedApplication(mtm).isFullKeyboardAccessEnabled() {
-        assert!(same_responder(&panel.firstResponder().unwrap(), save));
+        let first = panel.firstResponder().unwrap();
+        assert!(same_responder(&first, save) || same_responder(&first, &cancel));
+        let second = if same_responder(&first, save) {
+            &*cancel
+        } else {
+            save
+        };
+        tab_to(panel, second, false);
+        panel.sendEvent(&key(panel, "\t", 48, false));
+        assert!(
+            input.currentEditor().is_some(),
+            "Tab must return to secure entry"
+        );
+        tab_to(panel, second, true);
+        tab_to(panel, &first, true);
     } else {
         assert!(
             input.currentEditor().is_some(),
@@ -78,11 +108,14 @@ fn traversal(panel: &NSWindow, input: &NSSecureTextField, save: &NSButton, mtm: 
         input.currentEditor().is_some(),
         "Shift-Tab returns to secure entry"
     );
-    accessibility_tests::button_enabled(&cancel, ns_string!("Cancel"), true);
 }
 
-fn same_view(left: &NSView, right: &NSView) -> bool {
-    std::ptr::eq(left, right)
+fn tab_to(panel: &NSWindow, expected: &NSResponder, shifted: bool) {
+    panel.sendEvent(&key(panel, "\t", 48, shifted));
+    assert!(
+        same_responder(&panel.firstResponder().unwrap(), expected),
+        "Tab must visit both buttons once and reverse consistently with Shift-Tab"
+    );
 }
 
 fn same_responder(left: &NSResponder, right: &NSResponder) -> bool {
@@ -106,6 +139,7 @@ fn keyboard_cancel(mtm: MainThreadMarker) {
         let session = borrowed.as_ref().unwrap();
         (session.panel.clone(), session.input.clone())
     };
+    panel.makeKeyAndOrderFront(None);
     insert(&input.currentEditor().unwrap(), "SYNTHETIC-CANCEL");
     assert!(panel.performKeyEquivalent(&key(&panel, "\u{1b}", 53, false)));
     assert!(matches!(result.try_recv(), Ok(Err(PromptError::Cancelled))));
@@ -114,7 +148,12 @@ fn keyboard_cancel(mtm: MainThreadMarker) {
 }
 
 fn key(window: &NSWindow, characters: &str, code: u16, shifted: bool) -> Retained<NSEvent> {
-    let characters = NSString::from_str(characters);
+    // A native Shift-Tab event carries NSBackTabCharacter, not a literal tab.
+    let characters = NSString::from_str(if shifted && characters == "\t" {
+        "\u{19}"
+    } else {
+        characters
+    });
     NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
         NSEventType::KeyDown,
         NSPoint::new(0.0, 0.0),
