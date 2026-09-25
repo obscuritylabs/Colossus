@@ -1049,6 +1049,7 @@ pub(crate) async fn configure_managed_runtime(
     app: AppHandle,
     state: State<'_, AppState>,
     mut request: ConfigureManagedRuntimeInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     request.validate()?;
     let _guard = connect_guard(&state)?;
@@ -1127,7 +1128,15 @@ pub(crate) async fn configure_managed_runtime(
         }
         return desktop_status_from(&state, &settings).await;
     }
-    configure_managed_provider_runtime(&app, state.inner(), &store, settings, request).await
+    configure_managed_provider_runtime(
+        &app,
+        state.inner(),
+        &store,
+        settings,
+        request,
+        appearance.into(),
+    )
+    .await
 }
 
 async fn configure_managed_provider_runtime(
@@ -1136,9 +1145,11 @@ async fn configure_managed_provider_runtime(
     store: &SettingsStore,
     mut settings: DesktopSettings,
     mut request: ConfigureManagedRuntimeInput,
+    appearance: colossus_native_credential_ui::DialogAppearance,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let previous_settings = settings.clone();
-    let secret = provider_enrollment::request_provider_secret(credential_parent(app)?).await?;
+    let secret =
+        provider_enrollment::request_provider_secret(credential_parent(app)?, appearance).await?;
     let vault = DesktopCredentials::for_settings(state, store)?;
     let native_store = store.clone();
     let (next, rotation) = tokio::task::spawn_blocking(move || {
@@ -1284,6 +1295,7 @@ pub(crate) async fn apply_managed_model_configuration(
     app: AppHandle,
     state: State<'_, AppState>,
     request: ApplyManagedModelConfigurationInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     request.validate()?;
     let _guard = connect_guard(&state)?;
@@ -1308,6 +1320,7 @@ pub(crate) async fn apply_managed_model_configuration(
         &mut settings,
         &previous_settings,
         &credentials.fresh_ids,
+        appearance.into(),
     )
     .await?;
     settings.providers = request.providers_with_credentials(&credentials.by_profile);
@@ -1507,6 +1520,7 @@ async fn stage_provider_credentials(
     settings: &mut DesktopSettings,
     previous_settings: &DesktopSettings,
     fresh_ids: &[String],
+    appearance: colossus_native_credential_ui::DialogAppearance,
 ) -> Result<(), CommandErrorDto> {
     // Persist cleanup intent before creating any encrypted credential records. A crash
     // during enrollment can therefore be repaired on the next Desktop startup.
@@ -1517,7 +1531,8 @@ async fn stage_provider_credentials(
     for credential_id in fresh_ids {
         let result = async {
             let secret =
-                provider_enrollment::request_provider_secret(credential_parent(app)?).await?;
+                provider_enrollment::request_provider_secret(credential_parent(app)?, appearance)
+                    .await?;
             DesktopCredentials::for_settings(state, store)?
                 .write(credential_id, secret)
                 .await

@@ -409,7 +409,10 @@ bounded to 256 bytes. Journal and session keys are independent.
 
 Composition supplies an owner-private `ConfinedRoot`. Handle-based file access,
 a lifetime exclusive lease, and immediate-durability transactions prevent competing
-owners or unsafe paths from weakening storage. Initialization durably records
+owners or unsafe paths from weakening storage. Runtime vault ownership binds to the
+canonical private state directory, so renaming its state database does not invalidate
+the adjacent vault. OAuth record identities separately bind repository, server, and
+endpoint. Initialization durably records
 `PendingKey`, creates an OS entry only if that exact pending identity is absent,
 validates readback, and atomically commits an encrypted verification record with
 `Ready`. An interrupted empty pending vault can resume. A ready vault never
@@ -425,6 +428,16 @@ Before sidecar creation, the actual tagged bootstrap frame is encoded into bound
 zeroizing memory: at most 64 host credentials and 2 MiB including escaping and
 metadata. The receiver retains independent validation. Credential-derived HTTP
 headers are marked sensitive.
+
+Native entry is defense in depth against compromised renderer JavaScript reading a
+token from the legitimate enrollment field. A masked HTML input would still expose
+its value to that JavaScript; encrypted storage would not protect this entry step.
+This boundary complements the restrictive CSP, sanitized model content, narrow IPC,
+and native consent checks. It does not establish that a renderer exploit exists,
+protect against compromised native code or the operating system, or prevent a
+malicious renderer from displaying a deceptive replacement prompt. Native controls
+therefore retain the application's appearance and accessibility requirements without
+being described as a universal guarantee against frontend compromise.
 
 The cutover does not read or migrate old secret entries. Existing non-secret settings
 and credential references remain; operators re-enter manual tokens under their

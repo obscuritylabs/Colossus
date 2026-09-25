@@ -1,4 +1,4 @@
-use super::{CANCEL_ID, SAVE_ID, Session, wide};
+use super::{CANCEL_ID, SAVE_ID, Session, painting, wide};
 use crate::validation::{InputError, validate_units};
 use colossus_contracts::MAX_HOST_SECRET_BYTES;
 use std::slice;
@@ -14,7 +14,7 @@ use windows_sys::Win32::{
         Shell::{DefSubclassProc, RemoveWindowSubclass},
         WindowsAndMessaging::{
             GetParent, GetWindowTextLengthW, PostMessageW, SendMessageW, SetWindowTextW, WM_CHAR,
-            WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_PASTE, WM_SETTEXT,
+            WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_PASTE, WM_SETTEXT, WM_SYSCHAR,
         },
     },
 };
@@ -22,7 +22,9 @@ use zeroize::Zeroizing;
 
 pub(super) unsafe fn error(pointer: *const Session, error: InputError) {
     unsafe {
-        SetWindowTextW((*pointer).status, wide(error.message()).as_ptr());
+        (*pointer).has_error.set(true);
+        SetWindowTextW((*pointer).error, wide(error.message()).as_ptr());
+        painting::invalidate_input(pointer);
     }
 }
 
@@ -58,6 +60,12 @@ pub(super) unsafe extern "system" fn control_proc(
             RemoveWindowSubclass(window, Some(control_proc), id);
         }
         return unsafe { DefSubclassProc(window, message, wparam, lparam) };
+    }
+    unsafe {
+        painting::control_state(window, message, pointer);
+    }
+    if message == WM_SYSCHAR && unsafe { mnemonic(wparam, pointer) } {
+        return 0;
     }
     if message == WM_KEYDOWN && unsafe { keyboard(window, wparam, pointer) } {
         return 0;
@@ -230,4 +238,28 @@ unsafe fn keyboard(window: HWND, wparam: WPARAM, pointer: *const Session) -> boo
     }
 
     false
+}
+
+pub(super) unsafe fn mnemonic(character: WPARAM, pointer: *const Session) -> bool {
+    let Ok(character) = u8::try_from(character) else {
+        return false;
+    };
+    let session = unsafe { &*pointer };
+    match character.to_ascii_lowercase() {
+        b't' => unsafe {
+            SetFocus(session.input);
+        },
+        b's' | b'c' => {
+            let command = if character.eq_ignore_ascii_case(&b's') {
+                SAVE_ID
+            } else {
+                CANCEL_ID
+            };
+            unsafe {
+                PostMessageW(GetParent(session.input), WM_COMMAND, command, 0);
+            }
+        }
+        _ => return false,
+    }
+    true
 }

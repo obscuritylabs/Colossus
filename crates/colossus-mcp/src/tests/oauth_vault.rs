@@ -4,6 +4,8 @@ use colossus_ports::{CredentialKey, CredentialVault};
 use redb::ReadableTable as _;
 use rmcp::transport::auth::{CredentialStore as _, StoredCredentials};
 
+mod refresh;
+
 #[derive(Default)]
 struct MemoryVault(Mutex<BTreeMap<CredentialKey, VaultRecord>>);
 

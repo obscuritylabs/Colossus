@@ -18,6 +18,9 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(target_os = "macos")]
+#[path = "credential_acceptance_cleanup.rs"]
+mod cleanup;
 #[path = "credential_acceptance_fixture.rs"]
 mod fixture;
 
@@ -404,6 +407,10 @@ impl PrivateAcceptanceRoot {
                 );
             }
         }
+        // Immutable plugin snapshots intentionally leave owner-read-only directories.
+        // Restore only this stopped test's owned directories before removing its home.
+        #[cfg(target_os = "macos")]
+        cleanup::prepare_removal(&self.0).expect("prepare generated acceptance directories");
         std::fs::remove_dir_all(&self.0).expect("remove generated private acceptance files");
     }
 }

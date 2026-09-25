@@ -1,10 +1,12 @@
 //! Native message acceptance in a separate process with a private clipboard.
 
+#[path = "acceptance_appearance.rs"]
+mod appearance;
 #[path = "acceptance_isolation.rs"]
 mod isolation;
 
 use super::{CANCEL_ID, INPUT_ID, SAVE_ID, Session, create, wide};
-use crate::{PromptError, lifecycle::Completion, validation};
+use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
 use colossus_contracts::HostSecret;
 use isolation::{InputIsolation, set_clipboard};
 use std::{
@@ -35,7 +37,9 @@ pub(crate) fn run() {
     rejected_paste_preserves_exact_input();
     typed_character_boundaries();
     keyboard_traversal_and_actions();
+    mnemonic_actions();
     parent_close();
+    appearance::run();
     station.close();
     println!(
         "Windows native message acceptance passed: isolated clipboard paste boundaries, overflow rejection, exact saved tokens, keyboard traversal/actions, parent closure and exclusive ownership."
@@ -47,6 +51,7 @@ struct Dialog {
     window: HWND,
     input: HWND,
     status: HWND,
+    error: HWND,
     save: HWND,
     cancel: HWND,
     result: oneshot::Receiver<Result<HostSecret, PromptError>>,
@@ -54,6 +59,10 @@ struct Dialog {
 
 impl Dialog {
     fn new() -> Self {
+        Self::with_appearance(DialogAppearance::default())
+    }
+
+    fn with_appearance(appearance: DialogAppearance) -> Self {
         let parent = unsafe {
             CreateWindowExW(
                 0,
@@ -74,8 +83,16 @@ impl Dialog {
         let (completion, result) = Completion::acquire().unwrap();
         // The station is noninteractive: visible windows here do not appear on
         // the user's screen. Visibility enables real native keyboard focus.
-        let window =
-            unsafe { create(parent, Arc::new(AtomicBool::new(false)), completion, true) }.unwrap();
+        let window = unsafe {
+            create(
+                parent,
+                Arc::new(AtomicBool::new(false)),
+                completion,
+                true,
+                appearance,
+            )
+        }
+        .unwrap();
         let input = unsafe { GetDlgItem(window, i32::try_from(INPUT_ID).unwrap()) };
         let session = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const Session;
         assert_ne!(unsafe { SendMessageW(input, EM_GETPASSWORDCHAR, 0, 0) }, 0);
@@ -84,6 +101,7 @@ impl Dialog {
             window,
             input,
             status: unsafe { (*session).status },
+            error: unsafe { (*session).error },
             save: unsafe { GetDlgItem(window, i32::try_from(SAVE_ID).unwrap()) },
             cancel: unsafe { GetDlgItem(window, i32::try_from(CANCEL_ID).unwrap()) },
             result,
@@ -140,9 +158,10 @@ fn rejected_paste_preserves_exact_input() {
     dialog.paste(&"X".repeat(65_537));
     assert_eq!(read_text(dialog.input), "KEEP");
     assert_eq!(
-        read_text(dialog.status),
+        read_text(dialog.error),
         validation::InputError::TooLong.message()
     );
+    assert_eq!(read_text(dialog.status), "4 / 65,536 bytes");
     for invalid in [
         "X".repeat(65_537),
         "bad token".into(),
@@ -155,6 +174,7 @@ fn rejected_paste_preserves_exact_input() {
     let token = "X".repeat(65_536);
     dialog.paste(&token);
     assert_eq!(read_text(dialog.input), token);
+    assert!(read_text(dialog.error).is_empty());
     unsafe {
         SendMessageW(dialog.input, EM_SETSEL, 65_536, 65_536);
     }
@@ -166,7 +186,7 @@ fn rejected_paste_preserves_exact_input() {
         "aggregate paste overflow must not accept a prefix"
     );
     assert_eq!(
-        read_text(dialog.status),
+        read_text(dialog.error),
         validation::InputError::TooLong.message()
     );
     key(dialog.input, 0x0d, None);
@@ -233,7 +253,7 @@ fn typed_character_boundaries() {
     character(dialog.input, 'Y');
     assert_eq!(read_text(dialog.input), token);
     assert_eq!(
-        read_text(dialog.status),
+        read_text(dialog.error),
         validation::InputError::TooLong.message()
     );
     key(dialog.input, 0x41, Some(VK_CONTROL));
@@ -273,6 +293,35 @@ fn parent_close() {
         DestroyWindow(dialog.parent);
     }
     dialog.cancelled();
+}
+
+fn mnemonic_actions() {
+    let mut dialog = Dialog::new();
+    dialog.paste("SYNTHETIC-MNEMONIC");
+    key(dialog.input, 0x09, None);
+    system_character(dialog.save, 't');
+    assert_eq!(unsafe { GetFocus() }, dialog.input);
+    system_character(dialog.input, 'S');
+    dialog.saved("SYNTHETIC-MNEMONIC");
+    drop(dialog);
+    let mut dialog = Dialog::new();
+    system_character(dialog.window, 'c');
+    dialog.cancelled();
+}
+
+fn system_character(window: HWND, character: char) {
+    assert_ne!(
+        unsafe {
+            PostMessageW(
+                window,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_SYSCHAR,
+                character as usize,
+                1 << 29,
+            )
+        },
+        0
+    );
+    dispatch_pending();
 }
 
 fn key(window: HWND, code: usize, modifier: Option<u16>) {

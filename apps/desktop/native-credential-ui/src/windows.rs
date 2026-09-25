@@ -4,13 +4,15 @@
 pub(crate) mod acceptance;
 mod controls;
 mod input;
+mod painting;
 #[cfg(test)]
 mod tests;
+mod visuals;
 
-use crate::{PromptError, lifecycle::Completion, validation};
+use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
 use colossus_contracts::HostSecret;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ptr::{null, null_mut},
     sync::{
         Arc,
@@ -30,8 +32,9 @@ use windows_sys::Win32::{
             GWLP_USERDATA, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
             IDC_ARROW, IsWindow, KillTimer, LoadCursorW, RegisterClassW, SW_SHOW,
             SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_CLOSE,
-            WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ENDSESSION, WM_NCCREATE, WM_NCDESTROY, WM_TIMER,
-            WNDCLASSW, WS_CAPTION, WS_EX_DLGMODALFRAME, WS_SYSMENU,
+            WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ENDSESSION, WM_NCCREATE, WM_NCDESTROY,
+            WM_SYSCHAR, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_DLGMODALFRAME,
+            WS_SYSMENU,
         },
     },
 };
@@ -41,15 +44,20 @@ const INPUT_ID: usize = 101;
 const SAVE_ID: usize = 102;
 const CANCEL_ID: usize = 103;
 const POLL_TIMER: usize = 1;
-const WINDOW_WIDTH: i32 = 620;
-const WINDOW_HEIGHT: i32 = 255;
 
 struct Session {
     parent: HWND,
+    heading: HWND,
+    description: HWND,
+    label: HWND,
     input: HWND,
     status: HWND,
+    error: HWND,
     save: HWND,
     cancel: HWND,
+    visuals: visuals::Visuals,
+    has_error: Cell<bool>,
+    hovered: Cell<HWND>,
     cancelled: Arc<AtomicBool>,
     created: Arc<AtomicBool>,
     completion: RefCell<Option<Completion>>,
@@ -60,6 +68,7 @@ pub(crate) fn open(
     parent: &tauri::WebviewWindow,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
+    appearance: DialogAppearance,
 ) {
     let Ok(handle) = parent.hwnd() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -69,7 +78,7 @@ pub(crate) fn open(
     // SAFETY: Called on Tauri's UI thread with a live native parent. The owned
     // window retains the boxed session until WM_NCDESTROY. No callback blocks.
     unsafe {
-        create(parent, cancelled, completion, true);
+        create(parent, cancelled, completion, true, appearance);
     }
 }
 
@@ -78,6 +87,7 @@ unsafe fn create(
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     visible: bool,
+    appearance: DialogAppearance,
 ) -> Option<HWND> {
     if cancelled.load(Ordering::Acquire) || unsafe { IsWindow(parent) } == 0 {
         completion.finish(Err(PromptError::Cancelled));
@@ -98,29 +108,42 @@ unsafe fn create(
         RegisterClassW(&raw const description);
     }
     let created = Arc::new(AtomicBool::new(false));
+    let visuals = unsafe { visuals::Visuals::new(parent, appearance) };
+    if !visuals.available() {
+        completion.finish(Err(PromptError::Unavailable));
+        return None;
+    }
+    let (width, height) = visuals.outer_size();
     let session = Box::new(Session {
         parent,
+        heading: null_mut(),
+        description: null_mut(),
+        label: null_mut(),
         input: null_mut(),
         status: null_mut(),
+        error: null_mut(),
         save: null_mut(),
         cancel: null_mut(),
+        visuals,
+        has_error: Cell::new(false),
+        hovered: Cell::new(null_mut()),
         cancelled,
         created: created.clone(),
         completion: RefCell::new(Some(completion)),
         result: RefCell::new(None),
     });
     let pointer = Box::into_raw(session);
-    let (left, top) = unsafe { initial_position(parent) };
+    let (left, top) = unsafe { initial_position(parent, width, height) };
     let window = unsafe {
         CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             class.as_ptr(),
             wide("Save a Colossus credential").as_ptr(),
-            WS_CAPTION | WS_SYSMENU,
+            WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
             left,
             top,
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
+            width,
+            height,
             parent,
             null_mut(),
             instance,
@@ -139,6 +162,7 @@ unsafe fn create(
         return None;
     }
     unsafe {
+        (*pointer).visuals.apply_titlebar(window);
         EnableWindow(parent, 0);
     }
     if visible {
@@ -151,7 +175,7 @@ unsafe fn create(
     Some(window)
 }
 
-unsafe fn initial_position(parent: HWND) -> (i32, i32) {
+unsafe fn initial_position(parent: HWND, width: i32, height: i32) -> (i32, i32) {
     let mut bounds = RECT::default();
     let mut monitor = MONITORINFO {
         cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).expect("monitor structure size"),
@@ -168,11 +192,11 @@ unsafe fn initial_position(parent: HWND) -> (i32, i32) {
         return (0, 0);
     }
     let work = monitor.rcWork;
-    let left = bounds.left + (bounds.right - bounds.left - WINDOW_WIDTH) / 2;
-    let top = bounds.top + (bounds.bottom - bounds.top - WINDOW_HEIGHT) / 2;
+    let left = bounds.left + (bounds.right - bounds.left - width) / 2;
+    let top = bounds.top + (bounds.bottom - bounds.top - height) / 2;
     (
-        left.clamp(work.left, (work.right - WINDOW_WIDTH).max(work.left)),
-        top.clamp(work.top, (work.bottom - WINDOW_HEIGHT).max(work.top)),
+        left.clamp(work.left, (work.right - width).max(work.left)),
+        top.clamp(work.top, (work.bottom - height).max(work.top)),
     )
 }
 
@@ -200,7 +224,11 @@ unsafe extern "system" fn window_proc(
     if pointer.is_null() {
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };
     }
+    if let Some(result) = unsafe { painting::handle(window, message, wparam, lparam, pointer) } {
+        return result;
+    }
     match message {
+        WM_SYSCHAR if unsafe { input::mnemonic(wparam, pointer) } => 0,
         WM_CREATE => {
             if !unsafe { controls::create(window, pointer) }
                 || unsafe { SetTimer(window, POLL_TIMER, 100, None) } == 0
@@ -215,20 +243,8 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND => {
-            let id = wparam & 0xffff;
-            let notification = (wparam >> 16) & 0xffff;
-            if id == SAVE_ID && notification == BN_CLICKED as usize {
-                unsafe {
-                    save(window, pointer);
-                }
-            } else if id == CANCEL_ID && notification == BN_CLICKED as usize {
-                unsafe {
-                    DestroyWindow(window);
-                }
-            } else if id == INPUT_ID && notification == EN_CHANGE as usize {
-                unsafe {
-                    update_count(pointer);
-                }
+            unsafe {
+                command(window, wparam, pointer);
             }
             0
         }
@@ -280,6 +296,24 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+unsafe fn command(window: HWND, wparam: WPARAM, pointer: *const Session) {
+    let id = wparam & 0xffff;
+    let notification = (wparam >> 16) & 0xffff;
+    if id == SAVE_ID && notification == BN_CLICKED as usize {
+        unsafe {
+            save(window, pointer);
+        }
+    } else if id == CANCEL_ID && notification == BN_CLICKED as usize {
+        unsafe {
+            DestroyWindow(window);
+        }
+    } else if id == INPUT_ID && notification == EN_CHANGE as usize {
+        unsafe {
+            update_count(pointer);
+        }
+    }
+}
+
 unsafe fn release_session(window: HWND, pointer: *mut Session) {
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
@@ -299,8 +333,11 @@ unsafe fn update_count(pointer: *const Session) {
     let length = unsafe { GetWindowTextLengthW((*pointer).input) }.max(0);
     let message = format!("{length} / 65,536 bytes");
     unsafe {
+        (*pointer).has_error.set(false);
         SetWindowTextW((*pointer).status, wide(&message).as_ptr());
+        SetWindowTextW((*pointer).error, wide("").as_ptr());
         EnableWindow((*pointer).save, i32::from(length > 0));
+        painting::invalidate_input(pointer);
     }
 }
 

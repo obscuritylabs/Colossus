@@ -3,6 +3,7 @@ use super::{
     MainThreadOnly, NSBackingStoreType, NSString, NSWindow, NSWindowStyleMask, Ordering,
     PromptError, Retained, current_text, msg_send, ns_string, open_sheet, rect,
 };
+use crate::{ColorScheme, DialogAppearance, TextSize};
 use objc2_app_kit::NSApplication;
 use objc2_foundation::NSRange;
 
@@ -13,10 +14,26 @@ pub(crate) fn run() {
     let mtm =
         MainThreadMarker::new().expect("AppKit acceptance must run on the process main thread");
     let _application = NSApplication::sharedApplication(mtm);
-    for length in [761, 762, 2_560, 2_561, 8_192, 65_536] {
+    for (length, color_scheme, text_size) in [
+        (761, ColorScheme::Light, TextSize::Compact),
+        (762, ColorScheme::Dark, TextSize::Compact),
+        (2_560, ColorScheme::Light, TextSize::Comfortable),
+        (2_561, ColorScheme::Dark, TextSize::Comfortable),
+        (8_192, ColorScheme::Light, TextSize::Large),
+        (65_536, ColorScheme::Dark, TextSize::Large),
+    ] {
         let parent = parent(mtm);
         let (completion, mut result) = Completion::acquire().unwrap();
-        open_sheet(&parent, mtm, Arc::new(AtomicBool::new(false)), completion);
+        open_sheet(
+            &parent,
+            mtm,
+            Arc::new(AtomicBool::new(false)),
+            completion,
+            DialogAppearance {
+                color_scheme,
+                text_size,
+            },
+        );
         let controller = controller();
         let input = controller
             .ivars()
@@ -32,12 +49,37 @@ pub(crate) fn run() {
         let token = format!("{}END", "X".repeat(length - 3));
         insert(&editor, &token);
         assert_eq!(current_text(&input).to_string(), token);
+        let (count, status) = {
+            let borrowed = controller.ivars().session.borrow();
+            let session = borrowed.as_ref().unwrap();
+            (session.count.clone(), session.status.clone())
+        };
+        assert_eq!(
+            count.stringValue().to_string(),
+            format!("{length} / 65,536 bytes")
+        );
+        assert_eq!(status.stringValue().length(), 0);
         insert(&editor, &"X".repeat(65_537));
         assert_eq!(
             current_text(&input).to_string(),
             token,
             "oversized native edit must preserve prior contents"
         );
+        assert_eq!(
+            count.stringValue().to_string(),
+            format!("{length} / 65,536 bytes")
+        );
+        assert_eq!(
+            status.stringValue().to_string(),
+            crate::validation::InputError::TooLong.message()
+        );
+        insert(&editor, "SYNTHETIC-REPLACEMENT");
+        assert_eq!(
+            status.stringValue().length(),
+            0,
+            "valid input clears the rejected-edit error"
+        );
+        insert(&editor, &token);
         // SAFETY: Invoke the production action with its registered Objective-C
         // signature, exactly as the native Save button does.
         unsafe {
@@ -90,7 +132,13 @@ fn cancellation(mtm: MainThreadMarker, drop_parent: bool) {
     let parent = parent(mtm);
     let cancelled = Arc::new(AtomicBool::new(false));
     let (completion, mut result) = Completion::acquire().unwrap();
-    open_sheet(&parent, mtm, cancelled.clone(), completion);
+    open_sheet(
+        &parent,
+        mtm,
+        cancelled.clone(),
+        completion,
+        DialogAppearance::default(),
+    );
     let controller = controller();
     let (input, timer) = {
         let borrowed = controller.ivars().session.borrow();
@@ -116,7 +164,13 @@ fn cancellation(mtm: MainThreadMarker, drop_parent: bool) {
 fn shutdown(mtm: MainThreadMarker) {
     let parent = parent(mtm);
     let (completion, mut result) = Completion::acquire().unwrap();
-    open_sheet(&parent, mtm, Arc::new(AtomicBool::new(false)), completion);
+    open_sheet(
+        &parent,
+        mtm,
+        Arc::new(AtomicBool::new(false)),
+        completion,
+        DialogAppearance::default(),
+    );
     let input = controller()
         .ivars()
         .session

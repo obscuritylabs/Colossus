@@ -4,6 +4,7 @@
 //! Platform controls may retain internal allocations; only owned Rust buffers and
 //! the displayed control contents can be explicitly cleared here.
 
+mod appearance;
 #[cfg(any(windows, target_os = "macos"))]
 mod lifecycle;
 mod prompt;
@@ -15,6 +16,7 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
+pub use appearance::{ColorScheme, DialogAppearance, TextSize};
 pub use prompt::{PromptError, prompt};
 
 /// Run isolated, synthetic `AppKit` control acceptance on the process main thread.

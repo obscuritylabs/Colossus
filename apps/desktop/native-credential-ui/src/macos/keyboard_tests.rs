@@ -2,6 +2,7 @@ use super::{
     Arc, AtomicBool, Completion, DefinedClass, MainThreadMarker, NSWindow, PromptError, Retained,
     controller, current_text, insert, open_sheet, parent,
 };
+use crate::DialogAppearance;
 use objc2_app_kit::{
     NSAccessibility, NSApplication, NSButton, NSEvent, NSEventModifierFlags, NSEventType,
     NSResponder, NSSecureTextField, NSView,
@@ -16,7 +17,13 @@ pub(super) fn run(mtm: MainThreadMarker) {
 fn keyboard_save(mtm: MainThreadMarker) {
     let parent = parent(mtm);
     let (completion, mut result) = Completion::acquire().unwrap();
-    open_sheet(&parent, mtm, Arc::new(AtomicBool::new(false)), completion);
+    open_sheet(
+        &parent,
+        mtm,
+        Arc::new(AtomicBool::new(false)),
+        completion,
+        DialogAppearance::default(),
+    );
     let (panel, input, save) = {
         let controller = controller();
         let borrowed = controller.ivars().session.borrow();
@@ -102,7 +109,13 @@ fn same_responder(left: &NSResponder, right: &NSResponder) -> bool {
 fn keyboard_cancel(mtm: MainThreadMarker) {
     let parent = parent(mtm);
     let (completion, mut result) = Completion::acquire().unwrap();
-    open_sheet(&parent, mtm, Arc::new(AtomicBool::new(false)), completion);
+    open_sheet(
+        &parent,
+        mtm,
+        Arc::new(AtomicBool::new(false)),
+        completion,
+        DialogAppearance::default(),
+    );
     let (panel, input) = {
         let controller = controller();
         let borrowed = controller.ivars().session.borrow();

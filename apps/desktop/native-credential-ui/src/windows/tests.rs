@@ -51,6 +51,7 @@ fn native_dialog_has_a_title_and_stays_in_the_owner_monitor_work_area() {
             Arc::new(AtomicBool::new(false)),
             completion,
             false,
+            DialogAppearance::default(),
         )
     }
     .unwrap();
@@ -97,6 +98,7 @@ fn native_edit_accepts_exact_boundary_values_without_default_32k_truncation() {
                 Arc::new(AtomicBool::new(false)),
                 completion,
                 false,
+                DialogAppearance::default(),
             )
         }
         .unwrap();
@@ -127,6 +129,7 @@ fn native_replacement_rejects_overflow_and_invalid_characters_without_accepting_
             Arc::new(AtomicBool::new(false)),
             completion,
             false,
+            DialogAppearance::default(),
         )
     }
     .unwrap();
@@ -172,6 +175,7 @@ fn parent_destruction_and_async_cancellation_close_owned_native_dialogs() {
             Arc::new(AtomicBool::new(false)),
             completion,
             false,
+            DialogAppearance::default(),
         )
     }
     .unwrap();
@@ -182,7 +186,16 @@ fn parent_destruction_and_async_cancellation_close_owned_native_dialogs() {
     let parent = Parent::new();
     let cancelled = Arc::new(AtomicBool::new(false));
     let (completion, mut result) = Completion::acquire().unwrap();
-    let window = unsafe { create(parent.0, cancelled.clone(), completion, false) }.unwrap();
+    let window = unsafe {
+        create(
+            parent.0,
+            cancelled.clone(),
+            completion,
+            false,
+            DialogAppearance::default(),
+        )
+    }
+    .unwrap();
     cancelled.store(true, Ordering::Release);
     unsafe {
         SendMessageW(window, WM_TIMER, POLL_TIMER, 0);
@@ -201,6 +214,7 @@ fn parent_destruction_and_async_cancellation_close_owned_native_dialogs() {
             Arc::new(AtomicBool::new(false)),
             completion,
             false,
+            DialogAppearance::default(),
         )
     }
     .unwrap();

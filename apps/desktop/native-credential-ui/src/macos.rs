@@ -2,11 +2,13 @@
 
 #[path = "macos/formatter.rs"]
 mod formatter;
+#[path = "macos/styling.rs"]
+mod styling;
 #[cfg(feature = "native-test-driver")]
 #[path = "macos/tests.rs"]
 pub(crate) mod tests;
 
-use crate::{PromptError, lifecycle::Completion, validation};
+use crate::{DialogAppearance, PromptError, lifecycle::Completion, validation};
 use colossus_contracts::HostSecret;
 use formatter::TokenFormatter;
 use objc2::{
@@ -39,6 +41,7 @@ struct Session {
     parent: Retained<NSWindow>,
     panel: Retained<NSPanel>,
     input: Retained<NSSecureTextField>,
+    count: Retained<NSTextField>,
     status: Retained<NSTextField>,
     save: Retained<NSButton>,
     timer: Retained<NSTimer>,
@@ -70,7 +73,8 @@ define_class!(
         fn changed(&self, _: &NSNotification) {
             if let Some(session) = self.ivars().session.borrow().as_ref() {
                 let text = current_text(&session.input);
-                session.status.setStringValue(&NSString::from_str(&format!("{} / 65,536 bytes", text.length())));
+                session.count.setStringValue(&NSString::from_str(&format!("{} / 65,536 bytes", text.length())));
+                session.status.setStringValue(ns_string!(""));
                 session.save.setEnabled(text.length() > 0);
             }
         }
@@ -151,6 +155,7 @@ pub(crate) fn open(
     parent: &tauri::WebviewWindow,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
+    appearance: DialogAppearance,
 ) {
     let Some(mtm) = MainThreadMarker::new() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -170,7 +175,7 @@ pub(crate) fn open(
         completion.finish(Err(PromptError::Cancelled));
         return;
     }
-    open_sheet(&parent, mtm, cancelled, completion);
+    open_sheet(&parent, mtm, cancelled, completion, appearance);
 }
 
 fn open_sheet(
@@ -178,13 +183,15 @@ fn open_sheet(
     mtm: MainThreadMarker,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
+    appearance: DialogAppearance,
 ) {
     let controller = Controller::new(mtm);
+    let style = styling::Style::new(parent, appearance);
     // SAFETY: Window lifetime is explicitly retained; close must not autorelease
     // the owning reference. All views, targets and callbacks stay main-thread.
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
-        rect(0.0, 0.0, 580.0, 210.0),
+        style.rect(0.0, 0.0, 560.0, 324.0),
         NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
         NSBackingStoreType::Buffered,
         false,
@@ -192,21 +199,21 @@ fn open_sheet(
     unsafe {
         panel.setReleasedWhenClosed(false);
     }
-    panel.setTitle(ns_string!("Save a Colossus credential"));
+    panel.setTitle(ns_string!("Save credential"));
+    style.panel(&panel);
     let Some(content) = panel.contentView() else {
         completion.finish(Err(PromptError::Unavailable));
         return;
     };
-    let label = NSTextField::labelWithString(ns_string!("Token"), mtm);
-    label.setFrame(rect(20.0, 164.0, 540.0, 24.0));
+    let [heading, description, label] = style.labels(mtm);
     let input = NSSecureTextField::initWithFrame(
         NSSecureTextField::alloc(mtm),
-        rect(20.0, 126.0, 540.0, 30.0),
+        style.rect(28.0, 145.0, 504.0, 44.0),
     );
     input.setPlaceholderString(Some(ns_string!("Paste your credential")));
     input.setAccessibilityLabel(Some(ns_string!("Token")));
-    let status = NSTextField::labelWithString(ns_string!("0 / 65,536 bytes"), mtm);
-    status.setFrame(rect(20.0, 64.0, 540.0, 50.0));
+    style.input(&input);
+    let [count, status] = style.feedback(mtm);
     let save = unsafe {
         NSButton::buttonWithTitle_target_action(
             ns_string!("Save"),
@@ -215,7 +222,8 @@ fn open_sheet(
             mtm,
         )
     };
-    save.setFrame(rect(342.0, 20.0, 100.0, 32.0));
+    save.setFrame(style.rect(432.0, 24.0, 100.0, 40.0));
+    style.button(&save, true);
     save.setKeyEquivalent(ns_string!("\r"));
     save.setAccessibilityLabel(Some(ns_string!("Save")));
     save.setEnabled(false);
@@ -227,15 +235,19 @@ fn open_sheet(
             mtm,
         )
     };
-    cancel.setFrame(rect(450.0, 20.0, 110.0, 32.0));
+    cancel.setFrame(style.rect(320.0, 24.0, 100.0, 40.0));
+    style.button(&cancel, false);
     cancel.setKeyEquivalent(ns_string!("\u{1b}"));
     cancel.setAccessibilityLabel(Some(ns_string!("Cancel")));
     let formatter = TokenFormatter::new(mtm, status.clone());
     input.setFormatter(Some(&formatter));
     unsafe {
         input.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
+        content.addSubview(&heading);
+        content.addSubview(&description);
         content.addSubview(&label);
         content.addSubview(&input);
+        content.addSubview(&count);
         content.addSubview(&status);
         content.addSubview(&save);
         content.addSubview(&cancel);
@@ -263,6 +275,7 @@ fn open_sheet(
         parent: parent.retain(),
         panel: panel.clone(),
         input: input.clone(),
+        count,
         status,
         save,
         timer,

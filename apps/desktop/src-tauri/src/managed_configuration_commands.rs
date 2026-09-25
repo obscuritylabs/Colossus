@@ -396,6 +396,7 @@ pub(crate) async fn create_managed_credential(
     window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     request: CreateManagedCredentialInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
@@ -403,7 +404,8 @@ pub(crate) async fn create_managed_credential(
     ensure_global_revision(&settings, request.expected_revision)?;
     validate_label(&request.label)?;
     let credential_id = Uuid::now_v7().to_string();
-    let secret = provider_enrollment::request_managed_credential_secret(window).await?;
+    let secret =
+        provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
     let credentials = DesktopCredentials::for_settings(&state, &store)?;
     stage_credential_write(&store, &mut settings, &credential_id)?;
     credentials.write(&credential_id, secret).await?;
@@ -435,6 +437,7 @@ pub(crate) async fn rotate_managed_credential(
     window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     request: RotateManagedCredentialInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
@@ -448,7 +451,8 @@ pub(crate) async fn rotate_managed_credential(
         .cloned()
         .ok_or_else(|| unknown_credential("credentialId"))?;
     let new_id = Uuid::now_v7().to_string();
-    let secret = provider_enrollment::request_managed_credential_secret(window).await?;
+    let secret =
+        provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
     let credentials = DesktopCredentials::for_settings(&state, &store)?;
     stage_credential_write(&store, &mut settings, &new_id)?;
     credentials.write(&new_id, secret).await?;
@@ -537,6 +541,7 @@ pub(crate) async fn reenter_managed_credential(
     window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     request: RotateManagedCredentialInput,
+    appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
@@ -572,7 +577,8 @@ pub(crate) async fn reenter_managed_credential(
                 }));
         }
     }
-    let secret = provider_enrollment::request_managed_credential_secret(window).await?;
+    let secret =
+        provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
     credentials.write(&request.credential_id, secret).await?;
     snapshot(state.inner(), &settings).await
 }

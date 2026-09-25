@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { PluginInventory, PluginRequest } from "./plugins";
+import { readNativeDialogAppearance } from "./theme/appearance";
 
 export function getPluginInventory(targetId: string): Promise<PluginInventory> {
   return call("get_plugin_inventory", { targetId });
@@ -481,14 +482,20 @@ export function createManagedCredential(request: {
   label: string;
   kind: ManagedCredentialKind;
 }): Promise<ManagedSettingsSnapshot> {
-  return call("create_managed_credential", { request });
+  return call("create_managed_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function rotateManagedCredential(request: {
   expectedRevision: number;
   credentialId: string;
 }): Promise<ManagedSettingsSnapshot> {
-  return call("rotate_managed_credential", { request });
+  return call("rotate_managed_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function deleteManagedCredential(request: {
@@ -502,7 +509,10 @@ export function reenterManagedCredential(request: {
   expectedRevision: number;
   credentialId: string;
 }): Promise<ManagedSettingsSnapshot> {
-  return call("reenter_managed_credential", { request });
+  return call("reenter_managed_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function onSpaceStatusChanged(
@@ -542,13 +552,19 @@ export function readWorkspaceFile(
 export function configureManagedRuntime(
   request: ConfigureManagedRuntimeRequest,
 ): Promise<DesktopStatus> {
-  return call("configure_managed_runtime", { request });
+  return call("configure_managed_runtime", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function applyManagedModelConfiguration(
   request: ApplyManagedModelConfigurationRequest,
 ): Promise<DesktopStatus> {
-  return call("apply_managed_model_configuration", { request });
+  return call("apply_managed_model_configuration", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function restartManagedRuntime(): Promise<DesktopStatus> {

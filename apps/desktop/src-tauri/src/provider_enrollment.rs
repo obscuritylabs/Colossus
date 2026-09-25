@@ -2,18 +2,62 @@
 
 use crate::dto::CommandErrorDto;
 use colossus_contracts::HostSecret;
-use colossus_native_credential_ui::PromptError;
+use colossus_native_credential_ui::{ColorScheme, DialogAppearance, PromptError, TextSize};
+use serde::Deserialize;
+
+/// Only bounded, non-secret appearance preferences cross the renderer boundary.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DialogAppearanceInput {
+    color_scheme: ColorSchemeInput,
+    text_size: TextSizeInput,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ColorSchemeInput {
+    System,
+    Dark,
+    Light,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum TextSizeInput {
+    Compact,
+    Comfortable,
+    Large,
+}
+
+impl From<DialogAppearanceInput> for DialogAppearance {
+    fn from(value: DialogAppearanceInput) -> Self {
+        Self {
+            color_scheme: match value.color_scheme {
+                ColorSchemeInput::System => ColorScheme::System,
+                ColorSchemeInput::Dark => ColorScheme::Dark,
+                ColorSchemeInput::Light => ColorScheme::Light,
+            },
+            text_size: match value.text_size {
+                TextSizeInput::Compact => TextSize::Compact,
+                TextSizeInput::Comfortable => TextSize::Comfortable,
+                TextSizeInput::Large => TextSize::Large,
+            },
+        }
+    }
+}
 
 pub(crate) async fn request_provider_secret(
     parent: tauri::WebviewWindow,
+    appearance: DialogAppearance,
 ) -> Result<HostSecret, CommandErrorDto> {
-    request_managed_credential_secret(parent).await
+    request_managed_credential_secret(parent, appearance).await
 }
 
 pub(crate) async fn request_managed_credential_secret(
     parent: tauri::WebviewWindow,
+    appearance: DialogAppearance,
 ) -> Result<HostSecret, CommandErrorDto> {
-    colossus_native_credential_ui::prompt(parent)
+    colossus_native_credential_ui::prompt(parent, appearance)
         .await
         .map_err(|error| {
             let (code, message, retryable) = match error {
@@ -40,4 +84,32 @@ pub(crate) async fn request_managed_credential_secret(
             };
             CommandErrorDto::local_sanitized(code, message, retryable)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn dialog_appearance_accepts_only_bounded_non_secret_preferences() {
+        for color in ["system", "dark", "light"] {
+            for size in ["compact", "comfortable", "large"] {
+                let input: DialogAppearanceInput = serde_json::from_value(json!({
+                    "colorScheme": color,
+                    "textSize": size,
+                }))
+                .unwrap();
+                let _: DialogAppearance = input.into();
+            }
+        }
+        for input in [
+            json!({"colorScheme": "custom-css", "textSize": "large"}),
+            json!({"colorScheme": "dark", "textSize": 1000}),
+            json!({"colorScheme": "dark", "textSize": "comfortable", "secret": "rejected"}),
+            json!({"colorScheme": "dark"}),
+        ] {
+            assert!(serde_json::from_value::<DialogAppearanceInput>(input).is_err());
+        }
+    }
 }
