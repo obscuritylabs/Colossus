@@ -89,19 +89,62 @@ impl Terminal {
         }
     }
 
+    pub(crate) fn wait_until_visual_rows(
+        &self,
+        description: &str,
+        ready: impl Fn(&str, &[String]) -> bool,
+    ) -> String {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let (contents, rows) = {
+                let parser = self.screen.lock().expect("screen");
+                let screen = parser.screen();
+                // ConPTY may soft-wrap adjacent visual rows. contents() joins
+                // those rows, so layout assertions need the physical row view.
+                let (_, columns) = screen.size();
+                (
+                    screen.contents(),
+                    screen.rows(0, columns).collect::<Vec<_>>(),
+                )
+            };
+            if ready(&contents, &rows) {
+                return contents;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "TUI never rendered {description:?}:\n{}",
+                rows.join("\n")
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     pub(crate) fn command(&self, command: &str, expected: &str) -> String {
         // An earlier transcript entry may already contain `expected`. Observe
         // this input in the composer before submitting, then wait for both its
         // consumption and the host operation's completed render.
         self.send(format!("\x1b[200~{command}\x1b[201~").as_bytes());
-        self.wait_until(&format!("composer accepted {command:?}"), |screen| {
-            composer_contents(screen).is_some_and(|draft| draft.starts_with(command))
+        self.wait_until_visual_rows(&format!("composer accepted {command:?}"), |_, rows| {
+            composer_contents(rows).is_some_and(|draft| draft.starts_with(command))
         });
         self.send(b"\r");
-        self.wait_until(&format!("{expected:?} after {command:?}"), |screen| {
-            screen.contains(expected)
-                && !screen.contains("running /")
-                && composer_contents(screen).is_some_and(|draft| draft.is_empty())
+        self.wait_until_visual_rows(
+            &format!("{expected:?} after {command:?}"),
+            |screen, rows| {
+                screen.contains(expected)
+                    && !screen.contains("running /")
+                    && composer_contents(rows).is_some_and(|draft| draft.is_empty())
+            },
+        )
+    }
+
+    pub(crate) fn wait_for_composer(
+        &self,
+        description: &str,
+        ready: impl Fn(&str) -> bool,
+    ) -> String {
+        self.wait_until_visual_rows(description, |_, rows| {
+            composer_contents(rows).is_some_and(|draft| ready(&draft))
         })
     }
 
@@ -109,8 +152,8 @@ impl Terminal {
         self.resize_frame(rows, cols);
         // A truncated old frame can still contain every plugin name. Require
         // the closing border at the new width before sending any more input.
-        self.wait_until("resized composer border", |screen| {
-            screen.lines().any(|line| {
+        self.wait_until_visual_rows("resized composer border", |_, rows| {
+            rows.iter().any(|line| {
                 line.starts_with("┌ Message")
                     && line.ends_with('┐')
                     && line.chars().count() == usize::from(cols)
@@ -134,9 +177,9 @@ impl Terminal {
     }
 }
 
-fn composer_contents(screen: &str) -> Option<String> {
-    let mut lines = screen
-        .lines()
+fn composer_contents(rows: &[String]) -> Option<String> {
+    let mut lines = rows
+        .iter()
         .skip_while(|line| !line.starts_with("┌ Message") && !line.starts_with("┌ Execute"));
     lines.next()?;
     Some(

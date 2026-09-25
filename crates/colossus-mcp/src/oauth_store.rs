@@ -1,9 +1,11 @@
+use crate::oauth_record;
 use async_trait::async_trait;
 use chacha20poly1305::{
     KeyInit as _, XChaCha20Poly1305, XNonce,
     aead::{Aead as _, Payload},
 };
-use colossus_ports::KeyProvider;
+use colossus_contracts::{MAX_VAULT_RECORD_BYTES, VaultRecord};
+use colossus_ports::{CredentialKey, CredentialVault, KeyProvider};
 use redb::{Database, ReadableDatabase as _, TableDefinition, backends::InMemoryBackend};
 use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
@@ -18,7 +20,7 @@ const KEY_DOMAIN: &[u8] = b"colossus-mcp-oauth-encrypted-state-v1";
 #[derive(Clone)]
 pub(super) enum OAuthStoreFactory {
     Platform {
-        service: String,
+        vault: Arc<dyn CredentialVault>,
         repository_id: String,
     },
     EncryptedState {
@@ -33,9 +35,9 @@ pub(super) enum OAuthStoreFactory {
 }
 
 impl OAuthStoreFactory {
-    pub(super) fn platform(service: String, repository_id: String) -> Self {
+    pub(super) fn platform(vault: Arc<dyn CredentialVault>, repository_id: String) -> Self {
         Self::Platform {
-            service,
+            vault,
             repository_id,
         }
     }
@@ -137,9 +139,9 @@ impl OAuthStoreFactory {
             endpoint,
         );
         match self {
-            Self::Platform { service, .. } => OAuthCredentialStore::Platform {
-                service: service.clone(),
-                account: format!("mcp-oauth:{}", hex::encode(Sha256::digest(&identity))),
+            Self::Platform { vault, .. } => OAuthCredentialStore::Platform {
+                vault: Arc::clone(vault),
+                account: hex::encode(Sha256::digest(&identity)),
             },
             Self::EncryptedState { database, keys, .. } => OAuthCredentialStore::EncryptedState {
                 database: Arc::clone(database),
@@ -157,7 +159,7 @@ impl OAuthStoreFactory {
 #[derive(Clone)]
 pub(super) enum OAuthCredentialStore {
     Platform {
-        service: String,
+        vault: Arc<dyn CredentialVault>,
         account: String,
     },
     EncryptedState {
@@ -180,7 +182,7 @@ struct EncryptedOAuthRecord {
     ciphertext: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PlaintextOAuthRecord {
     schema_version: u16,
@@ -190,18 +192,36 @@ struct PlaintextOAuthRecord {
 #[async_trait]
 impl CredentialStore for OAuthCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.load_blocking())
+            .await
+            .map_err(|_| vault_unavailable())?
+    }
+
+    async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.save_blocking(credentials))
+            .await
+            .map_err(|_| vault_unavailable())?
+    }
+
+    async fn clear(&self) -> Result<(), AuthError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.clear_blocking())
+            .await
+            .map_err(|_| vault_unavailable())?
+    }
+}
+
+impl OAuthCredentialStore {
+    fn load_blocking(&self) -> Result<Option<StoredCredentials>, AuthError> {
         match self {
-            Self::Platform { service, account } => {
-                let entry = keyring::Entry::new(service, account)
-                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let encoded = match entry.get_password() {
-                    Ok(value) => value,
-                    Err(keyring::Error::NoEntry) => return Ok(None),
-                    Err(error) => return Err(AuthError::InternalError(error.to_string())),
-                };
-                serde_json::from_str(&encoded)
-                    .map(Some)
-                    .map_err(|error| AuthError::InternalError(error.to_string()))
+            Self::Platform { vault, account } => {
+                let key = vault_key(account)?;
+                let record = vault.read(&key).map_err(vault_error)?;
+                record
+                    .map(|record| oauth_record::decode(record.expose()))
+                    .transpose()
             }
             Self::EncryptedState {
                 database,
@@ -221,8 +241,11 @@ impl CredentialStore for OAuthCredentialStore {
                     else {
                         return Ok(None);
                     };
+                    if record.value().len() > oauth_record::MAX_STATE_RECORD_BYTES {
+                        return Err(oauth_record::invalid_record());
+                    }
                     serde_json::from_slice(record.value())
-                        .map_err(|error| AuthError::InternalError(error.to_string()))?
+                        .map_err(|_| oauth_record::invalid_record())?
                 };
                 if record.schema_version != 1 {
                     return Err(AuthError::InternalError(
@@ -232,35 +255,38 @@ impl CredentialStore for OAuthCredentialStore {
                 let mut key = keys
                     .key_by_id(&record.key_id)
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let mut derived = derive_key(&key);
+                let mut derived = Zeroizing::new(derive_key(&key));
                 key.zeroize();
                 let nonce: [u8; 24] = hex::decode(&record.nonce)
                     .map_err(|error| AuthError::InternalError(error.to_string()))?
                     .try_into()
                     .map_err(|_| AuthError::InternalError("OAuth nonce is invalid".into()))?;
+                if record.ciphertext.len() > 2 * (MAX_VAULT_RECORD_BYTES + 16) {
+                    return Err(oauth_record::invalid_record());
+                }
                 let ciphertext = hex::decode(&record.ciphertext)
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let mut plaintext = XChaCha20Poly1305::new((&derived).into())
-                    .decrypt(
-                        XNonce::from_slice(&nonce),
-                        Payload {
-                            msg: &ciphertext,
-                            aad: associated_data(identity, &record.key_id).as_bytes(),
-                        },
-                    )
-                    .map_err(|_| {
-                        AuthError::InternalError("OAuth credential decryption failed".into())
-                    })?;
+                let plaintext = Zeroizing::new(
+                    XChaCha20Poly1305::new((&*derived).into())
+                        .decrypt(
+                            XNonce::from_slice(&nonce),
+                            Payload {
+                                msg: &ciphertext,
+                                aad: associated_data(identity, &record.key_id).as_bytes(),
+                            },
+                        )
+                        .map_err(|_| {
+                            AuthError::InternalError("OAuth credential decryption failed".into())
+                        })?,
+                );
                 derived.zeroize();
-                let credentials: StoredCredentials = serde_json::from_slice(&plaintext)
-                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                plaintext.zeroize();
+                let credentials = oauth_record::decode(&plaintext)?;
                 let (active_id, mut active_key) = keys
                     .active_key()
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
                 active_key.zeroize();
                 if active_id != record.key_id {
-                    self.save(credentials.clone()).await?;
+                    self.save_blocking(credentials.clone())?;
                 }
                 Ok(Some(credentials))
             }
@@ -278,33 +304,31 @@ impl CredentialStore for OAuthCredentialStore {
                     else {
                         return Ok(None);
                     };
+                    if record.value().len() > oauth_record::MAX_PLAINTEXT_STATE_RECORD_BYTES {
+                        return Err(oauth_record::invalid_record());
+                    }
                     serde_json::from_slice(record.value())
-                        .map_err(|error| AuthError::InternalError(error.to_string()))?
+                        .map_err(|_| oauth_record::invalid_record())?
                 };
                 if record.schema_version != 1 {
                     return Err(AuthError::InternalError(
                         "unsupported plaintext OAuth record".into(),
                     ));
                 }
+                oauth_record::encode(&record.credentials)?;
                 Ok(Some(record.credentials))
             }
         }
     }
 
-    async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
-        let mut plaintext = serde_json::to_vec(&credentials)
-            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+    fn save_blocking(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+        let mut plaintext = oauth_record::encode(&credentials)?;
         match self {
-            Self::Platform { service, account } => {
-                let entry = keyring::Entry::new(service, account)
-                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let mut encoded = String::from_utf8(plaintext)
-                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let result = entry
-                    .set_password(&encoded)
-                    .map_err(|error| AuthError::InternalError(error.to_string()));
-                encoded.zeroize();
-                result
+            Self::Platform { vault, account } => {
+                let key = vault_key(account)?;
+                let record = VaultRecord::new(std::mem::take(&mut *plaintext))
+                    .map_err(|_| oauth_record::invalid_record())?;
+                vault.write(&key, &record).map_err(vault_error)
             }
             Self::EncryptedState {
                 database,
@@ -314,12 +338,12 @@ impl CredentialStore for OAuthCredentialStore {
                 let (key_id, mut key) = keys
                     .active_key()
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let mut derived = derive_key(&key);
+                let mut derived = Zeroizing::new(derive_key(&key));
                 key.zeroize();
                 let mut nonce = [0_u8; 24];
                 getrandom::fill(&mut nonce)
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                let ciphertext = XChaCha20Poly1305::new((&derived).into())
+                let ciphertext = XChaCha20Poly1305::new((&*derived).into())
                     .encrypt(
                         XNonce::from_slice(&nonce),
                         Payload {
@@ -339,6 +363,9 @@ impl CredentialStore for OAuthCredentialStore {
                     ciphertext: hex::encode(ciphertext),
                 })
                 .map_err(|error| AuthError::InternalError(error.to_string()))?;
+                if record.len() > oauth_record::MAX_STATE_RECORD_BYTES {
+                    return Err(oauth_record::invalid_record());
+                }
                 let write = database
                     .begin_write()
                     .map_err(|error| AuthError::InternalError(error.to_string()))?;
@@ -355,13 +382,7 @@ impl CredentialStore for OAuthCredentialStore {
                     .map_err(|error| AuthError::InternalError(error.to_string()))
             }
             Self::PlaintextState { database, identity } => {
-                let record = Zeroizing::new(
-                    serde_json::to_vec(&PlaintextOAuthRecord {
-                        schema_version: 1,
-                        credentials,
-                    })
-                    .map_err(|error| AuthError::InternalError(error.to_string()))?,
-                );
+                let record = oauth_record::plaintext_state_record(&plaintext);
                 plaintext.zeroize();
                 let write = database
                     .begin_write()
@@ -381,15 +402,11 @@ impl CredentialStore for OAuthCredentialStore {
         }
     }
 
-    async fn clear(&self) -> Result<(), AuthError> {
+    fn clear_blocking(&self) -> Result<(), AuthError> {
         match self {
-            Self::Platform { service, account } => {
-                let entry = keyring::Entry::new(service, account)
-                    .map_err(|error| AuthError::InternalError(error.to_string()))?;
-                match entry.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                    Err(error) => Err(AuthError::InternalError(error.to_string())),
-                }
+            Self::Platform { vault, account } => {
+                let key = vault_key(account)?;
+                vault.delete(&key).map_err(vault_error)
             }
             Self::EncryptedState {
                 database, identity, ..
@@ -521,4 +538,16 @@ fn derive_key(key: &[u8; 32]) -> [u8; 32] {
         .chain_update(key)
         .finalize()
         .into()
+}
+
+fn vault_key(account: &str) -> Result<CredentialKey, AuthError> {
+    CredentialKey::new("mcp-oauth", account).map_err(|_| oauth_record::invalid_record())
+}
+
+fn vault_unavailable() -> AuthError {
+    AuthError::InternalError("protected OAuth credential vault is unavailable".into())
+}
+
+fn vault_error(error: colossus_contracts::CredentialError) -> AuthError {
+    AuthError::InternalError(error.to_string())
 }

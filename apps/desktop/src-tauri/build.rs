@@ -64,6 +64,7 @@ const COMMANDS: &[&str] = &[
     "apply_space_configuration",
     "create_managed_credential",
     "rotate_managed_credential",
+    "reenter_managed_credential",
     "delete_managed_credential",
     "configure_managed_runtime",
     "apply_managed_model_configuration",

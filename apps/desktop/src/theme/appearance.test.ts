@@ -8,6 +8,7 @@ import {
   parseAppearancePreference,
   readAppearancePreference,
   readHostAppearancePreference,
+  readNativeDialogAppearance,
   resolveColorTheme,
   storeAppearancePreference,
   storeHostAppearancePreference,
@@ -15,6 +16,31 @@ import {
 } from "./appearance";
 
 describe("appearance preferences", () => {
+  it("captures only the rendered native-dialog theme and text size", () => {
+    const values = new Map([
+      ["data-theme", "dark"],
+      ["data-text-size", "large"],
+      ["data-unrelated", "not-sent"],
+    ]);
+    const root = { getAttribute: (name: string) => values.get(name) ?? null };
+    expect(readNativeDialogAppearance(root)).toEqual({
+      colorScheme: "dark",
+      textSize: "large",
+    });
+    values.set("data-theme", "light");
+    values.set("data-text-size", "compact");
+    expect(readNativeDialogAppearance(root)).toEqual({
+      colorScheme: "light",
+      textSize: "compact",
+    });
+    values.set("data-theme", "arbitrary-css");
+    values.delete("data-text-size");
+    expect(readNativeDialogAppearance(root)).toEqual({
+      colorScheme: "system",
+      textSize: "comfortable",
+    });
+  });
+
   it("falls back safely for missing, invalid, and partially invalid values", () => {
     expect(parseAppearancePreference(null)).toEqual(DEFAULT_APPEARANCE);
     expect(parseAppearancePreference("not json")).toEqual(DEFAULT_APPEARANCE);

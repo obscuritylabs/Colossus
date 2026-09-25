@@ -6,7 +6,7 @@ pub enum WindowsNativeError {
     /// The API was called on a non-Windows build.
     #[error("Windows native integration is unavailable on this platform")]
     UnsupportedPlatform,
-    /// A path, prompt, or hard bound was invalid.
+    /// A path or hard bound was invalid.
     #[error("Windows native input is invalid")]
     InvalidInput,
     /// A path contained a link, junction, or another reparse point.
@@ -18,9 +18,6 @@ pub enum WindowsNativeError {
     /// The object owner or DACL grants broader access than private app storage permits.
     #[error("Windows filesystem permissions are not private")]
     UnsafePermissions,
-    /// The native credential prompt was cancelled.
-    #[error("Windows credential prompt was cancelled")]
-    Cancelled,
     /// A bounded operating-system operation failed.
     #[error("Windows native {operation} failed: {source}")]
     Io {

@@ -197,17 +197,14 @@ impl McpExecutor {
         self
     }
 
-    /// Persist OAuth records in the operating-system credential store.
+    /// Persist OAuth records through a host-composed protected credential vault.
     #[must_use]
-    pub fn with_platform_oauth_storage(
+    pub fn with_oauth_vault(
         mut self,
-        service: impl Into<String>,
+        vault: Arc<dyn colossus_ports::CredentialVault>,
         repository_id: impl Into<String>,
     ) -> Self {
-        self.oauth_store = Some(OAuthStoreFactory::platform(
-            service.into(),
-            repository_id.into(),
-        ));
+        self.oauth_store = Some(OAuthStoreFactory::platform(vault, repository_id.into()));
         self
     }
 
@@ -833,8 +830,9 @@ fn resolve_http_headers(
             .map_or_else(|| secret.clone(), |scheme| format!("{scheme} {secret}"));
         let name = HeaderName::from_bytes(name.as_bytes())
             .map_err(|_| failed("MCP credential header name is invalid"))?;
-        let value = HeaderValue::from_str(&value)
+        let mut value = HeaderValue::from_str(&value)
             .map_err(|_| failed("MCP credential header value is invalid"))?;
+        value.set_sensitive(true);
         secrets.push(secret);
         headers.insert(name, value);
     }

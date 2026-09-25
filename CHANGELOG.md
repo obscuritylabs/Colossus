@@ -8,6 +8,33 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.10-preview.19] - 2026-09-24
+
+### Added
+
+- Added an encrypted credential vault for Windows, macOS, and Linux. Native OS
+  credential stores protect small vault keys while large API tokens and OAuth
+  records remain encrypted in private application storage.
+- Added native masked credential entry on Windows and macOS with exact byte counts,
+  long-token paste support, keyboard controls, and Desktop appearance settings.
+
+### Fixed
+
+- Preserved opaque API and MCP tokens up to 64 KiB through Desktop persistence,
+  managed-runtime startup, provider requests, and authenticated MCP discovery and
+  tool calls. Serialized OAuth credential records support up to 1 MiB.
+- Kept OAuth credentials usable when the state database is renamed within its
+  private directory.
+
+### Changed
+
+- Replaced the legacy Windows credential prompt and direct full-token OS storage.
+  Existing saved API tokens must be re-entered and platform-stored OAuth
+  connections reauthorized; connection references remain available for
+  reconnection, and previous OS credential entries are left untouched.
+- Synchronized Rust package versions, exact internal dependency pins, lockfiles,
+  the embedded core plugin, and Desktop fixtures to `0.10.10-preview.19`.
+
 ## [0.10.10-preview.18] - 2026-09-24
 
 ### Added

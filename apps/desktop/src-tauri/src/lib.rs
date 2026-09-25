@@ -7,6 +7,7 @@ mod commands;
 mod configuration_import;
 mod connection;
 mod desktop_commands;
+mod desktop_credentials;
 mod desktop_dto;
 mod desktop_settings;
 mod diagnostics;
@@ -48,9 +49,10 @@ use desktop_commands::{
 use diagnostics::{desktop_release_metadata, export_diagnostics};
 use managed_configuration_commands::{
     apply_space_configuration, create_managed_credential, delete_global_mcp_server,
-    delete_managed_credential, get_managed_configuration, rotate_managed_credential,
-    save_global_defaults, save_space_configuration, upsert_global_mcp_server, upsert_global_model,
-    upsert_global_provider, upsert_global_search_provider, upsert_global_telemetry_profile,
+    delete_managed_credential, get_managed_configuration, reenter_managed_credential,
+    rotate_managed_credential, save_global_defaults, save_space_configuration,
+    upsert_global_mcp_server, upsert_global_model, upsert_global_provider,
+    upsert_global_search_provider, upsert_global_telemetry_profile,
 };
 use managed_diagnostics::{
     begin_managed_mcp_oauth, complete_managed_mcp_oauth, diagnose_managed_mcp_server,
@@ -147,6 +149,7 @@ pub fn run() {
             apply_space_configuration,
             create_managed_credential,
             rotate_managed_credential,
+            reenter_managed_credential,
             delete_managed_credential,
             configure_managed_runtime,
             apply_managed_model_configuration,

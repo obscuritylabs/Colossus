@@ -15,7 +15,6 @@ use std::{
 #[cfg(not(windows))]
 use std::{fs::OpenOptions, io::Write as _};
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
 use crate::managed_configuration::{
@@ -40,7 +39,6 @@ const CODEX_AUTH_DIRECTORY: &str = "codex-auth";
 #[cfg(windows)]
 const WINDOWS_DESKTOP_HOME_DIRECTORY: &str = "ColossusDesktopHome";
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
-const MAX_PROVIDER_SECRET_BYTES: usize = 761;
 pub(crate) const LOCAL_TERMINAL_CONSENT_VERSION: u8 = 1;
 pub(crate) const MAX_EXTERNAL_TARGETS: usize = 32;
 const MAX_EXTERNAL_LABEL_BYTES: usize = 80;
@@ -51,7 +49,6 @@ pub(crate) const MAX_MANAGED_PROVIDERS: usize = 16;
 pub(crate) const MAX_MANAGED_MODELS: usize = 64;
 pub(crate) const MAX_WORKSPACE_PROFILES: usize = 128;
 const MAX_WORKSPACE_PROFILE_NAME_BYTES: usize = 80;
-const PROVIDER_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.provider";
 pub(crate) const EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
 const WORKSPACE_PARTITION_DOMAIN: &[u8] = b"colossus-desktop-managed-workspace-v1\0";
 const WORKSPACE_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-managed-instance-v1\0";
@@ -707,6 +704,9 @@ pub(crate) struct ManagedWorkspaceStorage {
 }
 
 impl SettingsStore {
+    pub(crate) fn application_root(&self) -> &Path {
+        &self.root
+    }
     pub(crate) fn open_application() -> Result<Self, CommandErrorDto> {
         let home = resolve_application_home().map_err(home_storage_error)?;
         Self::open_home(home)
@@ -1133,52 +1133,6 @@ pub(crate) fn revalidate_workspace(
         return Err(workspace_error());
     }
     Ok(canonical)
-}
-
-pub(crate) fn store_provider_secret(
-    credential_id: &str,
-    secret: &Zeroizing<String>,
-) -> Result<(), CommandErrorDto> {
-    if !valid_opaque_id(credential_id)
-        || secret.is_empty()
-        || secret.len() > MAX_PROVIDER_SECRET_BYTES
-        || !secret
-            .as_bytes()
-            .iter()
-            .all(|byte| (0x21..=0x7e).contains(byte))
-    {
-        return Err(CommandErrorDto::invalid(
-            "apiKey",
-            "The provider key must be bounded visible ASCII.",
-        ));
-    }
-    keyring::Entry::new(PROVIDER_KEYRING_SERVICE, credential_id)
-        .and_then(|entry| entry.set_secret(secret.as_bytes()))
-        .map_err(|_| credential_error())
-}
-
-pub(crate) fn load_provider_secret(
-    credential_id: &str,
-) -> Result<Zeroizing<Vec<u8>>, CommandErrorDto> {
-    if !valid_opaque_id(credential_id) {
-        return Err(credential_error());
-    }
-    keyring::Entry::new(PROVIDER_KEYRING_SERVICE, credential_id)
-        .and_then(|entry| entry.get_secret())
-        .map(Zeroizing::new)
-        .map_err(|_| credential_error())
-}
-
-pub(crate) fn delete_provider_secret(credential_id: &str) -> Result<(), CommandErrorDto> {
-    if !valid_opaque_id(credential_id) {
-        return Err(credential_error());
-    }
-    let entry = keyring::Entry::new(PROVIDER_KEYRING_SERVICE, credential_id)
-        .map_err(|_| credential_error())?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err(credential_error()),
-    }
 }
 
 fn migrate_v1_settings(
@@ -2092,14 +2046,6 @@ fn workspace_error() -> CommandErrorDto {
 
 fn ca_bundle_error(message: &str) -> CommandErrorDto {
     CommandErrorDto::local_sanitized("ca_bundle_invalid", message, false)
-}
-
-fn credential_error() -> CommandErrorDto {
-    CommandErrorDto::local_sanitized(
-        "provider_credential",
-        "The provider key could not be accessed in the system keychain. If it was removed, choose Replace the stored API key in Managed Local settings and retry.",
-        false,
-    )
 }
 
 #[cfg(test)]

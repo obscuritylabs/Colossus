@@ -1448,7 +1448,8 @@ async fn launch_child(
     // `launch_child` is also the sole restart path, so every generation repeats it.
     let workspace_identity =
         workspace.validate_expected(bootstrap.expected_workspace_identity())?;
-    let request = bootstrap.request(options, &workspace.canonical_path, workspace_identity)?;
+    let bootstrap_frame =
+        bootstrap.encoded_request(options, &workspace.canonical_path, workspace_identity)?;
     let executable = verify_executable(options.executable())?;
     let (child, process_tree, mut guardian, mut responses) =
         spawn_verified_sidecar(options.executable().path(), executable, &canonical_instance)
@@ -1463,7 +1464,15 @@ async fn launch_child(
         // changed between secure open and the inherited-channel exchange. The child
         // repeats this check independently before constructing the runtime.
         workspace.revalidate()?;
-        write_async_frame(&mut guardian, &ParentFrame::Bootstrap(Box::new(request))).await?;
+        guardian
+            .write_all(bootstrap_frame.as_slice())
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        guardian
+            .flush()
+            .await
+            .map_err(|_| SdkError::SidecarFailed)?;
+        drop(bootstrap_frame);
         let ready = match read_async_frame::<_, ChildFrame>(&mut responses).await? {
             ChildFrame::Ready(ready) => ready,
             ChildFrame::Failed(failure) => return Err(map_child_failure(failure.code)),

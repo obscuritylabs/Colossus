@@ -28,7 +28,7 @@ pub enum McpOAuthCredentialStoreKind {
     /// Select plaintext state for keyless deployments and protected storage otherwise.
     #[default]
     Auto,
-    /// Store OAuth credentials in the operating-system credential store.
+    /// Store OAuth records in a private vault protected by an operating-system key.
     Platform,
     /// Store OAuth credentials in an owner-private plaintext redb sidecar.
     PlaintextState,

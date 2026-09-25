@@ -350,7 +350,7 @@ export function OnboardingSurface({
                 <span>
                   <strong>Replace the stored API key</strong>
                   <small>
-                    Leave this off to reuse the existing native keychain entry
+                    Leave this off to reuse the existing encrypted vault entry
                     when changing only the model, access profile, or execution
                     boundary.
                   </small>
@@ -368,10 +368,10 @@ export function OnboardingSurface({
                   ? "The execution boundary has its own separate native confirmation. "
                   : ""}
                 {providerPromptRequired
-                  ? "Continue opens a native secure prompt for the fixed provider origin. The key never enters this WebView or renderer IPC, and native code stores it directly in the OS keychain."
+                  ? "Continue opens a native secure prompt. Your API key stays outside the page and is saved in the encrypted credential vault. The operating system protects the vault’s encryption key."
                   : providerKind === "open_ai_codex"
                     ? "The official Codex credential remains file-backed. Only its native path crosses private inherited bootstrap IPC; tokens never enter the WebView."
-                    : "The existing provider key remains in the OS keychain. Only the model, access policy, and execution boundary cross this WebView boundary."}
+                    : "The existing provider key remains in the encrypted credential vault. You can update the model, access profile, and execution boundary without entering it again."}
               </p>
             </div>
 

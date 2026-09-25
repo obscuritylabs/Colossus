@@ -79,7 +79,25 @@ impl ConfinedRoot {
     /// Open one existing confined regular file without creating a missing leaf.
     pub fn open_existing_file(&self, relative: &Path) -> Result<ConfinedFile, HomeError> {
         let (parents, leaf) = relative_file_parts(relative)?;
-        let file = open_existing_file_platform(self, &parents, &leaf)?;
+        let file = open_existing_file_platform(self, &parents, &leaf, false)?;
+        self.revalidate()?;
+        Ok(ConfinedFile {
+            path: self.path.join(relative),
+            file,
+            created: false,
+        })
+    }
+
+    /// Open an existing confined file for read/write access without creating it.
+    ///
+    /// Transactional stores can require write access for recovery even when serving
+    /// reads. Unlike [`Self::open_file`], a missing leaf or parent remains absent.
+    pub fn open_existing_file_read_write(
+        &self,
+        relative: &Path,
+    ) -> Result<ConfinedFile, HomeError> {
+        let (parents, leaf) = relative_file_parts(relative)?;
+        let file = open_existing_file_platform(self, &parents, &leaf, true)?;
         self.revalidate()?;
         Ok(ConfinedFile {
             path: self.path.join(relative),
@@ -135,6 +153,20 @@ impl ConfinedRoot {
     pub fn revalidate(&self) -> Result<(), HomeError> {
         revalidate_platform_root(self)
     }
+
+    /// Persist newly created child names on Unix before publishing external state.
+    ///
+    /// The retained directory descriptor is synced and revalidated. Windows has no
+    /// portable directory-fsync operation; file flushing remains its OS durability
+    /// boundary and this call still verifies the retained namespace.
+    pub fn sync_directory(&self) -> Result<(), HomeError> {
+        self.revalidate()?;
+        #[cfg(unix)]
+        self.directory
+            .sync_all()
+            .map_err(|error| HomeError::io(&self.path, error))?;
+        self.revalidate()
+    }
 }
 
 impl std::fmt::Debug for ConfinedRoot {
@@ -170,6 +202,55 @@ impl ConfinedFile {
     /// Whether this call created the previously absent file.
     pub const fn was_created(&self) -> bool {
         self.created
+    }
+
+    /// Borrow the retained file while this object continues to own its path binding.
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+
+    /// Prove this private file is still named by its original confined leaf.
+    ///
+    /// Unlike path preparation, a missing leaf is an error. Both the retained file
+    /// and a fresh no-follow open must identify the same private, single-link object.
+    pub fn revalidate(&self, root: &ConfinedRoot) -> Result<(), HomeError> {
+        root.revalidate()?;
+        let current = root.open_existing_file(root.relative(&self.path)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let retained = self
+                .file
+                .metadata()
+                .map_err(|error| HomeError::io(&self.path, error))?;
+            let actual = current
+                .file
+                .metadata()
+                .map_err(|error| HomeError::io(&self.path, error))?;
+            if !private_file_metadata(&retained)
+                || retained.dev() != actual.dev()
+                || retained.ino() != actual.ino()
+            {
+                return Err(HomeError::UnsafeConfinedPath(self.path.clone()));
+            }
+        }
+        #[cfg(windows)]
+        {
+            let retained = colossus_windows_native::FileIdentity::of(&self.file)
+                .map_err(|_| HomeError::UnsafeConfinedPath(self.path.clone()))?;
+            let actual = colossus_windows_native::FileIdentity::of(&current.file)
+                .map_err(|_| HomeError::UnsafeConfinedPath(self.path.clone()))?;
+            if retained != actual {
+                return Err(HomeError::UnsafeConfinedPath(self.path.clone()));
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = current;
+            return Err(HomeError::UnsafeConfinedPath(self.path.clone()));
+        }
+        #[cfg(any(unix, windows))]
+        root.revalidate()
     }
 
     /// Consume the binding and return its read/write file descriptor.
@@ -428,14 +509,18 @@ fn open_existing_file_platform(
     root: &ConfinedRoot,
     parents: &[OsString],
     leaf: &OsStr,
+    writable: bool,
 ) -> Result<File, HomeError> {
     let parent = open_directory_components(root, parents, false)?;
     let path = root.path.join(PathBuf::from_iter(parents)).join(leaf);
     let file = rustix::fs::openat(
         &parent,
         leaf,
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::NOFOLLOW
+        (if writable {
+            rustix::fs::OFlags::RDWR
+        } else {
+            rustix::fs::OFlags::RDONLY
+        }) | rustix::fs::OFlags::NOFOLLOW
             | rustix::fs::OFlags::NONBLOCK
             | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
@@ -604,17 +689,22 @@ fn open_existing_file_platform(
     root: &ConfinedRoot,
     parents: &[OsString],
     leaf: &OsStr,
+    writable: bool,
 ) -> Result<File, HomeError> {
     let path = windows_directory_path(root, parents, false)?.join(leaf);
-    let binding =
-        colossus_windows_native::BoundPath::open_file(&path).map_err(|error| match error {
-            colossus_windows_native::WindowsNativeError::Io { source, .. }
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                HomeError::io(&path, source)
-            }
-            _ => HomeError::UnsafeConfinedPath(path.clone()),
-        })?;
+    let binding = if writable {
+        colossus_windows_native::BoundPath::open_file_read_write(&path)
+    } else {
+        colossus_windows_native::BoundPath::open_file(&path)
+    }
+    .map_err(|error| match error {
+        colossus_windows_native::WindowsNativeError::Io { source, .. }
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            HomeError::io(&path, source)
+        }
+        _ => HomeError::UnsafeConfinedPath(path.clone()),
+    })?;
     binding
         .validate_private_owner_dacl()
         .and_then(|()| binding.revalidate())
@@ -720,10 +810,12 @@ fn open_existing_file_platform(
     root: &ConfinedRoot,
     parents: &[OsString],
     leaf: &OsStr,
+    writable: bool,
 ) -> Result<File, HomeError> {
     let path = fallback_directory_path(root, parents, false)?.join(leaf);
     let file = fs::OpenOptions::new()
         .read(true)
+        .write(writable)
         .open(&path)
         .map_err(|error| HomeError::io(&path, error))?;
     if !file
@@ -756,6 +848,67 @@ fn validate_directory_platform(
 mod tests {
     use super::*;
     use crate::test_support::private_tempdir;
+
+    #[test]
+    fn retained_file_revalidation_rejects_missing_and_replaced_leaf_names() {
+        let temporary = private_tempdir();
+        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        let retained = root.open_file(Path::new("state.redb")).unwrap();
+        retained.revalidate(&root).unwrap();
+        fs::rename(retained.path(), root.path().join("moved.redb")).unwrap();
+        assert!(retained.revalidate(&root).is_err());
+        let replacement = root.open_file(Path::new("state.redb")).unwrap();
+        replacement.revalidate(&root).unwrap();
+        assert!(retained.revalidate(&root).is_err());
+        root.sync_directory().unwrap();
+    }
+
+    #[test]
+    fn existing_read_write_open_never_creates_a_missing_leaf_or_parent() {
+        use std::io::{Read as _, Seek as _, Write as _};
+        let temporary = private_tempdir();
+        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        assert!(
+            root.open_existing_file_read_write(Path::new("missing.redb"))
+                .is_err()
+        );
+        assert!(
+            root.open_existing_file_read_write(Path::new("missing/state.redb"))
+                .is_err()
+        );
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        drop(root.open_file(Path::new("state.redb")).unwrap());
+        let opened = root
+            .open_existing_file_read_write(Path::new("state.redb"))
+            .unwrap();
+        assert!(!opened.was_created());
+        let mut file = opened.into_file();
+        file.write_all(b"state").unwrap();
+        file.rewind().unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"state");
+    }
+
+    #[test]
+    fn existing_read_write_open_rejects_hard_links_and_escaping_paths() {
+        let temporary = private_tempdir();
+        let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
+        drop(root.open_file(Path::new("state.redb")).unwrap());
+        fs::hard_link(
+            root.path().join("state.redb"),
+            root.path().join("linked.redb"),
+        )
+        .unwrap();
+        assert!(
+            root.open_existing_file_read_write(Path::new("state.redb"))
+                .is_err()
+        );
+        assert!(
+            root.open_existing_file_read_write(Path::new("../outside.redb"))
+                .is_err()
+        );
+    }
 
     #[cfg(windows)]
     #[test]

@@ -462,8 +462,4 @@ fn non_windows_calls_fail_closed() {
         BoundPath::open_directory(std::path::Path::new("/tmp")),
         Err(WindowsNativeError::UnsupportedPlatform)
     ));
-    assert!(matches!(
-        prompt_secret("Title", "Message", "target", 32),
-        Err(WindowsNativeError::UnsupportedPlatform)
-    ));
 }

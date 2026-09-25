@@ -73,11 +73,25 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Ports | `colossus-ports` | Application-owned interfaces for providers, state, tools, policy-adjacent services, and adapters |
 | Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry` | Use cases and durable behavior |
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
-| Infrastructure | `colossus-provider`, `colossus-codex-auth`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
+| Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
 ## Boundary rules
+
+Manual Desktop credentials and platform-backed MCP OAuth share the
+`colossus-credentials` adapter. `HostSecret` (64 KiB) and `VaultRecord` (1 MiB) are
+non-serializable, zeroizing contracts. `CredentialVault` and its opaque record
+identities belong to the ports surface; categorical credential errors are shared
+with contract validation. Runtime composition injects the vault into MCP; the
+adapter owns neither OAuth protocol behavior nor authorization policy.
+
+Each owner lazily opens one `credentials-v1.redb` and companion lease file within
+its validated private root. Desktop manual credentials use the global Desktop
+directory; platform OAuth uses the isolated runtime state directory. Conversation,
+journal, and settings databases contain no credential records. Native Windows and
+macOS entry lives in the private `apps/desktop/native-credential-ui` crate; Tauri
+commands dispatch it without receiving secret values from the renderer.
 
 - `colossus-domain` has no dependencies.
 - Ports are owned by the application, not infrastructure.

@@ -58,6 +58,7 @@ import {
   logoutManagedMcpOAuth,
   managedMcpOAuthStatus,
   rotateManagedCredential,
+  reenterManagedCredential,
   saveGlobalDefaults,
   saveSpaceConfiguration,
   upsertGlobalMcpServer,
@@ -1470,6 +1471,9 @@ export function buildManagedSettingsFixture(
       },
     },
     spaces,
+    credentialAvailability: Object.fromEntries(
+      credentials.map((credential) => [credential.id, "available" as const]),
+    ),
     fieldDescriptors: FIELD_DESCRIPTORS,
     lockedInvariants: [
       locked("storage.path", "Runtime storage path"),
@@ -2392,13 +2396,15 @@ export function ManagedSettingsPane({
       () => createManagedCredential(request),
       () =>
         fixtureRevision((draft) => {
+          const id = crypto.randomUUID();
           draft.globalConfiguration.credentials.push({
-            id: crypto.randomUUID(),
+            id,
             label: request.label,
             kind: request.kind,
             backend: "desktop",
             createdAtMs: Date.now(),
           });
+          draft.credentialAvailability[id] = "available";
         }),
       "Credential stored securely.",
     );
@@ -2417,11 +2423,13 @@ export function ManagedSettingsPane({
           const old = draft.globalConfiguration.credentials.find(
             (credential) => credential.id === credentialId,
           )!;
+          const id = crypto.randomUUID();
           draft.globalConfiguration.credentials.push({
             ...old,
-            id: crypto.randomUUID(),
+            id,
             createdAtMs: Date.now(),
           });
+          draft.credentialAvailability[id] = "available";
         }),
       "Credential rotated. Existing configurations keep using the previous value until updated.",
     );
@@ -2436,12 +2444,28 @@ export function ManagedSettingsPane({
         }),
       () =>
         fixtureRevision((draft) => {
+          delete draft.credentialAvailability[credentialId];
           draft.globalConfiguration.credentials =
             draft.globalConfiguration.credentials.filter(
               (credential) => credential.id !== credentialId,
             );
         }),
       "Credential deleted.",
+    );
+  }
+
+  async function reenterCredential(credentialId: string) {
+    await perform(
+      () =>
+        reenterManagedCredential({
+          expectedRevision: snapshot.globalConfiguration.revision,
+          credentialId,
+        }),
+      () =>
+        fixtureRevision((draft) => {
+          draft.credentialAvailability[credentialId] = "available";
+        }),
+      "Credential restored. Existing references are unchanged.",
     );
   }
 
@@ -2673,6 +2697,7 @@ export function ManagedSettingsPane({
             setCredentialKind={setCredentialKind}
             onCreateCredential={() => void createCredential()}
             onRotateCredential={(id) => void rotateCredential(id)}
+            onReenterCredential={(id) => void reenterCredential(id)}
             onDeleteCredential={(id) => void removeCredential(id)}
             onConfigureManaged={onConfigureManaged}
             desktop={desktop}
@@ -2834,6 +2859,7 @@ function GlobalSettingsBody({
   setCredentialKind,
   onCreateCredential,
   onRotateCredential,
+  onReenterCredential,
   onDeleteCredential,
   onConfigureManaged,
   desktop,
@@ -2882,6 +2908,7 @@ function GlobalSettingsBody({
   setCredentialKind: (kind: ManagedCredentialKind) => void;
   onCreateCredential: () => void;
   onRotateCredential: (id: string) => void;
+  onReenterCredential: (id: string) => void;
   onDeleteCredential: (id: string) => void;
   onConfigureManaged: () => void;
   desktop: DesktopStatus;
@@ -3198,7 +3225,41 @@ function GlobalSettingsBody({
           <div className="managed-list credential-list" role="list">
             {global.credentials.map((credential) => {
               const consumers = credentialConsumers.get(credential.id) ?? [];
-              const native = credential.backend === "desktop";
+              const availability =
+                snapshot.credentialAvailability[credential.id] ?? "unavailable";
+              const available = availability === "available";
+              const status = {
+                available: { label: "Stored securely", guidance: "" },
+                missing: {
+                  label: "Re-entry required",
+                  guidance:
+                    "Re-enter this token to restore existing configurations.",
+                },
+                locked: {
+                  label: "Storage locked",
+                  guidance:
+                    "Unlock your operating-system credential store, then retry.",
+                },
+                busy: {
+                  label: "Storage in use",
+                  guidance: "Close the other Colossus instance, then retry.",
+                },
+                key_missing: {
+                  label: "Encryption key missing",
+                  guidance:
+                    "The vault encryption key is missing. Existing data has been preserved.",
+                },
+                corrupt: {
+                  label: "Storage verification failed",
+                  guidance:
+                    "Credential storage could not be verified. Existing data has been preserved.",
+                },
+                unavailable: {
+                  label: "Storage unavailable",
+                  guidance:
+                    "Check the operating-system credential store, then retry.",
+                },
+              }[availability];
               return (
                 <div
                   className="managed-list-row"
@@ -3211,11 +3272,10 @@ function GlobalSettingsBody({
                   <div>
                     <strong>{credential.label}</strong>
                     <small>
-                      {credentialKindLabel(credential.kind)} ·{" "}
-                      {native
-                        ? "Secure system storage"
-                        : "External credential source"}
+                      {credentialKindLabel(credential.kind)} · Encrypted
+                      credential storage
                     </small>
+                    {status.guidance ? <small>{status.guidance}</small> : null}
                   </div>
                   <div className="credential-row-meta">
                     <span
@@ -3232,27 +3292,36 @@ function GlobalSettingsBody({
                         : "Not referenced"}
                     </span>
                     <span
-                      className={`status-chip${native ? " tone-success" : ""}`}
+                      className={`status-chip${available ? " tone-success" : ""}`}
                     >
                       <IconLock size={13} aria-hidden="true" />
-                      {native ? "Stored securely" : "External reference"}
+                      {status.label}
                     </span>
                   </div>
                   <div className="resource-actions">
                     <button
                       className="button secondary"
                       type="button"
-                      disabled={busy || !native}
-                      aria-label={`Rotate ${credential.label}`}
-                      title={`Rotate ${credential.label}`}
-                      onClick={() => onRotateCredential(credential.id)}
+                      disabled={
+                        busy || (availability !== "missing" && !available)
+                      }
+                      aria-label={`${availability === "missing" ? "Re-enter token for" : "Rotate"} ${credential.label}`}
+                      title={`${availability === "missing" ? "Re-enter token for" : "Rotate"} ${credential.label}`}
+                      onClick={() =>
+                        availability === "missing"
+                          ? onReenterCredential(credential.id)
+                          : onRotateCredential(credential.id)
+                      }
                     >
-                      <IconRefresh size={15} aria-hidden="true" /> Rotate
+                      <IconRefresh size={15} aria-hidden="true" />{" "}
+                      {availability === "missing" ? "Re-enter token" : "Rotate"}
                     </button>
                     <button
                       className="icon-button danger-icon-button"
                       type="button"
-                      disabled={busy || !native}
+                      disabled={
+                        busy || (availability !== "missing" && !available)
+                      }
                       aria-label={`Delete ${credential.label}`}
                       title={`Delete ${credential.label}`}
                       onClick={() => onDeleteCredential(credential.id)}

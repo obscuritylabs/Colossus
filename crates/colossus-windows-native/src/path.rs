@@ -53,6 +53,21 @@ pub struct FileIdentity {
     pub file_id: [u8; 16],
 }
 
+impl FileIdentity {
+    /// Query the stable identity of an already-open file without resolving its path.
+    pub fn of(file: &File) -> Result<Self, WindowsNativeError> {
+        #[cfg(windows)]
+        {
+            crate::windows::file_identity(file)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = file;
+            Err(WindowsNativeError::UnsupportedPlatform)
+        }
+    }
+}
+
 /// A retained exact Windows filesystem object and all opened path ancestors.
 pub struct BoundPath {
     #[cfg(windows)]

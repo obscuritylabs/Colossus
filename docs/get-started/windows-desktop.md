@@ -108,6 +108,19 @@ use the `/mcp` endpoint, not a legacy SSE transport. No API key or OAuth login i
 See [Cloudflare's server catalog](https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/)
 and [MCP configuration](../reference/configuration/mcp.md).
 
+Manual API keys and MCP tokens use a native masked-entry window with a byte count,
+Save, and Cancel. It accepts up to 65,536 bytes of visible ASCII and rejects overflow
+without truncation. The complete token is encrypted in Desktop's private
+`credentials-v1.redb`; Windows Credential Manager stores only a small dedicated
+encryption key. The vault and its companion lock file are created on first save,
+and all manually entered credentials share them.
+
+When upgrading from direct OS token storage, open **Settings → Global → Credentials**
+and choose **Re-enter token**. This restores the existing credential ID and its
+references. MCP OAuth connections require sign-in again. Settings and old OS entries
+are preserved; old tokens are not imported or deleted. A locked or unavailable
+credential store is reported separately from a missing token.
+
 ### 3. Import a private CA
 
 Open **Settings → Additional CA certificates → Import PEM bundle**. Desktop accepts a
