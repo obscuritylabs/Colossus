@@ -13317,33 +13317,41 @@ textarea {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-.mcp-delete-dialog {
+.mcp-delete-dialog,
+.catalog-delete-dialog {
   width: min(520px, calc(100vw - 48px));
   padding: 0;
   color: var(--text);
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.mcp-delete-dialog:not([open]) {
+.mcp-delete-dialog:not([open]),
+.catalog-delete-dialog:not([open]) {
   display: none;
 }
 
-.mcp-delete-dialog::backdrop {
+.mcp-delete-dialog::backdrop,
+.catalog-delete-dialog::backdrop {
   background: var(--surface-overlay);
 }
 
 .mcp-delete-dialog h3,
-.mcp-delete-content {
+.mcp-delete-content,
+.catalog-delete-dialog h3,
+.catalog-delete-content {
   overflow-wrap: anywhere;
 }
 
-.mcp-delete-content {
+.mcp-delete-content,
+.catalog-delete-content {
   overflow-y: auto;
   padding: 16px 20px;
 }
 
 .mcp-delete-content p + div,
-.mcp-delete-content [role="alert"] {
+.mcp-delete-content [role="alert"],
+.catalog-delete-content p + div,
+.catalog-delete-content [role="alert"] {
   margin-top: 16px;
 }
 

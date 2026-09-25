@@ -58,6 +58,8 @@ const COMMANDS: &[&str] = &[
     "get_managed_extension_inventory",
     "upsert_global_provider",
     "upsert_global_model",
+    "delete_global_provider",
+    "delete_global_model",
     "upsert_global_search_provider",
     "upsert_global_telemetry_profile",
     "save_space_configuration",

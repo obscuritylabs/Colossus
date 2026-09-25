@@ -48,6 +48,9 @@ use desktop_commands::{
     search_space_threads, select_space, select_target, set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
+use managed_configuration_commands::catalog_deletion::{
+    delete_global_model, delete_global_provider,
+};
 use managed_configuration_commands::{
     apply_space_configuration, create_managed_credential, delete_global_mcp_server,
     delete_managed_credential, get_managed_configuration, reenter_managed_credential,
@@ -133,6 +136,8 @@ pub fn run() {
             save_global_defaults,
             upsert_global_mcp_server,
             delete_global_mcp_server,
+            delete_global_model,
+            delete_global_provider,
             diagnose_managed_mcp_server,
             managed_mcp_oauth_status,
             begin_managed_mcp_oauth,

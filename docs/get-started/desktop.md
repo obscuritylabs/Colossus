@@ -141,6 +141,14 @@ does not change a running Workspace; the Workspace shows an update and must revi
 Workspace edits apply only to that Workspace after configuration preflight and any required
 native authority confirmation.
 
+To remove an unused model or provider, open **Settings → Global → Models** or
+**Providers**, choose **Delete** beside the entry, and confirm. If it is still in
+use, the dialog lists the models or workspaces that reference it. Change or remove
+those references and apply workspace changes first; restore archived workspaces
+before editing them. Delete unused models before deleting their provider connection.
+Deletion removes the saved entry and its versions. It keeps saved credentials,
+provider accounts, and other connections.
+
 Each ordinary setting shows whether its effective value comes from the Colossus
 built-in default, a Global override, or a Workspace override. **Inherit** removes an
 override instead of copying the current value. The read-only effective YAML view is

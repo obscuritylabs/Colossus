@@ -465,6 +465,23 @@ export function upsertGlobalProvider(request: {
   return call("upsert_global_provider", { request });
 }
 
+export interface DeleteGlobalCatalogEntryRequest {
+  expectedRevision: number;
+  resourceId: string;
+}
+
+export function deleteGlobalProvider(
+  request: DeleteGlobalCatalogEntryRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_provider", { request });
+}
+
+export function deleteGlobalModel(
+  request: DeleteGlobalCatalogEntryRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_model", { request });
+}
+
 export function upsertGlobalModel(request: {
   expectedRevision: number;
   resourceId: string | null;

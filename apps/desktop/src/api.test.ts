@@ -37,6 +37,8 @@ import {
   desktopReleaseChannel,
   deleteManagedCredential,
   deleteGlobalMcpServer,
+  deleteGlobalModel,
+  deleteGlobalProvider,
   diagnoseManagedMcpServer,
   diagnoseManagedModel,
   diagnoseManagedProvider,
@@ -132,6 +134,20 @@ describe("desktop API target routing", () => {
       request,
     });
   });
+
+  it.each([
+    ["model", deleteGlobalModel],
+    ["provider", deleteGlobalProvider],
+  ] as const)(
+    "deletes a global %s by identity with its reviewed revision",
+    async (kind, remove) => {
+      const request = { expectedRevision: 7, resourceId: "catalog-resource-1" };
+      await remove(request);
+      expect(tauri.invoke).toHaveBeenCalledWith(`delete_global_${kind}`, {
+        request,
+      });
+    },
+  );
 
   it("captures queued mentions through the native shared parser before delivery", async () => {
     await resolvePluginSelection("space-1", "@colossus/coding work", [

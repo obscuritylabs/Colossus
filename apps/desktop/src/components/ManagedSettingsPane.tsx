@@ -28,6 +28,8 @@ import {
 } from "@tabler/icons-react";
 import {
   type InputHTMLAttributes,
+  lazy,
+  Suspense,
   useEffect,
   useId,
   useMemo,
@@ -36,6 +38,11 @@ import {
 } from "react";
 import { PluginConfigurationEditor } from "./PluginConfigurationEditor";
 import { McpDeleteDialog } from "./McpDeleteDialog";
+import {
+  catalogDeletionBlockers,
+  deleteCatalogEntryFixture,
+  type DeletableCatalogKind,
+} from "../catalog-deletion";
 import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 
 import {
@@ -47,6 +54,8 @@ import {
   CommandFailure,
   deleteManagedCredential,
   deleteGlobalMcpServer,
+  deleteGlobalModel,
+  deleteGlobalProvider,
   diagnoseManagedMcpServer,
   diagnoseManagedModel,
   diagnoseManagedProvider,
@@ -106,6 +115,12 @@ import {
   selectCatalogModel,
 } from "../providerCatalog";
 import { ToastRegion, useToastQueue } from "./ToastRegion";
+
+const CatalogDeleteDialog = lazy(() =>
+  import("./CatalogDeleteDialog").then((module) => ({
+    default: module.CatalogDeleteDialog,
+  })),
+);
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
@@ -1606,6 +1621,17 @@ export function ManagedSettingsPane({
     expectedRevision: number;
   } | null>(null);
   const mcpDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const [catalogDeletion, setCatalogDeletion] = useState<{
+    kind: DeletableCatalogKind;
+    resourceId: string;
+    expectedRevision: number;
+  } | null>(null);
+  const catalogDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const catalogToDelete = catalogDeletion
+    ? snapshot.globalConfiguration[
+        catalogDeletion.kind === "model" ? "models" : "providers"
+      ].find((entry) => entry.id === catalogDeletion.resourceId)
+    : undefined;
   const mcpToDelete = snapshot.globalConfiguration.mcpServers.find(
     (entry) => entry.id === mcpDeletion?.resourceId,
   );
@@ -2341,6 +2367,28 @@ export function ManagedSettingsPane({
     }
   }
 
+  async function removeCatalogEntry() {
+    if (!catalogDeletion || !catalogToDelete || busy) return;
+    const { kind, ...request } = catalogDeletion;
+    const deleted = await perform(
+      () =>
+        kind === "model"
+          ? deleteGlobalModel(request)
+          : deleteGlobalProvider(request),
+      () => deleteCatalogEntryFixture(snapshot, kind, request),
+      kind === "model" ? "Model deleted." : "Provider deleted.",
+    );
+    if (!deleted) return;
+    setCatalogDeletion(null);
+    if (kind === "model" && modelEditor?.resourceId === request.resourceId)
+      setModelEditor(null);
+    if (
+      kind === "provider" &&
+      providerEditor?.resourceId === request.resourceId
+    )
+      setProviderEditor(null);
+  }
+
   async function saveModel() {
     if (!modelEditor || busy) return;
     const submitted = modelEditor;
@@ -2726,6 +2774,15 @@ export function ManagedSettingsPane({
             providerEditor={providerEditor}
             setProviderEditor={setProviderEditor}
             onSaveProvider={() => void saveProvider()}
+            onDeleteCatalogEntry={(kind, resourceId, trigger) => {
+              setFailure("");
+              catalogDeleteTrigger.current = trigger;
+              setCatalogDeletion({
+                kind,
+                resourceId,
+                expectedRevision: snapshot.globalConfiguration.revision,
+              });
+            }}
             modelEditor={modelEditor}
             setModelEditor={setModelEditor}
             onSaveModel={() => void saveModel()}
@@ -2870,6 +2927,24 @@ export function ManagedSettingsPane({
           onDelete={() => void removeMcp()}
         />
       ) : null}
+      {catalogDeletion && catalogToDelete ? (
+        <Suspense fallback={null}>
+          <CatalogDeleteDialog
+            kind={catalogDeletion.kind}
+            label={catalogToDelete.label}
+            blockers={catalogDeletionBlockers(
+              snapshot,
+              catalogDeletion.kind,
+              catalogToDelete.id,
+            )}
+            busy={busy}
+            error={failure}
+            returnFocus={catalogDeleteTrigger.current}
+            onCancel={() => setCatalogDeletion(null)}
+            onDelete={() => void removeCatalogEntry()}
+          />
+        </Suspense>
+      ) : null}
     </SettingsFrame>
   );
 }
@@ -2886,6 +2961,7 @@ function GlobalSettingsBody({
   setMcpEditor,
   onSaveMcp,
   onDeleteMcp,
+  onDeleteCatalogEntry,
   providerEditor,
   setProviderEditor,
   onSaveProvider,
@@ -2936,6 +3012,11 @@ function GlobalSettingsBody({
   setMcpEditor: (draft: McpEditorDraft | null) => void;
   onSaveMcp: () => void;
   onDeleteMcp: (resourceId: string, trigger: HTMLButtonElement) => void;
+  onDeleteCatalogEntry: (
+    kind: DeletableCatalogKind,
+    resourceId: string,
+    trigger: HTMLButtonElement,
+  ) => void;
   providerEditor: ProviderEditorDraft | null;
   setProviderEditor: (draft: ProviderEditorDraft | null) => void;
   onSaveProvider: () => void;
@@ -3542,6 +3623,7 @@ function GlobalSettingsBody({
             className="button primary"
             type="button"
             disabled={busy || Boolean(modelEditor)}
+            id="add-model"
             onClick={() =>
               setModelEditor({
                 ...EMPTY_MODEL_DRAFT,
@@ -3666,6 +3748,21 @@ function GlobalSettingsBody({
                     >
                       <IconEdit size={15} aria-hidden="true" /> Edit
                     </button>
+                    <button
+                      className="button danger"
+                      type="button"
+                      aria-label={`Delete ${entry.label}`}
+                      disabled={busy}
+                      onClick={(event) =>
+                        onDeleteCatalogEntry(
+                          "model",
+                          entry.id,
+                          event.currentTarget,
+                        )
+                      }
+                    >
+                      <IconTrash size={15} aria-hidden="true" /> Delete
+                    </button>
                   </div>
                 </div>
               );
@@ -3752,6 +3849,7 @@ function GlobalSettingsBody({
             className="button primary"
             type="button"
             disabled={busy || Boolean(providerEditor)}
+            id="add-provider"
             onClick={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
           >
             <IconPlus size={16} /> Add provider
@@ -3851,6 +3949,21 @@ function GlobalSettingsBody({
                       onClick={() => setProviderEditor(providerDraft(entry))}
                     >
                       <IconEdit size={15} aria-hidden="true" /> Edit
+                    </button>
+                    <button
+                      className="button danger"
+                      type="button"
+                      aria-label={`Delete ${entry.label}`}
+                      disabled={busy}
+                      onClick={(event) =>
+                        onDeleteCatalogEntry(
+                          "provider",
+                          entry.id,
+                          event.currentTarget,
+                        )
+                      }
+                    >
+                      <IconTrash size={15} aria-hidden="true" /> Delete
                     </button>
                   </div>
                 </div>

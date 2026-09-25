@@ -5,6 +5,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use uuid::Uuid;
 
+pub(crate) mod catalog_deletion;
 mod mcp_deletion;
 
 use crate::{

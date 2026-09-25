@@ -3,6 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 import { McpDeleteDialog } from "./McpDeleteDialog";
+import {
+  catalogDeletionBlockers,
+  deleteCatalogEntryFixture,
+} from "../catalog-deletion";
 
 import type {
   DesktopStatus,
@@ -60,6 +64,111 @@ const space: SpaceSummary = {
   lastActivityAt: null,
   providerConfigured: true,
 };
+
+describe("model and provider deletion", () => {
+  it("includes archived workspace references and pinned older model routes", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const provider = snapshot.globalConfiguration.providers[0]!;
+    const model = snapshot.globalConfiguration.models[0]!;
+    snapshot.spaces[0]!.archived = true;
+    const old = structuredClone(model.revisions[0]!);
+    model.currentRevision = old.revision + 1;
+    model.revisions.push({
+      revision: model.currentRevision,
+      value: { ...old.value, providerProfile: "replacement" },
+    });
+    expect(catalogDeletionBlockers(snapshot, "model", model.id)).toEqual([
+      "Workspace Colossus (archived)",
+    ]);
+    // Prove the older model route blocks independently of a direct provider pin.
+    for (const key of Object.keys(
+      snapshot.spaces[0]!.configuration.catalogRevisions,
+    )) {
+      if (key.startsWith("provider:"))
+        delete snapshot.spaces[0]!.configuration.catalogRevisions[key];
+    }
+    expect(catalogDeletionBlockers(snapshot, "provider", provider.id)).toEqual([
+      "Workspace Colossus (archived)",
+    ]);
+    expect(() =>
+      deleteCatalogEntryFixture(snapshot, "provider", {
+        expectedRevision: snapshot.globalConfiguration.revision,
+        resourceId: provider.id,
+      }),
+    ).toThrow(/still in use/);
+  });
+
+  it("removes unused models then providers by identity and preserves pending work and credentials", () => {
+    const source = buildManagedSettingsFixture(desktop());
+    source.spaces[0]!.configuration.catalogRevisions = {};
+    source.spaces[0]!.configuration.modelRoles = {};
+    const pending = structuredClone(source.spaces[0]!);
+    pending.id = "pending";
+    pending.configuration.acceptedGlobalRevision -= 1;
+    source.spaces.push(pending);
+    const model = source.globalConfiguration.models[0]!;
+    const provider = source.globalConfiguration.providers[0]!;
+    const other = structuredClone(model);
+    other.id = "other-model";
+    source.globalConfiguration.models.push(other);
+    const before = structuredClone(source);
+    const result = deleteCatalogEntryFixture(source, "model", {
+      expectedRevision: source.globalConfiguration.revision,
+      resourceId: model.id,
+    });
+    expect(result.globalConfiguration.models).toEqual([other]);
+    expect(result.globalConfiguration.credentials).toEqual(
+      source.globalConfiguration.credentials,
+    );
+    expect(result.spaces[0]!.configuration.acceptedGlobalRevision).toBe(
+      source.globalConfiguration.revision + 1,
+    );
+    expect(result.spaces[1]!.configuration.acceptedGlobalRevision).toBe(
+      pending.configuration.acceptedGlobalRevision,
+    );
+    expect(source).toEqual(before);
+    expect(catalogDeletionBlockers(result, "provider", provider.id)).toEqual([
+      `Model ${other.label}`,
+    ]);
+    const withoutModels = deleteCatalogEntryFixture(result, "model", {
+      expectedRevision: result.globalConfiguration.revision,
+      resourceId: other.id,
+    });
+    const withoutProvider = deleteCatalogEntryFixture(
+      withoutModels,
+      "provider",
+      {
+        expectedRevision: withoutModels.globalConfiguration.revision,
+        resourceId: provider.id,
+      },
+    );
+    expect(withoutProvider.globalConfiguration.providers).toEqual([]);
+    expect(withoutProvider.globalConfiguration.credentials).toEqual(
+      source.globalConfiguration.credentials,
+    );
+  });
+
+  it.each(["model", "provider"] as const)(
+    "rejects stale and unknown %s deletion requests",
+    (kind) => {
+      const source = buildManagedSettingsFixture(desktop());
+      const before = structuredClone(source);
+      expect(() =>
+        deleteCatalogEntryFixture(source, kind, {
+          expectedRevision: 0,
+          resourceId: "missing",
+        }),
+      ).toThrow(/Reload/);
+      expect(() =>
+        deleteCatalogEntryFixture(source, kind, {
+          expectedRevision: source.globalConfiguration.revision,
+          resourceId: "missing",
+        }),
+      ).toThrow(/unknown/);
+      expect(source).toEqual(before);
+    },
+  );
+});
 
 function desktop(): DesktopStatus {
   return {
