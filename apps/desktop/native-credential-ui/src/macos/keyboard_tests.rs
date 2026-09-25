@@ -4,8 +4,8 @@ use super::{
 };
 use crate::DialogAppearance;
 use objc2_app_kit::{
-    NSAccessibility, NSApplication, NSButton, NSEvent, NSEventModifierFlags, NSEventType,
-    NSResponder, NSSecureTextField, NSView,
+    NSApplication, NSButton, NSEvent, NSEventModifierFlags, NSEventType, NSResponder,
+    NSSecureTextField, NSView,
 };
 use objc2_foundation::{NSPoint, NSString, ns_string};
 
@@ -36,12 +36,12 @@ fn keyboard_save(mtm: MainThreadMarker) {
         )
     };
     accessibility_tests::secure_input(&input);
-    accessibility_tests::save_enabled(&save, false);
+    accessibility_tests::button_enabled(&save, ns_string!("Save"), false);
     panel.performKeyEquivalent(&key(&panel, "\r", 36, false));
     assert!(result.try_recv().is_err(), "empty Return must not save");
 
     insert(&input.currentEditor().unwrap(), "SYNTHETIC-KEYBOARD");
-    accessibility_tests::save_enabled(&save, true);
+    accessibility_tests::button_enabled(&save, ns_string!("Save"), true);
     accessibility_tests::secure_input(&input);
     traversal(&panel, &input, &save, mtm);
     assert_eq!(current_text(&input).to_string(), "SYNTHETIC-KEYBOARD");
@@ -78,10 +78,7 @@ fn traversal(panel: &NSWindow, input: &NSSecureTextField, save: &NSButton, mtm: 
         input.currentEditor().is_some(),
         "Shift-Tab returns to secure entry"
     );
-    assert_eq!(
-        cancel.accessibilityLabel().as_deref(),
-        Some(ns_string!("Cancel"))
-    );
+    accessibility_tests::button_enabled(&cancel, ns_string!("Cancel"), true);
 }
 
 fn same_view(left: &NSView, right: &NSView) -> bool {

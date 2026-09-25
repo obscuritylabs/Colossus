@@ -1,5 +1,7 @@
 //! `AppKit` sheet with a secure field and pre-insertion formatter validation.
 
+#[path = "macos/accessibility.rs"]
+mod accessibility;
 #[path = "macos/formatter.rs"]
 mod formatter;
 #[path = "macos/styling.rs"]
@@ -18,7 +20,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSAccessibility, NSApplicationWillTerminateNotification, NSBackingStoreType, NSButton,
+    NSApplicationWillTerminateNotification, NSBackingStoreType, NSButton,
     NSControlTextEditingDelegate, NSPanel, NSSecureTextField, NSTextField, NSTextFieldDelegate,
     NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowWillCloseNotification,
 };
@@ -211,8 +213,8 @@ fn open_sheet(
         style.rect(28.0, 145.0, 504.0, 44.0),
     );
     input.setPlaceholderString(Some(ns_string!("Paste your credential")));
-    input.setAccessibilityLabel(Some(ns_string!("Token")));
     style.input(&input);
+    accessibility::label(&input, ns_string!("Token"));
     let [count, status] = style.feedback(mtm);
     let save = unsafe {
         NSButton::buttonWithTitle_target_action(
@@ -225,7 +227,7 @@ fn open_sheet(
     save.setFrame(style.rect(432.0, 24.0, 100.0, 40.0));
     style.button(&save, true);
     save.setKeyEquivalent(ns_string!("\r"));
-    save.setAccessibilityLabel(Some(ns_string!("Save")));
+    accessibility::label(&save, ns_string!("Save"));
     save.setEnabled(false);
     let cancel = unsafe {
         NSButton::buttonWithTitle_target_action(
@@ -238,7 +240,7 @@ fn open_sheet(
     cancel.setFrame(style.rect(320.0, 24.0, 100.0, 40.0));
     style.button(&cancel, false);
     cancel.setKeyEquivalent(ns_string!("\u{1b}"));
-    cancel.setAccessibilityLabel(Some(ns_string!("Cancel")));
+    accessibility::label(&cancel, ns_string!("Cancel"));
     let formatter = TokenFormatter::new(mtm, status.clone());
     input.setFormatter(Some(&formatter));
     unsafe {

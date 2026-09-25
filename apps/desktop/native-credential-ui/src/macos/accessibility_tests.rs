@@ -2,8 +2,7 @@
 
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
-    NSAccessibility, NSAccessibilityUnignoredDescendant, NSButton, NSCell, NSSecureTextField,
-    NSView,
+    NSAccessibility, NSAccessibilityUnignoredDescendant, NSCell, NSSecureTextField, NSView,
 };
 use objc2_foundation::{NSString, ns_string};
 
@@ -29,13 +28,10 @@ pub(super) fn secure_input(input: &NSSecureTextField) {
     );
 }
 
-pub(super) fn save_enabled(button: &NSButton, enabled: bool) {
+pub(super) fn button_enabled(button: &NSView, label: &NSString, enabled: bool) {
     let element = exposed(button);
     assert!(element.isAccessibilityElement());
-    assert_eq!(
-        element.accessibilityLabel().as_deref(),
-        Some(ns_string!("Save"))
-    );
+    assert_eq!(element.accessibilityLabel().as_deref(), Some(label));
     assert_eq!(element.isAccessibilityEnabled(), enabled);
 }
 
