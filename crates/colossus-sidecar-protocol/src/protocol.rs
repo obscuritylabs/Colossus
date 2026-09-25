@@ -287,12 +287,16 @@ pub struct HostCredential {
     /// Opaque identifier referenced as `host:<id>` by runtime configuration.
     pub id: String,
     /// Credential value, erased on drop.
-    pub secret: SecretString,
+    #[serde(with = "crate::host_secret_wire")]
+    pub secret: colossus_contracts::HostSecret,
 }
 
 impl HostCredential {
     /// Validate a host credential and its opaque identifier.
-    pub fn new(id: impl Into<String>, secret: SecretString) -> Result<Self, ProtocolError> {
+    pub fn new(
+        id: impl Into<String>,
+        secret: colossus_contracts::HostSecret,
+    ) -> Result<Self, ProtocolError> {
         let value = Self {
             id: id.into(),
             secret,
@@ -1845,16 +1849,7 @@ pub enum ProtocolError {
 
 /// Encode one complete length-prefixed frame into zeroizing memory.
 pub fn encode_frame<T: Serialize>(value: &T) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
-    let payload =
-        Zeroizing::new(serde_json::to_vec(value).map_err(|_| ProtocolError::InvalidFrame)?);
-    if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
-        return Err(ProtocolError::InvalidFrame);
-    }
-    let length = u32::try_from(payload.len()).map_err(|_| ProtocolError::InvalidFrame)?;
-    let mut frame = Zeroizing::new(Vec::with_capacity(4 + payload.len()));
-    frame.extend_from_slice(&length.to_be_bytes());
-    frame.extend_from_slice(payload.as_slice());
-    Ok(frame)
+    crate::frame_encoding::encode(value)
 }
 
 /// Decode one already bounded JSON payload.
@@ -2027,7 +2022,7 @@ mod tests {
             host_credentials: vec![
                 HostCredential::new(
                     "provider-main",
-                    SecretString::new("secret-value").expect("secret"),
+                    colossus_contracts::HostSecret::new("secret-value").expect("secret"),
                 )
                 .expect("credential"),
             ],
@@ -2035,6 +2030,28 @@ mod tests {
                 encode_worker_authentication(&[0x5a; 32]).expect("worker authentication"),
             ),
         }
+    }
+
+    #[test]
+    fn host_secret_wire_roundtrip_retains_large_token_and_rejects_oversize() {
+        let credential = HostCredential::new(
+            "mcp-large",
+            colossus_contracts::HostSecret::new("s".repeat(64 * 1024)).unwrap(),
+        )
+        .unwrap();
+        let frame = encode_frame(&credential).unwrap();
+        let restored: HostCredential = read_frame(&mut Cursor::new(frame.as_slice())).unwrap();
+        assert!(restored.secret.expose() == credential.secret.expose());
+        let malformed = serde_json::json!({"id": "mcp-large", "secret": "s".repeat(64 * 1024 + 1)});
+        assert!(serde_json::from_value::<HostCredential>(malformed).is_err());
+    }
+
+    #[test]
+    fn frame_encoding_enforces_exact_json_payload_limit() {
+        let exact = "s".repeat(MAX_FRAME_BYTES - 2);
+        assert_eq!(encode_frame(&exact).unwrap().len(), MAX_FRAME_BYTES + 4);
+        assert!(encode_frame(&(exact + "s")).is_err());
+        assert!(encode_frame(&"\"".repeat(MAX_FRAME_BYTES / 2)).is_err());
     }
 
     #[test]
@@ -2184,7 +2201,7 @@ mod tests {
         bootstrap.host_credentials.push(
             HostCredential::new(
                 "serp-key",
-                SecretString::new("search-secret").expect("secret"),
+                colossus_contracts::HostSecret::new("search-secret").expect("secret"),
             )
             .expect("search credential"),
         );
@@ -2547,7 +2564,7 @@ mod tests {
         request.host_credentials.push(
             HostCredential::new(
                 "provider-main",
-                SecretString::new("another-secret").expect("secret"),
+                colossus_contracts::HostSecret::new("another-secret").expect("secret"),
             )
             .expect("credential"),
         );

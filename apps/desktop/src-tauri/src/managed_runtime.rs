@@ -21,11 +21,11 @@ use std::{
 
 use crate::{
     bundle::VerifiedBundle,
+    desktop_credentials::DesktopCredentials,
     desktop_dto::{ManagedRuntimeStateDto, RuntimeFailureCodeDto},
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ProviderKindSetting,
-        ReasoningEffortSetting, SettingsStore, load_provider_secret, normalized_settings_snapshot,
-        revalidate_workspace,
+        ReasoningEffortSetting, SettingsStore, normalized_settings_snapshot, revalidate_workspace,
     },
     dto::CommandErrorDto,
     managed_configuration::{
@@ -637,7 +637,10 @@ async fn start_inner(
         workspace_identity.clone(),
         store,
         settings,
-    )?;
+        &DesktopCredentials::for_settings(state, store)
+            .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?,
+    )
+    .await?;
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     install_managed_target(
         state,
@@ -659,8 +662,9 @@ async fn start_inner(
     .await
 }
 
-fn provider_host_credentials(
+async fn provider_host_credentials(
     resolved: &ResolvedSpaceConfiguration,
+    credentials: &std::sync::Arc<DesktopCredentials>,
 ) -> Result<Vec<SidecarHostCredential>, (CommandErrorDto, RuntimeFailureCodeDto)> {
     let mut credential_ids = resolved
         .providers
@@ -688,17 +692,18 @@ fn provider_host_credentials(
             .iter()
             .filter_map(|search| search.credential_id.clone()),
     );
-    credential_ids
-        .into_iter()
-        .map(|credential_id| {
-            let credential = load_provider_secret(&credential_id)
-                .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
-            let provider_secret = Secret::new(credential.to_vec())
-                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
-            SidecarHostCredential::new(&credential_id, provider_secret)
-                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))
-        })
-        .collect()
+    let mut host_credentials = Vec::with_capacity(credential_ids.len());
+    for credential_id in credential_ids {
+        let credential = credentials
+            .read(&credential_id)
+            .await
+            .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
+        host_credentials.push(
+            SidecarHostCredential::new(&credential_id, credential)
+                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?,
+        );
+    }
+    Ok(host_credentials)
 }
 
 struct PreparedManagedBootstrap {
@@ -707,11 +712,12 @@ struct PreparedManagedBootstrap {
     terminal_enabled: bool,
 }
 
-fn prepare_managed_bootstrap(
+async fn prepare_managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
     store: &SettingsStore,
     settings: &DesktopSettings,
+    credentials: &std::sync::Arc<DesktopCredentials>,
 ) -> Result<PreparedManagedBootstrap, (CommandErrorDto, RuntimeFailureCodeDto)> {
     let space = settings
         .selected_space_id
@@ -726,7 +732,7 @@ fn prepare_managed_bootstrap(
         })?;
     let resolved = resolve_space_configuration(&settings.global_configuration, space)
         .map_err(|error| (error, RuntimeFailureCodeDto::Configuration))?;
-    let host_credentials = provider_host_credentials(&resolved)?;
+    let host_credentials = provider_host_credentials(&resolved, credentials).await?;
     let codex_auth_path = codex_auth_path(settings)?;
     let ca_bundle_path = settings
         .additional_ca_bundle

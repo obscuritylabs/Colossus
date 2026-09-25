@@ -570,6 +570,16 @@ export interface ManagedLockedInvariant {
 
 export interface ManagedSettingsSnapshot {
   globalConfiguration: ManagedGlobalConfiguration;
+  credentialAvailability: Record<
+    string,
+    | "available"
+    | "missing"
+    | "locked"
+    | "busy"
+    | "key_missing"
+    | "corrupt"
+    | "unavailable"
+  >;
   spaces: ManagedSpaceConfigurationSnapshot[];
   fieldDescriptors: ManagedFieldDescriptor[];
   lockedInvariants: ManagedLockedInvariant[];

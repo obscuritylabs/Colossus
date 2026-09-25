@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     connection,
+    desktop_credentials::DesktopCredentials,
     desktop_dto::{
         ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
         DesktopApprovalModeDto, DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
@@ -26,8 +27,8 @@ use crate::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting, ExternalTargetSetting,
         LOCAL_TERMINAL_CONSENT_VERSION, MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS,
         ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
-        SettingsStore, WorkspaceSetting, delete_provider_secret, load_provider_secret,
-        provider_base_url, revalidate_workspace, store_provider_secret, validate_workspace,
+        SettingsStore, WorkspaceSetting, provider_base_url, revalidate_workspace,
+        validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto, RunDto},
     managed_runtime, provider_enrollment, run_list, space_search,
@@ -81,7 +82,7 @@ pub(crate) async fn initialize_desktop(
     let store = settings_store()?;
     let had_settings = store.has_persisted_settings();
     let mut settings = store.load()?;
-    cleanup_pending_provider_credentials(&store, &mut settings)?;
+    cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
     if migrate_legacy_connection(&mut settings) {
         store.save(&settings)?;
     }
@@ -162,7 +163,7 @@ pub(crate) async fn connect_colossus(
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
-    cleanup_pending_provider_credentials(&store, &mut settings)?;
+    cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
     let selected = state.selected_target_id().await;
     let target_id = target_id
         .or(selected)
@@ -1053,7 +1054,7 @@ pub(crate) async fn configure_managed_runtime(
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
-    cleanup_pending_provider_credentials(&store, &mut settings)?;
+    cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
     let workspace = settings.workspace.as_ref().ok_or_else(|| {
         CommandErrorDto::invalid(
             "workspaceId",
@@ -1097,10 +1098,19 @@ pub(crate) async fn configure_managed_runtime(
         .await;
     }
     if reusable_provider_credential(&settings, &request) {
-        // Verify native keychain access before mutating settings or stopping the
+        // Verify vault access before mutating settings or stopping the
         // working runtime. The value is dropped from zeroizing memory immediately;
         // start_inner resolves it again only after the new configuration is durable.
-        verify_reused_provider_credential(&settings, load_provider_secret)?;
+        let credential_id = settings
+            .primary_provider()
+            .and_then(|provider| provider.credential_id.as_deref())
+            .ok_or_else(CommandErrorDto::not_configured)?;
+        let secret = DesktopCredentials::for_settings(&state, &store)?
+            .read(credential_id)
+            .await?;
+        verify_reused_provider_credential(&settings, |_| {
+            Ok(zeroize::Zeroizing::new(secret.expose().as_bytes().to_vec()))
+        })?;
         let previous_settings =
             persist_reused_provider_configuration(&mut settings, &mut request, |settings| {
                 store.save(settings)
@@ -1117,36 +1127,66 @@ pub(crate) async fn configure_managed_runtime(
         }
         return desktop_status_from(&state, &settings).await;
     }
+    configure_managed_provider_runtime(&app, state.inner(), &store, settings, request).await
+}
+
+async fn configure_managed_provider_runtime(
+    app: &AppHandle,
+    state: &AppState,
+    store: &SettingsStore,
+    mut settings: DesktopSettings,
+    mut request: ConfigureManagedRuntimeInput,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
     let previous_settings = settings.clone();
-    let secret = provider_enrollment::request_provider_secret().await?;
-    let rotation = persist_provider_rotation(
-        &mut settings,
-        &mut request,
-        &secret,
-        store_provider_secret,
-        |settings| store.save(settings),
-    )?;
+    let secret = provider_enrollment::request_provider_secret(credential_parent(app)?).await?;
+    let vault = DesktopCredentials::for_settings(state, store)?;
+    let native_store = store.clone();
+    let (next, rotation) = tokio::task::spawn_blocking(move || {
+        let secret = zeroize::Zeroizing::new(secret.expose().to_owned());
+        let rotation = persist_provider_rotation(
+            &mut settings,
+            &mut request,
+            &secret,
+            |id, value| vault.write_blocking(id, value.as_str()),
+            |settings| native_store.save(settings),
+        );
+        (settings, rotation)
+    })
+    .await
+    .map_err(|_| credential_worker_error())?;
+    settings = next;
+    let rotation = rotation?;
     state
         .select_target(settings.selected_space_id.clone())
         .await;
-    if let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await {
-        let rollback = rollback_provider_rotation(
-            &mut settings,
-            previous_settings,
-            &rotation,
-            |settings| store.save(settings),
-            delete_provider_secret,
-        )?;
-        restore_managed_after_rollback(&state, &store, &settings).await?;
+    if let Err(start_error) = managed_runtime::start(state, store, &settings, true).await {
+        let vault = DesktopCredentials::for_settings(state, store)?;
+        let native_store = store.clone();
+        let (next, rollback) = tokio::task::spawn_blocking(move || {
+            let rollback = rollback_provider_rotation(
+                &mut settings,
+                previous_settings,
+                &rotation,
+                |settings| native_store.save(settings),
+                |id| vault.delete_blocking(id),
+            );
+            (settings, rollback)
+        })
+        .await
+        .map_err(|_| credential_worker_error())?;
+        settings = next;
+        let rollback = rollback?;
+        restore_managed_after_rollback(state, store, &settings).await?;
         if let Some(cleanup_error) = rollback.cleanup_error {
             return Err(cleanup_error);
         }
         return Err(start_error);
     }
     if let Some(previous_credential_id) = rotation.previous_credential_id {
-        retire_pending_provider_credential(&store, &mut settings, &previous_credential_id)?;
+        retire_pending_provider_credential(state, store, &mut settings, &previous_credential_id)
+            .await?;
     }
-    desktop_status_from(&state, &settings).await
+    desktop_status_from(state, &settings).await
 }
 
 async fn configure_managed_codex_runtime(
@@ -1234,7 +1274,7 @@ async fn configure_managed_codex_runtime(
         return Err(start_error);
     }
     for credential_id in retired_ids {
-        retire_pending_provider_credential(store, settings, &credential_id)?;
+        retire_pending_provider_credential(state, store, settings, &credential_id).await?;
     }
     desktop_status_from(state, settings).await
 }
@@ -1249,7 +1289,7 @@ pub(crate) async fn apply_managed_model_configuration(
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
-    cleanup_pending_provider_credentials(&store, &mut settings)?;
+    cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
     confirm_managed_model_configuration(&app, &state, &settings, &request).await?;
     if request
         .providers
@@ -1260,8 +1300,10 @@ pub(crate) async fn apply_managed_model_configuration(
     }
 
     let previous_settings = settings.clone();
-    let credentials = plan_provider_credentials(&settings, &request)?;
+    let credentials = plan_provider_credentials(&state, &store, &settings, &request).await?;
     stage_provider_credentials(
+        &app,
+        &state,
         &store,
         &mut settings,
         &previous_settings,
@@ -1291,11 +1333,13 @@ pub(crate) async fn apply_managed_model_configuration(
     }
     if let Err(error) = store.save(&settings) {
         rollback_staged_provider_credentials(
+            &state,
             &store,
             &mut settings,
             previous_settings,
             &credentials.fresh_ids,
-        )?;
+        )
+        .await?;
         return Err(error);
     }
     restart_after_model_configuration(
@@ -1386,7 +1430,9 @@ struct ProviderCredentialPlan {
     retired_ids: Vec<String>,
 }
 
-fn plan_provider_credentials(
+async fn plan_provider_credentials(
+    state: &AppState,
+    store: &SettingsStore,
     settings: &DesktopSettings,
     request: &ApplyManagedModelConfigurationInput,
 ) -> Result<ProviderCredentialPlan, CommandErrorDto> {
@@ -1411,7 +1457,11 @@ fn plan_provider_credentials(
                             "A provider without a stored credential cannot reuse one.",
                         )
                     })?;
-                drop(load_provider_secret(&credential_id)?);
+                drop(
+                    DesktopCredentials::for_settings(state, store)?
+                        .read(&credential_id)
+                        .await?,
+                );
                 Some(credential_id)
             }
             CredentialActionInput::Replace => {
@@ -1451,27 +1501,37 @@ fn plan_provider_credentials(
 }
 
 async fn stage_provider_credentials(
+    app: &AppHandle,
+    state: &AppState,
     store: &SettingsStore,
     settings: &mut DesktopSettings,
     previous_settings: &DesktopSettings,
     fresh_ids: &[String],
 ) -> Result<(), CommandErrorDto> {
-    // Persist cleanup intent before creating any native keychain entries. A crash
+    // Persist cleanup intent before creating any encrypted credential records. A crash
     // during enrollment can therefore be repaired on the next Desktop startup.
     settings
         .pending_provider_cleanup_ids
         .extend(fresh_ids.iter().cloned());
     store.save(settings)?;
     for credential_id in fresh_ids {
-        let enrollment = provider_enrollment::request_provider_secret().await;
-        let result = enrollment.and_then(|secret| store_provider_secret(credential_id, &secret));
+        let result = async {
+            let secret =
+                provider_enrollment::request_provider_secret(credential_parent(app)?).await?;
+            DesktopCredentials::for_settings(state, store)?
+                .write(credential_id, secret)
+                .await
+        }
+        .await;
         if let Err(error) = result {
             rollback_staged_provider_credentials(
+                state,
                 store,
                 settings,
                 previous_settings.clone(),
                 fresh_ids,
-            )?;
+            )
+            .await?;
             return Err(error);
         }
     }
@@ -1490,21 +1550,24 @@ async fn restart_after_model_configuration(
         .await;
     if let Err(start_error) = managed_runtime::start(state, store, settings, true).await {
         rollback_staged_provider_credentials(
+            state,
             store,
             settings,
             previous_settings,
             &credentials.fresh_ids,
-        )?;
+        )
+        .await?;
         restore_managed_after_rollback(state, store, settings).await?;
         return Err(start_error);
     }
     for credential_id in &credentials.retired_ids {
-        retire_pending_provider_credential(store, settings, credential_id)?;
+        retire_pending_provider_credential(state, store, settings, credential_id).await?;
     }
     desktop_status_from(state, settings).await
 }
 
-fn rollback_staged_provider_credentials(
+async fn rollback_staged_provider_credentials(
+    state: &AppState,
     store: &SettingsStore,
     settings: &mut DesktopSettings,
     mut previous: DesktopSettings,
@@ -1518,7 +1581,7 @@ fn rollback_staged_provider_credentials(
     store.save(&previous)?;
     *settings = previous;
     for credential_id in fresh_ids {
-        retire_pending_provider_credential(store, settings, credential_id)?;
+        retire_pending_provider_credential(state, store, settings, credential_id).await?;
     }
     Ok(())
 }
@@ -1636,6 +1699,19 @@ const fn execution_boundary_rank(boundary: ExecutionBoundarySetting) -> u8 {
         ExecutionBoundarySetting::WorkspaceIsolated => 1,
         ExecutionBoundarySetting::FullAccess => 2,
     }
+}
+
+fn credential_parent(app: &AppHandle) -> Result<tauri::WebviewWindow, CommandErrorDto> {
+    app.get_webview_window("main")
+        .ok_or_else(credential_worker_error)
+}
+
+fn credential_worker_error() -> CommandErrorDto {
+    CommandErrorDto::local_sanitized(
+        "credential_unavailable",
+        "Credential storage is unavailable. Retry the operation.",
+        true,
+    )
 }
 
 fn verify_reused_provider_credential(
@@ -1889,7 +1965,8 @@ fn rollback_provider_rotation(
     Ok(ProviderRollbackResult { cleanup_error })
 }
 
-fn cleanup_pending_provider_credentials(
+async fn cleanup_pending_provider_credentials(
+    state: &AppState,
     store: &SettingsStore,
     settings: &mut DesktopSettings,
 ) -> Result<(), CommandErrorDto> {
@@ -1897,16 +1974,22 @@ fn cleanup_pending_provider_credentials(
         return Ok(());
     }
     let before = settings.pending_provider_cleanup_ids.len();
-    settings
-        .pending_provider_cleanup_ids
-        .retain(|credential_id| delete_provider_secret(credential_id).is_err());
+    let vault = DesktopCredentials::for_settings(state, store)?;
+    let mut remaining = Vec::new();
+    for credential_id in &settings.pending_provider_cleanup_ids {
+        if vault.delete(credential_id).await.is_err() {
+            remaining.push(credential_id.clone());
+        }
+    }
+    settings.pending_provider_cleanup_ids = remaining;
     if settings.pending_provider_cleanup_ids.len() != before {
         store.save(settings)?;
     }
     Ok(())
 }
 
-fn retire_pending_provider_credential(
+async fn retire_pending_provider_credential(
+    state: &AppState,
     store: &SettingsStore,
     settings: &mut DesktopSettings,
     credential_id: &str,
@@ -1918,7 +2001,9 @@ fn retire_pending_provider_credential(
             .any(|pending| pending == credential_id),
         "retired provider credential must be durably queued"
     );
-    delete_provider_secret(credential_id)?;
+    DesktopCredentials::for_settings(state, store)?
+        .delete(credential_id)
+        .await?;
     let previous = settings.pending_provider_cleanup_ids.clone();
     settings
         .pending_provider_cleanup_ids

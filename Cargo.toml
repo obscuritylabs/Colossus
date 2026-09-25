@@ -4,6 +4,7 @@ members = [
     "xtask",
     "crates/colossus-domain",
     "crates/colossus-contracts",
+    "crates/colossus-credentials",
     "crates/colossus-api-proto",
     "crates/colossus-api",
     "crates/colossus-api-runtime",
@@ -174,6 +175,7 @@ x509-parser = "0.18.1"
 zeroize = "1.8.2"
 
 colossus-contracts = { version = "=0.10.10-preview.18", path = "crates/colossus-contracts" }
+colossus-credentials = { version = "=0.10.10-preview.18", path = "crates/colossus-credentials" }
 colossus-api-proto = { version = "=0.10.10-preview.18", path = "crates/colossus-api-proto" }
 colossus-api = { version = "=0.10.10-preview.18", path = "crates/colossus-api" }
 colossus-api-runtime = { version = "=0.10.10-preview.18", path = "crates/colossus-api-runtime" }

@@ -109,6 +109,40 @@ jobs:
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
 
+  credential-vault:
+    name: Credential vault (${{ matrix.os }})
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Test vault conformance and interruption boundaries
+        run: cargo test --locked -p colossus-credentials --lib
+      - name: Exercise Windows and macOS persistent platform keys
+        if: runner.os != 'Linux'
+        run: cargo test --locked -p colossus-credentials --lib platform_master_key_survives_vault_reopen -- --ignored
+      - name: Install Linux Secret Service
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes dbus-x11 gnome-keyring
+      - name: Exercise Linux persistent platform keys
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "colossus-ci-only\n" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test --locked -p colossus-credentials --lib platform_master_key_survives_vault_reopen -- --ignored
+          '
+
   macos-desktop:
     name: Representative macOS desktop bundle
     if: needs.eligibility.result == 'success'
@@ -164,6 +198,12 @@ jobs:
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Test the desktop native bridge
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Test native secure credential entry
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib
+      - name: Lint native credential controls and acceptance driver
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --all-targets --all-features -- -D warnings
+      - name: Test AppKit credential controls on the main thread
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-macos
       - name: Exercise Desktop plugins against the authenticated runtime
         working-directory: apps/desktop
         run: npm run test:plugin-runtime
@@ -294,6 +334,12 @@ jobs:
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Test Windows native secure credential entry
+        if: steps.desktop_prepare.outcome == 'success'
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib
+      - name: Lint Windows native credential controls
+        if: steps.desktop_prepare.outcome == 'success'
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --all-targets --all-features -- -D warnings
       - name: Install Chromium for Windows plugin acceptance
         if: steps.desktop_prepare.outcome == 'success'
         working-directory: apps/desktop
@@ -647,7 +693,7 @@ jobs:
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, macos-native, macos-desktop, windows-runtime, fuzz, supply-chain, chroma, storage, live-security]
+    needs: [eligibility, macos-native, macos-desktop, windows-runtime, credential-vault, fuzz, supply-chain, chroma, storage, live-security]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -663,6 +709,7 @@ jobs:
             macos=${{ needs['macos-native'].result }}
             macos-desktop=${{ needs['macos-desktop'].result }}
             windows=${{ needs['windows-runtime'].result }}
+            credential-vault=${{ needs['credential-vault'].result }}
             fuzz=${{ needs.fuzz.result }}
             supply-chain=${{ needs['supply-chain'].result }}
             chroma=${{ needs.chroma.result }}

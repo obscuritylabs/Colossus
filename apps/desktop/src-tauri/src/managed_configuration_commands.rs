@@ -9,12 +9,12 @@ mod mcp_deletion;
 
 use crate::{
     desktop_commands::{connect_guard, settings_store},
+    desktop_credentials::{CredentialAvailability, DesktopCredentials},
     desktop_dto::ManagedRuntimeStateDto,
     desktop_settings::{
         AccessProfileSetting, DesktopSettings, ExecutionBoundarySetting,
         MAX_PENDING_PROVIDER_CLEANUPS, ModelSetting, ProviderSetting, SettingsStore,
-        delete_provider_secret, managed_model_setting_is_valid, managed_provider_setting_is_valid,
-        store_provider_secret,
+        managed_model_setting_is_valid, managed_provider_setting_is_valid,
     },
     dto::CommandErrorDto,
     managed_configuration::{
@@ -81,6 +81,7 @@ const LOCKED_INVARIANTS: &[(&str, &str, &str)] = &[
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManagedSettingsSnapshotDto {
     global_configuration: GlobalConfigurationSetting,
+    credential_availability: BTreeMap<String, CredentialAvailability>,
     spaces: Vec<ManagedSpaceConfigurationDto>,
     field_descriptors: Vec<FieldDescriptorDto>,
     locked_invariants: Vec<LockedInvariantDto>,
@@ -392,6 +393,7 @@ pub(crate) async fn apply_space_configuration(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn create_managed_credential(
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     request: CreateManagedCredentialInput,
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
@@ -401,8 +403,10 @@ pub(crate) async fn create_managed_credential(
     ensure_global_revision(&settings, request.expected_revision)?;
     validate_label(&request.label)?;
     let credential_id = Uuid::now_v7().to_string();
-    let secret = provider_enrollment::request_managed_credential_secret().await?;
-    store_provider_secret(&credential_id, &secret)?;
+    let secret = provider_enrollment::request_managed_credential_secret(window).await?;
+    let credentials = DesktopCredentials::for_settings(&state, &store)?;
+    stage_credential_write(&store, &mut settings, &credential_id)?;
+    credentials.write(&credential_id, secret).await?;
     settings
         .global_configuration
         .credentials
@@ -416,8 +420,11 @@ pub(crate) async fn create_managed_credential(
     let previous_revision = settings.global_configuration.revision;
     bump_global_revision(&mut settings.global_configuration)?;
     advance_unaffected_spaces(&mut settings, previous_revision, &BTreeSet::new());
+    settings
+        .pending_provider_cleanup_ids
+        .retain(|id| id != &credential_id);
     if let Err(error) = store.save(&settings) {
-        let _ = delete_provider_secret(&credential_id);
+        credentials.delete(&credential_id).await?;
         return Err(error);
     }
     snapshot(state.inner(), &settings).await
@@ -425,6 +432,7 @@ pub(crate) async fn create_managed_credential(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn rotate_managed_credential(
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     request: RotateManagedCredentialInput,
 ) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
@@ -440,8 +448,10 @@ pub(crate) async fn rotate_managed_credential(
         .cloned()
         .ok_or_else(|| unknown_credential("credentialId"))?;
     let new_id = Uuid::now_v7().to_string();
-    let secret = provider_enrollment::request_managed_credential_secret().await?;
-    store_provider_secret(&new_id, &secret)?;
+    let secret = provider_enrollment::request_managed_credential_secret(window).await?;
+    let credentials = DesktopCredentials::for_settings(&state, &store)?;
+    stage_credential_write(&store, &mut settings, &new_id)?;
+    credentials.write(&new_id, secret).await?;
     settings
         .global_configuration
         .credentials
@@ -460,8 +470,11 @@ pub(crate) async fn rotate_managed_credential(
     let previous_revision = settings.global_configuration.revision;
     bump_global_revision(&mut settings.global_configuration)?;
     advance_unaffected_spaces(&mut settings, previous_revision, &affected_resources);
+    settings
+        .pending_provider_cleanup_ids
+        .retain(|id| id != &new_id);
     if let Err(error) = store.save(&settings) {
-        let _ = delete_provider_secret(&new_id);
+        credentials.delete(&new_id).await?;
         return Err(error);
     }
     snapshot(state.inner(), &settings).await
@@ -493,12 +506,6 @@ pub(crate) async fn delete_managed_credential(
             ),
         ));
     }
-    if credential.backend == CredentialBackendSetting::LegacyProvider {
-        return Err(CommandErrorDto::invalid(
-            "credentialId",
-            "Legacy provider credentials must be replaced through the provider editor.",
-        ));
-    }
     if settings.pending_provider_cleanup_ids.len() >= MAX_PENDING_PROVIDER_CLEANUPS {
         return Err(CommandErrorDto::busy(
             "Pending credential cleanup must finish before another credential can be deleted.",
@@ -515,12 +522,73 @@ pub(crate) async fn delete_managed_credential(
     bump_global_revision(&mut settings.global_configuration)?;
     advance_unaffected_spaces(&mut settings, previous_revision, &BTreeSet::new());
     store.save(&settings)?;
-    delete_provider_secret(&credential.id)?;
+    DesktopCredentials::for_settings(&state, &store)?
+        .delete(&credential.id)
+        .await?;
     settings
         .pending_provider_cleanup_ids
         .retain(|candidate| candidate != &credential.id);
     store.save(&settings)?;
     snapshot(state.inner(), &settings).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn reenter_managed_credential(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    request: RotateManagedCredentialInput,
+) -> Result<ManagedSettingsSnapshotDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let settings = store.load()?;
+    ensure_global_revision(&settings, request.expected_revision)?;
+    if !settings
+        .global_configuration
+        .credentials
+        .iter()
+        .any(|credential| credential.id == request.credential_id)
+    {
+        return Err(unknown_credential("credentialId"));
+    }
+    let credentials = DesktopCredentials::for_settings(&state, &store)?;
+    let statuses = credentials
+        .availability(vec![request.credential_id.clone()])
+        .await?;
+    match statuses.get(&request.credential_id) {
+        Some(CredentialAvailability::Missing) => {}
+        Some(CredentialAvailability::Available) => {
+            return Err(CommandErrorDto::invalid(
+                "credentialId",
+                "This credential is already available. Use Rotate to replace it.",
+            ));
+        }
+        status => {
+            return Err(status
+                .and_then(|status| status.access_failure())
+                .unwrap_or_else(|| {
+                    crate::desktop_credentials::credential_error(
+                        colossus_contracts::CredentialError::Unavailable,
+                    )
+                }));
+        }
+    }
+    let secret = provider_enrollment::request_managed_credential_secret(window).await?;
+    credentials.write(&request.credential_id, secret).await?;
+    snapshot(state.inner(), &settings).await
+}
+
+fn stage_credential_write(
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    id: &str,
+) -> Result<(), CommandErrorDto> {
+    if settings.pending_provider_cleanup_ids.len() >= MAX_PENDING_PROVIDER_CLEANUPS {
+        return Err(CommandErrorDto::busy(
+            "Pending credential cleanup must finish before saving another credential.",
+        ));
+    }
+    settings.pending_provider_cleanup_ids.push(id.to_owned());
+    store.save(settings)
 }
 
 async fn snapshot(
@@ -560,6 +628,16 @@ async fn snapshot(
     }
     Ok(ManagedSettingsSnapshotDto {
         global_configuration: settings.global_configuration.clone(),
+        credential_availability: DesktopCredentials::for_settings(state, &settings_store()?)?
+            .availability(
+                settings
+                    .global_configuration
+                    .credentials
+                    .iter()
+                    .map(|credential| credential.id.clone())
+                    .collect(),
+            )
+            .await?,
         spaces,
         field_descriptors: field_descriptors(),
         locked_invariants: LOCKED_INVARIANTS

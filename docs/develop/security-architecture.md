@@ -383,8 +383,8 @@ rejection, CA roots, permit timeouts, and bounded response path. Remote
 declarations contain only literal non-secret headers and environment credential
 references; the permit-bearing adapter resolves those references immediately before the
 request. OAuth authorization is an operator-only PKCE flow and never starts from an agent
-tool call. Tokens are server/endpoint/repository-bound in the platform credential
-namespace, a domain-separated XChaCha20-Poly1305 redb sidecar, or an explicitly reported
+tool call. Tokens are server/endpoint/repository-bound in an injected encrypted credential
+vault, a domain-separated XChaCha20-Poly1305 redb sidecar, or an explicitly reported
 owner-only plaintext sidecar selected by keyless `auto`; client secrets remain behind
 their configured references. Stateful sessions remain the default. A strict,
 request-bound `allowStateless` opt-in permits one top-level remote declaration to omit
@@ -396,6 +396,41 @@ hold stdin open after writing the complete one-shot batch until the final respon
 initialization error is observed in bounded JSONL stdout. Malformed or truncated output,
 child exit, and the normal effect deadline terminate that hold; stdin is then closed and
 the same resource supervision and process-tree cleanup continue.
+
+### Native credential vault
+
+Manual Desktop tokens and platform-backed MCP OAuth use separate instances of
+`colossus-credentials`. Every record is encrypted with XChaCha20-Poly1305 before it
+enters redb. Fresh random nonces and authenticated schema, vault ID, owner scope,
+record purpose/identity, and key ID bind ciphertext to its owner. The OS store
+(Windows Credential Manager, macOS Keychain, or Linux Secret Service) holds only
+a dedicated random 32-byte master key in a strict versioned base64url envelope
+bounded to 256 bytes. Journal and session keys are independent.
+
+Composition supplies an owner-private `ConfinedRoot`. Handle-based file access,
+a lifetime exclusive lease, and immediate-durability transactions prevent competing
+owners or unsafe paths from weakening storage. Initialization durably records
+`PendingKey`, creates an OS entry only if that exact pending identity is absent,
+validates readback, and atomically commits an encrypted verification record with
+`Ready`. An interrupted empty pending vault can resume. A ready vault never
+regenerates a missing key or resets malformed storage. No fallback writes plaintext.
+Keys and plaintext allocations are zeroizing; errors expose only categories.
+
+Native Windows and macOS dialogs mask input, count bytes, and explicitly reject
+overflow. Manual enrollment accepts exact visible ASCII up to 65,536 bytes; the
+shared host-secret contract also supports non-NUL UTF-8 within the same byte bound.
+Native completion and database/OS-store work do not block the WebView or async
+executor. Secrets do not cross renderer IPC, helper processes, logs, or diagnostics.
+Before sidecar creation, the actual tagged bootstrap frame is encoded into bounded
+zeroizing memory: at most 64 host credentials and 2 MiB including escaping and
+metadata. The receiver retains independent validation. Credential-derived HTTP
+headers are marked sensitive.
+
+The cutover does not read or migrate old secret entries. Existing non-secret settings
+and credential references remain; operators re-enter manual tokens under their
+existing IDs or sign in to MCP OAuth again. Old OS entries are left untouched.
+Automatic master-key rotation, portable export, and backup recovery are outside
+this version. Copying a database alone does not produce a portable credential vault.
 
 Codex/ChatGPT authentication is also operator-only. `colossus codex login` delegates the
 OAuth ceremony to the official Codex CLI and forces its supported file credential store;

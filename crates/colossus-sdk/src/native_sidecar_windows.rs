@@ -281,7 +281,7 @@ async fn launch(
         bootstrap.workspace(),
         bootstrap.expected_workspace_identity(),
     )?;
-    let request = bootstrap.request(
+    let bootstrap_frame = bootstrap.encoded_request(
         options,
         workspace.binding.canonical_path(),
         workspace.identity.clone(),
@@ -343,7 +343,11 @@ async fn launch(
         .map_err(|_| SdkError::IdentityMismatch)?;
 
     workspace.revalidate()?;
-    write_async_frame(&mut pipe, &ParentFrame::Bootstrap(Box::new(request))).await?;
+    pipe.write_all(bootstrap_frame.as_slice())
+        .await
+        .map_err(|_| SdkError::SidecarFailed)?;
+    pipe.flush().await.map_err(|_| SdkError::SidecarFailed)?;
+    drop(bootstrap_frame);
     let ready = match read_async_frame::<ChildFrame>(&mut pipe).await? {
         ChildFrame::Ready(ready) => ready,
         ChildFrame::Failed(failure) => return Err(map_child_failure(failure.code)),

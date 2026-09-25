@@ -572,8 +572,15 @@ impl Runtime {
                                 .with_plaintext_oauth_storage(&path, repository_id.clone())?,
                         }
                     }
-                    KeyConfig::Platform { service, .. } => mcp_executor
-                        .with_platform_oauth_storage(service.clone(), repository_id.clone()),
+                    KeyConfig::Platform { service, .. } => mcp_executor.with_oauth_vault(
+                        crate::credential_vault::platform_oauth_vault(
+                            colossus_home_root.as_ref(),
+                            &storage_path,
+                            service,
+                            &repository_id,
+                        )?,
+                        repository_id.clone(),
+                    ),
                     KeyConfig::Environment { .. } => {
                         let path = storage_path.with_extension("mcp-oauth.redb");
                         match config.open_resolved_home_file(&path)? {
@@ -596,7 +603,15 @@ impl Runtime {
                         KeyConfig::Platform { service, .. } => service.clone(),
                         KeyConfig::Environment { .. } => "colossus-mcp-oauth".into(),
                     };
-                    mcp_executor.with_platform_oauth_storage(service, repository_id.clone())
+                    mcp_executor.with_oauth_vault(
+                        crate::credential_vault::platform_oauth_vault(
+                            colossus_home_root.as_ref(),
+                            &storage_path,
+                            &service,
+                            &repository_id,
+                        )?,
+                        repository_id.clone(),
+                    )
                 }
                 McpOAuthCredentialStoreKind::PlaintextState => {
                     let path = storage_path.with_extension("mcp-oauth.redb");

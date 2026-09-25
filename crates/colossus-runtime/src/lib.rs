@@ -16,6 +16,7 @@ mod agent_tools;
 mod composition;
 mod config;
 mod context_tools;
+mod credential_vault;
 mod development_sandbox;
 mod diagnostics;
 mod direct_effects;

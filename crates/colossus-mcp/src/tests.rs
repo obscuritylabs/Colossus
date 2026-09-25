@@ -1,5 +1,7 @@
 use super::*;
 mod diagnostics;
+mod large_credentials;
+mod oauth_vault;
 mod stdio_diagnostics;
 use colossus_contracts::{ActorType, DecisionOutcome, SandboxBoundaryMode};
 use colossus_policy::{

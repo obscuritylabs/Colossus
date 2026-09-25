@@ -883,12 +883,9 @@ test("provider enrollment and external trust stay behind native UI", () => {
     0,
     enrollment.indexOf("#[cfg(test)]"),
   );
-  assert.match(
-    enrollmentImplementation,
-    /Command::new\("\/usr\/bin\/osascript"\)/u,
-  );
-  assert.match(enrollmentImplementation, /\.env_clear\(\)/u);
-  assert.match(enrollmentImplementation, /with hidden answer/u);
+  assert.match(enrollmentImplementation, /colossus_native_credential_ui::prompt/u);
+  assert.match(enrollmentImplementation, /HostSecret/u);
+  assert.doesNotMatch(enrollmentImplementation, /osascript|CredUI|Command::new/u);
   assert.doesNotMatch(
     enrollmentImplementation,
     /api\.openai\.com|openrouter\.ai/u,
@@ -907,7 +904,8 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(commands, /fn confirm_provider_origins/u);
   assert.match(commands, /fn rollback_staged_provider_credentials/u);
   assert.match(commands, /fn reject_active_managed_runs/u);
-  assert.match(commands, /request_provider_secret\(\)/u);
+  assert.match(commands, /request_provider_secret\(credential_parent/u);
+  assert.match(commands, /DesktopCredentials::for_settings/u);
   assert.match(commands, /Unsafe: Full access/u);
   assert.match(commands, /approval mode is a separate setting/u);
   for (const action of ["Import", "Connect", "Select", "Remove"]) {

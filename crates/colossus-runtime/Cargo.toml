@@ -13,6 +13,7 @@ colossus-access.workspace = true
 colossus-audit.workspace = true
 colossus-agent.workspace = true
 colossus-contracts.workspace = true
+colossus-credentials.workspace = true
 colossus-context.workspace = true
 colossus-home.workspace = true
 colossus-journal-redb.workspace = true

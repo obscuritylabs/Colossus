@@ -1,0 +1,44 @@
+[package]
+name = "colossus-native-credential-ui"
+version = "0.1.0"
+publish = false
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+workspace = "../src-tauri"
+
+[features]
+native-test-driver = []
+
+[[test]]
+name = "native-macos"
+path = "tests/native_macos.rs"
+harness = false
+required-features = ["native-test-driver"]
+
+[dependencies]
+colossus-contracts = { version = "=0.10.10-preview.18", path = "../../../crates/colossus-contracts" }
+tauri = { version = "=2.11.5", features = [] }
+tokio = { version = "1.49.0", features = ["sync"] }
+zeroize = "1.8.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader", "Win32_System_Memory",
+    "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "block2", "NSAccessibilityConstants", "NSAccessibilityProtocols", "NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSPanel",
+    "NSResponder", "NSSecureTextField", "NSText", "NSTextField", "NSView", "NSWindow",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std", "NSDate", "NSFormatter", "NSGeometry", "NSNotification", "NSObject", "NSString", "NSThread", "NSTimer",
+] }
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

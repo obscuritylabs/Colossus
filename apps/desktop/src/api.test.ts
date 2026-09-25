@@ -55,6 +55,7 @@ import {
   listRuns,
   openTerminal,
   resizeTerminal,
+  reenterManagedCredential,
   rotateManagedCredential,
   restoreThread,
   removeExternalTarget,
@@ -546,8 +547,12 @@ describe("desktop API target routing", () => {
       expectedRevision: 8,
       credentialId: "credential-opaque-1",
     });
+    await reenterManagedCredential({
+      expectedRevision: 9,
+      credentialId: "credential-opaque-1",
+    });
 
-    expect(tauri.invoke.mock.calls.slice(-12)).toEqual([
+    expect(tauri.invoke.mock.calls.slice(-13)).toEqual([
       ["get_managed_configuration", undefined],
       ["save_global_defaults", { request: defaults }],
       ["upsert_global_mcp_server", { request: mcp }],
@@ -585,9 +590,15 @@ describe("desktop API target routing", () => {
           },
         },
       ],
+      [
+        "reenter_managed_credential",
+        {
+          request: { expectedRevision: 9, credentialId: "credential-opaque-1" },
+        },
+      ],
     ]);
 
-    const payload = JSON.stringify(tauri.invoke.mock.calls.slice(-12));
+    const payload = JSON.stringify(tauri.invoke.mock.calls.slice(-13));
     expect(payload).not.toContain("secretValue");
     expect(payload).not.toContain("apiKey");
     expect(payload).not.toContain("clientSecret");

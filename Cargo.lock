@@ -136,9 +136,9 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "apple-native-keyring-store"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7be2f067ccd8d4b4d4a66ddafe0f32a5dff31732f32dbff85fefc40929b1f72"
+checksum = "797f94b6a53d7d10b56dc18290e0d40a2158352f108bb4ff32350825081a9f29"
 dependencies = [
  "keyring-core",
  "log",
@@ -1097,6 +1097,33 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-credentials"
+version = "0.10.10-preview.18"
+dependencies = [
+ "apple-native-keyring-store",
+ "base64",
+ "chacha20poly1305",
+ "colossus-contracts",
+ "colossus-home",
+ "colossus-ports",
+ "colossus-windows-native",
+ "fs4",
+ "getrandom 0.4.3",
+ "hex",
+ "keyring-core",
+ "redb",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tempfile",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
+ "zeroize",
 ]
 
 [[package]]
@@ -1271,6 +1298,7 @@ dependencies = [
  "colossus-observability",
  "colossus-policy",
  "colossus-ports",
+ "colossus-provider",
  "colossus-sandbox",
  "colossus-testkit",
  "futures",
@@ -1278,7 +1306,6 @@ dependencies = [
  "hex",
  "http",
  "jsonschema",
- "keyring",
  "rcgen",
  "redb",
  "reqwest 0.12.28",
@@ -1548,6 +1575,7 @@ dependencies = [
  "colossus-bundles",
  "colossus-context",
  "colossus-contracts",
+ "colossus-credentials",
  "colossus-home",
  "colossus-integrations",
  "colossus-journal-postgres",
@@ -1640,6 +1668,7 @@ dependencies = [
  "base64",
  "colossus-api",
  "colossus-api-proto",
+ "colossus-contracts",
  "colossus-darwin-process",
  "colossus-grpc",
  "colossus-sidecar-protocol",
@@ -1735,6 +1764,7 @@ dependencies = [
 name = "colossus-sidecar-protocol"
 version = "0.10.10-preview.18"
 dependencies = [
+ "colossus-contracts",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1830,7 +1860,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "windows-sys 0.61.2",
- "zeroize",
 ]
 
 [[package]]

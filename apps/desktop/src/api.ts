@@ -498,6 +498,13 @@ export function deleteManagedCredential(request: {
   return call("delete_managed_credential", { request });
 }
 
+export function reenterManagedCredential(request: {
+  expectedRevision: number;
+  credentialId: string;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("reenter_managed_credential", { request });
+}
+
 export function onSpaceStatusChanged(
   handler: (space: SpaceStatusEvent) => void,
 ): Promise<UnlistenFn> {

@@ -91,9 +91,9 @@ the [offline and air-gapped operation guide](../admin/offline-airgap.md).
 
 Select the fixed OpenAI Responses, OpenRouter (OpenAI-compatible), or **ChatGPT
 subscription (Codex)** preset and enter the model. OpenAI and OpenRouter continue
-through an operating-system secure-input dialog for the preset's fixed origin; the
-WebView cannot submit a key or endpoint. The native layer stores that key directly in
-the platform keychain, and Managed Local resolves only its opaque `host:` reference
+through a native masked-input dialog for the preset's fixed origin; the
+WebView cannot submit a key or endpoint. The native layer encrypts that key in
+Desktop's credential vault, and Managed Local resolves only its opaque `host:` reference
 after policy permits the provider action.
 
 For Codex, choose **Sign in with ChatGPT**. Desktop confirms the operation natively and
@@ -102,7 +102,7 @@ Codex-owned private file store. The WebView receives only signed-in, signed-out,
 unavailable status; the native host passes the validated file path—not its tokens or
 account identifier—over inherited bootstrap IPC. Sign-out uses the official CLI too.
 
-Later model or access-profile edits reuse the existing keychain entry when the
+Later model or access-profile edits reuse the existing encrypted credential when the
 provider preset is unchanged. Select **Replace the stored API key** to rotate it;
 first setup and every API-key provider-preset change always force the native key
 prompt. Advanced model configuration also exposes the provider-neutral reasoning-effort
@@ -113,6 +113,21 @@ terminal sessions. Real model runs remain unavailable until this setup succeeds.
 the explicit offline self-test when you only need to validate local startup.
 
 ### Manage inherited configuration
+
+After upgrading to the credential-vault release, open **Settings → Global →
+Credentials** and choose **Re-enter token** for each missing credential. Re-entry
+preserves its ID and existing references; rotation creates a new credential revision.
+MCP OAuth connections require a fresh sign-in. Non-secret settings remain, and old
+OS credential entries are left untouched rather than imported or deleted.
+
+Manual tokens may contain up to 65,536 bytes of visible ASCII. The native dialog
+shows the byte count and rejects excess input without truncating the token.
+Desktop creates `$COLOSSUS_HOME/desktop/credentials-v1.redb` and a small companion
+lock file only when it first saves a credential. All manual tokens share this
+encrypted database. The OS keychain holds only its small encryption key. Platform
+OAuth creates its own shared vault lazily within the existing isolated runtime
+state directory. Neither workspace selection nor missing-credential checks create
+credential databases or master keys.
 
 Open **Settings** to enter its dedicated view. Choose **Global** or **Workspace** in
 the settings sidebar, then choose a category below. For Workspace settings, select
