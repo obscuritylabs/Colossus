@@ -1,0 +1,29 @@
+[package]
+name = "colossus-native-browser"
+version = "0.1.0"
+publish = false
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+workspace = "../src-tauri"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+tauri = { version = "=2.11.5", features = ["unstable"] }
+tokio = { version = "1.49.0", features = ["sync", "time"] }
+url = "2.5.8"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSError", "NSString", "NSURL", "NSURLRequest"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSWorkspace"] }
+objc2-web-kit = { version = "0.3.2", features = ["WKNavigation", "WKNavigationAction", "WKNavigationResponse", "WKNavigationDelegate", "WKPreferences", "WKUIDelegate", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore"] }
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

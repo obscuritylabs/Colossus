@@ -208,6 +208,13 @@ jobs:
         run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --all-targets --all-features -- -D warnings
       - name: Test AppKit credential controls on the main thread
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-macos
+      - name: Lint the embedded browser and native acceptance driver
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --all-targets --features browser-test-bridge -- -D warnings
+      - name: Test embedded browser URL and ownership contracts
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --lib --features browser-preview
+      - name: Exercise native WebKit browser isolation and navigation
+        working-directory: apps/desktop
+        run: npm run test:browser-native
       - name: Exercise Desktop plugins against the authenticated runtime
         working-directory: apps/desktop
         run: npm run test:plugin-runtime
@@ -352,6 +359,16 @@ jobs:
       - name: Test Windows credential paste and keyboard controls
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-windows
+      - name: Lint Windows embedded browser and acceptance driver
+        if: steps.desktop_prepare.outcome == 'success'
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --all-targets --features browser-test-bridge -- -D warnings
+      - name: Test Windows embedded browser contracts
+        if: steps.desktop_prepare.outcome == 'success'
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --lib --features browser-preview
+      - name: Exercise native WebView2 browser isolation and navigation
+        if: steps.desktop_prepare.outcome == 'success'
+        working-directory: apps/desktop
+        run: npm run test:browser-native
       - name: Install Chromium for Windows plugin acceptance
         if: steps.desktop_prepare.outcome == 'success'
         working-directory: apps/desktop

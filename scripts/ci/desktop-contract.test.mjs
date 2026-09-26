@@ -397,7 +397,9 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   const terminal = json(
     "apps/desktop/src-tauri/capabilities/terminal-pty.json",
   );
-  assert.deepEqual(main.windows, ["main"]);
+  assert.deepEqual(main.webviews, ["main"]);
+  assert.equal(main.windows, undefined);
+  assert.equal(main.remote, undefined);
   assert.deepEqual(terminal.windows, ["terminal"]);
   assert.equal(terminal.local, true);
   assert.deepEqual(terminal.permissions, [
@@ -758,7 +760,7 @@ test("Space search indexes only bounded released thread metadata", () => {
     /path|prompt|message|tool|output|credential|secret/iu,
   );
   const commands = read("apps/desktop/src-tauri/src/desktop_commands.rs");
-  assert.match(commands, /app\.emit\(\s*"space-status-changed"/u);
+  assert.match(commands, /app\.emit_to\(\s*tauri::EventTarget::webview\("main"\),\s*"space-status-changed"/u);
   assert.match(commands, /"space-attention"/u);
 });
 

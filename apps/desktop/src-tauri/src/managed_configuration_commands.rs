@@ -394,7 +394,7 @@ pub(crate) async fn apply_space_configuration(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn create_managed_credential(
-    window: tauri::WebviewWindow,
+    window: tauri::Window,
     state: State<'_, AppState>,
     request: CreateManagedCredentialInput,
     appearance: provider_enrollment::DialogAppearanceInput,
@@ -418,7 +418,7 @@ pub(crate) async fn create_managed_credential(
 }
 
 pub(crate) async fn enroll_credential(
-    window: tauri::WebviewWindow,
+    window: tauri::Window,
     state: &AppState,
     store: &SettingsStore,
     settings: &mut DesktopSettings,
@@ -457,7 +457,7 @@ pub(crate) async fn enroll_credential(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn rotate_managed_credential(
-    window: tauri::WebviewWindow,
+    window: tauri::Window,
     state: State<'_, AppState>,
     request: RotateManagedCredentialInput,
     appearance: provider_enrollment::DialogAppearanceInput,
@@ -561,7 +561,7 @@ pub(crate) async fn delete_managed_credential(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn reenter_managed_credential(
-    window: tauri::WebviewWindow,
+    window: tauri::Window,
     state: State<'_, AppState>,
     request: RotateManagedCredentialInput,
     appearance: provider_enrollment::DialogAppearanceInput,

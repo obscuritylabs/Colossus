@@ -4,6 +4,7 @@ import rehypeSanitize from "rehype-sanitize";
 import ReactMarkdown from "react-markdown";
 import type { Components, UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { BrowserLink, webLink } from "./browser/BrowserLink";
 
 interface MarkdownContentProps {
   content: string;
@@ -62,15 +63,10 @@ const ALLOWED_ELEMENTS = [
 ];
 const REHYPE_PLUGINS = [rehypeSanitize];
 
-// The privileged webview must never navigate to model-authored destinations.
-// A future native URL opener can replace this with an explicit allowlisted flow.
-const removeDestination: UrlTransform = () => null;
-
-function InertLink({
-  children,
-}: Pick<ComponentPropsWithoutRef<"a">, "children">) {
-  return <span className="markdown-link-inert">{children}</span>;
-}
+// Remote images remain blocked. Links become explicit native-browser actions
+// only when a browser controller is available; never privileged-view navigation.
+const safeDestination: UrlTransform = (url, key) =>
+  key === "href" ? webLink(url) : null;
 
 function BlockedImage({ alt }: Pick<ComponentPropsWithoutRef<"img">, "alt">) {
   return (
@@ -179,7 +175,7 @@ function enforceStructureBudget() {
 const REMARK_PLUGINS = [remarkGfm, enforceStructureBudget];
 
 const MARKDOWN_COMPONENTS: Components = {
-  a: InertLink,
+  a: BrowserLink,
   img: BlockedImage,
   pre: MarkdownPre,
   table: MarkdownTable,
@@ -230,7 +226,7 @@ function MarkdownContentView({
         rehypePlugins={REHYPE_PLUGINS}
         remarkPlugins={REMARK_PLUGINS}
         skipHtml
-        urlTransform={removeDestination}
+        urlTransform={safeDestination}
       >
         {content}
       </ReactMarkdown>

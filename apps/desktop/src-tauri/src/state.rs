@@ -242,6 +242,7 @@ impl ExternalHealth {
 
 /// Native-only authenticated clients and local process state shared by narrow commands.
 pub(crate) struct AppState {
+    pub(crate) browser: crate::browser::BrowserManager,
     pub(crate) credential_vault:
         StdMutex<Option<Arc<crate::desktop_credentials::DesktopCredentials>>>,
     pub(crate) mcp_health_history:
@@ -405,6 +406,7 @@ impl Default for AppState {
     fn default() -> Self {
         let (selection_updates, _) = watch::channel(0);
         Self {
+            browser: crate::browser::BrowserManager::default(),
             targets: RwLock::new(HashMap::new()),
             credential_vault: StdMutex::new(None),
             mcp_health_history: StdMutex::new(std::collections::VecDeque::new()),
@@ -568,6 +570,12 @@ impl AppState {
         self.selected_target_id.read().await.clone()
     }
 
+    pub(crate) async fn browser_selection(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, Option<String>> {
+        self.selected_target_id.read().await
+    }
+
     pub(crate) async fn select_target(&self, target_id: Option<String>) {
         let _context_guard = self.terminal_context_guard.lock().await;
         let mut selected = self.selected_target_id.write().await;
@@ -575,6 +583,7 @@ impl AppState {
             return;
         }
         *selected = target_id;
+        self.browser.selection_changed(selected.clone());
         self.run_targets.write().await.clear();
         let epoch = self
             .selection_epoch

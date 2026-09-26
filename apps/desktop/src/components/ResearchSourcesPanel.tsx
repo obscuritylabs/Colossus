@@ -4,6 +4,8 @@ import {
   IconFileText,
   IconFlask,
 } from "@tabler/icons-react";
+import { useContext } from "react";
+import { BrowserLink, BrowserLinkContext } from "./browser/BrowserLink";
 
 export interface ResearchSource {
   label: string;
@@ -71,6 +73,7 @@ export function ResearchSourcesPanel({
   onOpenWorkspaceFile,
 }: ResearchSourcesPanelProps) {
   const sources = researchSources(output);
+  const openBrowser = useContext(BrowserLinkContext);
 
   return (
     <section className="research-sources-panel" aria-label="Research sources">
@@ -92,14 +95,18 @@ export function ResearchSourcesPanel({
                 <div>
                   <strong>{source.title}</strong>
                   {isWebUri(source.uri) ? (
-                    <a href={source.uri} target="_blank" rel="noreferrer">
-                      {source.uri}
-                      <IconExternalLink
-                        size={14}
-                        stroke={1.7}
-                        aria-hidden="true"
-                      />
-                    </a>
+                    openBrowser ? (
+                      <BrowserLink href={source.uri}>{source.uri}</BrowserLink>
+                    ) : (
+                      <a href={source.uri} target="_blank" rel="noreferrer">
+                        {source.uri}
+                        <IconExternalLink
+                          size={14}
+                          stroke={1.7}
+                          aria-hidden="true"
+                        />
+                      </a>
+                    )
                   ) : workspacePath !== null ? (
                     <button
                       className="research-source-file"

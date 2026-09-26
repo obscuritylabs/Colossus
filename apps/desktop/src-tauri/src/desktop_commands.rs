@@ -42,7 +42,8 @@ const MAX_SPACE_SEARCH_INDEX_RUNS: usize = 4_096;
 
 fn emit_space_events(app: &AppHandle, status: &DesktopStatusDto) {
     for summary in &status.spaces {
-        let _ = app.emit(
+        let _ = app.emit_to(
+            tauri::EventTarget::webview("main"),
             "space-status-changed",
             SpaceStatusEventDto {
                 space_id: summary.space_id.clone(),
@@ -56,7 +57,8 @@ fn emit_space_events(app: &AppHandle, status: &DesktopStatusDto) {
             },
         );
         if summary.attention_count > 0 {
-            let _ = app.emit(
+            let _ = app.emit_to(
+                tauri::EventTarget::webview("main"),
                 "space-attention",
                 SpaceAttentionDto {
                     space_id: summary.space_id.clone(),
@@ -1726,9 +1728,8 @@ const fn execution_boundary_rank(boundary: ExecutionBoundarySetting) -> u8 {
     }
 }
 
-pub(crate) fn credential_parent(app: &AppHandle) -> Result<tauri::WebviewWindow, CommandErrorDto> {
-    app.get_webview_window("main")
-        .ok_or_else(credential_worker_error)
+pub(crate) fn credential_parent(app: &AppHandle) -> Result<tauri::Window, CommandErrorDto> {
+    app.get_window("main").ok_or_else(credential_worker_error)
 }
 
 fn credential_worker_error() -> CommandErrorDto {
