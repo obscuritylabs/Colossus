@@ -101,6 +101,9 @@ pub(crate) enum ControlOperation {
         #[serde(skip_serializing_if = "is_false")]
         include_provider_response: bool,
     },
+    ProviderModels {
+        profile: Option<String>,
+    },
     ModelDoctor {
         profile: Option<String>,
         #[serde(skip_serializing_if = "is_false")]
@@ -339,6 +342,13 @@ mod tests {
 
     #[test]
     fn control_operations_have_the_worker_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(ControlOperation::ProviderModels {
+                profile: Some("setup-provider".into()),
+            })
+            .expect("provider models"),
+            serde_json::json!({"operation": "provider_models", "profile": "setup-provider"})
+        );
         assert_eq!(
             serde_json::to_value(ControlOperation::Ping).expect("ping"),
             serde_json::json!({"operation": "ping"})

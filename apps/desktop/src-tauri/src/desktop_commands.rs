@@ -1052,6 +1052,15 @@ pub(crate) async fn configure_managed_runtime(
     appearance: provider_enrollment::DialogAppearanceInput,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     request.validate()?;
+    if request.base_url.is_some()
+        || request.credential_id.is_some()
+        || request.no_credential
+        || request.model_metadata.is_some()
+    {
+        let settings = settings_store()?.load()?;
+        let configuration = crate::provider_catalog::setup_configuration(request, &settings)?;
+        return apply_managed_model_configuration(app, state, configuration, appearance).await;
+    }
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
@@ -1460,16 +1469,21 @@ async fn plan_provider_credentials(
         let credential_id = match provider.credential_action {
             CredentialActionInput::None => None,
             CredentialActionInput::Reuse => {
-                let credential_id = old_credentials
-                    .get(&provider.profile)
-                    .cloned()
-                    .flatten()
-                    .ok_or_else(|| {
-                        CommandErrorDto::invalid(
-                            "credentialAction",
-                            "A provider without a stored credential cannot reuse one.",
-                        )
-                    })?;
+                let credential_id = if let Some(id) = provider.credential_id.as_deref() {
+                    crate::provider_catalog::validate_provider_credential(settings, id)?;
+                    id.to_owned()
+                } else {
+                    old_credentials
+                        .get(&provider.profile)
+                        .cloned()
+                        .flatten()
+                        .ok_or_else(|| {
+                            CommandErrorDto::invalid(
+                                "credentialAction",
+                                "A provider without a stored credential cannot reuse one.",
+                            )
+                        })?
+                };
                 drop(
                     DesktopCredentials::for_settings(state, store)?
                         .read(&credential_id)
@@ -1489,12 +1503,8 @@ async fn plan_provider_credentials(
         .values()
         .filter_map(Option::as_deref)
         .collect::<BTreeSet<_>>();
-    let retired_ids = settings
-        .provider_credential_ids()
-        .into_iter()
-        .filter(|credential_id| !referenced_credentials.contains(credential_id))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
+    let retired_ids =
+        crate::provider_catalog::credentials_to_retire(settings, &referenced_credentials);
     if settings
         .pending_provider_cleanup_ids
         .len()
@@ -1646,7 +1656,7 @@ pub(crate) async fn reject_active_managed_runs_for(
     }
 }
 
-async fn confirm_provider_origins(
+pub(crate) async fn confirm_provider_origins(
     app: &AppHandle,
     origins: &[String],
 ) -> Result<bool, CommandErrorDto> {
@@ -1716,7 +1726,7 @@ const fn execution_boundary_rank(boundary: ExecutionBoundarySetting) -> u8 {
     }
 }
 
-fn credential_parent(app: &AppHandle) -> Result<tauri::WebviewWindow, CommandErrorDto> {
+pub(crate) fn credential_parent(app: &AppHandle) -> Result<tauri::WebviewWindow, CommandErrorDto> {
     app.get_webview_window("main")
         .ok_or_else(credential_worker_error)
 }
@@ -3167,6 +3177,10 @@ mod tests {
             execution_boundary:
                 crate::desktop_settings::ExecutionBoundarySetting::WorkspaceIsolated,
             replace_credential: false,
+            base_url: None,
+            credential_id: None,
+            no_credential: false,
+            model_metadata: None,
         }
     }
 

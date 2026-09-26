@@ -1749,14 +1749,33 @@ mod tests {
 
     #[test]
     fn full_access_desktop_runtime_opens_loopback_wildcard_mcp_servers() {
+        #[cfg(windows)]
+        let temporary_root = std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .expect("absolute Windows user profile")
+            .canonicalize()
+            .expect("canonical Windows user profile");
+        #[cfg(not(windows))]
         let temporary_root = std::env::temp_dir()
             .canonicalize()
             .expect("canonical temporary root");
         let instance = tempfile::tempdir_in(&temporary_root).expect("instance");
         let workspace = tempfile::tempdir_in(&temporary_root).expect("workspace");
+        #[cfg(windows)]
+        let instance_path = {
+            // Runtime homes require private state beneath a trusted namespace;
+            // the Windows temporary directory can grant access to other users.
+            let path = instance.path().join("private-instance");
+            colossus_windows_native::create_private_directory(&path)
+                .expect("private instance directory");
+            path
+        };
+        #[cfg(not(windows))]
+        let instance_path = instance.path().to_owned();
         #[cfg(unix)]
         std::fs::set_permissions(
-            instance.path(),
+            &instance_path,
             <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
         )
         .expect("private instance permissions");
@@ -1777,11 +1796,11 @@ mod tests {
         managed.models[0].max_output_tokens = 16_000;
         let instance_id = Uuid::now_v7();
         let baseline_config =
-            managed_runtime_config(&managed, instance_id, instance.path(), None, true)
+            managed_runtime_config(&managed, instance_id, &instance_path, None, true)
                 .expect("baseline managed configuration")
-                .resolve_storage_paths(workspace.path(), instance.path())
+                .resolve_storage_paths(workspace.path(), &instance_path)
                 .expect("baseline managed storage paths");
-        let home = ColossusHome::ensure_at(instance.path().join("home")).expect("Colossus home");
+        let home = ColossusHome::ensure_at(instance_path.join("home")).expect("Colossus home");
         {
             let options = RuntimeOpenOptions::for_workspace(workspace.path())
                 .expect("baseline runtime options")
@@ -1822,7 +1841,7 @@ mod tests {
             })
             .collect();
 
-        let config = managed_runtime_config(&managed, instance_id, instance.path(), None, true)
+        let config = managed_runtime_config(&managed, instance_id, &instance_path, None, true)
             .expect("managed loopback wildcard MCP configuration");
 
         assert_eq!(config.mcp.servers.len(), 2);
@@ -1837,7 +1856,7 @@ mod tests {
         );
 
         let config = config
-            .resolve_storage_paths(workspace.path(), instance.path())
+            .resolve_storage_paths(workspace.path(), &instance_path)
             .expect("resolved managed storage paths");
         let options = RuntimeOpenOptions::for_workspace(workspace.path())
             .expect("runtime options")

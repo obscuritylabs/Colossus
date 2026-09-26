@@ -28,6 +28,8 @@ import {
 } from "@tabler/icons-react";
 import {
   type InputHTMLAttributes,
+  lazy,
+  Suspense,
   useEffect,
   useId,
   useMemo,
@@ -36,6 +38,11 @@ import {
 } from "react";
 import { PluginConfigurationEditor } from "./PluginConfigurationEditor";
 import { McpDeleteDialog } from "./McpDeleteDialog";
+import {
+  catalogDeletionBlockers,
+  deleteCatalogEntryFixture,
+  type DeletableCatalogKind,
+} from "../catalog-deletion";
 import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 
 import {
@@ -47,11 +54,14 @@ import {
   CommandFailure,
   deleteManagedCredential,
   deleteGlobalMcpServer,
+  deleteGlobalModel,
+  deleteGlobalProvider,
   diagnoseManagedMcpServer,
   diagnoseManagedModel,
   diagnoseManagedProvider,
   diagnoseManagedSearch,
   diagnoseManagedTelemetry,
+  discoverManagedProviderModels,
   getManagedExtensionInventory,
   getManagedConfiguration,
   inspectRepositoryConfiguration,
@@ -97,7 +107,26 @@ import type {
 } from "../types";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { DropdownSelect } from "./DropdownSelect";
+import { ProviderPresetSelect } from "./ProviderPresetSelect";
+import { ProviderModelPicker } from "./ProviderModelPicker";
+import {
+  presetProviderKind,
+  resetModelMetadata,
+  selectCatalogModel,
+} from "../providerCatalog";
 import { ToastRegion, useToastQueue } from "./ToastRegion";
+
+const CatalogInventory = lazy(() =>
+  import("./CatalogInventory").then((module) => ({
+    default: module.CatalogInventory,
+  })),
+);
+
+const CatalogDeleteDialog = lazy(() =>
+  import("./CatalogDeleteDialog").then((module) => ({
+    default: module.CatalogDeleteDialog,
+  })),
+);
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
@@ -330,10 +359,10 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   profile: "",
   providerProfile: "",
   model: "",
-  contextWindowTokens: 128_000,
-  maxOutputTokens: 16_384,
-  toolCalls: true,
-  streaming: true,
+  contextWindowTokens: 32_768,
+  maxOutputTokens: 4_096,
+  toolCalls: false,
+  streaming: false,
   imageInputs: false,
   reasoningEffort: null,
 };
@@ -1568,7 +1597,9 @@ export function ManagedSettingsPane({
     desktop.selectedSpaceId ?? initial.spaces[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [actionBusy, setBusy] = useState(false);
+  const busy = actionBusy || connecting;
+  const actionInFlight = useRef(false);
   const [failure, setFailure] = useState("");
   const { dismissToast, pushToast, toasts } = useToastQueue();
   const [defaults, setDefaults] = useState(() => defaultsDraft(initial));
@@ -1596,6 +1627,17 @@ export function ManagedSettingsPane({
     expectedRevision: number;
   } | null>(null);
   const mcpDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const [catalogDeletion, setCatalogDeletion] = useState<{
+    kind: DeletableCatalogKind;
+    resourceId: string;
+    expectedRevision: number;
+  } | null>(null);
+  const catalogDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const catalogToDelete = catalogDeletion
+    ? snapshot.globalConfiguration[
+        catalogDeletion.kind === "model" ? "models" : "providers"
+      ].find((entry) => entry.id === catalogDeletion.resourceId)
+    : undefined;
   const mcpToDelete = snapshot.globalConfiguration.mcpServers.find(
     (entry) => entry.id === mcpDeletion?.resourceId,
   );
@@ -1707,12 +1749,40 @@ export function ManagedSettingsPane({
     selectedSpace?.effectiveValues.map((value) => [value.fieldId, value]) ?? [],
   );
 
+  function beginAction() {
+    if (actionInFlight.current || connecting) return false;
+    actionInFlight.current = true;
+    setBusy(true);
+    return true;
+  }
+
+  function endAction() {
+    actionInFlight.current = false;
+    setBusy(false);
+  }
+
+  async function discoverModels(
+    request: Parameters<typeof discoverManagedProviderModels>[0],
+  ) {
+    if (!beginAction()) {
+      throw new Error(
+        "Wait for the current settings operation to finish, then retry.",
+      );
+    }
+    try {
+      // Switching Settings tabs unmounts the picker, but its native request continues.
+      return await discoverManagedProviderModels(request);
+    } finally {
+      endAction();
+    }
+  }
+
   async function perform(
     action: () => Promise<ManagedSettingsSnapshot>,
     fixtureAction: () => ManagedSettingsSnapshot,
     success: string,
   ) {
-    setBusy(true);
+    if (!beginAction()) return false;
     setFailure("");
     try {
       const next = isTauriRuntime() ? await action() : fixtureAction();
@@ -1731,7 +1801,7 @@ export function ManagedSettingsPane({
       );
       return false;
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1924,7 +1994,7 @@ export function ManagedSettingsPane({
 
   async function inspectRepositoryImport() {
     if (!selectedSpace) return;
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       const proposal = isTauriRuntime()
@@ -1957,7 +2027,7 @@ export function ManagedSettingsPane({
           : "Repository configuration inspection failed.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1978,7 +2048,7 @@ export function ManagedSettingsPane({
       setFailure("Enter a new profile name for every rename decision.");
       return;
     }
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       if (isTauriRuntime()) {
@@ -2013,7 +2083,7 @@ export function ManagedSettingsPane({
           : "Repository configuration could not be applied.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -2113,7 +2183,7 @@ export function ManagedSettingsPane({
   }
 
   async function runMcpDiagnostic(operation: () => Promise<void>) {
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       await operation();
@@ -2124,7 +2194,7 @@ export function ManagedSettingsPane({
           : "The managed MCP operation failed.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -2276,7 +2346,8 @@ export function ManagedSettingsPane({
   }
 
   async function saveProvider() {
-    if (!providerEditor) return;
+    if (!providerEditor || busy) return;
+    const submitted = providerEditor;
     const provider = managedProvider(providerEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
@@ -2284,7 +2355,7 @@ export function ManagedSettingsPane({
       label: providerEditor.label,
       provider,
     };
-    await perform(
+    const saved = await perform(
       () => upsertGlobalProvider(request),
       () =>
         fixtureRevision((draft) => {
@@ -2297,11 +2368,36 @@ export function ManagedSettingsPane({
         }),
       "Provider saved.",
     );
-    setProviderEditor(null);
+    if (saved) {
+      setProviderEditor((current) => (current === submitted ? null : current));
+    }
+  }
+
+  async function removeCatalogEntry() {
+    if (!catalogDeletion || !catalogToDelete || busy) return;
+    const { kind, ...request } = catalogDeletion;
+    const deleted = await perform(
+      () =>
+        kind === "model"
+          ? deleteGlobalModel(request)
+          : deleteGlobalProvider(request),
+      () => deleteCatalogEntryFixture(snapshot, kind, request),
+      kind === "model" ? "Model deleted." : "Provider deleted.",
+    );
+    if (!deleted) return;
+    setCatalogDeletion(null);
+    if (kind === "model" && modelEditor?.resourceId === request.resourceId)
+      setModelEditor(null);
+    if (
+      kind === "provider" &&
+      providerEditor?.resourceId === request.resourceId
+    )
+      setProviderEditor(null);
   }
 
   async function saveModel() {
-    if (!modelEditor) return;
+    if (!modelEditor || busy) return;
+    const submitted = modelEditor;
     const model = managedModel(modelEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
@@ -2309,7 +2405,7 @@ export function ManagedSettingsPane({
       label: modelEditor.label,
       model,
     };
-    await perform(
+    const saved = await perform(
       () => upsertGlobalModel(request),
       () =>
         fixtureRevision((draft) => {
@@ -2322,7 +2418,9 @@ export function ManagedSettingsPane({
         }),
       "Model saved.",
     );
-    setModelEditor(null);
+    if (saved) {
+      setModelEditor((current) => (current === submitted ? null : current));
+    }
   }
 
   async function saveSearch() {
@@ -2682,9 +2780,19 @@ export function ManagedSettingsPane({
             providerEditor={providerEditor}
             setProviderEditor={setProviderEditor}
             onSaveProvider={() => void saveProvider()}
+            onDeleteCatalogEntry={(kind, resourceId, trigger) => {
+              setFailure("");
+              catalogDeleteTrigger.current = trigger;
+              setCatalogDeletion({
+                kind,
+                resourceId,
+                expectedRevision: snapshot.globalConfiguration.revision,
+              });
+            }}
             modelEditor={modelEditor}
             setModelEditor={setModelEditor}
             onSaveModel={() => void saveModel()}
+            onDiscoverModels={discoverModels}
             searchEditor={searchEditor}
             setSearchEditor={setSearchEditor}
             onSaveSearch={() => void saveSearch()}
@@ -2701,7 +2809,7 @@ export function ManagedSettingsPane({
             onDeleteCredential={(id) => void removeCredential(id)}
             onConfigureManaged={onConfigureManaged}
             desktop={desktop}
-            connecting={connecting}
+            connecting={busy}
             updateChecking={updateChecking}
             updateMessage={updateMessage}
             externalTargets={externalTargets}
@@ -2825,6 +2933,24 @@ export function ManagedSettingsPane({
           onDelete={() => void removeMcp()}
         />
       ) : null}
+      {catalogDeletion && catalogToDelete ? (
+        <Suspense fallback={null}>
+          <CatalogDeleteDialog
+            kind={catalogDeletion.kind}
+            label={catalogToDelete.label}
+            blockers={catalogDeletionBlockers(
+              snapshot,
+              catalogDeletion.kind,
+              catalogToDelete.id,
+            )}
+            busy={busy}
+            error={failure}
+            returnFocus={catalogDeleteTrigger.current}
+            onCancel={() => setCatalogDeletion(null)}
+            onDelete={() => void removeCatalogEntry()}
+          />
+        </Suspense>
+      ) : null}
     </SettingsFrame>
   );
 }
@@ -2841,12 +2967,14 @@ function GlobalSettingsBody({
   setMcpEditor,
   onSaveMcp,
   onDeleteMcp,
+  onDeleteCatalogEntry,
   providerEditor,
   setProviderEditor,
   onSaveProvider,
   modelEditor,
   setModelEditor,
   onSaveModel,
+  onDiscoverModels,
   searchEditor,
   setSearchEditor,
   onSaveSearch,
@@ -2890,12 +3018,18 @@ function GlobalSettingsBody({
   setMcpEditor: (draft: McpEditorDraft | null) => void;
   onSaveMcp: () => void;
   onDeleteMcp: (resourceId: string, trigger: HTMLButtonElement) => void;
+  onDeleteCatalogEntry: (
+    kind: DeletableCatalogKind,
+    resourceId: string,
+    trigger: HTMLButtonElement,
+  ) => void;
   providerEditor: ProviderEditorDraft | null;
   setProviderEditor: (draft: ProviderEditorDraft | null) => void;
   onSaveProvider: () => void;
   modelEditor: ModelEditorDraft | null;
   setModelEditor: (draft: ModelEditorDraft | null) => void;
   onSaveModel: () => void;
+  onDiscoverModels: typeof discoverManagedProviderModels;
   searchEditor: SearchEditorDraft | null;
   setSearchEditor: (draft: SearchEditorDraft | null) => void;
   onSaveSearch: () => void;
@@ -3427,392 +3561,239 @@ function GlobalSettingsBody({
   }
   if (tab === "models") {
     const activeModels = global.models.filter((entry) => !entry.archived);
-    const firstActiveProvider = global.providers.find(
-      (entry) => !entry.archived,
-    );
-    const modelConsumers = new Map(
-      activeModels.map((entry) => [
-        entry.id,
-        managedModelConsumers(snapshot, entry.id),
-      ]),
-    );
+    const activeProviders = global.providers.filter((entry) => !entry.archived);
+    const firstActiveProvider = activeProviders[0];
     const providersInUse = new Set(
       activeModels.map((entry) => currentValue(entry).providerProfile),
     ).size;
-    const routedWorkspaceCount = new Set([...modelConsumers.values()].flat())
-      .size;
     return (
-      <section
-        className="managed-settings-body models-settings"
-        aria-labelledby="models-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">AI models</p>
-            <h3 id="models-heading">Models</h3>
-            <p className="models-heading-copy">
-              Choose the models available to workspaces, their token limits, and
-              the features they support.
-            </p>
-          </div>
-          <div className="model-contract-note" aria-label="Model capabilities">
-            <IconShield size={18} aria-hidden="true" />
-            <span>
-              <strong>Supported features</strong>
-              <small>
-                Turn on only the features this model supports: tools, streaming,
-                and images.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip models-metric-strip"
-          aria-label="Model summary"
-        >
-          <Metric
-            icon={<IconCpu size={19} />}
-            value={activeModels.length}
-            label="Active models"
-          />
-          <Metric
-            icon={<IconCloud size={19} />}
-            value={providersInUse}
-            label="Providers in use"
-          />
-          <Metric
-            icon={<IconRoute size={19} />}
-            value={routedWorkspaceCount}
-            label="Workspaces using models"
-          />
-        </div>
-        <div className="model-catalog-toolbar">
-          <div>
-            <h4>Model inventory</h4>
-            <p>Add models here, then choose which workspaces can use them.</p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={Boolean(modelEditor)}
-            onClick={() =>
-              setModelEditor({
-                ...EMPTY_MODEL_DRAFT,
-                providerProfile: firstActiveProvider
-                  ? currentValue(firstActiveProvider).profile
-                  : "",
-              })
-            }
-          >
-            <IconPlus size={16} aria-hidden="true" /> Add model
-          </button>
-        </div>
-        {modelEditor ? (
-          <ModelEditor
-            draft={modelEditor}
-            providers={global.providers.filter((entry) => !entry.archived)}
-            busy={busy}
-            onChange={setModelEditor}
-            onCancel={() => setModelEditor(null)}
-            onSave={onSaveModel}
-          />
-        ) : null}
-        <section
-          className="model-inventory"
-          aria-labelledby="configured-models-heading"
-        >
-          <div className="model-inventory-heading">
-            <div>
-              <h4 id="configured-models-heading">Configured models</h4>
-              <p>
-                Compare each model's provider, token limits, and supported
-                features.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeModels.length} models`}
-            >
-              {activeModels.length}
-            </span>
-          </div>
-          <div className="managed-list model-list" role="list">
-            {activeModels.map((entry) => {
-              const model = currentValue(entry);
-              const consumers = modelConsumers.get(entry.id) ?? [];
-              const provider = global.providers.find(
-                (candidate) =>
-                  !candidate.archived &&
-                  currentValue(candidate).profile === model.providerProfile,
-              );
-              const enabledCapabilities = [
-                model.capabilities.toolCalls ? "Tools" : null,
-                model.capabilities.streaming ? "Streaming" : null,
-                model.capabilities.imageInputs ? "Images" : null,
-              ].filter((value): value is string => Boolean(value));
-              return (
-                <div
-                  className="managed-list-row model-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconCpu size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p role="status">Loading models…</p>}>
+        <CatalogInventory
+          key="models"
+          kind="model"
+          busy={busy}
+          editing={Boolean(modelEditor)}
+          summary={`${activeModels.length} configured ${activeModels.length === 1 ? "model" : "models"} · ${providersInUse} ${providersInUse === 1 ? "provider" : "providers"}`}
+          onAdd={() =>
+            setModelEditor({
+              ...EMPTY_MODEL_DRAFT,
+              providerProfile: firstActiveProvider
+                ? currentValue(firstActiveProvider).profile
+                : "",
+            })
+          }
+          rows={activeModels.map((entry) => {
+            const model = currentValue(entry);
+            const consumers = managedModelConsumers(snapshot, entry.id);
+            const provider = activeProviders.find(
+              (candidate) =>
+                currentValue(candidate).profile === model.providerProfile,
+            );
+            const capabilities = [
+              model.capabilities.toolCalls ? "Tools" : null,
+              model.capabilities.streaming ? "Streaming" : null,
+              model.capabilities.imageInputs ? "Images" : null,
+            ].filter((value): value is string => Boolean(value));
+            return {
+              id: entry.id,
+              label: entry.label,
+              name: entry.label === model.profile ? model.model : entry.label,
+              description:
+                entry.label === model.profile
+                  ? model.profile
+                  : `${model.profile} · ${model.model}`,
+              searchText: [
+                entry.label,
+                model.profile,
+                model.model,
+                provider?.label,
+                model.providerProfile,
+              ].join(" "),
+              connection: provider?.label ?? model.providerProfile,
+              usage: `${consumers.length} ${consumers.length === 1 ? "workspace" : "workspaces"}`,
+              onEdit: () => setModelEditor(modelDraft(entry)),
+              onDelete: (trigger) =>
+                onDeleteCatalogEntry("model", entry.id, trigger),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === model.profile
-                        ? model.model
-                        : `${model.profile} · ${model.model}`}
-                    </small>
-                    <small className="model-provider-route">
-                      Provider · {provider?.label ?? model.providerProfile}
-                    </small>
+                    <h4>Model settings</h4>
+                    <dl>
+                      <dt>Model ID</dt>
+                      <dd>{model.model}</dd>
+                      <dt>Profile ID</dt>
+                      <dd>{model.profile}</dd>
+                      <dt>Token limits</dt>
+                      <dd>
+                        {compactTokenCount(model.contextWindowTokens)} context ·{" "}
+                        {compactTokenCount(model.maxOutputTokens)} output
+                      </dd>
+                      <dt>Supported features</dt>
+                      <dd>
+                        {capabilities.length
+                          ? capabilities.join(", ")
+                          : "Text only"}
+                      </dd>
+                      <dt>Reasoning effort</dt>
+                      <dd>{model.reasoningEffort ?? "Provider default"}</dd>
+                      <dt>Version</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <div
-                    className="model-capability-list"
-                    aria-label="Capabilities"
-                  >
-                    {(enabledCapabilities.length
-                      ? enabledCapabilities
-                      : ["Text only"]
-                    ).map((capability) => (
-                      <span
-                        className="status-chip tone-success"
-                        key={capability}
-                      >
-                        {capability}
-                      </span>
-                    ))}
+                  <div>
+                    <h4>Active workspaces</h4>
+                    {consumers.length ? (
+                      <ul>
+                        {consumers.map((name, index) => (
+                          <li key={index}>{name}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No active workspace references this model.</p>
+                    )}
                   </div>
-                  <div className="model-row-meta">
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active workspace references this model."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "Not used"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {compactTokenCount(model.contextWindowTokens)} context ·{" "}
-                      {compactTokenCount(model.maxOutputTokens)} output · v
-                      {entry.currentRevision}
-                    </span>
-                  </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      onClick={() => setModelEditor(modelDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeModels.length === 0 ? (
-              <EmptySettings icon={<IconCpu size={24} />} title="No models" />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {modelEditor ? (
+            <ModelEditor
+              draft={modelEditor}
+              workspaceId={desktop.workspace?.workspaceId ?? null}
+              catalogRevision={global.revision}
+              providers={activeProviders}
+              busy={busy}
+              onChange={setModelEditor}
+              onCancel={() => setModelEditor(null)}
+              onSave={onSaveModel}
+              onDiscoverModels={onDiscoverModels}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "providers") {
     const activeProviders = global.providers.filter((entry) => !entry.archived);
-    const providerConsumers = new Map(
-      activeProviders.map((entry) => [
-        entry.id,
-        managedProviderConsumers(snapshot, entry.id),
-      ]),
-    );
-    const routedModelCount = [...providerConsumers.values()].reduce(
-      (total, consumers) => total + consumers.length,
-      0,
-    );
-    const credentialBindingCount = activeProviders.filter((entry) =>
-      Boolean(currentValue(entry).credentialId),
-    ).length;
+    const activeModels = global.models.filter((entry) => !entry.archived);
     return (
-      <section
-        className="managed-settings-body providers-settings"
-        aria-labelledby="providers-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">AI connections</p>
-            <h3 id="providers-heading">Providers</h3>
-            <p className="providers-heading-copy">
-              Connect the services and accounts Colossus uses to access AI
-              models.
-            </p>
-          </div>
-          <div
-            className="provider-security-note"
-            aria-label="Provider credential safety"
-          >
-            <IconLock size={18} aria-hidden="true" />
-            <span>
-              <strong>Credentials stay protected</strong>
-              <small>
-                Colossus stores which credential to use, not its secret value.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip providers-metric-strip"
-          aria-label="Provider summary"
-        >
-          <Metric
-            icon={<IconCloud size={19} />}
-            value={activeProviders.length}
-            label="Active providers"
-          />
-          <Metric
-            icon={<IconCpu size={19} />}
-            value={routedModelCount}
-            label="Models using them"
-          />
-          <Metric
-            icon={<IconKey size={19} />}
-            value={credentialBindingCount}
-            label="Credentials used"
-          />
-        </div>
-        <div className="provider-catalog-toolbar">
-          <div>
-            <h4>Provider connections</h4>
-            <p>
-              Add a provider once, then reuse the connection for multiple
-              models.
-            </p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={Boolean(providerEditor)}
-            onClick={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
-          >
-            <IconPlus size={16} /> Add provider
-          </button>
-        </div>
-        {providerEditor ? (
-          <ProviderEditor
-            draft={providerEditor}
-            credentials={global.credentials}
-            busy={busy}
-            onChange={setProviderEditor}
-            onCancel={() => setProviderEditor(null)}
-            onSave={onSaveProvider}
-          />
-        ) : null}
-        <section
-          className="provider-inventory"
-          aria-labelledby="configured-providers-heading"
-        >
-          <div className="provider-inventory-heading">
-            <div>
-              <h4 id="configured-providers-heading">Providers</h4>
-              <p>
-                Compare each provider's endpoint, sign-in method, model usage,
-                and timeout.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeProviders.length} providers`}
-            >
-              {activeProviders.length}
-            </span>
-          </div>
-          <div className="managed-list provider-list" role="list">
-            {activeProviders.map((entry) => {
-              const provider = currentValue(entry);
-              const consumers = providerConsumers.get(entry.id) ?? [];
-              const codex = provider.kind === "open_ai_codex";
-              const timeout = provider.timeoutMs
-                ? `${Math.round(provider.timeoutMs / 1_000)}s timeout`
-                : "Default timeout";
-              return (
-                <div
-                  className="managed-list-row provider-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconCloud size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p role="status">Loading providers…</p>}>
+        <CatalogInventory
+          key="providers"
+          kind="provider"
+          busy={busy}
+          editing={Boolean(providerEditor)}
+          summary={`${activeProviders.length} ${activeProviders.length === 1 ? "provider" : "providers"} · ${activeModels.length} configured ${activeModels.length === 1 ? "model" : "models"}`}
+          onAdd={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
+          rows={activeProviders.map((entry) => {
+            const provider = currentValue(entry);
+            const codex = provider.kind === "open_ai_codex";
+            const models = activeModels.filter(
+              (model) =>
+                currentValue(model).providerProfile === provider.profile,
+            );
+            const name =
+              codex && entry.label === provider.profile ? "Codex" : entry.label;
+            const description = codex
+              ? `${provider.profile} · Subscription`
+              : entry.label === provider.profile
+                ? providerEndpointLabel(provider)
+                : `${provider.profile} · ${providerEndpointLabel(provider)}`;
+            const credential = global.credentials.find(
+              (candidate) => candidate.id === provider.credentialId,
+            );
+            return {
+              id: entry.id,
+              label: entry.label,
+              name,
+              description,
+              searchText: [
+                name,
+                entry.label,
+                provider.profile,
+                providerEndpointLabel(provider),
+              ].join(" "),
+              connection: (
+                <>
+                  <IconLock size={16} aria-hidden="true" />
+                  {codex
+                    ? "Codex account"
+                    : provider.credentialId
+                      ? "Credential saved"
+                      : "No credential"}
+                </>
+              ),
+              usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
+              onEdit: () => setProviderEditor(providerDraft(entry)),
+              onDelete: (trigger) =>
+                onDeleteCatalogEntry("provider", entry.id, trigger),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === provider.profile
-                        ? providerEndpointLabel(provider)
-                        : `${provider.profile} · ${providerEndpointLabel(provider)}`}
-                    </small>
+                    <h4>Connection details</h4>
+                    <dl>
+                      <dt>Profile ID</dt>
+                      <dd>{provider.profile}</dd>
+                      <dt>API format</dt>
+                      <dd>{providerAdapterLabel(provider.kind)}</dd>
+                      {!codex ? (
+                        <>
+                          <dt>Endpoint</dt>
+                          <dd>{provider.baseUrl}</dd>
+                        </>
+                      ) : null}
+                      <dt>Sign-in</dt>
+                      <dd>
+                        {codex
+                          ? "Codex account"
+                          : (credential?.label ??
+                            (provider.credentialId
+                              ? "Credential unavailable"
+                              : "No credential"))}
+                      </dd>
+                      <dt>Request timeout</dt>
+                      <dd>
+                        {provider.timeoutMs
+                          ? `${provider.timeoutMs / 1000}s`
+                          : "Default"}
+                      </dd>
+                      <dt>Version</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <span className="status-chip tone-neutral provider-adapter-chip">
-                    {providerAdapterLabel(provider.kind)}
-                  </span>
-                  <div className="provider-row-meta">
-                    <span
-                      className={`status-chip${provider.credentialId || codex ? " tone-success" : ""}`}
-                    >
-                      <IconLock size={13} aria-hidden="true" />
-                      {codex
-                        ? "Codex account"
-                        : provider.credentialId
-                          ? "Credential attached"
-                          : "No credential"}
-                    </span>
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active model references this provider."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "No models"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {timeout} · v{entry.currentRevision}
-                    </span>
+                  <div>
+                    <h4>Configured models</h4>
+                    {models.length ? (
+                      <ul>
+                        {models.map((model) => (
+                          <li key={model.id}>
+                            {model.label}
+                            <small>{currentValue(model).model}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No configured model uses this provider.</p>
+                    )}
                   </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      onClick={() => setProviderEditor(providerDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeProviders.length === 0 ? (
-              <EmptySettings
-                icon={<IconCloud size={24} />}
-                title="No providers"
-              />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {providerEditor ? (
+            <ProviderEditor
+              draft={providerEditor}
+              credentials={global.credentials}
+              busy={busy}
+              onChange={setProviderEditor}
+              onCancel={() => setProviderEditor(null)}
+              onSave={onSaveProvider}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "search") {
@@ -6543,7 +6524,7 @@ function ProviderEditor({
       aria-labelledby="provider-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        if (!busy) onSave();
       }}
     >
       <div className="provider-editor-heading">
@@ -6561,6 +6542,7 @@ function ProviderEditor({
           className="icon-button"
           type="button"
           aria-label="Close provider editor"
+          disabled={busy}
           onClick={onCancel}
         >
           <IconX size={17} />
@@ -6580,6 +6562,7 @@ function ProviderEditor({
           <label>
             <span>Display label</span>
             <input
+              disabled={busy}
               value={draft.label}
               placeholder="For example, OpenRouter production"
               aria-describedby="provider-label-help"
@@ -6593,6 +6576,7 @@ function ProviderEditor({
           <label>
             <span>Profile ID</span>
             <input
+              disabled={busy}
               value={draft.profile}
               placeholder="openrouter-production"
               aria-describedby="provider-profile-help"
@@ -6615,10 +6599,26 @@ function ProviderEditor({
           <h5 id="provider-editor-connection-heading">Connection</h5>
           <p>Choose the provider API format and endpoint.</p>
         </div>
+        <ProviderPresetSelect
+          kind={draft.kind}
+          baseUrl={draft.baseUrl}
+          busy={busy}
+          onSelect={(preset) =>
+            onChange({
+              ...draft,
+              kind: presetProviderKind(preset),
+              baseUrl: preset.baseUrl ?? "",
+              label: draft.label || preset.label,
+              profile: draft.profile || preset.id,
+              credentialId: "",
+            })
+          }
+        />
         <div className="provider-editor-grid provider-connection-grid">
           <label>
             <span>Adapter</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.kind}
               aria-describedby="provider-adapter-help"
               onChange={(event) =>
@@ -6642,7 +6642,7 @@ function ProviderEditor({
               value={
                 codex ? "https://chatgpt.com/backend-api/codex" : draft.baseUrl
               }
-              disabled={codex}
+              disabled={busy || codex}
               aria-describedby="provider-endpoint-help"
               required
               onChange={(event) =>
@@ -6670,7 +6670,7 @@ function ProviderEditor({
             <span>Credential reference</span>
             <DropdownSelect
               value={codex ? "" : draft.credentialId}
-              disabled={codex}
+              disabled={busy || codex}
               aria-describedby="provider-credential-help"
               onChange={(event) =>
                 onChange({ ...draft, credentialId: event.target.value })
@@ -6717,6 +6717,7 @@ function ProviderEditor({
           <label>
             <span>Request timeout (ms)</span>
             <input
+              disabled={busy}
               type="number"
               min={1}
               max={3_600_000}
@@ -6740,7 +6741,12 @@ function ProviderEditor({
         </div>
       </section>
       <div className="mcp-editor-actions">
-        <button className="button secondary" type="button" onClick={onCancel}>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
         <button className="button primary" type="submit" disabled={busy}>
@@ -6752,31 +6758,53 @@ function ProviderEditor({
   );
 }
 
+function resetModelDraft(draft: ModelEditorDraft): ModelEditorDraft {
+  const model = resetModelMetadata(managedModel(draft));
+  return { ...draft, ...model, ...model.capabilities };
+}
+
 function ModelEditor({
   draft,
+  workspaceId,
+  catalogRevision,
   providers,
   busy,
   onChange,
   onCancel,
   onSave,
+  onDiscoverModels,
 }: {
   draft: ModelEditorDraft;
+  workspaceId: string | null;
+  catalogRevision: number;
   providers: CatalogEntry<ManagedProviderCatalogValue>[];
   busy: boolean;
   onChange: (draft: ModelEditorDraft) => void;
   onCancel: () => void;
   onSave: () => void;
+  onDiscoverModels: typeof discoverManagedProviderModels;
 }) {
+  const provider = providers
+    .map(currentValue)
+    .find((candidate) => candidate.profile === draft.providerProfile);
   const title = draft.resourceId
     ? `Edit ${draft.label || "model"}`
     : "Add model";
+  const connectionKey = JSON.stringify([
+    workspaceId,
+    catalogRevision,
+    provider?.profile,
+    provider?.kind,
+    provider?.baseUrl,
+    provider?.credentialId,
+  ]);
   return (
     <form
       className="mcp-editor catalog-editor model-editor"
       aria-labelledby="model-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        if (!busy) onSave();
       }}
     >
       <div className="model-editor-heading">
@@ -6791,6 +6819,7 @@ function ModelEditor({
           className="icon-button"
           type="button"
           aria-label="Close model editor"
+          disabled={busy}
           onClick={onCancel}
         >
           <IconX size={17} />
@@ -6810,6 +6839,7 @@ function ModelEditor({
           <label>
             <span>Display label</span>
             <input
+              disabled={busy}
               value={draft.label}
               placeholder="For example, Primary reasoning model"
               aria-describedby="model-label-help"
@@ -6823,6 +6853,7 @@ function ModelEditor({
           <label>
             <span>Profile ID</span>
             <input
+              disabled={busy}
               value={draft.profile}
               placeholder="primary-reasoning"
               aria-describedby="model-profile-help"
@@ -6849,11 +6880,16 @@ function ModelEditor({
           <label>
             <span>Provider profile</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.providerProfile}
               aria-describedby="model-provider-help"
               required
               onChange={(event) =>
-                onChange({ ...draft, providerProfile: event.target.value })
+                onChange({
+                  ...resetModelDraft(draft),
+                  providerProfile: event.target.value,
+                  model: "",
+                })
               }
             >
               <option value="">Select provider</option>
@@ -6873,12 +6909,16 @@ function ModelEditor({
           <label>
             <span>Model identifier</span>
             <input
+              disabled={busy}
               value={draft.model}
               placeholder="Provider-specific model name"
               aria-describedby="model-identifier-help"
               required
               onChange={(event) =>
-                onChange({ ...draft, model: event.target.value })
+                onChange({
+                  ...resetModelDraft(draft),
+                  model: event.target.value,
+                })
               }
             />
             <small id="model-identifier-help">
@@ -6886,6 +6926,41 @@ function ModelEditor({
             </small>
           </label>
         </div>
+        <ProviderModelPicker
+          key={connectionKey}
+          connectionKey={connectionKey}
+          model={draft.model}
+          disabled={busy || workspaceId === null || provider === undefined}
+          onLoad={async () => {
+            if (workspaceId === null || !provider) return [];
+            const result = await onDiscoverModels({
+              workspaceId,
+              providerKind: provider.kind,
+              baseUrl: provider.baseUrl,
+              credentialAction: provider.credentialId ? "reuse" : "none",
+              ...(provider.credentialId
+                ? { credentialId: provider.credentialId }
+                : {}),
+            });
+            if (result.errorMessage) throw new Error(result.errorMessage);
+            return result.models;
+          }}
+          onSelect={(entry) => {
+            const selected = selectCatalogModel(managedModel(draft), entry);
+            onChange({
+              ...draft,
+              ...selected,
+              ...selected.capabilities,
+              label: draft.label || entry.display_name || entry.id,
+              profile:
+                draft.profile ||
+                entry.id.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 64),
+            });
+          }}
+        />
+        {workspaceId === null ? (
+          <p>Choose a Workspace to load this provider’s models.</p>
+        ) : null}
       </section>
       <section
         className="model-editor-section"
@@ -6901,6 +6976,7 @@ function ModelEditor({
           <label>
             <span>Context window (tokens)</span>
             <input
+              disabled={busy}
               type="number"
               min={1_024}
               value={draft.contextWindowTokens}
@@ -6919,6 +6995,7 @@ function ModelEditor({
           <label>
             <span>Maximum output (tokens)</span>
             <input
+              disabled={busy}
               type="number"
               min={1}
               value={draft.maxOutputTokens}
@@ -6947,6 +7024,7 @@ function ModelEditor({
         <div className="model-capability-grid">
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.toolCalls}
               onChange={(event) =>
                 onChange({ ...draft, toolCalls: event.target.checked })
@@ -6959,6 +7037,7 @@ function ModelEditor({
           </label>
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.streaming}
               onChange={(event) =>
                 onChange({ ...draft, streaming: event.target.checked })
@@ -6971,6 +7050,7 @@ function ModelEditor({
           </label>
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.imageInputs}
               onChange={(event) =>
                 onChange({ ...draft, imageInputs: event.target.checked })
@@ -6986,6 +7066,7 @@ function ModelEditor({
           <label>
             <span>Reasoning effort</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.reasoningEffort ?? "inherit"}
               aria-describedby="model-reasoning-help"
               onChange={(event) =>
@@ -7022,7 +7103,12 @@ function ModelEditor({
         </div>
       </section>
       <div className="mcp-editor-actions">
-        <button className="button secondary" type="button" onClick={onCancel}>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
         <button className="button primary" type="submit" disabled={busy}>

@@ -123,6 +123,23 @@ Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
 
+### Desktop provider setup acceptance
+
+Prepare current bundled binaries with `cargo xtask desktop prepare --profile debug`,
+then run `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_catalog_ -- --ignored`.
+This operator-owned native acceptance tier requires loopback access and the platform
+credential store. It uses disposable private homes, the verified bundled sidecar,
+authenticated worker IPC, and the production provider gateway. It proves first-run
+Chat Completions and Responses model discovery without a selected model, card limits,
+absent authorization for unauthenticated endpoints, real encrypted-vault credential
+forwarding on Windows/macOS, and successful retries after malformed catalogs and
+HTTP 401. Successful runs verify removal of their exact generated runtime keys and
+homes; cleanup failures fail the test. During an existing test failure, cleanup
+diagnostics preserve that original failure and may leave generated resources for
+inspection. It does not
+automate native consent or credential-entry dialogs; those still require on-screen
+acceptance. Browser mocks alone do not exercise this native boundary.
+
 ### Plan Mode acceptance
 
 Run `cargo test -p colossus-cli --test plan_mode_smoke --test interactive_plan_smoke`

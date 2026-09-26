@@ -92,12 +92,10 @@ describe("OnboardingSurface", () => {
   it("starts with folder selection and allows offline verification", () => {
     const markup = renderOnboarding(null);
 
-    expect(markup).toContain("Add your first Workspace");
-    expect(markup).toContain("Add Workspace from folder");
+    expect(markup).toContain("Choose your project folder");
+    expect(markup).toContain("Choose folder");
     expect(markup).not.toContain("provider-setup-form");
-    expect(openingButtonTag(markup, "Run offline self-test")).not.toContain(
-      "disabled",
-    );
+    expect(openingButtonTag(markup, "Run check")).not.toContain("disabled");
   });
 
   it("shows workspace selection failures before provider setup", () => {
@@ -119,18 +117,18 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain('class="provider-setup-form"');
     expect(markup).toContain("~/tools/Colossus");
     expect(markup).not.toContain('type="password"');
-    expect(markup).not.toContain("API base URL");
-    expect(markup).toContain("native secure prompt");
+    expect(markup).toContain("API base URL");
+    expect(markup).toContain("Load models");
+    expect(markup).toContain("Model limits and capabilities");
+    expect(markup).toContain("separate secure window");
     expect(markup).toContain(
-      '<span class="app-select-value">Allow all — every declared built-in tool</span>',
+      '<span class="app-select-value">Allow all — all built-in tools</span>',
     );
-    expect(markup).toContain("Unsafe: Full access.");
-    expect(markup).toContain("Approval mode is a separate setting.");
-    expect(openingButtonTag(markup, "Run offline self-test")).not.toContain(
-      "disabled",
-    );
+    expect(markup).toContain("Full access is unsafe.");
+    expect(markup).toContain("Approval settings still apply.");
+    expect(openingButtonTag(markup, "Run check")).not.toContain("disabled");
     expect(markup).toContain(
-      "It does not configure a provider or enable model runs.",
+      "Runs an offline check without setting up a provider or running a model.",
     );
     expect(markup).not.toContain(">Cancel</button>");
   });
@@ -144,13 +142,41 @@ describe("OnboardingSurface", () => {
           kind: "openai_responses",
           model: "configured-model",
         },
+        managedModelConfiguration: {
+          providers: [
+            {
+              profile: "primary-provider",
+              providerKind: "openai_responses",
+              baseUrl: "https://api.example.test/v1",
+              hasCredential: true,
+              timeoutMs: null,
+              effectiveTimeoutMs: 300000,
+            },
+          ],
+          models: [
+            {
+              profile: "primary",
+              providerProfile: "primary-provider",
+              model: "configured-model",
+              contextWindowTokens: 32768,
+              maxOutputTokens: 4096,
+              reasoningEffort: null,
+              capabilities: {
+                toolCalls: false,
+                imageInputs: false,
+                streaming: false,
+              },
+            },
+          ],
+          roles: { primary: "primary" },
+        },
         accessProfile: "minimal",
         executionBoundary: "offline_isolated",
       },
       true,
     );
 
-    expect(markup).toContain("Configure Managed Local");
+    expect(markup).toContain("Edit workspace setup");
     expect(markup).toContain(">Cancel</button>");
     expect(markup).toContain('value="configured-model"');
     expect(markup).toContain(
@@ -162,11 +188,9 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain(
       '<span class="app-select-value">Offline isolated</span>',
     );
-    expect(markup).not.toContain("Unsafe: Full access.");
-    expect(markup).toContain("Replace the stored API key");
-    expect(markup).toContain(
-      "The existing provider key remains in the encrypted credential vault.",
-    );
+    expect(markup).not.toContain("Full access is unsafe.");
+    expect(markup).toContain("Use a different API key");
+    expect(markup).toContain("Your saved API key will be reused.");
     expect(markup).toContain('type="checkbox"');
     expect(markup).not.toContain('type="checkbox" checked=""');
   });
@@ -182,8 +206,81 @@ describe("OnboardingSurface", () => {
 
     expect(markup).toContain("ChatGPT subscription (Codex)");
     expect(markup).toContain("Sign in with ChatGPT");
-    expect(markup).toContain("official Codex credential remains file-backed");
-    expect(markup).not.toContain("Replace the stored API key");
-    expect(openingButtonTag(markup, "Continue securely")).toContain("disabled");
+    expect(markup).toContain(
+      "Connect through Codex using your ChatGPT account.",
+    );
+    expect(markup).not.toContain("Use a different API key");
+    expect(openingButtonTag(markup, "Save and start")).toContain("disabled");
+  });
+
+  it("opens existing multiple providers in the full editor and shows apply errors", () => {
+    const markup = renderOnboarding(
+      workspace,
+      {
+        provider: {
+          configured: true,
+          kind: "openai_responses",
+          model: "primary-model",
+        },
+        managedModelConfiguration: {
+          providers: [
+            {
+              profile: "secondary-provider",
+              providerKind: "openai_compatible",
+              baseUrl: "https://secondary.example.test/v1",
+              hasCredential: false,
+              timeoutMs: null,
+              effectiveTimeoutMs: 300000,
+            },
+            {
+              profile: "primary-provider",
+              providerKind: "openai_responses",
+              baseUrl: "https://primary.example.test/v1",
+              hasCredential: true,
+              timeoutMs: null,
+              effectiveTimeoutMs: 300000,
+            },
+          ],
+          models: [
+            {
+              profile: "secondary",
+              providerProfile: "secondary-provider",
+              model: "secondary-model",
+              contextWindowTokens: 32000,
+              maxOutputTokens: 2000,
+              reasoningEffort: null,
+              capabilities: {
+                toolCalls: false,
+                streaming: false,
+                imageInputs: false,
+              },
+            },
+            {
+              profile: "primary",
+              providerProfile: "primary-provider",
+              model: "primary-model",
+              contextWindowTokens: 64000,
+              maxOutputTokens: 8000,
+              reasoningEffort: null,
+              capabilities: {
+                toolCalls: true,
+                streaming: true,
+                imageInputs: false,
+              },
+            },
+          ],
+          roles: { primary: "primary" },
+        },
+      },
+      false,
+      "The model configuration could not be applied.",
+    );
+    expect(markup).toContain('value="https://primary.example.test/v1"');
+    expect(markup).toContain('value="64000"');
+    expect(markup).toContain("https://secondary.example.test/v1");
+    expect(markup).toContain("Save and start");
+    expect(markup).not.toContain("Choose another folder");
+    expect(markup).not.toContain("Back to basic setup");
+    expect(markup).toContain("The model configuration could not be applied.");
   });
 });

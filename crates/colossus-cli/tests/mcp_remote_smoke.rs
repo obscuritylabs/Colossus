@@ -132,6 +132,11 @@ fn mcp_doctor_preserves_http_failure_and_policy_denial_without_remote_payloads()
                 Err(error) => panic!("health check did not reach fixture: {error}"),
             }
         };
+        // Winsock can carry the listener's nonblocking mode onto accepted streams.
+        // Read requests with the bounded blocking timeout below.
+        stream
+            .set_nonblocking(false)
+            .expect("blocking fixture stream");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

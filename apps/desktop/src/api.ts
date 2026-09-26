@@ -2,6 +2,33 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { PluginInventory, PluginRequest } from "./plugins";
 import { readNativeDialogAppearance } from "./theme/appearance";
+import type { ProviderPreset, ProviderCatalogModel } from "./providerCatalog";
+
+export function getProviderPresets(): Promise<ProviderPreset[]> {
+  return call("get_provider_presets");
+}
+
+export interface DiscoverProviderModelsRequest {
+  workspaceId: string;
+  providerKind: import("./types").ProviderKind;
+  baseUrl: string;
+  credentialAction: import("./types").CredentialAction;
+  credentialId?: string;
+  providerProfile?: string;
+}
+
+export function discoverManagedProviderModels(
+  request: DiscoverProviderModelsRequest,
+): Promise<{
+  models: ProviderCatalogModel[];
+  credentialId: string | null;
+  errorMessage?: string | null;
+}> {
+  return call("discover_managed_provider_models", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
+}
 
 export function getPluginInventory(targetId: string): Promise<PluginInventory> {
   return call("get_plugin_inventory", { targetId });
@@ -436,6 +463,23 @@ export function upsertGlobalProvider(request: {
   provider: ManagedProviderCatalogValue;
 }): Promise<ManagedSettingsSnapshot> {
   return call("upsert_global_provider", { request });
+}
+
+export interface DeleteGlobalCatalogEntryRequest {
+  expectedRevision: number;
+  resourceId: string;
+}
+
+export function deleteGlobalProvider(
+  request: DeleteGlobalCatalogEntryRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_provider", { request });
+}
+
+export function deleteGlobalModel(
+  request: DeleteGlobalCatalogEntryRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_model", { request });
 }
 
 export function upsertGlobalModel(request: {

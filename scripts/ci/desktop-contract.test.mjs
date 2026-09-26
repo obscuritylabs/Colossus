@@ -785,10 +785,9 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
 
 test("Windows private storage is created with a protected native DACL", () => {
   const settingsSource = read("apps/desktop/src-tauri/src/desktop_settings.rs");
-  const settings = settingsSource.slice(
-    0,
-    settingsSource.indexOf("#[cfg(test)]"),
-  );
+  const testModule = settingsSource.search(/^#\[cfg\(test\)\]\r?\nmod tests/mu);
+  assert.notEqual(testModule, -1);
+  const settings = settingsSource.slice(0, testModule);
   assert.match(
     settings,
     /colossus_windows_native::create_private_directory\(path\)/u,
@@ -843,7 +842,9 @@ test("provider enrollment and external trust stay behind native UI", () => {
     types.indexOf("export interface ConfigureManagedRuntimeRequest"),
     types.indexOf("export type CredentialAction"),
   );
-  assert.doesNotMatch(configureRequest, /apiKey|baseUrl/u);
+  assert.match(configureRequest, /baseUrl/u);
+  assert.match(configureRequest, /credentialId/u);
+  assert.doesNotMatch(configureRequest, /apiKey|credentialValue|secretValue/u);
   const managedConfigurationRequest = types.slice(
     types.indexOf("export type CredentialAction"),
     types.indexOf("export interface ManagedFieldOverride"),
@@ -852,7 +853,7 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(managedConfigurationRequest, /credentialAction/u);
   assert.doesNotMatch(
     managedConfigurationRequest,
-    /apiKey|credentialId|credentialValue|secret/u,
+    /apiKey|credentialValue|secret/u,
   );
   const managedSettingsContracts = types.slice(
     types.indexOf("export interface ManagedFieldOverride"),
@@ -864,10 +865,10 @@ test("provider enrollment and external trust stay behind native UI", () => {
   );
 
   const onboarding = read("apps/desktop/src/components/OnboardingSurface.tsx");
-  assert.doesNotMatch(onboarding, /type=["']password["']|API base URL/u);
-  assert.match(onboarding, /native secure prompt/u);
-  assert.match(onboarding, /Your API key stays outside the page/u);
-  assert.match(onboarding, /encrypted credential vault/u);
+  assert.doesNotMatch(onboarding, /type=["']password["']/u);
+  assert.match(onboarding, /API base URL/u);
+  assert.match(onboarding, /enter your API key in a separate secure window/u);
+  assert.match(onboarding, /saves the key encrypted on this computer/u);
   const modelEditor = read(
     "apps/desktop/src/components/ModelConfigurationEditor.tsx",
   );
@@ -876,7 +877,7 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(modelEditor, /credentialAction/u);
   assert.doesNotMatch(
     modelEditor,
-    /type=["']password["']|apiKey|credentialId/u,
+    /type=["']password["']|apiKey|credentialValue/u,
   );
 
   const enrollment = read("apps/desktop/src-tauri/src/provider_enrollment.rs");
@@ -884,9 +885,15 @@ test("provider enrollment and external trust stay behind native UI", () => {
     0,
     enrollment.indexOf("#[cfg(test)]"),
   );
-  assert.match(enrollmentImplementation, /colossus_native_credential_ui::prompt/u);
+  assert.match(
+    enrollmentImplementation,
+    /colossus_native_credential_ui::prompt/u,
+  );
   assert.match(enrollmentImplementation, /HostSecret/u);
-  assert.doesNotMatch(enrollmentImplementation, /osascript|CredUI|Command::new/u);
+  assert.doesNotMatch(
+    enrollmentImplementation,
+    /osascript|CredUI|Command::new/u,
+  );
   assert.doesNotMatch(
     enrollmentImplementation,
     /api\.openai\.com|openrouter\.ai/u,

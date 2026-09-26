@@ -20,6 +20,7 @@ mod mcp_health;
 mod plugin_adapter;
 mod plugin_commands;
 mod plugin_selection;
+mod provider_catalog;
 mod provider_enrollment;
 mod run_list;
 mod space_search;
@@ -47,6 +48,9 @@ use desktop_commands::{
     search_space_threads, select_space, select_target, set_approval_mode, set_terminal_enabled,
 };
 use diagnostics::{desktop_release_metadata, export_diagnostics};
+use managed_configuration_commands::catalog_deletion::{
+    delete_global_model, delete_global_provider,
+};
 use managed_configuration_commands::{
     apply_space_configuration, create_managed_credential, delete_global_mcp_server,
     delete_managed_credential, get_managed_configuration, reenter_managed_credential,
@@ -64,6 +68,7 @@ use plugin_commands::{
     cancel_plugin_operation, get_plugin_inventory, manage_plugin, read_plugin_preview,
 };
 use plugin_selection::resolve_plugin_selection;
+use provider_catalog::{discover_managed_provider_models, get_provider_presets};
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
     terminal_context, write_terminal,
@@ -131,6 +136,8 @@ pub fn run() {
             save_global_defaults,
             upsert_global_mcp_server,
             delete_global_mcp_server,
+            delete_global_model,
+            delete_global_provider,
             diagnose_managed_mcp_server,
             managed_mcp_oauth_status,
             begin_managed_mcp_oauth,
@@ -152,6 +159,8 @@ pub fn run() {
             reenter_managed_credential,
             delete_managed_credential,
             configure_managed_runtime,
+            discover_managed_provider_models,
+            get_provider_presets,
             apply_managed_model_configuration,
             restart_managed_runtime,
             run_managed_self_test,

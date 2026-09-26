@@ -73,7 +73,7 @@ model output.
 | `process` | Execute one exact program without an implicit shell |
 | `network` | Perform policy-allowed brokered HTTP requests |
 | `workflow` | Validate, register, run, trigger, recover, and inspect workflows |
-| `provider` | Inspect and diagnose model profiles |
+| `provider` | Set up provider connections, discover models, and diagnose profiles |
 | `codex` | Login, validate, or logout the file-backed ChatGPT sign-in used by Codex subscription providers; completion means the runtime credential state was verified |
 | `search` | Inspect and query provider-neutral search routes |
 | `models` | Inspect role-to-profile routing |
@@ -120,7 +120,7 @@ positional:
 | `workflow schedule` | `create SCHEDULE_ID NAME VERSION`, `list`, `show SCHEDULE_ID`, `enable SCHEDULE_ID`, `disable SCHEDULE_ID`, `tick` |
 | `workflow webhook` | `create WEBHOOK_ID NAME VERSION`, `list`, `show WEBHOOK_ID`, `enable WEBHOOK_ID`, `disable WEBHOOK_ID`, `ingest WEBHOOK_ID`, `serve` |
 | `workflow subscription` | `create SUBSCRIPTION_ID NAME VERSION`, `list`, `show SUBSCRIPTION_ID`, `enable SUBSCRIPTION_ID`, `disable SUBSCRIPTION_ID`, `tick` |
-| `provider` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `models [PROFILE]` |
+| `provider` | `presets`, `discover [--preset ID] [--base-url URL] [--credential-env NAME \| --no-credential]`, `setup [--preset ID] [--model ID] [--local]`, `profiles`, `doctor [PROFILE] [--include-provider-response]`, `models [PROFILE]` |
 | `codex` | `[--codex-bin PATH] login [--device-code]`, `[--codex-bin PATH] status`, `[--codex-bin PATH] logout` |
 | `search` | `profiles`, `query QUERY` |
 | `models` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `routes`, `route [ROLE]` |
@@ -273,6 +273,9 @@ contract. Important roots are:
 | --- | --- |
 | `run` | `run_id`, nullable `session_id`, `role`, `profile`, `model`, `output`, `event_count`, `elapsed_seconds` |
 | `provider doctor` | `profile`, `provider`, `ready`, `tool_calls`, `streaming`, `checks` |
+| `provider presets` | Array of `id`, `label`, `protocol`, `baseUrl`, and `credentialEnv` setup choices; no configuration required |
+| `provider discover`, `provider models` | Array of model IDs and optional provider-declared card metadata: name, description, context/output limits, capabilities, reasoning options |
+| `provider setup` | `created`, `config_path`, selected `provider` preset, and configured `model`; refuses existing files |
 | `search query` | `query`, `count`, `results`; each result has `rank`, `title`, `url`, `snippet`, nullable `source` |
 | `workflow status` | `run_id`, workflow identity/hash, parent/trigger linkage, `call_depth`, `status`, `inputs`, nullable `outputs`, completion/wait fields |
 | `sessions show` | `id`, nullable `title`, timestamps, `message_count`, nullable `last_run_id`, nullable `last_user_preview` |

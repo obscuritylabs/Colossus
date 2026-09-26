@@ -516,6 +516,24 @@ pub(super) fn init_config_at(
             .into());
         }
     }
+    persist_new_configuration(target, &encoded)?;
+    if human_output(io::stdout().is_terminal()) {
+        println!("created {}", path.display());
+    } else {
+        print_json(&json!({
+            "created": true,
+            "config_path": path,
+        }))?;
+    }
+    emit_security_posture_warning(&config.security_posture())?;
+    Ok(())
+}
+
+pub(super) fn persist_new_configuration(
+    target: &ConfigInitTarget,
+    encoded: &str,
+) -> Result<(), Box<dyn Error>> {
+    let path = &target.config_path;
     if let Some(root) = &target.confined_config_root {
         let opened = root.open_file(Path::new("config.yaml"))?;
         if !opened.was_created() {
@@ -527,21 +545,15 @@ pub(super) fn init_config_at(
     } else if let Some(workspace) = &target.workspace_config_root {
         create_workspace_config(workspace, encoded.as_bytes())?;
     } else {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let mut destination = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)?;
         destination.write_all(encoded.as_bytes())?;
     }
-    if human_output(io::stdout().is_terminal()) {
-        println!("created {}", path.display());
-    } else {
-        print_json(&json!({
-            "created": true,
-            "config_path": path,
-        }))?;
-    }
-    emit_security_posture_warning(&config.security_posture())?;
     Ok(())
 }
 
@@ -596,7 +608,7 @@ pub(super) fn init_config(
     )
 }
 
-fn config_init_yaml(
+pub(super) fn config_init_yaml(
     target: &ConfigInitTarget,
     from: Option<&Path>,
     access_profile: Option<AccessProfile>,

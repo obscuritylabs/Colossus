@@ -940,9 +940,35 @@ async fn hosted_worker_fixture_with_home(
     home_backed: bool,
     configure: impl FnOnce(&mut RuntimeConfig),
 ) -> HostedWorkerFixture {
+    #[cfg(windows)]
+    let directory = if home_backed {
+        let user_profile = std::env::var_os("USERPROFILE")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .expect("absolute Windows user profile");
+        tempfile::Builder::new()
+            .prefix("colossus-worker-")
+            .tempdir_in(user_profile)
+            .expect("worker fixture directory")
+    } else {
+        tempfile::tempdir().expect("worker fixture directory")
+    };
+    #[cfg(not(windows))]
     let directory = tempfile::tempdir().expect("worker fixture directory");
-    let root = directory
-        .path()
+    #[cfg(windows)]
+    let root = if home_backed {
+        // An explicit home validates its ancestors, so the fixture must not
+        // inherit broad permissions from the Windows temporary directory.
+        let path = directory.path().join("private-runtime");
+        colossus_windows_native::create_private_directory(&path)
+            .expect("private worker fixture root");
+        path
+    } else {
+        directory.path().to_owned()
+    };
+    #[cfg(not(windows))]
+    let root = directory.path().to_owned();
+    let root = root
         .canonicalize()
         .expect("canonical worker fixture directory");
     let mut config = RuntimeConfig::offline_template(root.join("state.redb"));

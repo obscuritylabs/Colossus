@@ -621,6 +621,7 @@ impl Runtime {
                         id: model.model,
                         object: Some("model".into()),
                         owned_by: Some("colossus".into()),
+                        ..ProviderModelInfo::default()
                     })
                     .collect(),
             ));

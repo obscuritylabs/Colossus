@@ -47,6 +47,7 @@ mod plugin_registry_tests;
 mod prelude;
 mod presentation_work_effects;
 mod provider_gateway;
+mod provider_setup;
 mod repository_tools;
 mod research_gateway;
 mod research_skill_effects;
@@ -89,6 +90,9 @@ pub use config::{
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;
+pub use provider_setup::{
+    ProviderSetupConnection, ProviderSetupModel, SETUP_MODEL_PROFILE, SETUP_PROVIDER_PROFILE,
+};
 pub use workflows_research::ResearchRunContext;
 pub use workspace::RuntimeOpenOptions;
 pub use workspace_lease::WorkspaceIdentityToken;
