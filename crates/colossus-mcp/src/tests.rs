@@ -294,6 +294,63 @@ fn remote_server(endpoint: &str) -> McpServerConfig {
     }
 }
 
+#[test]
+fn missing_stdio_executable_does_not_disable_other_servers() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let mut missing = remote_server("http://127.0.0.1:8787/mcp");
+    missing.transport = McpTransportKind::Stdio;
+    missing.command = workspace.path().join("missing-mcp-server");
+    missing.url = None;
+    let executor = McpExecutor::new(
+        &McpConfig {
+            oauth_credential_store: McpOAuthCredentialStoreKind::Auto,
+            servers: BTreeMap::from([
+                ("missing".into(), missing),
+                ("splunk".into(), remote_server("http://127.0.0.1:8787/mcp")),
+            ]),
+        },
+        workspace.path(),
+        "native",
+        Arc::new(McpEffectShapeExecutor {
+            reference: "unused",
+        }),
+    )
+    .expect("one unavailable server does not fail adapter construction");
+    assert_eq!(executor.server_names(), ["missing", "splunk"]);
+    assert!(!executor.servers()[0].available);
+    assert!(executor.servers()[1].available);
+    assert!(
+        executor
+            .request(
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "test".into(),
+                },
+                ExecutionContext::default(),
+                McpOperation::ListTools {
+                    server: "missing".into(),
+                    cursor: None,
+                },
+            )
+            .is_err()
+    );
+    assert!(
+        executor
+            .request(
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "test".into(),
+                },
+                ExecutionContext::default(),
+                McpOperation::ListTools {
+                    server: "splunk".into(),
+                    cursor: None,
+                },
+            )
+            .is_ok()
+    );
+}
+
 fn validation_context(
     resource_authority: ResourceAuthority,
     sandbox_environment: &[String],

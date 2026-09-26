@@ -828,13 +828,16 @@ impl Runtime {
             executables: access_executables
                 .iter()
                 .map(|path| {
-                    if config.sandbox.backend == "oci" {
-                        Ok(path.clone())
-                    } else {
-                        fs::canonicalize(path)
-                    }
+                    resolve_configured_executable(
+                        path,
+                        &config.sandbox.backend,
+                        &active_plugin_extensions.mcp,
+                    )
                 })
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<std::io::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
         });
         let trace_tool_executor: Arc<dyn ToolExecutor> = Arc::new(TraceToolExecutor {
             journal: Arc::clone(&journal),

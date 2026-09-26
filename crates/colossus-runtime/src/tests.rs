@@ -11,22 +11,22 @@ use super::{
     ReasoningEffort, Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions, SearchConfig,
     SearchProfileConfig, SemanticMemoryConfig, StorageAdapter, TraceToolExecutor,
     WorkEffectExecutor, WorkOperation, configure_shell_environment, derive_development_sandbox,
-    goal_objective_from_plan, model_resource_path, model_workspace_path, provider_profile,
-    push_bounded_mcp_discovery_tool, recover_interrupted_subagents, recover_unknown_effects,
-    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
-    shell_command_arguments, terminal_actor,
+    goal_objective_from_plan, model_resource_path, model_workspace_path, plan_mode_instructions,
+    provider_profile, push_bounded_mcp_discovery_tool, recover_interrupted_subagents,
+    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
+    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
     ModelContent, ModelContentPart, ModelImageDetail, ModelImageReference, ModelLimits,
-    ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, PlanRecord, PlanStatus,
-    PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation, ProviderEvent,
-    ProviderResponseDiagnostic, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
-    ResourceAuthority, RiskLevel, RiskRecommendation, RunBranchContextMode, RunEvent,
-    SandboxBoundaryMode, SessionMessageAppend, StartupVerificationMode, SubagentStatus, TaskStatus,
-    TerminalPreferences, ToolCall,
+    ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, PlanDraftTarget,
+    PlanRecord, PlanStatus, PlanStep, PolicyDecision, ProjectionBatch, ProjectionMutation,
+    ProviderEvent, ProviderResponseDiagnostic, ProviderRoute, ProviderTurn,
+    QuarantinedEffectResult, ResourceAuthority, RiskLevel, RiskRecommendation,
+    RunBranchContextMode, RunEvent, SandboxBoundaryMode, SessionMessageAppend,
+    StartupVerificationMode, SubagentStatus, TaskStatus, TerminalPreferences, ToolCall,
 };
 use colossus_home::{ColossusHome, HomeSurface, detect_workspace_identity};
 use colossus_mcp::{
@@ -2184,6 +2184,138 @@ fn mcp_model_input_errors_are_recoverable_but_allowlist_denials_remain_terminal(
         colossus_ports::ToolError::InvalidArguments { .. }
     ));
     assert!(matches!(denied, colossus_ports::ToolError::Denied(_)));
+}
+
+#[test]
+fn configured_mcp_source_is_visible_at_run_start_without_connecting() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    config
+        .sandbox
+        .network_destinations
+        .push("https://mcp.example.com".into());
+    config.mcp.servers.insert(
+        "splunk".into(),
+        McpServerConfig {
+            transport: McpTransportKind::StreamableHttp,
+            command: PathBuf::new(),
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            literal_environment: BTreeMap::new(),
+            url: Some("https://mcp.example.com/mcp".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: false,
+            oauth: None,
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime opens without initializing the remote server");
+
+    let prepared = runtime
+        .prepare_agent_instructions("", "")
+        .expect("instructions");
+    assert!(
+        prepared
+            .text
+            .contains("Configured MCP sources: [\"splunk\"]")
+    );
+    assert!(prepared.text.contains("mcp.search"));
+    assert!(
+        runtime
+            .access
+            .active_tool_names()
+            .contains(&"mcp.search".into())
+    );
+    let plan = runtime
+        .prepare_plan_agent_instructions("", &plan_mode_instructions(&PlanDraftTarget::Create))
+        .expect("plan instructions");
+    assert!(!plan.text.contains("Configured MCP sources:"));
+    assert!(!plan.text.contains("mcp.search"));
+}
+
+#[test]
+fn missing_isolated_mcp_command_does_not_block_runtime_startup() {
+    let workspace = private_tempdir();
+    let missing = workspace.path().join("missing-mcp-server");
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    config.sandbox.executables.push(missing.clone());
+    config.sandbox.filesystem.push(FilesystemGrant {
+        root: workspace.path().display().to_string(),
+        mode: "read".into(),
+    });
+    config.mcp.servers.insert(
+        "splunk".into(),
+        McpServerConfig {
+            transport: McpTransportKind::Stdio,
+            command: missing,
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            literal_environment: BTreeMap::new(),
+            url: None,
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: false,
+            oauth: None,
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("one missing MCP command does not block the isolated runtime");
+    assert!(!runtime.mcp_servers().expect("MCP metadata")[0].available);
+    let prepared = runtime
+        .prepare_agent_instructions("", "")
+        .expect("instructions");
+    assert!(
+        prepared
+            .text
+            .contains("Configured MCP sources: [\"splunk\"]")
+    );
+}
+
+#[test]
+fn missing_unrelated_executable_grant_still_blocks_runtime_startup() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    config
+        .sandbox
+        .executables
+        .push(workspace.path().join("missing-unrelated-tool"));
+    assert!(
+        Runtime::open_with_options(
+            &config,
+            Arc::new(DenyApproval),
+            None,
+            RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -119,6 +119,20 @@ colossus --config .colossus/config.yaml mcp servers
 
 This lists configured names and exact allowlists.
 
+At the start of an agent run, Colossus also gives the model a short list of configured
+MCP source names. It does not connect to the servers to build this list. When the
+model needs one, `mcp.search` discovers allowlisted tools and returns at most ten
+ranked names and short descriptions without their schemas. A search can target one
+server by its exact configured name. `mcp.tools` with both `server` and `tool` then
+returns that tool's live schema; `mcp.call` discovers and validates it again before
+invocation. Search uses local text matching over tool names, titles, descriptions,
+and argument names. It does not require an embedding service.
+
+Broad searches report unavailable server names while still returning matches from
+working servers. A missing stdio executable is shown as `available: false` in
+`mcp servers` and does not stop other servers or the runtime from starting. Remote
+health is checked when a discovery or call is made.
+
 ### 3. Discover live allowed schemas
 
 ```bash

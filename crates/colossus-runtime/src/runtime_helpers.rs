@@ -183,7 +183,7 @@ pub(super) async fn discover_mcp_tools(
     Ok(tools)
 }
 
-async fn visit_mcp_server_tools(
+pub(super) async fn visit_mcp_server_tools(
     gateway: &EffectGateway,
     executor: &McpExecutor,
     effect_executor: &dyn EffectExecutor,
@@ -310,7 +310,7 @@ impl McpToolLookup {
     }
 }
 
-async fn discover_exact_mcp_tool(
+pub(super) async fn discover_exact_mcp_tool(
     gateway: &EffectGateway,
     executor: &McpExecutor,
     effect_executor: &dyn EffectExecutor,

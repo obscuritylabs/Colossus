@@ -28,6 +28,7 @@ mod generic_effects;
 mod goal_runs;
 mod instruction_snapshots;
 mod mcp_diagnostics;
+mod mcp_search;
 mod memory;
 pub use mcp_diagnostics::McpHealthCheck;
 mod memory_gateway;

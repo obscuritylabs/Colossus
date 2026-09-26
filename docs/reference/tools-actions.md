@@ -29,7 +29,7 @@ and output bounds.
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
-| MCP | `mcp.servers`, `mcp.tools`, `mcp.call` | Configured stdio servers and exact tool allowlists |
+| MCP | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | Configured stdio or Streamable HTTP servers and exact tool allowlists |
 | Integrations | Connected operation names | Configured, trusted, and selected only |
 
 Every tool schema denies unknown fields. Tool availability does not imply permission.
@@ -122,7 +122,7 @@ exceptions operators need when writing action overrides:
 | `agent.result` | `subagent.read` |
 | `agent.list` | `subagent.list` |
 | `web.fetch`, `docs.fetch`, `network.http` | `network.http` |
-| `mcp.tools` | `mcp.tools` |
+| `mcp.search`, `mcp.tools` | `mcp.tools` |
 | `mcp.call` | `mcp.call` |
 
 Connected integration operations use their generated tool name as the action name.

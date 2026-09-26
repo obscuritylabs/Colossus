@@ -66,10 +66,24 @@ impl GatewayToolExecutor {
                     .map_err(|error| ToolError::Failed(error.to_string()))?
             }
             "mcp.tools" => {
-                self.discover_mcp_tool_output(
+                let tool = optional_tool_string(&call, "tool")?;
+                let server = optional_tool_string(&call, "server")?;
+                if tool.is_some() && server.is_none() {
+                    return Err(ToolError::InvalidArguments {
+                        tool: call.name.clone(),
+                        message: "server is required when tool is set".into(),
+                    });
+                }
+                self.discover_mcp_tool_output(&call, context, server, tool)
+                    .await?
+            }
+            "mcp.search" => {
+                self.search_mcp_tool_output(
                     &call,
                     context,
+                    required_tool_string(&call, "query")?,
                     optional_tool_string(&call, "server")?,
+                    optional_tool_u64(&call, "max_results")?.unwrap_or(5),
                 )
                 .await?
             }
