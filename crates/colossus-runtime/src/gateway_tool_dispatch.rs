@@ -54,6 +54,7 @@ impl ToolExecutor for GatewayToolExecutor {
             | "plugin.resource.list"
             | "plugin.resource.read"
             | "mcp.servers"
+            | "mcp.search"
             | "mcp.tools"
             | "mcp.call" => Box::pin(self.execute_extensions(call, context)).await,
             "web.search" | "network.http" | "web.fetch" | "docs.fetch" => {

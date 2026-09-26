@@ -23,6 +23,31 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) interactive: bool,
 }
 
+/// An absent configured MCP command is an unavailable source, not a usable
+/// executable grant. Other invalid executable grants still fail startup.
+pub(super) fn resolve_configured_executable(
+    path: &Path,
+    sandbox_backend: &str,
+    mcp: &McpConfig,
+) -> std::io::Result<Option<PathBuf>> {
+    if sandbox_backend == "oci" {
+        return Ok(Some(path.to_owned()));
+    }
+    match fs::canonicalize(path) {
+        Ok(path) => Ok(Some(path)),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && mcp.servers.values().any(|server| {
+                    server.transport == colossus_mcp::McpTransportKind::Stdio
+                        && server.command == path
+                }) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(super) fn compose_access_policy(
     inputs: AccessPolicyInputs<'_>,
 ) -> Result<AccessPolicyComposition, RuntimeError> {
@@ -80,9 +105,22 @@ pub(super) fn compose_access_policy(
     }
     let mut access_executables = config.sandbox.executables.clone();
     access_executables.extend(development_sandbox.executables.iter().cloned());
+    let available_executables = access_executables
+        .iter()
+        .map(|path| {
+            resolve_configured_executable(
+                path,
+                &config.sandbox.backend,
+                &active_plugin_extensions.mcp,
+            )
+        })
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     let mut access_filesystem = config.sandbox.filesystem.clone();
     access_filesystem.extend(development_sandbox.filesystem.iter().cloned());
-    let configured_git_executables = access_executables
+    let configured_git_executables = available_executables
         .iter()
         .filter(|path| {
             path.file_stem()
@@ -100,7 +138,7 @@ pub(super) fn compose_access_policy(
             || access_filesystem.iter().any(|grant| grant.mode == "write"),
         git_executable: configured_git_executables == 1
             || (danger_full_access && ambient_executable("git").is_some()),
-        any_executable: danger_full_access || !access_executables.is_empty(),
+        any_executable: danger_full_access || !available_executables.is_empty(),
         network_destination: danger_full_access || !config.sandbox.network_destinations.is_empty(),
         model_network_tools,
         agent_search_route: searches.resolve("agent").is_ok(),
@@ -170,12 +208,14 @@ pub(super) fn compose_access_policy(
                 policy = policy.with_filesystem_root(root.display().to_string(), &grant.mode);
             }
             for executable in &config.sandbox.executables {
-                let executable = if config.sandbox.backend == "oci" {
-                    executable.clone()
-                } else {
-                    fs::canonicalize(executable)?
-                };
-                policy = policy.with_filesystem_root(executable.display().to_string(), "execute");
+                if let Some(executable) = resolve_configured_executable(
+                    executable,
+                    &config.sandbox.backend,
+                    &active_plugin_extensions.mcp,
+                )? {
+                    policy =
+                        policy.with_filesystem_root(executable.display().to_string(), "execute");
+                }
             }
             for environment in &config.sandbox.environment {
                 policy = policy.with_environment(environment);

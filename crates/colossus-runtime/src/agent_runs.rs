@@ -578,7 +578,12 @@ impl Runtime {
             AgentRunMode::Execute => String::new(),
             AgentRunMode::Plan(target) => plan_mode_instructions(target),
         };
-        let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
+        let prepared = match &mode {
+            AgentRunMode::Execute => self.prepare_agent_instructions(instructions, &runtime_mode),
+            AgentRunMode::Plan(_) => {
+                self.prepare_plan_agent_instructions(instructions, &runtime_mode)
+            }
+        }?;
         let composition = compose_plugins(
             &prepared.plugins.records,
             &prepared.base_text,
@@ -822,7 +827,12 @@ impl Runtime {
             AgentRunMode::Execute => String::new(),
             AgentRunMode::Plan(target) => plan_mode_instructions(target),
         };
-        let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
+        let prepared = match &mode {
+            AgentRunMode::Execute => self.prepare_agent_instructions(instructions, &runtime_mode),
+            AgentRunMode::Plan(_) => {
+                self.prepare_plan_agent_instructions(instructions, &runtime_mode)
+            }
+        }?;
         let composition = compose_plugins(
             &prepared.plugins.records,
             &prepared.base_text,

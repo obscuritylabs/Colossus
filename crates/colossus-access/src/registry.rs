@@ -60,7 +60,9 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
                 ToolPrerequisite::ModelNetworkTools,
             ],
         ),
-        "mcp.servers" | "mcp.tools" | "mcp.call" => ("mcp", vec![ToolPrerequisite::McpConfigured]),
+        "mcp.servers" | "mcp.search" | "mcp.tools" | "mcp.call" => {
+            ("mcp", vec![ToolPrerequisite::McpConfigured])
+        }
         _ => return Err(AccessError::Unclassified(format!("tool {name}"))),
     };
     let source = if family == "mcp" {
