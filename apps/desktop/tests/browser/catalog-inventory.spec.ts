@@ -181,3 +181,72 @@ test("Codex uses a recognizable name while preserving the saved connection label
     }),
   ).toHaveText("Team subscription");
 });
+
+test("provider branding follows the connection in both inventories and the model editor", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Edit primary-provider", exact: true })
+    .click();
+  const editor = page.locator(".provider-editor");
+  await editor
+    .getByRole("textbox", { name: /^Display label/u })
+    .fill("Team gateway");
+  await editor
+    .getByRole("textbox", { name: /^Endpoint URL/u })
+    .fill("https://openrouter.ai/api/v1");
+  await editor
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
+  const row = page.locator(".catalog-inventory-row");
+  await expect(row.locator('[data-provider-brand="openrouter"]')).toBeVisible();
+  await expect(
+    row.getByRole("button", { name: "Details for Team gateway", exact: true }),
+  ).toHaveText("Team gateway");
+
+  for (const theme of ["Light", "Dark"] as const) {
+    await page.getByRole("button", { name: "Desktop", exact: true }).click();
+    await page.getByRole("combobox", { name: /^Color theme/u }).click();
+    await page.getByRole("option", { name: theme, exact: true }).click();
+    for (const tab of ["Providers", "Models"] as const) {
+      await page.getByRole("button", { name: tab, exact: true }).click();
+      const icon = row.locator(
+        `[data-provider-brand="openrouter"] .provider-icon-${theme.toLowerCase()}`,
+      );
+      await expect(icon).toBeVisible();
+      await expect
+        .poll(() =>
+          icon.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+        )
+        .toBeGreaterThan(0);
+      await page.locator(".catalog-settings").screenshot({
+        path: `output/playwright/provider-brand-${tab.toLowerCase()}-${theme.toLowerCase()}.png`,
+      });
+    }
+  }
+  await page.getByRole("button", { name: "Edit primary", exact: true }).click();
+  const savedProvider = page.getByRole("combobox", {
+    name: /^Provider profile/u,
+  });
+  await expect(
+    savedProvider.locator('[data-provider-brand="openrouter"]'),
+  ).toBeVisible();
+  await page
+    .locator(".model-editor")
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Edit Team gateway", exact: true })
+    .click();
+  await editor.getByRole("textbox", { name: /^Display label/u }).fill("OpenAI");
+  await editor
+    .getByRole("textbox", { name: /^Endpoint URL/u })
+    .fill("https://gateway.example.test/v1");
+  await editor
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
+  await expect(row.locator('[data-provider-brand="custom"]')).toBeVisible();
+  await expect(row.locator(".provider-icon img")).toHaveCount(0);
+});

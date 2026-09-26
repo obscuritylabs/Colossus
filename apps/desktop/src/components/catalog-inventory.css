@@ -125,6 +125,13 @@
 .catalog-identity .resource-icon {
   flex-shrink: 0;
 }
+.catalog-provider-icon {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+}
 .catalog-identity small {
   display: block;
   margin-top: 5px;

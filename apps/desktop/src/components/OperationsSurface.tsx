@@ -32,6 +32,7 @@ import { PluginsSurface } from "./PluginsSurface";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
+  initialSettingsTab?: "runtime" | "providers" | undefined;
   pluginSelections?: readonly string[];
   onUsePluginSkill?: (id: string) => void;
   surface: Exclude<WorkspaceSurface, "work" | "terminal">;
@@ -515,6 +516,7 @@ function effectiveManagedConfiguration(desktop: DesktopStatus): string {
 }
 
 function SettingsView({
+  initialSettingsTab,
   onReturnToWork,
   connection,
   desktop,
@@ -537,6 +539,7 @@ function SettingsView({
   onRemoveCaBundle,
 }: Pick<
   OperationsSurfaceProps,
+  | "initialSettingsTab"
   | "onReturnToWork"
   | "connection"
   | "desktop"
@@ -584,6 +587,7 @@ function SettingsView({
     <>
       <div className="overview-scroll settings-scroll" tabIndex={0}>
         <ManagedSettingsPane
+          initialSpaceTab={initialSettingsTab}
           onReturnToWork={onReturnToWork}
           desktop={desktop}
           connecting={connecting}
@@ -1019,6 +1023,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "connections" ? <ConnectionsView {...props} /> : null}
       {props.surface === "settings" ? (
         <SettingsView
+          initialSettingsTab={props.initialSettingsTab}
           onReturnToWork={props.onReturnToWork}
           connection={props.connection}
           desktop={props.desktop}

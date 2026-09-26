@@ -91,6 +91,22 @@ button:not(:disabled) {
   box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
+.app-select-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-select-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.app-select-icon:empty {
+  display: none;
+}
+
 .app-select-value {
   min-width: 0;
   overflow: hidden;
@@ -6143,7 +6159,7 @@ p {
   position: relative;
   max-width: var(--conversation-max-width, 790px);
   margin: 0 auto;
-  padding: 9px 10px 8px;
+  padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
   background: var(--surface-inset);
@@ -6652,16 +6668,51 @@ p {
   font-size: var(--font-size-body-sm);
 }
 
-.composer-target-row,
+.composer-header,
 .composer-action-row,
 .composer-meta {
   display: flex;
   align-items: center;
 }
 
-.composer-target-row {
+.composer-header {
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 9px 9px 0 0;
+  background: var(--surface-muted);
+}
+
+.composer-body {
+  padding: 6px 12px;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 9px 9px;
+  background: var(--surface-muted);
+}
+
+.composer-run-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.composer-model-loading {
+  min-height: 28px;
+  padding: 5px 3px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
 }
 
 .approval-mode-control {
@@ -6690,25 +6741,13 @@ p {
   color: var(--amber);
 }
 
-.composer-target {
-  display: flex;
-  max-width: 65%;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-  color: var(--blue-strong);
-  font-size: var(--font-size-body-sm);
-  font-weight: 640;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .run-controls {
   position: relative;
 }
 
 .run-controls summary {
   display: flex;
+  min-height: 28px;
   align-items: center;
   gap: 5px;
   color: var(--muted);
@@ -6997,12 +7036,12 @@ textarea {
   line-height: 1.45;
 }
 
-.work-composer > textarea {
+.composer-body > textarea {
   display: block;
   width: 100%;
-  min-height: 34px;
+  min-height: 48px;
   max-height: 150px;
-  padding: 6px 1px 4px;
+  padding: 4px 0;
   resize: none;
   border: 0;
   outline: 0;
@@ -7011,12 +7050,15 @@ textarea {
   font-size: 0.78rem;
 }
 
-.work-composer > textarea::placeholder {
+.composer-body > textarea::placeholder {
   color: var(--faint);
 }
 
 .composer-action-row {
+  flex: 0 1 auto;
   gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .composer-context-actions {
@@ -7145,11 +7187,28 @@ textarea {
 }
 
 .composer-meta {
+  flex: 1 1 200px;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 4px;
+  gap: 8px;
   color: var(--muted);
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-caption);
+}
+
+.composer-meta > span:last-child:not(:first-child) {
+  flex: none;
+}
+
+.work-composer > .prompt-limit-error,
+.work-composer > .composer-error {
+  margin: 0;
+  padding: 6px 12px;
+}
+
+@media (max-width: 700px) {
+  .composer-footer > .composer-meta {
+    order: 1;
+    flex-basis: 100%;
+  }
 }
 
 .counter-over-limit,
@@ -10701,14 +10760,6 @@ textarea {
 
   .prompt-actions .button {
     width: 100%;
-  }
-
-  .composer-meta span:first-child {
-    display: none;
-  }
-
-  .composer-meta {
-    justify-content: flex-end;
   }
 
   .product-nav-item {

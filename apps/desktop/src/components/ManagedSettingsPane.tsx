@@ -108,6 +108,7 @@ import type {
 import { AppearanceSettings } from "./AppearanceSettings";
 import { DropdownSelect } from "./DropdownSelect";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
+import { ProviderIcon } from "./ProviderIcon";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
   presetProviderKind,
@@ -153,6 +154,7 @@ type SpaceTab =
   | "effective";
 
 interface ManagedSettingsPaneProps {
+  initialSpaceTab?: "runtime" | "providers" | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
@@ -1563,6 +1565,7 @@ function mcpEntry(
 }
 
 export function ManagedSettingsPane({
+  initialSpaceTab = "runtime",
   onReturnToWork,
   desktop,
   connecting,
@@ -1588,7 +1591,7 @@ export function ManagedSettingsPane({
   const [snapshot, setSnapshot] = useState(initial);
   const [scope, setScope] = useState<SettingsScope>("space");
   const [globalTab, setGlobalTab] = useState<GlobalTab>("mcp");
-  const [spaceTab, setSpaceTab] = useState<SpaceTab>("runtime");
+  const [spaceTab, setSpaceTab] = useState<SpaceTab>(initialSpaceTab);
   const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
   const [expandedAdvancedSections, setExpandedAdvancedSections] = useState<
     ReadonlySet<string>
@@ -3609,7 +3612,14 @@ function GlobalSettingsBody({
                 provider?.label,
                 model.providerProfile,
               ].join(" "),
-              connection: provider?.label ?? model.providerProfile,
+              connection: (
+                <>
+                  <ProviderIcon
+                    provider={provider ? currentValue(provider) : null}
+                  />
+                  <span>{provider?.label ?? model.providerProfile}</span>
+                </>
+              ),
               usage: `${consumers.length} ${consumers.length === 1 ? "workspace" : "workspaces"}`,
               onEdit: () => setModelEditor(modelDraft(entry)),
               onDelete: (trigger) =>
@@ -3708,6 +3718,7 @@ function GlobalSettingsBody({
               label: entry.label,
               name,
               description,
+              icon: <ProviderIcon provider={provider} size={28} />,
               searchText: [
                 name,
                 entry.label,
@@ -6883,6 +6894,15 @@ function ModelEditor({
               disabled={busy}
               value={draft.providerProfile}
               aria-describedby="model-provider-help"
+              renderOptionIcon={(option) => {
+                const entry = providers.find(
+                  (candidate) =>
+                    currentValue(candidate).profile === option.value,
+                );
+                return entry ? (
+                  <ProviderIcon provider={currentValue(entry)} />
+                ) : null;
+              }}
               required
               onChange={(event) =>
                 onChange({

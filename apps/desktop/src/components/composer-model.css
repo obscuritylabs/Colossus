@@ -1,0 +1,64 @@
+.composer-model-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+button.composer-model-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.composer-model-copy {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  column-gap: 6px;
+  font-size: var(--font-size-body-sm);
+}
+
+.composer-model-copy > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-copy strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.composer-model-copy > span,
+.composer-model-settings-icon {
+  color: var(--muted);
+}
+
+.composer-model-settings-icon {
+  flex: none;
+}
+
+.composer-reasoning {
+  flex: none;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  text-transform: capitalize;
+}
+
+@media (max-width: 700px) {
+  .composer-reasoning {
+    display: none;
+  }
+}

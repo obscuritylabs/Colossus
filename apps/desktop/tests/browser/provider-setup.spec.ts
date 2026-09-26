@@ -52,6 +52,21 @@ async function mountSetup(
                 baseUrl: "https://openrouter.ai/api/v1",
                 credentialEnv: "OPENROUTER_API_KEY",
               },
+              ...[
+                ["openai", "OpenAI", "https://api.openai.com/v1"],
+                ["groq", "Groq", "https://api.groq.com/openai/v1"],
+                ["together", "Together AI", "https://api.together.xyz/v1"],
+                ["deepseek", "DeepSeek", "https://api.deepseek.com/v1"],
+                ["mistral", "Mistral", "https://api.mistral.ai/v1"],
+                ["ollama", "Ollama", "http://localhost:11434/v1"],
+                ["lmstudio", "LM Studio", "http://localhost:1234/v1"],
+              ].map(([id, label, baseUrl]) => ({
+                id,
+                label,
+                baseUrl,
+                protocol: id === "openai" ? "responses" : "chat_completions",
+                credentialEnv: null,
+              })),
               {
                 id: "custom-chat",
                 label: "Custom Chat Completions",
@@ -143,6 +158,78 @@ async function choosePreset(page: Page, name: string) {
   await page.getByRole("combobox", { name: "Provider", exact: true }).click();
   await page.getByRole("option", { name, exact: true }).click();
 }
+
+test("provider icons load locally in both themes and preserve keyboard selection", async ({
+  page,
+}) => {
+  const remoteImages: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.resourceType() === "image" &&
+      new URL(request.url()).hostname !== "127.0.0.1"
+    ) {
+      remoteImages.push(request.url());
+    }
+  });
+  await mountSetup(page);
+  const picker = page.getByRole("combobox", { name: "Provider", exact: true });
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(
+      (theme) => document.documentElement.setAttribute("data-theme", theme),
+      theme,
+    );
+    await picker.click();
+    const listbox = page.getByRole("listbox", {
+      name: "Provider",
+      exact: true,
+    });
+    for (const name of [
+      "Codex (ChatGPT subscription)",
+      "OpenAI",
+      "OpenRouter",
+      "Groq",
+      "Together AI",
+      "DeepSeek",
+      "Mistral",
+      "Ollama",
+      "LM Studio",
+    ]) {
+      const option = listbox.getByRole("option", { name, exact: true });
+      const image = option.locator("img:visible");
+      await expect(image).toHaveCount(1);
+      await expect(image).toHaveAttribute("alt", "");
+      await expect
+        .poll(() =>
+          image.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+        )
+        .toBeGreaterThan(0);
+    }
+    const openrouter = listbox.getByRole("option", {
+      name: "OpenRouter",
+      exact: true,
+    });
+    await expect(openrouter.locator(`.provider-icon-${theme}`)).toBeVisible();
+    await expect(
+      listbox
+        .getByRole("option", { name: "Custom Responses", exact: true })
+        .locator('[data-provider-brand="custom"]'),
+    ).toHaveCount(1);
+    await listbox.screenshot({
+      path: `output/playwright/provider-picker-${theme}.png`,
+    });
+    await page.keyboard.press("Escape");
+    await expect(picker).toBeFocused();
+  }
+  await picker.press("Home");
+  await picker.press("c");
+  await picker.press("o");
+  await picker.press("Enter");
+  await expect(picker).toContainText("Codex (ChatGPT subscription)");
+  await expect(picker.locator('[data-provider-brand="openai"]')).toHaveCount(1);
+  await choosePreset(page, "Custom Responses");
+  await expect(picker.locator('[data-provider-brand="custom"]')).toHaveCount(1);
+  expect(remoteImages).toEqual([]);
+});
 
 test("custom Responses setup searches model cards, imports metadata and saves native references", async ({
   page,
