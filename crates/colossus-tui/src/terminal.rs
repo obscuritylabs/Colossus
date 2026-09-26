@@ -419,6 +419,20 @@ impl TerminalGuard {
             let _ = disable_raw_mode();
             return Err(error);
         }
+        // Kitty keyboard flag stacks are screen-local. Enable the mode on the
+        // active screen so Shift+Enter can be distinguished from Enter.
+        #[cfg(unix)]
+        if let Err(error) = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        ) {
+            if mode == ScreenMode::Alternate {
+                let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
+            }
+            let _ = execute!(stdout, Show, DisableBracketedPaste);
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
         Ok(Self {
             mode,
             transient_alternate_screen: false,
@@ -435,6 +449,14 @@ impl TerminalGuard {
             let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
             return Err(error);
         }
+        #[cfg(unix)]
+        if let Err(error) = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        ) {
+            let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
+            return Err(error);
+        }
         self.transient_alternate_screen = true;
         Ok(())
     }
@@ -444,6 +466,8 @@ impl TerminalGuard {
             return Ok(());
         }
         let mut stdout = io::stdout();
+        #[cfg(unix)]
+        execute!(stdout, PopKeyboardEnhancementFlags)?;
         execute!(stdout, DisableMouseCapture, LeaveAlternateScreen)?;
         self.transient_alternate_screen = false;
         Ok(())
@@ -452,9 +476,15 @@ impl TerminalGuard {
     fn restore(&mut self) {
         let mut stdout = io::stdout();
         if self.mode == ScreenMode::Alternate || self.transient_alternate_screen {
+            #[cfg(unix)]
+            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
             let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
         }
         self.transient_alternate_screen = false;
+        #[cfg(unix)]
+        if self.mode == ScreenMode::Inline {
+            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+        }
         let _ = execute!(stdout, Show, DisableBracketedPaste);
         let _ = stdout.flush();
         let _ = disable_raw_mode();

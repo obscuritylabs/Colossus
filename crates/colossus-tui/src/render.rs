@@ -901,9 +901,9 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
             }),
     );
     let action = if state.preferences.multiline {
-        "Ctrl/Alt+Enter sends"
+        "Enter newline · Ctrl+D sends"
     } else {
-        "Enter sends"
+        "Enter sends · Shift+Enter newline"
     };
     let title = if state.plan_review_decision_active() {
         " Message · paused for plan review · draft preserved ".into()

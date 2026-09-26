@@ -259,7 +259,11 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
             PresentationBlock::KeyValue(vec![
                 (
                     "Send".into(),
-                    "Enter; Ctrl/Alt+Enter in multiline mode".into(),
+                    "Enter; Ctrl/Alt+Enter or Ctrl+D in /multiline on".into(),
+                ),
+                (
+                    "Newline".into(),
+                    "Shift+Enter; if your terminal sends plain Enter, use /multiline on".into(),
                 ),
                 (
                     "Scroll".into(),
