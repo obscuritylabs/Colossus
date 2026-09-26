@@ -72,6 +72,10 @@ policy, approval, permits, or audit.
 
 ## `shell.run`
 
+The model-visible tool description includes the host operating system before the
+agent's first command. It is a hint for native execution; a configured OCI container
+may use a different OS, and command syntax still depends on the selected shell.
+
 `shell.run` accepts exactly one invocation form:
 
 ```json

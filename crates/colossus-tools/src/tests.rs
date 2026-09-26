@@ -28,6 +28,30 @@ fn configured_catalog_is_sorted_strict_and_rejects_unknown_tools() {
 }
 
 #[test]
+fn shell_tool_describes_the_host_os_without_expanding_other_tool_definitions() {
+    let shell = StaticToolRegistry::builtins(&["shell.run".into()])
+        .expect("shell catalog")
+        .list_specs()
+        .pop()
+        .expect("shell spec");
+    let host = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    assert!(shell.description.contains(&format!("Host OS: {host}.")));
+    assert!(shell.description.contains("Verify OS in containers."));
+
+    let echo = StaticToolRegistry::builtins(&["echo".into()])
+        .expect("echo catalog")
+        .list_specs()
+        .pop()
+        .expect("echo spec");
+    assert!(!echo.description.contains("Host OS:"));
+}
+
+#[test]
 fn tool_search_is_pure_bounded_and_strict() {
     let registry = StaticToolRegistry::builtins(&["tool.search".into()]).expect("catalog");
     let spec = registry.list_specs().pop().expect("tool search");
