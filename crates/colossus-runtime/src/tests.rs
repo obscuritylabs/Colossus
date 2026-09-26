@@ -2187,6 +2187,62 @@ fn mcp_model_input_errors_are_recoverable_but_allowlist_denials_remain_terminal(
 }
 
 #[test]
+fn configured_mcp_source_is_visible_at_run_start_without_connecting() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template("unused.redb");
+    config.use_ephemeral_storage();
+    config
+        .sandbox
+        .network_destinations
+        .push("https://mcp.example.com".into());
+    config.mcp.servers.insert(
+        "splunk".into(),
+        McpServerConfig {
+            transport: McpTransportKind::StreamableHttp,
+            command: PathBuf::new(),
+            args: Vec::new(),
+            working_directory: None,
+            environment: BTreeMap::new(),
+            literal_environment: BTreeMap::new(),
+            url: Some("https://mcp.example.com/mcp".into()),
+            headers: BTreeMap::new(),
+            credential_headers: BTreeMap::new(),
+            allow_stateless: false,
+            oauth: None,
+            allowed_tools: vec!["*".into()],
+            research_tools: Vec::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            effect_action_prefix: None,
+            provenance: None,
+        },
+    );
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(workspace.path()).expect("workspace options"),
+    )
+    .expect("runtime opens without initializing the remote server");
+
+    let prepared = runtime
+        .prepare_agent_instructions("", "")
+        .expect("instructions");
+    assert!(
+        prepared
+            .text
+            .contains("Configured MCP sources: [\"splunk\"]")
+    );
+    assert!(prepared.text.contains("mcp.search"));
+    assert!(
+        runtime
+            .access
+            .active_tool_names()
+            .contains(&"mcp.search".into())
+    );
+}
+
+#[test]
 fn unadvertised_mcp_tools_include_bounded_related_name_guidance() {
     let error = crate::unadvertised_mcp_tool_error(
         "gitlab",

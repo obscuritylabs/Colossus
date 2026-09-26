@@ -28,6 +28,7 @@ use std::{
 /// Permit-bound configured MCP adapter.
 pub struct McpExecutor {
     servers: BTreeMap<String, ConfiguredServer>,
+    unavailable_servers: BTreeMap<String, McpServerSummary>,
     process: Arc<dyn EffectExecutor>,
     credentials: Arc<dyn CredentialResolver>,
     tls_roots: AdditionalRootCertificates,
@@ -56,12 +57,37 @@ impl McpExecutor {
         process: Arc<dyn EffectExecutor>,
     ) -> Result<Self, McpError> {
         let mut servers = BTreeMap::new();
+        let mut unavailable_servers = BTreeMap::new();
         for (name, server) in &config.servers {
             let command = match server.transport {
                 McpTransportKind::Stdio if sandbox_backend == "oci" => server.command.clone(),
-                McpTransportKind::Stdio => fs::canonicalize(&server.command).map_err(|error| {
-                    McpError::Invalid(format!("server {name} command could not resolve: {error}"))
-                })?,
+                McpTransportKind::Stdio => match fs::canonicalize(&server.command) {
+                    Ok(command) => command,
+                    Err(_) => {
+                        // A missing executable is an availability failure for this
+                        // server, not a reason to disable every other MCP source.
+                        unavailable_servers.insert(
+                            name.clone(),
+                            McpServerSummary {
+                                name: name.clone(),
+                                available: false,
+                                transport: server.transport.as_str().into(),
+                                allow_stateless: server.allow_stateless,
+                                allowed_tools: ToolAllowlist::from_config(
+                                    name,
+                                    &server.allowed_tools,
+                                )?
+                                .summary(),
+                                research_tools: server
+                                    .research_tools
+                                    .iter()
+                                    .map(|tool| tool.tool.clone())
+                                    .collect(),
+                            },
+                        );
+                        continue;
+                    }
+                },
                 McpTransportKind::StreamableHttp => PathBuf::new(),
             };
             let cwd = match server.transport {
@@ -95,6 +121,7 @@ impl McpExecutor {
         }
         Ok(Self {
             servers,
+            unavailable_servers,
             process,
             credentials: Arc::new(EnvironmentCredentialResolver),
             tls_roots: AdditionalRootCertificates::default(),
@@ -394,15 +421,17 @@ impl McpExecutor {
 
     /// Whether at least one server is explicitly configured.
     pub fn is_configured(&self) -> bool {
-        !self.servers.is_empty()
+        !self.servers.is_empty() || !self.unavailable_servers.is_empty()
     }
 
     /// Safe configured discovery metadata.
     pub fn servers(&self) -> Vec<McpServerSummary> {
-        self.servers
+        let mut servers = self
+            .servers
             .values()
             .map(|server| McpServerSummary {
                 name: server.name.clone(),
+                available: true,
                 transport: server.transport.as_str().into(),
                 allow_stateless: server.allow_stateless,
                 allowed_tools: server.allowed_tools.summary(),
@@ -412,16 +441,27 @@ impl McpExecutor {
                     .map(|tool| tool.tool.clone())
                     .collect(),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        servers.extend(self.unavailable_servers.values().cloned());
+        servers.sort_by(|left, right| left.name.cmp(&right.name));
+        servers
     }
 
     /// Deterministic configured server names.
     pub fn server_names(&self) -> Vec<String> {
-        self.servers.keys().cloned().collect()
+        let mut names = self.servers.keys().cloned().collect::<Vec<_>>();
+        names.extend(self.unavailable_servers.keys().cloned());
+        names.sort();
+        names
     }
 
     /// Return whether one configured server permits an exact tool name.
     pub fn allows_tool(&self, server: &str, tool: &str) -> Result<bool, McpError> {
+        if self.unavailable_servers.contains_key(server) {
+            return Err(McpError::Invalid(format!(
+                "server {server} executable is unavailable"
+            )));
+        }
         let server = self
             .servers
             .get(server)
@@ -457,6 +497,12 @@ impl McpExecutor {
         context: ExecutionContext,
         operation: McpOperation,
     ) -> Result<EffectRequest, McpError> {
+        if self.unavailable_servers.contains_key(operation.server()) {
+            return Err(McpError::Invalid(format!(
+                "server {} executable is unavailable",
+                operation.server()
+            )));
+        }
         let server = self
             .servers
             .get(operation.server())

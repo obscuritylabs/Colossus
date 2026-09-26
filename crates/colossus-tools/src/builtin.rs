@@ -762,10 +762,28 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 256 * 1024,
         },
         ToolSpec {
-            name: "mcp.tools".into(),
-            description: "Discover allowlisted tools from one configured MCP server, or every configured server.".into(),
+            name: "mcp.search".into(),
+            description: "Search allowlisted tools advertised by configured MCP servers using a task or keywords. Use server to target a named source; then call mcp.tools with server and tool for its exact schema before mcp.call. Returns only a small ranked catalog, without loading every schema into context.".into(),
             input_schema: object_schema(
-                json!({"server": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                json!({
+                    "query": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "server": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}
+                }),
+                &["query"],
+            ),
+            effect_action: Some("mcp.tools".into()),
+            capability: Some("mcp.invoke".into()),
+            max_output_bytes: 32 * 1024,
+        },
+        ToolSpec {
+            name: "mcp.tools".into(),
+            description: "Inspect the exact schema for one MCP tool using server and tool, or list allowlisted tools from one configured server. Prefer mcp.search first for broad discovery.".into(),
+            input_schema: object_schema(
+                json!({
+                    "server": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "tool": {"type": "string", "minLength": 1, "maxLength": 128}
+                }),
                 &[],
             ),
             effect_action: Some("mcp.tools".into()),
