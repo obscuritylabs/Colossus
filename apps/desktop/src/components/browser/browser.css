@@ -7,22 +7,33 @@
   background: var(--surface);
   color: var(--text);
 }
-.browser-heading {
+.browser-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  min-height: 44px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  flex-shrink: 0;
 }
-.browser-session-label {
-  margin-right: auto;
+.browser-tab-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
-.browser-heading .icon-button,
-.browser-address-bar .icon-button,
-.browser-tabs > .icon-button {
+.browser-pane-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  margin-left: auto;
+}
+.browser-toolbar > .icon-button,
+.browser-pane-actions .icon-button,
+.browser-address-bar .icon-button {
   width: 28px;
   height: 28px;
   flex: 0 0 28px;
@@ -31,17 +42,19 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 38px;
-  padding: 4px 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
 }
 .browser-tab {
   display: flex;
   align-items: center;
-  flex: 0 1 180px;
-  min-width: 100px;
-  border-radius: 5px;
+  flex: 0 0 160px;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 7px;
   border: 1px solid transparent;
 }
 .browser-tab.is-active {
@@ -75,7 +88,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 7px 8px;
+  padding: 6px 8px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
 .browser-address-bar input {
@@ -85,7 +99,7 @@
   height: 31px;
   font-size: 12px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 8px;
   background: var(--surface-control);
   color: inherit;
 }

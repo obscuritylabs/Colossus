@@ -97,6 +97,7 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "memory.update",
     "mcp.call",
     "mcp.servers",
+    "mcp.search",
     "mcp.tools",
     "network.http",
     "patch.apply",
@@ -275,7 +276,9 @@ async fn ensure_managed_capacity(
     Ok(())
 }
 
-async fn managed_target_has_active_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
+pub(crate) async fn managed_target_has_active_work(
+    client: &Colossus,
+) -> Result<bool, CommandErrorDto> {
     let mut page_token = String::new();
     let mut seen_tokens = BTreeSet::new();
     for _ in 0..MAX_ACTIVE_RUN_PAGES {
@@ -1346,6 +1349,7 @@ mod tests {
             "shell.run",
             "plugin.skill.read",
             "mcp.call",
+            "mcp.search",
             "web.search",
             "network.http",
             "plan.approve_request",

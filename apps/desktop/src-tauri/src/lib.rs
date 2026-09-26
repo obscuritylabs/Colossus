@@ -59,6 +59,7 @@ use diagnostics::{desktop_release_metadata, export_diagnostics};
 use managed_configuration_commands::catalog_deletion::{
     delete_global_model, delete_global_provider,
 };
+use managed_configuration_commands::updates::sync_managed_configuration;
 use managed_configuration_commands::{
     apply_space_configuration, create_managed_credential, delete_global_mcp_server,
     delete_managed_credential, get_managed_configuration, reenter_managed_credential,
@@ -178,6 +179,7 @@ pub fn run() {
             upsert_global_telemetry_profile,
             save_space_configuration,
             apply_space_configuration,
+            sync_managed_configuration,
             create_managed_credential,
             rotate_managed_credential,
             reenter_managed_credential,

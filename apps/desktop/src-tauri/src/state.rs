@@ -242,6 +242,15 @@ impl ExternalHealth {
 
 /// Native-only authenticated clients and local process state shared by narrow commands.
 pub(crate) struct AppState {
+    pub(crate) configuration_updates: Mutex<
+        HashMap<
+            String,
+            (
+                u64,
+                crate::managed_configuration_commands::updates::PendingUpdate,
+            ),
+        >,
+    >,
     pub(crate) browser: crate::browser::BrowserManager,
     pub(crate) credential_vault:
         StdMutex<Option<Arc<crate::desktop_credentials::DesktopCredentials>>>,
@@ -407,6 +416,7 @@ impl Default for AppState {
         let (selection_updates, _) = watch::channel(0);
         Self {
             browser: crate::browser::BrowserManager::default(),
+            configuration_updates: Mutex::new(HashMap::new()),
             targets: RwLock::new(HashMap::new()),
             credential_vault: StdMutex::new(None),
             mcp_health_history: StdMutex::new(std::collections::VecDeque::new()),

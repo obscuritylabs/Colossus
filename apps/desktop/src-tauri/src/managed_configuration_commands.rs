@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 pub(crate) mod catalog_deletion;
 mod mcp_deletion;
+pub(crate) mod updates;
 
 use crate::{
     desktop_commands::{connect_guard, settings_store},
@@ -632,13 +633,7 @@ async fn snapshot(
             .then_some(settings.global_configuration.revision);
         let health = state.managed_health_for(&space.id).await;
         let (status, status_message) = if pending.is_some() {
-            (
-                "update_available".to_owned(),
-                format!(
-                    "Global revision {} is ready to review and apply.",
-                    settings.global_configuration.revision
-                ),
-            )
+            updates::pending_status(state, &space.id, settings.global_configuration.revision).await
         } else {
             (health_state_name(health.state).to_owned(), health.message)
         };
@@ -981,7 +976,7 @@ fn apply_space_edit(
     if let Some((key, reference)) = telemetry_reference {
         space.configuration.catalog_revisions.insert(key, reference);
     }
-    project_space_compatibility(settings, &request.space_id)
+    advance_space_revision(settings, &request.space_id)
 }
 
 fn selected_catalog_references<T>(
@@ -1104,6 +1099,7 @@ fn project_space_compatibility(
     space.terminal_enabled = resolved.terminal_enabled;
     space.providers = resolved.providers;
     space.models = resolved.models;
+    space.model_roles = resolved.model_roles;
     if settings.selected_space_id.as_deref() == Some(space_id) {
         settings.project_selected_space();
     }
@@ -1155,29 +1151,14 @@ pub(crate) async fn confirm_authority_elevation(
     before: &ResolvedSpaceConfiguration,
     after: &ResolvedSpaceConfiguration,
 ) -> Result<(), CommandErrorDto> {
-    let access_elevated = access_rank(after.access_profile) > access_rank(before.access_profile);
-    let boundary_elevated =
-        boundary_rank(after.execution_boundary) > boundary_rank(before.execution_boundary);
-    let sensitive_telemetry_enabled = after.telemetry.as_ref().is_some_and(|telemetry| {
-        telemetry.journal_payloads == crate::managed_configuration::JournalPayloadSetting::Full
-            && before.telemetry.as_ref().is_none_or(|current| {
-                current.journal_payloads
-                    != crate::managed_configuration::JournalPayloadSetting::Full
-            })
-    });
-    let managed_authority_elevated = risky_field_authority_changed(before, after);
-    if !access_elevated
-        && !boundary_elevated
-        && !sensitive_telemetry_enabled
-        && !managed_authority_elevated
-    {
+    if !requires_authority_confirmation(before, after) {
         return Ok(());
     }
     let app = app.clone();
     let approved = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .message(
-                "This change increases runtime authority or enables sensitive telemetry disclosure. Review the Access, Sandbox, and Telemetry values before allowing the runtime to restart.",
+                "This update changes runtime permissions or sensitive telemetry settings. Check the workspace settings before allowing the runtime to restart.",
             )
             .title("Approve Workspace authority change")
             .kind(MessageDialogKind::Warning)
@@ -1206,13 +1187,49 @@ pub(crate) async fn confirm_authority_elevation(
     }
 }
 
+fn requires_authority_confirmation(
+    before: &ResolvedSpaceConfiguration,
+    after: &ResolvedSpaceConfiguration,
+) -> bool {
+    let access_elevated = access_rank(after.access_profile) > access_rank(before.access_profile);
+    let boundary_elevated =
+        boundary_rank(after.execution_boundary) > boundary_rank(before.execution_boundary);
+    let sensitive_telemetry_enabled = after.telemetry.as_ref().is_some_and(|telemetry| {
+        telemetry.journal_payloads == crate::managed_configuration::JournalPayloadSetting::Full
+            && before.telemetry.as_ref().is_none_or(|current| {
+                current.journal_payloads
+                    != crate::managed_configuration::JournalPayloadSetting::Full
+            })
+    });
+    let managed_authority_elevated = risky_field_authority_changed(before, after);
+    let mcp_permissions_changed = after.mcp_servers.iter().any(|server| {
+        before
+            .mcp_servers
+            .iter()
+            .find(|previous| previous.name == server.name)
+            .is_none_or(|previous| {
+                previous.allowed_tools.iter().collect::<BTreeSet<_>>()
+                    != server.allowed_tools.iter().collect::<BTreeSet<_>>()
+            })
+    });
+    access_elevated
+        || boundary_elevated
+        || sensitive_telemetry_enabled
+        || managed_authority_elevated
+        || mcp_permissions_changed
+        || (after.terminal_enabled && !before.terminal_enabled)
+}
+
 fn risky_field_authority_changed(
     before: &ResolvedSpaceConfiguration,
     after: &ResolvedSpaceConfiguration,
 ) -> bool {
-    const RISKY_FIELDS: [&str; 21] = [
+    const RISKY_FIELDS: [&str; 24] = [
         "access.tools.include",
+        "access.tools.exclude",
         "access.actions.allow",
+        "access.actions.requireApproval",
+        "access.actions.deny",
         "audit.exporter",
         "policy",
         "memory.semantic",
@@ -1238,25 +1255,16 @@ fn risky_field_authority_changed(
         .iter()
         .map(|field| (field.field_id.as_str(), &field.value))
         .collect::<BTreeMap<_, _>>();
-    after.field_overrides.iter().any(|field| {
-        RISKY_FIELDS.contains(&field.field_id.as_str())
-            && before.get(field.field_id.as_str()).copied() != Some(&field.value)
-            && authority_bearing_value(&field.value)
-    })
-}
-
-fn authority_bearing_value(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::String(value) => !value.trim().is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(value) => value
-            .get("kind")
-            .and_then(Value::as_str)
-            .is_none_or(|kind| !matches!(kind, "disabled" | "built_in")),
-        Value::Number(_) => true,
-    }
+    let after = after
+        .field_overrides
+        .iter()
+        .map(|field| (field.field_id.as_str(), &field.value))
+        .collect::<BTreeMap<_, _>>();
+    // Removing a restriction can increase authority too. Treat changes to these
+    // fields conservatively rather than inferring safety from empty/false values.
+    RISKY_FIELDS
+        .iter()
+        .any(|field| before.get(field) != after.get(field))
 }
 
 pub(crate) fn bump_global_revision(
@@ -2296,7 +2304,7 @@ mod tests {
     };
     use std::path::PathBuf;
 
-    fn settings() -> DesktopSettings {
+    pub(super) fn settings() -> DesktopSettings {
         let mut settings = DesktopSettings::default();
         settings.spaces.push(WorkspaceProfile {
             id: "space-one".into(),

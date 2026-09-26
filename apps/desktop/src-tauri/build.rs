@@ -67,6 +67,7 @@ const COMMANDS: &[&str] = &[
     "upsert_global_telemetry_profile",
     "save_space_configuration",
     "apply_space_configuration",
+    "sync_managed_configuration",
     "create_managed_credential",
     "rotate_managed_credential",
     "reenter_managed_credential",

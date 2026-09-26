@@ -116,6 +116,9 @@ test("composer retains visible, accessible controls at narrow widths in both the
 test("new messages use a compact header, writing area, and footer", async ({
   page,
 }) => {
+  await page
+    .getByRole("button", { name: "Close thread details", exact: true })
+    .click();
   await page.setViewportSize({ width: 880, height: 950 });
   await page.getByRole("button", { name: "Open work navigation" }).click();
   await page.getByRole("button", { name: "New thread in Colossus" }).click();

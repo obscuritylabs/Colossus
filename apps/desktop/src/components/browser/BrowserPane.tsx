@@ -29,11 +29,19 @@ export function BrowserPane({
   const active = snapshot.tabs.find((tab) => tab.id === snapshot.selectedTabId);
   const [address, setAddress] = useState(active?.url ?? "");
   const addressRef = useRef<HTMLInputElement>(null);
+  const selectedTabRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setAddress(active?.url ?? "");
   }, [active?.id, active?.url]);
+
+  useEffect(() => {
+    selectedTabRef.current?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [active?.id]);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -122,63 +130,47 @@ export function BrowserPane({
 
   return (
     <section className="browser-pane" aria-label="Browser">
-      <header className="browser-heading">
-        <IconGlobe size={17} aria-hidden="true" />
-        <strong>Browser</strong>
-        <span className="browser-session-label">Temporary session</span>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label={expanded ? "Restore browser pane" : "Expand browser pane"}
-          onClick={onExpand}
-        >
-          {expanded ? (
-            <IconArrowsMinimize size={16} />
-          ) : (
-            <IconArrowsMaximize size={16} />
-          )}
-        </button>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Close browser pane"
-          onClick={onClose}
-        >
-          <IconX size={17} />
-        </button>
-      </header>
-      <div className="browser-tabs" aria-label="Browser tabs">
-        {snapshot.tabs.map((tab) => (
-          <div
-            className={`browser-tab${tab.id === active?.id ? " is-active" : ""}`}
-            key={tab.id}
-          >
-            <button
-              type="button"
-              aria-pressed={tab.id === active?.id}
-              onClick={() => void command({ type: "select", tabId: tab.id })}
-              title={tab.url || "New tab"}
+      <header className="browser-toolbar">
+        <div className="browser-tabs" role="group" aria-label="Browser tabs">
+          {snapshot.tabs.length === 0 ? (
+            <span className="browser-tab-placeholder">
+              <IconGlobe size={15} aria-hidden="true" />
+              Browser
+            </span>
+          ) : null}
+          {snapshot.tabs.map((tab) => (
+            <div
+              className={`browser-tab${tab.id === active?.id ? " is-active" : ""}`}
+              key={tab.id}
+              ref={tab.id === active?.id ? selectedTabRef : null}
             >
-              {tab.loading ? (
-                <IconLoader2
-                  className="browser-spinner"
-                  size={14}
-                  aria-hidden="true"
-                />
-              ) : (
-                <IconGlobe size={14} aria-hidden="true" />
-              )}
-              <span>{tab.title || "New tab"}</span>
-            </button>
-            <button
-              type="button"
-              aria-label={`Close tab: ${tab.title || "New tab"}`}
-              onClick={() => void command({ type: "close", tabId: tab.id })}
-            >
-              <IconX size={13} />
-            </button>
-          </div>
-        ))}
+              <button
+                type="button"
+                aria-pressed={tab.id === active?.id}
+                onClick={() => void command({ type: "select", tabId: tab.id })}
+                title={tab.url || "New tab"}
+              >
+                {tab.loading ? (
+                  <IconLoader2
+                    className="browser-spinner"
+                    size={14}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <IconGlobe size={14} aria-hidden="true" />
+                )}
+                <span>{tab.title || "New tab"}</span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Close tab: ${tab.title || "New tab"}`}
+                onClick={() => void command({ type: "close", tabId: tab.id })}
+              >
+                <IconX size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
         <button
           className="icon-button"
           type="button"
@@ -188,7 +180,31 @@ export function BrowserPane({
         >
           <IconPlus size={17} />
         </button>
-      </div>
+        <div className="browser-pane-actions">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={
+              expanded ? "Restore browser pane" : "Expand browser pane"
+            }
+            onClick={onExpand}
+          >
+            {expanded ? (
+              <IconArrowsMinimize size={16} />
+            ) : (
+              <IconArrowsMaximize size={16} />
+            )}
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close browser pane"
+            onClick={onClose}
+          >
+            <IconX size={17} />
+          </button>
+        </div>
+      </header>
       <form
         className="browser-address-bar"
         onSubmit={(event) => {
@@ -342,7 +358,7 @@ export function BrowserPane({
               Loading page…
             </>
           ) : (
-            "Browsing stays separate from your conversation"
+            "Temporary session · Separate from your conversation"
           )}
         </span>
         <button

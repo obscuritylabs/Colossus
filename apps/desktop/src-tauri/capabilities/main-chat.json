@@ -47,6 +47,7 @@
     "allow-upsert-global-telemetry-profile",
     "allow-save-space-configuration",
     "allow-apply-space-configuration",
+    "allow-sync-managed-configuration",
     "allow-diagnose-managed-mcp-server",
     "allow-managed-mcp-oauth-status",
     "allow-begin-managed-mcp-oauth",

@@ -41,7 +41,7 @@ for (const width of [1586, 700]) {
     await expect(
       page.getByRole("checkbox", { name: "Agent Plugins", exact: true }),
     ).toBeChecked();
-    await expect(globalSave).toBeDisabled();
+    await expect(globalSave).toHaveCount(0);
     await page
       .getByRole("textbox", { name: "Included plugins", exact: true })
       .fill("colossus");
@@ -127,7 +127,7 @@ for (const width of [1586, 700]) {
       "https://registry.example",
     );
     await globalSave.click();
-    await expect(globalSave).toBeDisabled();
+    await expect(globalSave).toHaveCount(0);
     await page
       .getByRole("textbox", { name: "Included plugins", exact: true })
       .fill("temporary");
@@ -144,7 +144,7 @@ for (const width of [1586, 700]) {
       page.getByRole("textbox", { name: "Included plugins", exact: true }),
     ).toHaveValue("");
     await expect(
-      page.getByRole("button", { name: /Review and apply r/ }),
+      page.getByRole("button", { name: "Apply global updates" }),
     ).toBeVisible();
     const excluded = page.getByRole("textbox", {
       name: "Excluded plugins",
@@ -152,7 +152,7 @@ for (const width of [1586, 700]) {
     });
     await excluded.fill("example");
     await workspaceSave.click();
-    await expect(workspaceSave).toBeDisabled();
+    await expect(workspaceSave).toHaveCount(0);
 
     const workspace = sidebar.getByRole("combobox", {
       name: "Workspace",

@@ -3,6 +3,15 @@ use super::*;
 /// Maximum serialized output released by the built-in `mcp.tools` operation.
 pub const MCP_TOOLS_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+fn host_os_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
 /// Return every supported built-in tool specification.
 pub fn builtin_specs() -> Vec<ToolSpec> {
     vec![
@@ -321,9 +330,10 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "shell.run".into(),
-            description:
-                "Run a non-interactive process inside the selected workspace; provide exactly one of command or argv. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access."
-                    .into(),
+            description: format!(
+                "Run a non-interactive process inside the selected workspace; provide exactly one of command or argv. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access. Host OS: {}. Verify OS in containers.",
+                host_os_name()
+            ),
             input_schema: object_schema_with(
                 json!({
                     "justification": {
@@ -752,10 +762,28 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 256 * 1024,
         },
         ToolSpec {
-            name: "mcp.tools".into(),
-            description: "Discover allowlisted tools from one configured MCP server, or every configured server.".into(),
+            name: "mcp.search".into(),
+            description: "Search allowlisted tools advertised by configured MCP servers using a task or keywords. Use server to target a named source; then call mcp.tools with server and tool for its exact schema before mcp.call. Returns only a small ranked catalog, without loading every schema into context.".into(),
             input_schema: object_schema(
-                json!({"server": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                json!({
+                    "query": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "server": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}
+                }),
+                &["query"],
+            ),
+            effect_action: Some("mcp.tools".into()),
+            capability: Some("mcp.invoke".into()),
+            max_output_bytes: 32 * 1024,
+        },
+        ToolSpec {
+            name: "mcp.tools".into(),
+            description: "Inspect the exact schema for one MCP tool using server and tool, or list allowlisted tools from one configured server. Prefer mcp.search first for broad discovery.".into(),
+            input_schema: object_schema(
+                json!({
+                    "server": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "tool": {"type": "string", "minLength": 1, "maxLength": 128}
+                }),
                 &[],
             ),
             effect_action: Some("mcp.tools".into()),

@@ -48,9 +48,16 @@ This Developer Preview is ad-hoc signed and is not notarized by Apple. Control-c
 still blocks it, use **System Settings → Privacy & Security → Open Anyway**. Do not
 disable Gatekeeper globally, and do not treat this preview as a stable production build.
 
-### 2. Open a workspace
+### 2. Set up the desktop and workspace
 
-Launch Colossus Desktop and choose a folder through the native picker. The app records
+First launch guides you through **Desktop → Workspace → Provider → Model → Start**.
+Choose a theme and text size on the Desktop step. If your organization uses a custom
+certificate authority, expand **Advanced: CA certificates** to import its CA bundle.
+Appearance preferences and imported certificates apply immediately; you can change them
+later in Settings. Use **Back** or a completed step to revisit your choices without
+losing the setup draft.
+
+On the Workspace step, choose a folder through the native picker. The app records
 an opaque workspace binding in `$COLOSSUS_HOME/desktop/settings.json`. It does not write
 Colossus configuration, state, or credentials into the selected repository. Managed
 Local keeps its generated configuration, canonical database, indexes, and private
@@ -87,12 +94,14 @@ fetch tools visible. Search, MCP, and integration adapters remain independently
 controlled by their own configuration. For a deployment with no remote transport, use
 the [offline and air-gapped operation guide](../admin/offline-airgap.md).
 
-### 3. Configure a model
+### 3. Connect a provider and choose a model
 
-Select the fixed OpenAI Responses, OpenRouter (OpenAI-compatible), or **ChatGPT
-subscription (Codex)** preset and enter the model. OpenAI and OpenRouter continue
-through a native masked-input dialog for the preset's fixed origin; the
-WebView cannot submit a key or endpoint. The native layer encrypts that key in
+Choose a provider preset, such as OpenAI, OpenRouter, or **Codex (ChatGPT subscription)**.
+For another service, choose a custom Chat Completions or Responses connection and enter
+its API base URL. Continue to the Model step and choose **Load models** to browse the
+provider's catalog, or enter a model ID manually. API-key connections use a separate
+native dialog to confirm the provider address and enter the key; the
+WebView never receives the secret. The native layer encrypts that key in
 Desktop's credential vault, and Managed Local resolves only its opaque `host:` reference
 after policy permits the provider action.
 
@@ -108,6 +117,7 @@ first setup and every API-key provider-preset change always force the native key
 prompt. Advanced model configuration also exposes the provider-neutral reasoning-effort
 setting used by Codex and other adapters that support it.
 
+On the Start step, review your workspace, model, and tool access before launching.
 The key is not written to YAML, argv, environment variables, renderer state, logs, or
 terminal sessions. Real model runs remain unavailable until this setup succeeds. Use
 the explicit offline self-test when you only need to validate local startup.
@@ -136,10 +146,17 @@ place when you change scope. **Back to work** returns to your conversation.
 
 Global resources are
 immutable revisioned definitions for providers, models, credentials, MCP servers,
-search, and telemetry. A Workspace pins the exact revisions it uses. Saving a Global edit
-does not change a running Workspace; the Workspace shows an update and must review and apply it.
-Workspace edits apply only to that Workspace after configuration preflight and any required
-native authority confirmation.
+search, and telemetry. A Workspace pins the exact revisions it uses. Saved global updates
+apply automatically when the workspace is idle. Active runs keep their current configuration
+until they finish. Open terminal sessions also defer automatic restarts until closed;
+archived workspaces keep their pinned revisions until restored.
+Permission and sensitive telemetry changes require native confirmation. The settings footer
+shows when an update is waiting, needs confirmation, or failed. Use **Apply global updates**
+or **Retry global update** there when needed.
+Workspace edits use **Apply Workspace changes** in the same footer, which also includes any
+pending global update. **Discard** removes unsaved workspace edits, not saved global changes.
+Updates pass configuration preflight and any required native authority confirmation before
+the workspace restarts. Clean settings show a saved status without disabled action buttons.
 
 To remove an unused model or provider, open **Settings → Global → Models** or
 **Providers**, open the entry's **More actions** menu, choose **Delete**, and confirm. If it is still in

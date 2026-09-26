@@ -296,6 +296,7 @@ impl GatewayToolExecutor {
         call: &ToolCall,
         context: ExecutionContext,
         server: Option<&str>,
+        tool: Option<&str>,
     ) -> Result<String, ToolError> {
         let catalog = active_plugin_catalog();
         let executor = self
@@ -324,16 +325,33 @@ impl GatewayToolExecutor {
         let effect = bound
             .as_ref()
             .map_or(effect, |bound| bound as &dyn EffectExecutor);
-        let tools = discover_mcp_tools(
-            self.gateway.as_ref(),
-            executor,
-            effect,
-            model_actor(call, &context),
-            context,
-            server,
-        )
-        .await
-        .map_err(mcp_runtime_tool_error)?;
+        let actor = model_actor(call, &context);
+        let tools = if let (Some(server), Some(tool)) = (server, tool) {
+            vec![
+                discover_exact_mcp_tool(
+                    self.gateway.as_ref(),
+                    executor,
+                    effect,
+                    &actor,
+                    &context,
+                    server,
+                    tool,
+                )
+                .await
+                .map_err(mcp_runtime_tool_error)?,
+            ]
+        } else {
+            discover_mcp_tools(
+                self.gateway.as_ref(),
+                executor,
+                effect,
+                actor,
+                context,
+                server,
+            )
+            .await
+            .map_err(mcp_runtime_tool_error)?
+        };
         let output =
             serde_json::to_string(&tools).map_err(|error| ToolError::Failed(error.to_string()))?;
         if output.len() > MCP_TOOLS_MAX_OUTPUT_BYTES {

@@ -116,3 +116,41 @@ test("browser pane expands, resizes, and has accessible controls", async ({
     .analyze();
   expect(report.violations).toEqual([]);
 });
+
+test("browser uses two compact rows and keeps pane actions visible with many tabs", async ({
+  page,
+}) => {
+  const pane = page.getByRole("region", { name: "Browser", exact: true });
+  const addTab = page.getByRole("button", {
+    name: "New browser tab",
+    exact: true,
+  });
+  for (let index = 0; index < 8; index += 1) {
+    await addTab.click();
+    await expect(
+      page.getByRole("button", { name: "Close tab: New tab", exact: true }),
+    ).toHaveCount(index + 1);
+    await expect(page.locator(".browser-tab.is-active")).toBeInViewport();
+  }
+  for (const width of [1440, 880]) {
+    await page.setViewportSize({ width, height: 640 });
+    await expect(addTab).toBeInViewport();
+    await expect(
+      page.getByRole("button", { name: "Close browser pane", exact: true }),
+    ).toBeInViewport();
+    await expect(
+      page.getByRole("textbox", { name: "Web address" }),
+    ).toBeInViewport();
+    const viewport = await page
+      .getByLabel("Web page", { exact: true })
+      .boundingBox();
+    const bounds = await pane.boundingBox();
+    expect(viewport!.y - bounds!.y).toBeLessThanOrEqual(100);
+  }
+  await page
+    .getByRole("button", { name: "Clear session", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Browse beside your work" }),
+  ).toBeVisible();
+});

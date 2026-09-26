@@ -1604,6 +1604,7 @@ dependencies = [
  "colossus-worker-protocol",
  "colossus-workflow",
  "fs4",
+ "futures",
  "getrandom 0.4.3",
  "hex",
  "ignore",

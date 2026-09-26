@@ -7,6 +7,7 @@ import {
   applyManagedModelConfiguration,
 } from "../api";
 import type { DesktopStatus } from "../types";
+import { AppearanceProvider } from "../theme/AppearanceProvider";
 
 const desktop: DesktopStatus = {
   releaseChannel: "development",
@@ -51,14 +52,18 @@ const desktop: DesktopStatus = {
   },
 };
 
-function ProviderSetupStudio({
+export default function ProviderSetupStudio({
   configured,
   workspaceSelected,
   hasCredential,
+  showControls = true,
+  guided = true,
 }: {
   configured: boolean;
   workspaceSelected: boolean;
   hasCredential: boolean;
+  showControls?: boolean;
+  guided?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(true);
@@ -69,6 +74,8 @@ function ProviderSetupStudio({
   );
   const [multipleProviders, setMultipleProviders] = useState(false);
   const [failure, setFailure] = useState("");
+  const [certificatesImported, setCertificatesImported] = useState(false);
+  const [cancelFolder, setCancelFolder] = useState(false);
   const currentDesktop: DesktopStatus = structuredClone(
     (configured || multipleProviders) && workspaceNumber <= 1
       ? {
@@ -155,26 +162,46 @@ function ProviderSetupStudio({
   }
   return (
     <>
-      <div>
-        <button onClick={() => setBusy((value) => !value)}>
-          Toggle unrelated busy state
-        </button>
-        <button onClick={() => setVisible((value) => !value)}>
-          {visible ? "Close setup fixture" : "Open setup fixture"}
-        </button>
-        <button onClick={() => setWorkspaceNumber((value) => value + 1)}>
-          Switch workspace fixture
-        </button>
-        <button onClick={() => setMultipleProviders(true)}>
-          Load saved multiple providers fixture
-        </button>
-        {saved ? <p role="status">Configuration saved</p> : null}
-      </div>
-      {visible ? (
+      {showControls ? (
+        <div>
+          <button onClick={() => setBusy((value) => !value)}>
+            Toggle unrelated busy state
+          </button>
+          <button onClick={() => setVisible((value) => !value)}>
+            {visible ? "Close setup fixture" : "Open setup fixture"}
+          </button>
+          <button onClick={() => setWorkspaceNumber((value) => value + 1)}>
+            Switch workspace fixture
+          </button>
+          <button onClick={() => setMultipleProviders(true)}>
+            Load saved multiple providers fixture
+          </button>
+          <button onClick={() => setCancelFolder(true)}>
+            Cancel next folder selection
+          </button>
+        </div>
+      ) : null}
+      {saved ? (
+        <main className="setup-preview-complete">
+          <h1>Setup complete</h1>
+          <p role="status">Configuration saved</p>
+          <p>
+            This browser preview uses sample data. No workspace or provider was
+            changed.
+          </p>
+        </main>
+      ) : visible ? (
         <div className="app-shell" style={{ minHeight: "100%" }}>
           <OnboardingSurface
             desktop={{
               ...currentDesktop,
+              additionalCaBundle: certificatesImported
+                ? {
+                    configured: true,
+                    certificateCount: 1,
+                    fingerprintsSha256: [],
+                  }
+                : currentDesktop.additionalCaBundle,
               codexAuth: {
                 state: signedIn ? "signed_in" : "signed_out",
                 message: signedIn
@@ -185,7 +212,14 @@ function ProviderSetupStudio({
             busy={busy}
             error={failure}
             onChooseWorkspace={async () => {
+              if (cancelFolder) {
+                setCancelFolder(false);
+                return;
+              }
               setWorkspaceNumber((value) => value + 1);
+            }}
+            onImportCaBundle={async () => {
+              setCertificatesImported(true);
             }}
             onConfigure={(request) =>
               save(() => configureManagedRuntime(request))
@@ -201,7 +235,7 @@ function ProviderSetupStudio({
               setSignedIn(false);
             }}
             onUseExternal={async () => {}}
-            dismissible={configured}
+            dismissible={configured || !guided}
             onCancel={() => {}}
           />
         </div>
@@ -214,6 +248,7 @@ export function mountProviderSetupStudio(
   configured = false,
   workspaceSelected = true,
   hasCredential = true,
+  guided = false,
 ) {
   if (!import.meta.env.DEV)
     throw new Error("Setup fixture requires development mode.");
@@ -223,10 +258,13 @@ export function mountProviderSetupStudio(
   host.style.overflow = "auto";
   document.body.append(host);
   createRoot(host).render(
-    <ProviderSetupStudio
-      configured={configured}
-      workspaceSelected={workspaceSelected}
-      hasCredential={hasCredential}
-    />,
+    <AppearanceProvider>
+      <ProviderSetupStudio
+        configured={configured}
+        workspaceSelected={workspaceSelected}
+        hasCredential={hasCredential}
+        guided={guided}
+      />
+    </AppearanceProvider>,
   );
 }

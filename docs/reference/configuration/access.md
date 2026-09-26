@@ -235,7 +235,7 @@ grant the underlying resource.
 | Network destination | `web.fetch`, `docs.fetch`, `network.http` | At least one sandbox network destination, or acknowledged ambient authority |
 | Agent search route | `web.search` | A valid top-level `search.roles.agent` route |
 | Interactive interface | `user.ask` | A trusted prompt-capable interface for the current runtime |
-| MCP server | `mcp.servers`, `mcp.tools`, `mcp.call` | At least one configured and trusted MCP server |
+| MCP server | `mcp.servers`, `mcp.search`, `mcp.tools`, `mcp.call` | At least one configured and trusted MCP server |
 
 Provider service and authentication transports are independent from the model-network
 tool prerequisite. Managed Local **Offline isolated** retains the configured provider's
@@ -317,7 +317,7 @@ Most effectful built-ins use the same tool and action name. Important exceptions
 | `agent.result` | `subagent.read` |
 | `agent.list` | `subagent.list` |
 | `web.fetch`, `docs.fetch`, `network.http` | `network.http` |
-| `mcp.tools` | `mcp.tools` |
+| `mcp.search`, `mcp.tools` | `mcp.tools` |
 | `mcp.call` | `mcp.call` |
 
 Connected integrations and explicitly enabled plugin MCP servers add action identities
