@@ -1778,9 +1778,14 @@ fn repeated_history_navigation_restores_the_original_draft_and_resets_after_edit
 #[test]
 fn multiline_history_search_and_first_line_navigation_preserve_the_draft() {
     let mut state = TuiState::from_snapshot(snapshot());
-    state.preferences.multiline = true;
     state.composer.insert("first");
-    state.composer.insert("\n");
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+        ),
+        None
+    );
     state.composer.insert("界");
     assert_eq!(state.draft(), "first\n界");
 
@@ -1800,6 +1805,116 @@ fn multiline_history_search_and_first_line_navigation_preserve_the_draft() {
     });
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(state.draft(), "first\n界");
+}
+
+#[test]
+fn shift_enter_inserts_at_cursor_without_accepting_completion_or_submitting() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("/to tail");
+    state.composer.cursor = 3;
+    state.composer.completion_index = Some(0);
+
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+        ),
+        None
+    );
+    assert_eq!(state.draft(), "/to\n tail");
+    assert_eq!(state.cursor(), 4);
+    assert_eq!(state.composer.completion_index, None);
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        ),
+        Some("/to\n tail".into())
+    );
+    assert!(state.draft().is_empty());
+}
+
+#[test]
+fn indistinguishable_shift_enter_uses_multiline_fallback_and_ctrl_d_submits() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.preferences.multiline = true;
+    state.composer.insert("first");
+    // A terminal that strips Shift sends an ordinary Enter event.
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        ),
+        None
+    );
+    state.composer.insert("second");
+    assert_eq!(state.draft(), "first\nsecond");
+    assert_eq!(
+        handle_composer_ctrl_d(&mut state),
+        Some("first\nsecond".into())
+    );
+    assert!(state.draft().is_empty());
+    assert!(!state.should_exit);
+}
+
+#[test]
+fn legacy_modified_enter_still_submits_in_multiline_mode() {
+    for modifiers in [
+        KeyModifiers::CONTROL,
+        KeyModifiers::ALT,
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ] {
+        let mut state = TuiState::from_snapshot(snapshot());
+        state.preferences.multiline = true;
+        state.composer.insert("first\nsecond");
+        assert_eq!(
+            handle_composer_enter(&mut state, KeyEvent::new(KeyCode::Enter, modifiers)),
+            Some("first\nsecond".into())
+        );
+    }
+}
+
+#[test]
+fn legacy_multiline_enter_still_accepts_selected_completion() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.preferences.multiline = true;
+    state.composer.insert("/to");
+    state.composer.completion_index = Some(0);
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        ),
+        None
+    );
+    assert_eq!(state.draft(), "/tools");
+}
+
+#[test]
+fn enter_accepts_selected_completion_but_shift_enter_starts_a_new_line() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("/to");
+    state.composer.completion_index = Some(0);
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+        ),
+        None
+    );
+    assert_eq!(state.draft(), "/to\n");
+
+    state.composer.clear();
+    state.composer.insert("/to");
+    state.composer.completion_index = Some(0);
+    assert_eq!(
+        handle_composer_enter(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        ),
+        None
+    );
+    assert_eq!(state.draft(), "/tools");
 }
 
 #[test]

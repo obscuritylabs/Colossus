@@ -568,6 +568,68 @@ fn fixture_process() {
         .expect("fixture TUI");
 }
 
+#[cfg(unix)]
+#[test]
+fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("fixture_process");
+    command.arg("--nocapture");
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => reader_output
+                    .lock()
+                    .expect("output")
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    wait_for_raw(&output, b"\x1b[>1u");
+
+    writer
+        .write_all(b"first\x1b[13;2usecond")
+        .expect("compose modified Enter turn");
+    writer.flush().expect("flush modified Enter turn");
+    wait_for_screen(&output, 24, 80, "second");
+    let composed = screen_contents(&output, 24, 80);
+    assert!(composed.contains("first"), "{composed}");
+    assert!(!composed.contains("stream-final-row-30"), "{composed}");
+
+    writer.write_all(b"\r").expect("submit composed turn");
+    writer.flush().expect("flush composed turn");
+    wait_for_screen(&output, 24, 80, "stream-final-row-30");
+    writer.write_all(&[3, 3]).expect("exit");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("fixture status");
+    drop(writer);
+    drop(pair.master);
+    reader_thread.join().expect("reader thread");
+    assert!(status.success());
+    assert!(raw_contains(&output.lock().expect("output"), b"\x1b[<1u"));
+}
+
 #[test]
 fn inline_mode_preserves_rows_and_restores_terminal_controls() {
     let pty_system = native_pty_system();

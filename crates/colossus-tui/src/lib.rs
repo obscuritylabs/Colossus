@@ -16,6 +16,10 @@ use colossus_presentation::{
     PresentationBlock, PresentationDocument, PresentationTone, SemanticRenderer,
     StyledDocumentRenderer, TerminalPalette,
 };
+#[cfg(unix)]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::{
     cursor::{Hide, Show},
     event::{

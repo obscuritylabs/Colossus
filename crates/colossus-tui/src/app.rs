@@ -351,8 +351,8 @@ fn handle_key(
             state.hide_completion();
         }
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if !state.is_busy() && state.composer.draft.is_empty() {
-                state.should_exit = true;
+            if let Some(line) = handle_composer_ctrl_d(state) {
+                submit_line(state, line, host, event_tx);
             }
         }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -408,22 +408,38 @@ fn handle_key(
         }
         KeyCode::PageDown if screen_mode == ScreenMode::Alternate => state.page_down(),
         KeyCode::Enter => {
-            if state.composer.completion_index.is_some() && state.accept_completion() {
-                return;
-            }
-            let submit = !state.preferences.multiline
-                || key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL);
-            if submit {
-                let line = state.composer.take();
+            if let Some(line) = handle_composer_enter(state, key) {
                 submit_line(state, line, host, event_tx);
-            } else {
-                state.composer.insert("\n");
             }
         }
         _ => {}
     }
+}
+
+pub(super) fn handle_composer_ctrl_d(state: &mut TuiState) -> Option<String> {
+    if state.preferences.multiline && !state.composer.draft.is_empty() {
+        Some(state.composer.take())
+    } else {
+        if !state.is_busy() && state.composer.draft.is_empty() {
+            state.should_exit = true;
+        }
+        None
+    }
+}
+
+pub(super) fn handle_composer_enter(state: &mut TuiState, key: KeyEvent) -> Option<String> {
+    let explicit_submit = key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let shift_newline = !explicit_submit && key.modifiers.contains(KeyModifiers::SHIFT);
+    if !shift_newline && state.composer.completion_index.is_some() && state.accept_completion() {
+        return None;
+    }
+    if shift_newline || (state.preferences.multiline && !explicit_submit) {
+        state.composer.insert("\n");
+        return None;
+    }
+    Some(state.composer.take())
 }
 
 pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
