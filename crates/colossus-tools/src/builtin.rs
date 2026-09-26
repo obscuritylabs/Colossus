@@ -3,6 +3,15 @@ use super::*;
 /// Maximum serialized output released by the built-in `mcp.tools` operation.
 pub const MCP_TOOLS_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+fn host_os_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
 /// Return every supported built-in tool specification.
 pub fn builtin_specs() -> Vec<ToolSpec> {
     vec![
@@ -321,9 +330,10 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "shell.run".into(),
-            description:
-                "Run a non-interactive process inside the selected workspace; provide exactly one of command or argv. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access."
-                    .into(),
+            description: format!(
+                "Run a non-interactive process inside the selected workspace; provide exactly one of command or argv. An acknowledged danger_full_access backend instead permits ambient host executables, environment, working directories, filesystem access, and network access. Host OS: {}. Verify OS in containers.",
+                host_os_name()
+            ),
             input_schema: object_schema_with(
                 json!({
                     "justification": {
