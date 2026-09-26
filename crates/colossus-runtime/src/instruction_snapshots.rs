@@ -453,12 +453,30 @@ impl Runtime {
         invocation: &str,
         runtime_mode: &str,
     ) -> Result<PreparedAgentInstructions, RuntimeError> {
+        self.prepare_agent_instructions_with_mcp(invocation, runtime_mode, true)
+    }
+
+    pub(super) fn prepare_plan_agent_instructions(
+        &self,
+        invocation: &str,
+        runtime_mode: &str,
+    ) -> Result<PreparedAgentInstructions, RuntimeError> {
+        self.prepare_agent_instructions_with_mcp(invocation, runtime_mode, false)
+    }
+
+    fn prepare_agent_instructions_with_mcp(
+        &self,
+        invocation: &str,
+        runtime_mode: &str,
+        include_mcp_cue: bool,
+    ) -> Result<PreparedAgentInstructions, RuntimeError> {
         let captured = self.capture_agent_instructions(invocation)?;
-        let mcp_available = self
-            .access
-            .active_tool_names()
-            .iter()
-            .any(|name| name == "mcp.search");
+        let mcp_available = include_mcp_cue
+            && self
+                .access
+                .active_tool_names()
+                .iter()
+                .any(|name| name == "mcp.search");
         let server_names = if mcp_available {
             captured
                 .plugins

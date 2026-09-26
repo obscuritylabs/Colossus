@@ -63,7 +63,7 @@ impl McpExecutor {
                 McpTransportKind::Stdio if sandbox_backend == "oci" => server.command.clone(),
                 McpTransportKind::Stdio => match fs::canonicalize(&server.command) {
                     Ok(command) => command,
-                    Err(_) => {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                         // A missing executable is an availability failure for this
                         // server, not a reason to disable every other MCP source.
                         unavailable_servers.insert(
@@ -86,6 +86,11 @@ impl McpExecutor {
                             },
                         );
                         continue;
+                    }
+                    Err(error) => {
+                        return Err(McpError::Invalid(format!(
+                            "server {name} command could not resolve: {error}"
+                        )));
                     }
                 },
                 McpTransportKind::StreamableHttp => PathBuf::new(),

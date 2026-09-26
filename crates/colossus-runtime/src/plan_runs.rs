@@ -43,7 +43,7 @@ impl Runtime {
     ) -> Result<AgentRunResult, RuntimeError> {
         self.validate_plan_target(session_id, &target)?;
         let runtime_mode = plan_mode_instructions(&target);
-        let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
+        let prepared = self.prepare_plan_agent_instructions(instructions, &runtime_mode)?;
         let composition = compose_plugins(
             &prepared.plugins.records,
             &prepared.base_text,
@@ -117,7 +117,7 @@ impl Runtime {
     ) -> Result<AgentRunResult, RuntimeError> {
         self.validate_plan_target(session_id, &target)?;
         let runtime_mode = plan_mode_instructions(&target);
-        let prepared = self.prepare_agent_instructions(instructions, &runtime_mode)?;
+        let prepared = self.prepare_plan_agent_instructions(instructions, &runtime_mode)?;
         let composition = compose_plugins(
             &prepared.plugins.records,
             &prepared.base_text,
