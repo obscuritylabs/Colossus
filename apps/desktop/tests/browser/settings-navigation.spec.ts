@@ -81,14 +81,19 @@ for (const width of [1586, 880, 700]) {
         navigationStyle,
       );
     }
-    const pageStyle = () =>
-      page.locator(".managed-settings-body").evaluate((body) => {
-        const heading = body.querySelector(".managed-section-heading h3")!;
-        return {
-          padding: getComputedStyle(body).padding,
-          headingFontSize: getComputedStyle(heading).fontSize,
-        };
-      });
+    const pageStyle = async () => {
+      const body = page.locator(".managed-settings-body");
+      const heading = body.getByRole("heading", { level: 3 }).first();
+      await expect(heading).toBeVisible();
+      return {
+        padding: await body.evaluate(
+          (element) => getComputedStyle(element).padding,
+        ),
+        headingFontSize: await heading.evaluate(
+          (element) => getComputedStyle(element).fontSize,
+        ),
+      };
+    };
     const workspaceStyle = await pageStyle();
     const turns = page.getByRole("spinbutton", { name: "Maximum turns" });
     await turns.fill("75");

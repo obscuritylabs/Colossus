@@ -12,7 +12,7 @@
 .catalog-heading h3 {
   margin: 0;
   color: var(--text-strong);
-  font-size: var(--font-size-title);
+  font-size: var(--font-size-heading);
   line-height: 1.25;
 }
 
