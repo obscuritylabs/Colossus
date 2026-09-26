@@ -627,7 +627,20 @@ fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
     drop(pair.master);
     reader_thread.join().expect("reader thread");
     assert!(status.success());
-    assert!(raw_contains(&output.lock().expect("output"), b"\x1b[<1u"));
+    let raw = output.lock().expect("output");
+    let offset = |sequence: &[u8]| {
+        raw.windows(sequence.len())
+            .position(|window| window == sequence)
+            .expect("terminal control sequence")
+    };
+    assert!(
+        offset(b"\x1b[?1049h") < offset(b"\x1b[>1u"),
+        "keyboard enhancement must be enabled on the alternate screen"
+    );
+    assert!(
+        offset(b"\x1b[<1u") < offset(b"\x1b[?1049l"),
+        "keyboard enhancement must be removed before leaving the alternate screen"
+    );
 }
 
 #[test]
@@ -1220,6 +1233,26 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("reader thread");
+    #[cfg(unix)]
+    {
+        let raw = output.lock().expect("output");
+        let find_after = |start: usize, sequence: &[u8]| {
+            raw[start..]
+                .windows(sequence.len())
+                .position(|window| window == sequence)
+                .map(|offset| start + offset)
+                .expect("terminal control sequence")
+        };
+        let main_push = find_after(0, b"\x1b[>1u");
+        let enter = find_after(main_push, b"\x1b[?1049h");
+        let alternate_push = find_after(enter, b"\x1b[>1u");
+        let alternate_pop = find_after(alternate_push, b"\x1b[<1u");
+        let leave = find_after(alternate_pop, b"\x1b[?1049l");
+        let main_pop = find_after(leave, b"\x1b[<1u");
+        assert!(main_push < enter && enter < alternate_push);
+        assert!(alternate_push < alternate_pop && alternate_pop < leave);
+        assert!(leave < main_pop);
+    }
 }
 
 #[test]
