@@ -399,6 +399,7 @@ test("appearance preferences are readable, consistent, and persistent", async ({
 
   for (const tab of globalTabs) {
     await page.getByRole("button", { name: tab, exact: true }).click();
+    await expect(page.locator(".managed-settings-body")).toBeVisible();
     const lightAccessibility = await new AxeBuilder({ page })
       .include(".managed-settings-body")
       .analyze();
@@ -411,8 +412,8 @@ test("appearance preferences are readable, consistent, and persistent", async ({
   }
 
   for (const [tab, rowSelector] of [
-    ["Providers", ".provider-row"],
-    ["Models", ".model-row"],
+    ["Providers", ".catalog-inventory-row"],
+    ["Models", ".catalog-inventory-row"],
     ["Credentials", ".credential-list .managed-list-row"],
     ["Search", ".search-profile-row"],
     ["Telemetry", ".telemetry-row"],
@@ -443,6 +444,7 @@ test("appearance preferences are readable, consistent, and persistent", async ({
 
   for (const tab of globalTabs) {
     await page.getByRole("button", { name: tab, exact: true }).click();
+    await expect(page.locator(".managed-settings-body")).toBeVisible();
     const darkAccessibility = await new AxeBuilder({ page })
       .include(".managed-settings-body")
       .analyze();
@@ -1500,23 +1502,24 @@ test("model settings stay clear, complete, and compact", async ({ page }) => {
   await page.getByRole("button", { name: "Global", exact: true }).click();
   await page.getByRole("button", { name: "Models", exact: true }).click();
 
-  await expect(
-    page.getByText(
-      "Turn on only the features this model supports: tools, streaming, and images.",
-      {
-        exact: true,
-      },
-    ),
-  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Details for primary", exact: true })
+    .click();
   const primaryModel = page
-    .getByRole("listitem")
+    .locator(".catalog-inventory-row")
     .filter({ hasText: "primary" });
-  await expect(primaryModel.getByText("Tools", { exact: true })).toBeVisible();
+  const modelDetails = page.getByRole("region", {
+    name: "Details for primary",
+    exact: true,
+  });
   await expect(
-    primaryModel.getByText("Streaming", { exact: true }),
+    modelDetails.getByText("Tools, Streaming", { exact: true }),
   ).toBeVisible();
   await expect(
-    primaryModel.getByText("Used by 4", { exact: true }),
+    primaryModel.getByRole("button", {
+      name: "Active workspaces for primary: 4 workspaces",
+      exact: true,
+    }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Add model", exact: true }).click();
@@ -1548,13 +1551,24 @@ test("model settings stay clear, complete, and compact", async ({ page }) => {
     .click();
 
   const addedModel = page
-    .getByRole("listitem")
+    .locator(".catalog-inventory-row")
     .filter({ hasText: "Vision model" });
   await expect(addedModel).toBeVisible();
-  await expect(addedModel.getByText("Images", { exact: true })).toBeVisible();
-  await expect(addedModel.getByText("Not used", { exact: true })).toBeVisible();
+  await addedModel
+    .getByRole("button", { name: "Details for Vision model", exact: true })
+    .click();
   await expect(
-    addedModel.getByText("256k context · 32k output · v1", { exact: true }),
+    addedModel.getByText("0 workspaces", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Details for Vision model", exact: true })
+      .getByText("256k context · 32k output", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Details for Vision model", exact: true })
+      .getByText(/Images/u),
   ).toBeVisible();
 
   const pane = page.locator(".managed-settings-shell");
@@ -1577,20 +1591,22 @@ test("provider connections stay clear, secure, and compact", async ({
   await page.getByRole("button", { name: "Global", exact: true }).click();
   await page.getByRole("button", { name: "Providers", exact: true }).click();
 
-  await expect(
-    page.getByText(
-      "Colossus stores which credential to use, not its secret value.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Details for primary-provider", exact: true })
+    .click();
   const primaryProvider = page
-    .getByRole("listitem")
+    .locator(".catalog-inventory-row")
     .filter({ hasText: "primary-provider" });
   await expect(
-    primaryProvider.getByText("OpenAI compatible", { exact: true }),
+    page
+      .getByRole("region", {
+        name: "Details for primary-provider",
+        exact: true,
+      })
+      .getByText("OpenAI compatible", { exact: true }),
   ).toBeVisible();
   await expect(
-    primaryProvider.getByText("Used by 1", { exact: true }),
+    primaryProvider.getByText("1 model", { exact: true }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Add provider", exact: true }).click();
@@ -1626,20 +1642,33 @@ test("provider connections stay clear, secure, and compact", async ({
     .click();
 
   const addedProvider = page
-    .getByRole("listitem")
+    .locator(".catalog-inventory-row")
     .filter({ hasText: "OpenAI production" });
   await expect(addedProvider).toBeVisible();
+  await addedProvider
+    .getByRole("button", { name: "Details for OpenAI production", exact: true })
+    .click();
   await expect(
-    addedProvider.getByText("OpenAI Responses", { exact: true }),
+    page
+      .getByRole("region", {
+        name: "Details for OpenAI production",
+        exact: true,
+      })
+      .getByText("OpenAI Responses", { exact: true }),
   ).toBeVisible();
   await expect(
-    addedProvider.getByText("Credential attached", { exact: true }),
+    addedProvider.getByText("Credential saved", { exact: true }),
   ).toBeVisible();
   await expect(
-    addedProvider.getByText("No models", { exact: true }),
+    addedProvider.getByText("0 models", { exact: true }),
   ).toBeVisible();
   await expect(
-    addedProvider.getByText("45s timeout · v1", { exact: true }),
+    page
+      .getByRole("region", {
+        name: "Details for OpenAI production",
+        exact: true,
+      })
+      .getByText("45s", { exact: true }),
   ).toBeVisible();
 
   const pane = page.locator(".managed-settings-shell");

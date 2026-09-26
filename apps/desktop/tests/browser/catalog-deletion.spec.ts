@@ -8,6 +8,15 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole("button", { name: "Global", exact: true }).click();
 });
 
+async function openDelete(page: Page, label: string) {
+  await page
+    .getByRole("button", { name: `More actions for ${label}`, exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: `Delete ${label}`, exact: true })
+    .click();
+}
+
 async function addProvider(page: Page) {
   await page.getByRole("button", { name: "Providers", exact: true }).click();
   await page.getByRole("button", { name: "Add provider", exact: true }).click();
@@ -56,9 +65,7 @@ test("an unused model can be deleted, then its provider can be deleted without l
   await addProvider(page);
   await addModel(page, "Temporary provider");
   await page.getByRole("button", { name: "Providers", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Delete Temporary provider", exact: true })
-    .click();
+  await openDelete(page, "Temporary provider");
   let dialog = page.getByRole("dialog", { name: "Delete Temporary provider?" });
   await expect(dialog.getByRole("listitem")).toHaveText([
     "Model Temporary model",
@@ -71,22 +78,21 @@ test("an unused model can be deleted, then its provider can be deleted without l
   await page
     .getByRole("button", { name: "Edit Temporary model", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "Delete Temporary model", exact: true })
-    .click();
+  await openDelete(page, "Temporary model");
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "Delete model", exact: true })
     .click();
   await expect(page.locator(".model-editor")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Delete Temporary model", exact: true }),
+    page.getByRole("button", {
+      name: "More actions for Temporary model",
+      exact: true,
+    }),
   ).toHaveCount(0);
   await expect(page.locator("#add-model")).toBeFocused();
   await page.getByRole("button", { name: "Providers", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Delete Temporary provider", exact: true })
-    .click();
+  await openDelete(page, "Temporary provider");
   dialog = page.getByRole("dialog", { name: "Delete Temporary provider?" });
   await expect(dialog).toContainText(
     "Saved credentials and your provider account will be kept.",
@@ -96,7 +102,7 @@ test("an unused model can be deleted, then its provider can be deleted without l
     .click();
   await expect(
     page.getByRole("button", {
-      name: "Delete Temporary provider",
+      name: "More actions for Temporary provider",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -114,20 +120,20 @@ for (const kind of ["model", "provider"] as const) {
     if (kind === "model") await addModel(page);
     else await addProvider(page);
     const trigger = page.getByRole("button", {
-      name: `Delete Temporary ${kind}`,
+      name: `More actions for Temporary ${kind}`,
       exact: true,
     });
-    await trigger.click();
+    await openDelete(page, `Temporary ${kind}`);
     const dialog = page.getByRole("dialog", {
       name: `Delete Temporary ${kind}?`,
     });
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(trigger).toBeFocused();
-    await trigger.click();
+    await openDelete(page, `Temporary ${kind}`);
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(trigger).toBeFocused();
-    await trigger.click();
+    await openDelete(page, `Temporary ${kind}`);
     await page.evaluate(() => {
       const state = window as unknown as {
         __TAURI_INTERNALS__: unknown;
@@ -186,7 +192,7 @@ for (const kind of ["model", "provider"] as const) {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown })
         .__TAURI_INTERNALS__;
     });
-    await trigger.click();
+    await openDelete(page, `Temporary ${kind}`);
     await dialog
       .getByRole("button", { name: `Delete ${kind}`, exact: true })
       .click();
@@ -204,13 +210,13 @@ for (const kind of ["model", "provider"] as const) {
       })
       .click();
     const trigger = page.getByRole("button", {
-      name: `Delete ${kind === "model" ? "primary" : "primary-provider"}`,
+      name: `More actions for ${kind === "model" ? "primary" : "primary-provider"}`,
       exact: true,
     });
     await expect(trigger).toBeInViewport();
     const box = (await trigger.boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(700);
-    await trigger.click();
+    await openDelete(page, kind === "model" ? "primary" : "primary-provider");
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("Workspace Colossus");
     await expect(

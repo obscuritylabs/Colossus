@@ -116,6 +116,12 @@ import {
 } from "../providerCatalog";
 import { ToastRegion, useToastQueue } from "./ToastRegion";
 
+const CatalogInventory = lazy(() =>
+  import("./CatalogInventory").then((module) => ({
+    default: module.CatalogInventory,
+  })),
+);
+
 const CatalogDeleteDialog = lazy(() =>
   import("./CatalogDeleteDialog").then((module) => ({
     default: module.CatalogDeleteDialog,
@@ -3555,429 +3561,239 @@ function GlobalSettingsBody({
   }
   if (tab === "models") {
     const activeModels = global.models.filter((entry) => !entry.archived);
-    const firstActiveProvider = global.providers.find(
-      (entry) => !entry.archived,
-    );
-    const modelConsumers = new Map(
-      activeModels.map((entry) => [
-        entry.id,
-        managedModelConsumers(snapshot, entry.id),
-      ]),
-    );
+    const activeProviders = global.providers.filter((entry) => !entry.archived);
+    const firstActiveProvider = activeProviders[0];
     const providersInUse = new Set(
       activeModels.map((entry) => currentValue(entry).providerProfile),
     ).size;
-    const routedWorkspaceCount = new Set([...modelConsumers.values()].flat())
-      .size;
     return (
-      <section
-        className="managed-settings-body models-settings"
-        aria-labelledby="models-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">AI models</p>
-            <h3 id="models-heading">Models</h3>
-            <p className="models-heading-copy">
-              Choose the models available to workspaces, their token limits, and
-              the features they support.
-            </p>
-          </div>
-          <div className="model-contract-note" aria-label="Model capabilities">
-            <IconShield size={18} aria-hidden="true" />
-            <span>
-              <strong>Supported features</strong>
-              <small>
-                Turn on only the features this model supports: tools, streaming,
-                and images.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip models-metric-strip"
-          aria-label="Model summary"
-        >
-          <Metric
-            icon={<IconCpu size={19} />}
-            value={activeModels.length}
-            label="Active models"
-          />
-          <Metric
-            icon={<IconCloud size={19} />}
-            value={providersInUse}
-            label="Providers in use"
-          />
-          <Metric
-            icon={<IconRoute size={19} />}
-            value={routedWorkspaceCount}
-            label="Workspaces using models"
-          />
-        </div>
-        <div className="model-catalog-toolbar">
-          <div>
-            <h4>Model inventory</h4>
-            <p>Add models here, then choose which workspaces can use them.</p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={busy || Boolean(modelEditor)}
-            id="add-model"
-            onClick={() =>
-              setModelEditor({
-                ...EMPTY_MODEL_DRAFT,
-                providerProfile: firstActiveProvider
-                  ? currentValue(firstActiveProvider).profile
-                  : "",
-              })
-            }
-          >
-            <IconPlus size={16} aria-hidden="true" /> Add model
-          </button>
-        </div>
-        {modelEditor ? (
-          <ModelEditor
-            draft={modelEditor}
-            workspaceId={desktop.workspace?.workspaceId ?? null}
-            catalogRevision={global.revision}
-            providers={global.providers.filter((entry) => !entry.archived)}
-            busy={busy}
-            onChange={setModelEditor}
-            onCancel={() => setModelEditor(null)}
-            onSave={onSaveModel}
-            onDiscoverModels={onDiscoverModels}
-          />
-        ) : null}
-        <section
-          className="model-inventory"
-          aria-labelledby="configured-models-heading"
-        >
-          <div className="model-inventory-heading">
-            <div>
-              <h4 id="configured-models-heading">Configured models</h4>
-              <p>
-                Compare each model's provider, token limits, and supported
-                features.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeModels.length} models`}
-            >
-              {activeModels.length}
-            </span>
-          </div>
-          <div className="managed-list model-list" role="list">
-            {activeModels.map((entry) => {
-              const model = currentValue(entry);
-              const consumers = modelConsumers.get(entry.id) ?? [];
-              const provider = global.providers.find(
-                (candidate) =>
-                  !candidate.archived &&
-                  currentValue(candidate).profile === model.providerProfile,
-              );
-              const enabledCapabilities = [
-                model.capabilities.toolCalls ? "Tools" : null,
-                model.capabilities.streaming ? "Streaming" : null,
-                model.capabilities.imageInputs ? "Images" : null,
-              ].filter((value): value is string => Boolean(value));
-              return (
-                <div
-                  className="managed-list-row model-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconCpu size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p role="status">Loading models…</p>}>
+        <CatalogInventory
+          key="models"
+          kind="model"
+          busy={busy}
+          editing={Boolean(modelEditor)}
+          summary={`${activeModels.length} configured ${activeModels.length === 1 ? "model" : "models"} · ${providersInUse} ${providersInUse === 1 ? "provider" : "providers"}`}
+          onAdd={() =>
+            setModelEditor({
+              ...EMPTY_MODEL_DRAFT,
+              providerProfile: firstActiveProvider
+                ? currentValue(firstActiveProvider).profile
+                : "",
+            })
+          }
+          rows={activeModels.map((entry) => {
+            const model = currentValue(entry);
+            const consumers = managedModelConsumers(snapshot, entry.id);
+            const provider = activeProviders.find(
+              (candidate) =>
+                currentValue(candidate).profile === model.providerProfile,
+            );
+            const capabilities = [
+              model.capabilities.toolCalls ? "Tools" : null,
+              model.capabilities.streaming ? "Streaming" : null,
+              model.capabilities.imageInputs ? "Images" : null,
+            ].filter((value): value is string => Boolean(value));
+            return {
+              id: entry.id,
+              label: entry.label,
+              name: entry.label === model.profile ? model.model : entry.label,
+              description:
+                entry.label === model.profile
+                  ? model.profile
+                  : `${model.profile} · ${model.model}`,
+              searchText: [
+                entry.label,
+                model.profile,
+                model.model,
+                provider?.label,
+                model.providerProfile,
+              ].join(" "),
+              connection: provider?.label ?? model.providerProfile,
+              usage: `${consumers.length} ${consumers.length === 1 ? "workspace" : "workspaces"}`,
+              onEdit: () => setModelEditor(modelDraft(entry)),
+              onDelete: (trigger) =>
+                onDeleteCatalogEntry("model", entry.id, trigger),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === model.profile
-                        ? model.model
-                        : `${model.profile} · ${model.model}`}
-                    </small>
-                    <small className="model-provider-route">
-                      Provider · {provider?.label ?? model.providerProfile}
-                    </small>
+                    <h4>Model settings</h4>
+                    <dl>
+                      <dt>Model ID</dt>
+                      <dd>{model.model}</dd>
+                      <dt>Profile ID</dt>
+                      <dd>{model.profile}</dd>
+                      <dt>Token limits</dt>
+                      <dd>
+                        {compactTokenCount(model.contextWindowTokens)} context ·{" "}
+                        {compactTokenCount(model.maxOutputTokens)} output
+                      </dd>
+                      <dt>Supported features</dt>
+                      <dd>
+                        {capabilities.length
+                          ? capabilities.join(", ")
+                          : "Text only"}
+                      </dd>
+                      <dt>Reasoning effort</dt>
+                      <dd>{model.reasoningEffort ?? "Provider default"}</dd>
+                      <dt>Version</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <div
-                    className="model-capability-list"
-                    aria-label="Capabilities"
-                  >
-                    {(enabledCapabilities.length
-                      ? enabledCapabilities
-                      : ["Text only"]
-                    ).map((capability) => (
-                      <span
-                        className="status-chip tone-success"
-                        key={capability}
-                      >
-                        {capability}
-                      </span>
-                    ))}
+                  <div>
+                    <h4>Active workspaces</h4>
+                    {consumers.length ? (
+                      <ul>
+                        {consumers.map((name, index) => (
+                          <li key={index}>{name}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No active workspace references this model.</p>
+                    )}
                   </div>
-                  <div className="model-row-meta">
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active workspace references this model."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "Not used"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {compactTokenCount(model.contextWindowTokens)} context ·{" "}
-                      {compactTokenCount(model.maxOutputTokens)} output · v
-                      {entry.currentRevision}
-                    </span>
-                  </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      disabled={busy}
-                      onClick={() => setModelEditor(modelDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                    <button
-                      className="button danger"
-                      type="button"
-                      aria-label={`Delete ${entry.label}`}
-                      disabled={busy}
-                      onClick={(event) =>
-                        onDeleteCatalogEntry(
-                          "model",
-                          entry.id,
-                          event.currentTarget,
-                        )
-                      }
-                    >
-                      <IconTrash size={15} aria-hidden="true" /> Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeModels.length === 0 ? (
-              <EmptySettings icon={<IconCpu size={24} />} title="No models" />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {modelEditor ? (
+            <ModelEditor
+              draft={modelEditor}
+              workspaceId={desktop.workspace?.workspaceId ?? null}
+              catalogRevision={global.revision}
+              providers={activeProviders}
+              busy={busy}
+              onChange={setModelEditor}
+              onCancel={() => setModelEditor(null)}
+              onSave={onSaveModel}
+              onDiscoverModels={onDiscoverModels}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "providers") {
     const activeProviders = global.providers.filter((entry) => !entry.archived);
-    const providerConsumers = new Map(
-      activeProviders.map((entry) => [
-        entry.id,
-        managedProviderConsumers(snapshot, entry.id),
-      ]),
-    );
-    const routedModelCount = [...providerConsumers.values()].reduce(
-      (total, consumers) => total + consumers.length,
-      0,
-    );
-    const credentialBindingCount = activeProviders.filter((entry) =>
-      Boolean(currentValue(entry).credentialId),
-    ).length;
+    const activeModels = global.models.filter((entry) => !entry.archived);
     return (
-      <section
-        className="managed-settings-body providers-settings"
-        aria-labelledby="providers-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">AI connections</p>
-            <h3 id="providers-heading">Providers</h3>
-            <p className="providers-heading-copy">
-              Connect the services and accounts Colossus uses to access AI
-              models.
-            </p>
-          </div>
-          <div
-            className="provider-security-note"
-            aria-label="Provider credential safety"
-          >
-            <IconLock size={18} aria-hidden="true" />
-            <span>
-              <strong>Credentials stay protected</strong>
-              <small>
-                Colossus stores which credential to use, not its secret value.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip providers-metric-strip"
-          aria-label="Provider summary"
-        >
-          <Metric
-            icon={<IconCloud size={19} />}
-            value={activeProviders.length}
-            label="Active providers"
-          />
-          <Metric
-            icon={<IconCpu size={19} />}
-            value={routedModelCount}
-            label="Models using them"
-          />
-          <Metric
-            icon={<IconKey size={19} />}
-            value={credentialBindingCount}
-            label="Credentials used"
-          />
-        </div>
-        <div className="provider-catalog-toolbar">
-          <div>
-            <h4>Provider connections</h4>
-            <p>
-              Add a provider once, then reuse the connection for multiple
-              models.
-            </p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={busy || Boolean(providerEditor)}
-            id="add-provider"
-            onClick={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
-          >
-            <IconPlus size={16} /> Add provider
-          </button>
-        </div>
-        {providerEditor ? (
-          <ProviderEditor
-            draft={providerEditor}
-            credentials={global.credentials}
-            busy={busy}
-            onChange={setProviderEditor}
-            onCancel={() => setProviderEditor(null)}
-            onSave={onSaveProvider}
-          />
-        ) : null}
-        <section
-          className="provider-inventory"
-          aria-labelledby="configured-providers-heading"
-        >
-          <div className="provider-inventory-heading">
-            <div>
-              <h4 id="configured-providers-heading">Providers</h4>
-              <p>
-                Compare each provider's endpoint, sign-in method, model usage,
-                and timeout.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeProviders.length} providers`}
-            >
-              {activeProviders.length}
-            </span>
-          </div>
-          <div className="managed-list provider-list" role="list">
-            {activeProviders.map((entry) => {
-              const provider = currentValue(entry);
-              const consumers = providerConsumers.get(entry.id) ?? [];
-              const codex = provider.kind === "open_ai_codex";
-              const timeout = provider.timeoutMs
-                ? `${Math.round(provider.timeoutMs / 1_000)}s timeout`
-                : "Default timeout";
-              return (
-                <div
-                  className="managed-list-row provider-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconCloud size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p role="status">Loading providers…</p>}>
+        <CatalogInventory
+          key="providers"
+          kind="provider"
+          busy={busy}
+          editing={Boolean(providerEditor)}
+          summary={`${activeProviders.length} ${activeProviders.length === 1 ? "provider" : "providers"} · ${activeModels.length} configured ${activeModels.length === 1 ? "model" : "models"}`}
+          onAdd={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
+          rows={activeProviders.map((entry) => {
+            const provider = currentValue(entry);
+            const codex = provider.kind === "open_ai_codex";
+            const models = activeModels.filter(
+              (model) =>
+                currentValue(model).providerProfile === provider.profile,
+            );
+            const name =
+              codex && entry.label === provider.profile ? "Codex" : entry.label;
+            const description = codex
+              ? `${provider.profile} · Subscription`
+              : entry.label === provider.profile
+                ? providerEndpointLabel(provider)
+                : `${provider.profile} · ${providerEndpointLabel(provider)}`;
+            const credential = global.credentials.find(
+              (candidate) => candidate.id === provider.credentialId,
+            );
+            return {
+              id: entry.id,
+              label: entry.label,
+              name,
+              description,
+              searchText: [
+                name,
+                entry.label,
+                provider.profile,
+                providerEndpointLabel(provider),
+              ].join(" "),
+              connection: (
+                <>
+                  <IconLock size={16} aria-hidden="true" />
+                  {codex
+                    ? "Codex account"
+                    : provider.credentialId
+                      ? "Credential saved"
+                      : "No credential"}
+                </>
+              ),
+              usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
+              onEdit: () => setProviderEditor(providerDraft(entry)),
+              onDelete: (trigger) =>
+                onDeleteCatalogEntry("provider", entry.id, trigger),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === provider.profile
-                        ? providerEndpointLabel(provider)
-                        : `${provider.profile} · ${providerEndpointLabel(provider)}`}
-                    </small>
+                    <h4>Connection details</h4>
+                    <dl>
+                      <dt>Profile ID</dt>
+                      <dd>{provider.profile}</dd>
+                      <dt>API format</dt>
+                      <dd>{providerAdapterLabel(provider.kind)}</dd>
+                      {!codex ? (
+                        <>
+                          <dt>Endpoint</dt>
+                          <dd>{provider.baseUrl}</dd>
+                        </>
+                      ) : null}
+                      <dt>Sign-in</dt>
+                      <dd>
+                        {codex
+                          ? "Codex account"
+                          : (credential?.label ??
+                            (provider.credentialId
+                              ? "Credential unavailable"
+                              : "No credential"))}
+                      </dd>
+                      <dt>Request timeout</dt>
+                      <dd>
+                        {provider.timeoutMs
+                          ? `${provider.timeoutMs / 1000}s`
+                          : "Default"}
+                      </dd>
+                      <dt>Version</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <span className="status-chip tone-neutral provider-adapter-chip">
-                    {providerAdapterLabel(provider.kind)}
-                  </span>
-                  <div className="provider-row-meta">
-                    <span
-                      className={`status-chip${provider.credentialId || codex ? " tone-success" : ""}`}
-                    >
-                      <IconLock size={13} aria-hidden="true" />
-                      {codex
-                        ? "Codex account"
-                        : provider.credentialId
-                          ? "Credential attached"
-                          : "No credential"}
-                    </span>
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active model references this provider."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "No models"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {timeout} · v{entry.currentRevision}
-                    </span>
+                  <div>
+                    <h4>Configured models</h4>
+                    {models.length ? (
+                      <ul>
+                        {models.map((model) => (
+                          <li key={model.id}>
+                            {model.label}
+                            <small>{currentValue(model).model}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No configured model uses this provider.</p>
+                    )}
                   </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      disabled={busy}
-                      onClick={() => setProviderEditor(providerDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                    <button
-                      className="button danger"
-                      type="button"
-                      aria-label={`Delete ${entry.label}`}
-                      disabled={busy}
-                      onClick={(event) =>
-                        onDeleteCatalogEntry(
-                          "provider",
-                          entry.id,
-                          event.currentTarget,
-                        )
-                      }
-                    >
-                      <IconTrash size={15} aria-hidden="true" /> Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeProviders.length === 0 ? (
-              <EmptySettings
-                icon={<IconCloud size={24} />}
-                title="No providers"
-              />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {providerEditor ? (
+            <ProviderEditor
+              draft={providerEditor}
+              credentials={global.credentials}
+              busy={busy}
+              onChange={setProviderEditor}
+              onCancel={() => setProviderEditor(null)}
+              onSave={onSaveProvider}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "search") {
