@@ -1,0 +1,27 @@
+.provider-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  color: var(--muted);
+}
+
+.provider-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.provider-icon .provider-icon-light {
+  display: none;
+}
+
+:root[data-theme="light"] .provider-icon .provider-icon-light {
+  display: block;
+}
+
+:root[data-theme="light"] .provider-icon .provider-icon-dark {
+  display: none;
+}

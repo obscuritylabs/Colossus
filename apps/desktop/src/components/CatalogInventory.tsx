@@ -24,6 +24,7 @@ export interface CatalogInventoryRow {
   label: string;
   name: string;
   description: string;
+  icon?: ReactNode;
   searchText: string;
   connection: ReactNode;
   usage: string;
@@ -141,8 +142,12 @@ export function CatalogInventory({
                   <tr className="catalog-inventory-row" data-expanded={open}>
                     <th scope="row">
                       <div className="catalog-identity">
-                        <span className="resource-icon">
-                          <Icon size={19} aria-hidden="true" />
+                        <span
+                          className={
+                            row.icon ? "catalog-provider-icon" : "resource-icon"
+                          }
+                        >
+                          {row.icon ?? <Icon size={19} aria-hidden="true" />}
                         </span>
                         <div>
                           <button

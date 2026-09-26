@@ -928,6 +928,9 @@ export default function App() {
   const desktopRef = useRef(desktop);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
+  const [settingsStartTab, setSettingsStartTab] = useState<
+    "runtime" | "providers"
+  >("runtime");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
     useState<WorkspaceFileOpenRequest | null>(null);
@@ -4672,6 +4675,7 @@ export default function App() {
   const openWorkNavigation = useCallback(() => setWorkNavigationOpen(true), []);
   const selectSurface = useCallback((nextSurface: WorkspaceSurface) => {
     setWorkNavigationOpen(false);
+    if (nextSurface === "settings") setSettingsStartTab("runtime");
     setSurface(nextSurface);
   }, []);
 
@@ -4708,9 +4712,15 @@ export default function App() {
         (activeRun === undefined || isTerminalStatus(activeRun.status))
       }
       approvalModeChanging={approvalModeChanging}
-      targetLabel={
-        activeRun === undefined ? "Colossus" : agentRoleLabel(activeRun.role)
-      }
+      modelContext={{
+        targetKind: selectedTarget?.kind ?? null,
+        configuration: desktop.managedModelConfiguration,
+      }}
+      onOpenModelSettings={() => {
+        setSettingsStartTab("providers");
+        setWorkNavigationOpen(false);
+        setSurface("settings");
+      }}
       canCompose={canCompose}
       submitting={submitting}
       continuation={continuation}
@@ -5056,6 +5066,7 @@ export default function App() {
         />
       ) : (
         <OperationsSurface
+          initialSettingsTab={settingsStartTab}
           onReturnToWork={() => selectSurface("work")}
           pluginSelections={pluginSelections}
           onUsePluginSkill={(id) => {

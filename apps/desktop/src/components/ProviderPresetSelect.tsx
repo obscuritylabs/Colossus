@@ -6,6 +6,7 @@ import {
 } from "../providerCatalog";
 import type { ProviderKind } from "../types";
 import { DropdownSelect } from "./DropdownSelect";
+import { ProviderIcon } from "./ProviderIcon";
 
 export function ProviderPresetSelect({
   kind,
@@ -66,6 +67,9 @@ export function ProviderPresetSelect({
           aria-label="Provider"
           value={selected?.id ?? ""}
           disabled={busy || presets.length === 0}
+          renderOptionIcon={(option) =>
+            option.value ? <ProviderIcon presetId={option.value} /> : null
+          }
           onChange={(event) => {
             if (event.target.value === selected?.id) return;
             const preset = presets.find(
