@@ -1,4 +1,5 @@
 mod approval_adapter;
+mod browser;
 mod bundle;
 mod codex_auth;
 mod command_review;
@@ -32,6 +33,13 @@ mod terminal_protocol;
 mod updates;
 mod workspace_files;
 
+/// Run the opt-in native browser acceptance harness.
+#[cfg(feature = "browser-test-bridge")]
+pub fn run_browser_acceptance() {
+    browser::acceptance::run();
+}
+
+use browser::commands::{browser_command, browser_context, browser_viewport};
 use codex_auth::{codex_auth_login, codex_auth_logout, codex_auth_status};
 use command_review::{command_review_context, finish_command_review};
 use commands::{
@@ -100,7 +108,23 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
         .manage(command_review::CommandReviewState::default())
+        .setup(|app| {
+            browser::start_watchdog(app.handle().clone());
+            Ok(())
+        })
+        .on_page_load(|view, payload| {
+            if view.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                use tauri::Manager as _;
+                view.state::<state::AppState>().browser.controller_loading();
+            }
+        })
+        .on_window_event(browser::handle_window_event)
         .invoke_handler(tauri::generate_handler![
+            browser_context,
+            browser_command,
+            browser_viewport,
             command_review_context,
             finish_command_review,
             get_plugin_inventory,

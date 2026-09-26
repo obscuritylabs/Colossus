@@ -19,6 +19,7 @@
     "test:browser": "playwright test",
     "test:plugin-runtime": "node scripts/test-plugin-runtime.mjs",
     "test:approval-runtime": "node scripts/test-approval-runtime.mjs",
+    "test:browser-native": "node scripts/test-browser-native.mjs",
     "test:browser:install": "playwright install chromium",
     "test:watch": "vitest",
     "tauri": "tauri",

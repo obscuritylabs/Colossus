@@ -4923,6 +4923,8 @@ export default function App() {
         />
       ) : surface === "work" ? (
         <WorkSurface
+          browserScope={desktop.selectedTargetId}
+          browserFixture={FIXTURE_MODE}
           title={title}
           view={activeView}
           conversationViews={conversationViews}

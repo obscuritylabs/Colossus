@@ -2,8 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-chat",
   "description": "Only the main bundled WebView may use the narrow Colossus chat commands.",
-  "windows": ["main"],
+  "local": true,
+  "webviews": ["main"],
   "permissions": [
+    "allow-browser-context",
+    "allow-browser-command",
+    "allow-browser-viewport",
     "allow-get-plugin-inventory",
     "allow-resolve-plugin-selection",
     "allow-read-plugin-preview",

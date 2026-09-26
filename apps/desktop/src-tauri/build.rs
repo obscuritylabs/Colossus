@@ -11,6 +11,9 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "browser_context",
+    "browser_command",
+    "browser_viewport",
     "command_review_context",
     "finish_command_review",
     "get_plugin_inventory",
@@ -105,11 +108,21 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    // Ask the MSVC linker to embed Common Controls v6 for every executable,
+    // including library tests and examples that use TaskDialogIndirect. Disable
+    // Tauri's binary-only copy below to avoid two MANIFEST resources in the app.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+        );
+    }
     export_release_trust_configuration();
     stage_connection_config();
     stage_bundle_manifest();
     tauri_build::try_build(
         tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
     .expect("failed to build the Colossus desktop manifest");

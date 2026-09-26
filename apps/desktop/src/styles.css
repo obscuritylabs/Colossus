@@ -5085,6 +5085,19 @@ p {
   border-right: 0;
 }
 
+.browser-content-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue-strong);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
 .markdown-link-inert {
   color: var(--blue-strong);
   text-decoration: underline;
