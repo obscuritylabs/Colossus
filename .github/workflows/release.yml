@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*", "!vsigning-smoke-*"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
