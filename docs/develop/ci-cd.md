@@ -233,7 +233,7 @@ ad-hoc signature does not establish publisher identity. The workflow names it
 an adjacent SHA-256 sidecar, sets GitHub prerelease metadata, and labels the draft
 **Colossus vX.Y.Z-preview.N - Developer Preview (Unnotarized)**. The native compile-time
 channel also supplies the in-app banner, shown when **Show security warnings** is enabled
-in Desktop appearance settings (off by default). Production Desktop signing,
+in Desktop appearance settings (off by default). macOS production signing,
 notarization, and update authority remain a separate release track from the stable core.
 
 Within `release.yml`, only the draft job receives `contents: write`. After the selected
@@ -273,9 +273,10 @@ additional-CA configuration and rejects HTTPS-to-HTTP redirects.
 
 The application update signature is separate from platform publisher identity.
 Windows release signing is staged: sign the bundled CLI and sidecar, hash them into the
-bundle manifest, patch its digest into the Desktop executable, sign that executable,
-build the NSIS installer, then sign the installer. GitHub verifies each Authenticode
-publisher and timestamp before uploading the final installer. Standalone Windows x64
+bundle manifest, and patch its digest into the Desktop executable. Tauri then patches
+the app with its NSIS bundle type and invokes the Azure signer for the app, uninstaller,
+and installer. GitHub verifies the installed binaries' Authenticode publisher and
+timestamp before uploading the final installer. Standalone Windows x64
 and ARM64 CLI archives are signed on Windows x64 after build and before final ZIP hashing.
 
 ## Expected result

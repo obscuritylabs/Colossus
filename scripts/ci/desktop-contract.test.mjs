@@ -175,6 +175,10 @@ test("Windows Desktop seals signed releases in the required order", () => {
   assert.doesNotMatch(packaging, /\[IO\.File\]::Replace/u);
   assert.match(packaging, /Get-FileHash[\s\S]*detached executable/u);
   assert.match(packaging, /"--bundles", "nsis"/u);
+  assert.match(packaging, /sign-tauri-windows\.ps1/u);
+  assert.match(packaging, /signCommand = \[ordered\]@\{/u);
+  assert.match(packaging, /if \(\$Phase -eq "all"\) \{\s*\$BundleArguments \+= "--no-sign"/u);
+  assert.match(packaging, /Tauri must patch the unsigned desktop executable before signing it/u);
   assert.match(packaging, /LastWriteTimeUtc -ge \$BundleStartedAtUtc/u);
   assert.match(packaging, /Get-FileHash/u);
   assert.match(packaging, /verify-authenticode\.ps1/u);
@@ -184,6 +188,12 @@ test("Windows Desktop seals signed releases in the required order", () => {
   const installerVerification = packaging.indexOf('if ($Phase -eq "finalize")', mainVerification);
   assert.ok(nestedVerification < mainBinding && mainBinding < mainVerification);
   assert.ok(mainVerification < installerVerification);
+
+  const signer = read("scripts/ci/sign-tauri-windows.ps1");
+  assert.match(signer, /Import-Module ArtifactSigning/u);
+  assert.match(signer, /Invoke-ArtifactSigning/u);
+  assert.match(signer, /verify-authenticode\.ps1/u);
+  assert.match(signer, /Tauri signing input must be unsigned/u);
 });
 
 test("repository import keeps its action footer inside compact windows", () => {
@@ -1168,13 +1178,13 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
 
   assert.match(
     windowsJob,
-    /if: needs\.validate\.outputs\.publish_draft != 'true'/u,
+    /if: needs\.validate\.outputs\.publish_draft != 'true' && needs\.validate\.outputs\.target_channel != 'stable'/u,
   );
   assert.match(windowsJob, /runs-on: windows-latest-l/u);
   assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
   assert.match(windowsJob, /package-desktop-windows\.ps1/u);
   assert.match(windowsJob, /Get-FileHash/u);
-  assert.match(windowsJob, /codeSigning = "unsigned_developer_preview"/u);
+  assert.match(windowsJob, /codeSigning = "unsigned_validation_only"/u);
   assert.match(windowsJob, /smartScreenWarningExpected = \$true/u);
   assert.match(windowsJob, /Start-Process -FilePath \$installer/u);
   assert.match(windowsJob, /Start-Process -FilePath \$uninstallers/u);
@@ -1184,16 +1194,15 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
   assert.match(signedWindowsJob, /azure\/login@[0-9a-f]{40}/u);
-  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 3);
+  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 1);
   const signedBuild = signedWindowsJob.indexOf("-Phase build");
   const nestedSign = signedWindowsJob.indexOf("Sign bundled sidecar and CLI");
   const bind = signedWindowsJob.indexOf("-Phase bind");
-  const outerSign = signedWindowsJob.indexOf("Sign sealed desktop executable");
   const bundle = signedWindowsJob.indexOf("-Phase bundle");
-  const installerSign = signedWindowsJob.indexOf("Sign NSIS installer");
   const finalize = signedWindowsJob.indexOf("-Phase finalize");
-  assert.ok(signedBuild < nestedSign && nestedSign < bind && bind < outerSign);
-  assert.ok(outerSign < bundle && bundle < installerSign && installerSign < finalize);
+  assert.ok(signedBuild < nestedSign && nestedSign < bind && bind < bundle);
+  assert.ok(bundle < finalize);
+  assert.match(signedWindowsJob, /Bundle NSIS and sign patched app, uninstaller, and installer/u);
   assert.match(signedWindowsJob, /codeSigning = 'azure_artifact_signing'/u);
   assert.match(signedWindowsJob, /Start-Process -FilePath \$installed\[0\]\.FullName/u);
 
@@ -1321,6 +1330,10 @@ test("Windows CLI archives are signed before final release hashing", () => {
   assert.ok(unsignedCheck < azureSign && azureSign < signedCheck && signedCheck < upload);
   assert.match(gate, /windows_cli_sign="\$WINDOWS_CLI_SIGN_RESULT"/u);
   assert.match(gate, /test "\$WINDOWS_CLI_SIGN_RESULT" = skipped/u);
+  assert.match(
+    gate,
+    /if \[ "\$TARGET_CHANNEL" = stable \]; then[\s\S]*if \[ "\$\{\{ needs\.validate\.outputs\.publish_draft \}\}" = true \]; then[\s\S]*desktop_windows_signed="\$WINDOWS_SIGNED_DESKTOP_RESULT"[\s\S]*test "\$WINDOWS_SIGNED_DESKTOP_RESULT" = skipped/u,
+  );
 });
 
 test("desktop browser acceptance covers the supported minimum layout", () => {

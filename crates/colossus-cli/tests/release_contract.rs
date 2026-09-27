@@ -109,8 +109,10 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "release_channel=validation_only",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 21",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 25",
         "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
+        "Colossus-Desktop-STABLE-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
+        "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe",
     ] {
         assert!(
             source.contains(required),
@@ -202,7 +204,7 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
         "shasum -a 256 --check $preview_checksum",
         "System Settings > Privacy & Security > Open Anyway",
         "Do not disable Gatekeeper globally",
-        "Automatic Desktop updates are disabled in this unsigned preview",
+        "Automatic Desktop updates are disabled in this preview",
         "test ! -e \"dist/developer_preview.json\"",
         ".prerelease == $prerelease",
     ] {

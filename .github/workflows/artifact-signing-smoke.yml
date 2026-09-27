@@ -111,6 +111,23 @@ jobs:
           toolchain: 1.96.0
           targets: x86_64-pc-windows-msvc
 
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
+      - name: Cache Windows Desktop target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+          key: signing-smoke-desktop-x86_64-pc-windows-msvc
+          cache-targets: false
+
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop
         run: npm ci --ignore-scripts
@@ -143,32 +160,9 @@ jobs:
         shell: pwsh
         run: ./scripts/package-desktop-windows.ps1 -Phase bind
 
-      - name: Sign sealed Desktop executable
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
-        with:
-          endpoint: https://eus.codesigning.azure.net/
-          signing-account-name: colossus-code-sign
-          certificate-profile-name: colossus
-          files: ${{ github.workspace }}\apps\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\colossus-desktop.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
-      - name: Build NSIS installer
+      - name: Build NSIS and sign patched app, uninstaller, and installer
         shell: pwsh
         run: ./scripts/package-desktop-windows.ps1 -Phase bundle
-
-      - name: Sign NSIS installer
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
-        with:
-          endpoint: https://eus.codesigning.azure.net/
-          signing-account-name: colossus-code-sign
-          certificate-profile-name: colossus
-          files-folder: ${{ github.workspace }}\apps\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
 
       - name: Verify installer and manifest
         shell: pwsh
@@ -189,11 +183,21 @@ jobs:
               -File -Recurse -ErrorAction SilentlyContinue
           )
           if ($installed.Count -ne 1) { throw 'desktop executable was not installed' }
+          $installRoot = $installed[0].Directory.FullName
           foreach ($name in @('colossus-desktop.exe', 'colossus-sidecar.exe', 'colossus.exe')) {
-            ./scripts/ci/verify-authenticode.ps1 -Path (Join-Path $installed[0].Directory.FullName $name)
+            Write-Output "Checking installed $name"
+            ./scripts/ci/verify-authenticode.ps1 -Path (Join-Path $installRoot $name)
           }
           $application = Start-Process -FilePath $installed[0].FullName -PassThru
           Start-Sleep -Seconds 8
           if ($application.HasExited) { throw 'signed Desktop exited during launch smoke' }
           Stop-Process -Id $application.Id -Force
           $application.WaitForExit()
+          $uninstallers = @(
+            Get-ChildItem -LiteralPath $installRoot -Filter '*uninstall*.exe' -File
+          )
+          if ($uninstallers.Count -ne 1) { throw 'expected one signed uninstaller' }
+          ./scripts/ci/verify-authenticode.ps1 -Path $uninstallers[0].FullName
+          $uninstall = Start-Process -FilePath $uninstallers[0].FullName -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw 'NSIS uninstall failed' }
+          if (Test-Path -LiteralPath $installed[0].FullName) { throw 'desktop remained after uninstall' }

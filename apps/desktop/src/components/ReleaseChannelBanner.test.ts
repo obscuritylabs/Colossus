@@ -13,7 +13,7 @@ function metadata(
     architecture: "x64",
     channel: "developer_preview",
     bundleIntegrity: "verified",
-    codeSigning: "unsigned",
+    codeSigning: "verified",
     ...overrides,
   };
 }
@@ -30,11 +30,11 @@ function render(
 }
 
 describe("ReleaseChannelBanner", () => {
-  it("clearly labels the unsigned Windows developer preview", () => {
+  it("identifies the signed Windows developer preview", () => {
     const markup = render("developer_preview", metadata());
 
     expect(markup).toContain("Developer Preview");
-    expect(markup).toContain("Unsigned preview build for local testing");
+    expect(markup).toContain("Signed by Obscurity Labs LLC");
   });
 
   it("preserves the macOS ad-hoc signing label", () => {
@@ -45,7 +45,6 @@ describe("ReleaseChannelBanner", () => {
 
     expect(markup).toContain("Developer Preview");
     expect(markup).toContain("Ad-hoc signed and not Apple-notarized");
-    expect(markup).not.toContain("Unsigned preview build");
   });
 
   it.each(["development", "stable", "validation_only"] as const)(
