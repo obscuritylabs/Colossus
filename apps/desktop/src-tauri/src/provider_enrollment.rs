@@ -47,14 +47,14 @@ impl From<DialogAppearanceInput> for DialogAppearance {
 }
 
 pub(crate) async fn request_provider_secret(
-    parent: tauri::WebviewWindow,
+    parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<HostSecret, CommandErrorDto> {
     request_managed_credential_secret(parent, appearance).await
 }
 
 pub(crate) async fn request_managed_credential_secret(
-    parent: tauri::WebviewWindow,
+    parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<HostSecret, CommandErrorDto> {
     colossus_native_credential_ui::prompt(parent, appearance)

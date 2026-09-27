@@ -699,7 +699,8 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain('role="combobox"');
     expect(markup).not.toContain("<select");
     expect(markup).toContain("built in");
-    expect(markup).toContain("No local changes");
+    expect(markup).toContain("All changes saved and applied");
+    expect(markup).not.toContain("Apply Workspace changes");
     expect(markup).toContain('disabled=""');
   });
 
@@ -1343,6 +1344,33 @@ describe("ManagedSettingsPane", () => {
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("did not close cleanly");
     expect(markup).toContain("Apply Workspace changes");
+  });
+
+  it.each([
+    ["update_waiting", null],
+    ["update_confirmation", "Apply global updates"],
+    ["update_failed", "Retry global update"],
+  ] as const)("shows one truthful action for %s", (status, action) => {
+    const pending = buildManagedSettingsFixture(desktop()).spaces[0]!;
+    pending.status = status;
+    pending.pendingGlobalRevision = 5;
+    pending.statusMessage = "Saved global update status";
+    const markup = renderToStaticMarkup(
+      createElement(SettingsActionBar, {
+        dirty: false,
+        busy: false,
+        failure: "",
+        label: "Apply Workspace changes",
+        pending,
+        onDiscard: vi.fn(),
+        onApply: vi.fn(),
+      }),
+    );
+    expect(markup).toContain("Saved global update status");
+    expect(markup).not.toContain("Discard");
+    expect(markup).not.toContain("Apply Workspace changes");
+    if (action) expect(markup).toContain(action);
+    else expect(markup).not.toContain("<button");
   });
 
   it.each([

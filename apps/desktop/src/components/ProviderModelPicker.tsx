@@ -11,6 +11,7 @@ export function ProviderModelPicker({
   model,
   disabled = false,
   autoLoad = false,
+  headingLevel = 4,
   onLoad,
   onSelect,
 }: {
@@ -18,10 +19,12 @@ export function ProviderModelPicker({
   model: string;
   disabled?: boolean;
   autoLoad?: boolean;
+  headingLevel?: 2 | 4;
   onLoad: () => Promise<ProviderCatalogModel[]>;
   onSelect: (model: ProviderCatalogModel) => void;
 }) {
   const id = useId();
+  const Heading = headingLevel === 2 ? "h2" : "h4";
   const [models, setModels] = useState<ProviderCatalogModel[]>([]);
   const [query, setQuery] = useState("");
   const [state, setState] = useState<"idle" | "loading" | "loaded" | "error">(
@@ -81,7 +84,9 @@ export function ProviderModelPicker({
     >
       <div className="provider-catalog-heading">
         <div>
-          <h4 id={`${id}-heading`}>Available models</h4>
+          <Heading className="provider-catalog-title" id={`${id}-heading`}>
+            Available models
+          </Heading>
           <p>
             Load models from your provider, then choose one. You can also enter
             a model ID below.

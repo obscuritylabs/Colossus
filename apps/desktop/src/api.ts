@@ -321,6 +321,10 @@ export function getManagedConfiguration(): Promise<ManagedSettingsSnapshot> {
   return call("get_managed_configuration");
 }
 
+export function syncManagedConfiguration(): Promise<ManagedSettingsSnapshot | null> {
+  return call("sync_managed_configuration");
+}
+
 export function diagnoseManagedMcpServer(
   spaceId: string,
   server: string,

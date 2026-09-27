@@ -692,6 +692,15 @@ native boundary returns at most 256 KiB of text and exposes no write, execute, p
 network, arbitrary-open, or SDK command. Source changes continue through ordinary
 permit-bound agent effects; the viewer cannot mutate them.
 
+The opt-in embedded browser mounts untrusted guest WebViews under the Desktop window.
+Main-app capabilities bind the exact local main WebView, not every child of that
+window. Browser commands also validate caller document, selected workspace, and tab
+ownership. Guests share neither app credentials nor app event broadcasts. Native
+protocol handlers retain their caller checks. The browser is a human network surface,
+independent of agent tool permissions; navigation checks do not constitute a general
+private-network firewall. It remains disabled in normal builds pending the platform
+permission, lifecycle, and cleanup gates in [ADR 0003](adr/0003-desktop-browser-boundary.md).
+
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a
 SHA-256 manifest whose exact byte digest is patched into, and then sealed by, the signed

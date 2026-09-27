@@ -140,6 +140,45 @@ inspection. It does not
 automate native consent or credential-entry dialogs; those still require on-screen
 acceptance. Browser mocks alone do not exercise this native boundary.
 
+### Desktop embedded browser preview
+
+From `apps/desktop`, run `npm run test:browser-native` to build and exercise the
+feature-gated native browser harness. It requires a graphical Windows/macOS session
+and loopback sockets. It creates an owner-private UUID home under the user profile,
+uses an isolated main WebView profile, and removes only that exact generated directory
+after the process exits. It never uses saved Desktop credentials or workspaces.
+
+The harness checks real engine history, temporary cookie sharing/isolation, foreign
+workspace rejection, guest IPC/app-origin denial, native permission denial, suppressed
+script dialogs, popups, downloads, and clear/close behavior. Its fixture evaluation is
+compiled only with `browser-test-bridge`; no generic evaluation IPC command exists.
+The macOS and Windows pre-merge lanes own this acceptance tier.
+
+Set `COLOSSUS_BROWSER_INTERACTIVE_ACCEPTANCE=1` in an interactive desktop session
+to additionally require foreground keyboard/focus acceptance. Ordinary CI can have no
+foreground OS window; it checks that this condition denies the viewport lease and
+reports the interactive gate as outstanding. That result does not establish on-device
+keyboard, overlay, or focus behavior.
+
+Run native contracts from the repository root:
+
+```sh
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --lib --features browser-preview
+```
+
+From `apps/desktop`, run `npm run test:browser -- tests/browser/browser-pane.spec.ts`
+for controls, composer preservation, responsive layout, and accessibility. Fixture
+pages do not prove native isolation or site compatibility. The remaining release
+matrix is recorded in [ADR 0003](adr/0003-desktop-browser-boundary.md).
+
+For developer review, prepare debug sidecars, then from `apps/desktop` run:
+
+```sh
+npm run tauri -- dev --features browser-preview -- --locked
+```
+
+The feature is off in normal builds until the native release gates pass.
+
 ### Plan Mode acceptance
 
 Run `cargo test -p colossus-cli --test plan_mode_smoke --test interactive_plan_smoke`
