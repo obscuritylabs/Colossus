@@ -187,8 +187,8 @@ merging; a conflict-free merge alone does not prove the combined result was test
 
 - If classification is wrong or empty, fix the classifier or path contract; do not force
   a skipped gate through the aggregate job.
-- If pre-merge eligibility fails, verify draft status, actor permission, branch currency,
-  and the PR gate on the current merge commit before relabeling.
+- If pre-merge eligibility fails, verify draft status, actor permission, the current PR
+  head SHA, and its successful PR gate before relabeling.
 - If an acceptance job fails, diagnose that job, push the fix, wait for the new PR gate,
   and reapply `ci:full`.
 - If a release target fails, do not publish partial artifacts. Fix the source and create a
