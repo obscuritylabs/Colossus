@@ -158,12 +158,13 @@ fn export_release_trust_configuration() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo must provide target OS");
     if target_os == "windows" {
         match release_channel.as_str() {
-            "developer_preview" | "validation_only" => assert!(
+            "validation_only" => assert!(
                 team_id == "UNSIGNED",
-                "unsigned Windows preview builds require {TEAM_VARIABLE}=UNSIGNED"
+                "Windows validation builds require {TEAM_VARIABLE}=UNSIGNED"
             ),
-            "stable" => panic!(
-                "stable Windows Desktop is disabled until an Authenticode signer is configured"
+            "stable" | "developer_preview" => assert!(
+                team_id == "OBSCURITY_LABS_LLC",
+                "signed Windows releases require {TEAM_VARIABLE}=OBSCURITY_LABS_LLC"
             ),
             _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
         }
@@ -185,14 +186,17 @@ fn export_release_trust_configuration() {
         }
     }
     let signing_status = match (target_os.as_str(), release_channel.as_str()) {
-        ("windows", "developer_preview" | "validation_only") => "unsigned",
-        ("macos", "stable") => "verified",
+        ("windows", "validation_only") => "unsigned",
+        ("windows", "stable" | "developer_preview") | ("macos", "stable") => "verified",
         ("macos", "developer_preview" | "validation_only") => "ad_hoc",
         _ => "unsupported",
     };
-    let updates_enabled = release_channel == "stable";
     let update_endpoint = env::var(UPDATE_ENDPOINT_VARIABLE).unwrap_or_default();
     let update_public_key = env::var(UPDATE_PUBLIC_KEY_VARIABLE).unwrap_or_default();
+    // A first signed Windows release can use manual GitHub Release updates until
+    // a separate Tauri updater key and endpoint are configured.
+    let updates_enabled = release_channel == "stable"
+        && !(target_os == "windows" && update_endpoint.is_empty() && update_public_key.is_empty());
     if updates_enabled {
         assert!(
             valid_update_endpoint(&update_endpoint),
@@ -205,7 +209,7 @@ fn export_release_trust_configuration() {
     } else {
         assert!(
             update_endpoint.is_empty() && update_public_key.is_empty(),
-            "unsigned Developer Preview and validation-only Desktop builds must not advertise an update channel"
+            "Desktop builds without a configured update channel must not advertise partial update trust"
         );
     }
     println!("cargo:rustc-env={TEAM_VARIABLE}={team_id}");

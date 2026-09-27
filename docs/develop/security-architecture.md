@@ -707,7 +707,7 @@ SHA-256 manifest whose exact byte digest is patched into, and then sealed by, th
 running desktop executable. The manifest is opened once without following symlinks;
 selected executables are code-identity checked immediately before no-shell spawn and
 bootstrapped only over inherited bounded channels. The release manifest is created
-after nested signing because signing changes Mach-O bytes; an unset compile-time marker
+after nested signing because signing changes executable bytes; an unset compile-time marker
 or an unbound resource is never accepted as final executable authority.
 
 Executable binding is platform-specific and fails closed. On macOS, native code hashes
