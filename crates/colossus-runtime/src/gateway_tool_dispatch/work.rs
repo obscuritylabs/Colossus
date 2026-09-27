@@ -105,6 +105,7 @@ impl GatewayToolExecutor {
                     context,
                     WorkOperation::DecisionList {
                         session_id,
+                        scope: DecisionListScope::Workspace,
                         status: optional_tool_value(&call, "status")?,
                         limit: tool_limit(&call, 100)?,
                     },

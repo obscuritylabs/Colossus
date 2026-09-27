@@ -177,6 +177,11 @@ struct RecordingDenyPolicy {
     requests: Arc<Mutex<Vec<EffectRequest>>>,
 }
 
+struct WorkspaceDecisionPolicy {
+    inner: BuiltInPolicy,
+    requests: Arc<Mutex<Vec<EffectRequest>>>,
+}
+
 #[async_trait::async_trait]
 impl PolicyDecisionPoint for RuntimePostDenyPolicy {
     async fn decide(
@@ -207,6 +212,35 @@ impl PolicyDecisionPoint for RecordingDenyPolicy {
             .expect("recorded policy requests")
             .push(request.clone());
         self.inner.decide(request).await
+    }
+
+    async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
+        self.inner.doctor().await
+    }
+}
+
+#[async_trait::async_trait]
+impl PolicyDecisionPoint for WorkspaceDecisionPolicy {
+    async fn decide(
+        &self,
+        request: &EffectRequest,
+    ) -> Result<PolicyDecision, colossus_ports::PolicyError> {
+        let mut decision = self.inner.decide(request).await?;
+        if request.action == "decision.list" {
+            self.requests
+                .lock()
+                .expect("workspace decision policy requests")
+                .push(request.clone());
+            if request.resource != "workspace:decisions"
+                || (request.phase == EffectPhase::PreEffect
+                    && request.content["scope"] != "workspace")
+            {
+                decision.outcome = DecisionOutcome::Deny;
+                decision.reason = "workspace decision read was not authorized".into();
+            }
+            decision.obligations.require_post_effect = true;
+        }
+        Ok(decision)
     }
 
     async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
@@ -4227,9 +4261,13 @@ async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wi
     for action in actions {
         policy = policy.with_action(action, DecisionOutcome::Allow);
     }
+    let decision_policy_requests = Arc::new(Mutex::new(Vec::new()));
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
         Arc::clone(&journal),
-        Arc::new(policy),
+        Arc::new(WorkspaceDecisionPolicy {
+            inner: policy,
+            requests: Arc::clone(&decision_policy_requests),
+        }),
         Arc::new(colossus_policy::DenyApproval),
         colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
         [10_u8; 32],
@@ -4347,6 +4385,18 @@ async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wi
     let listed_from_other_session: serde_json::Value =
         serde_json::from_str(&listed_from_other_session.output).expect("list JSON");
     assert_eq!(listed_from_other_session[0]["id"], decision["id"]);
+    {
+        let policy_requests = decision_policy_requests
+            .lock()
+            .expect("workspace decision policy requests");
+        assert_eq!(policy_requests.len(), 4);
+        for request in policy_requests.iter() {
+            assert_eq!(request.resource, "workspace:decisions");
+            if request.phase == EffectPhase::PreEffect {
+                assert_eq!(request.content["scope"], "workspace");
+            }
+        }
+    }
 
     let updated = executor
         .execute(
