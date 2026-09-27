@@ -209,7 +209,7 @@ test.beforeEach(async ({ page }) => {
   }, icon);
   await page.goto("/?fixture=plugin-studio");
   await expect(
-    page.getByRole("button", { name: /colossus 0\.10/u }),
+    page.getByRole("button", { name: /colossus 0\.11/u }),
   ).toBeVisible();
 });
 
@@ -251,7 +251,7 @@ test("failed plugin MCP diagnostics keep TLS evidence readable before expansion"
   await page
     .getByRole("button", { name: "Refresh plugins", exact: true })
     .click();
-  await page.getByRole("button", { name: /colossus 0\.10/u }).click();
+  await page.getByRole("button", { name: /colossus 0\.11/u }).click();
   const controls = page.getByRole("group", {
     name: "colossus/docs connection",
   });
@@ -295,7 +295,7 @@ test("failed plugin MCP diagnostics keep TLS evidence readable before expansion"
 test("plugin MCP diagnostics and OAuth require explicit server enablement", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: /colossus 0\.10/u }).click();
+  await page.getByRole("button", { name: /colossus 0\.11/u }).click();
   const controls = page.getByRole("group", {
     name: "colossus/docs connection",
   });
@@ -341,7 +341,7 @@ test("plugin MCP diagnostics and OAuth require explicit server enablement", asyn
 test("metadata-only discovery, bounded previews, binary paths, selection, and compact accessibility", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: /colossus 0\.10/u }).click();
+  await page.getByRole("button", { name: /colossus 0\.11/u }).click();
   await expect(
     page.getByRole("heading", {
       name: "colossus/plugin-authoring",
@@ -407,7 +407,7 @@ test("metadata-only discovery, bounded previews, binary paths, selection, and co
 test("core ownership, global lifecycle, untrusted activation, explicit digest, and errors", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: /colossus 0\.10/u }).click();
+  await page.getByRole("button", { name: /colossus 0\.11/u }).click();
   const detail = page.getByRole("article", { name: "colossus details" });
   await expect(
     detail.getByRole("button", { name: "Uninstall", exact: true }),
