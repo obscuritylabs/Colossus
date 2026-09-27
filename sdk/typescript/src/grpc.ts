@@ -114,7 +114,7 @@ export async function createSecureGrpcClient<Client extends grpc.Client>(
     // Full command context plus the bounded response envelope; sends stay unchanged.
     "grpc.max_receive_message_length": 8 * 1024 * 1024,
     "grpc.max_send_message_length": 4 * 1024 * 1024,
-    "grpc.primary_user_agent": "colossus-typescript-sdk/0.10.9",
+    "grpc.primary_user_agent": "colossus-typescript-sdk/0.11.0",
     // grpc-js always forwards its TLS servername, while Node rejects IP
     // literals in SNI. Use an inert SNI value and verify the descriptor's
     // literal IP SAN explicitly in checkServerIdentity above.
