@@ -94,6 +94,7 @@ try {
     $env:COLOSSUS_HOME = Join-Path $installedSmoke "colossus-home"
     try {
         $plugins = @(& $installed --config config.yaml plugins list | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "installed embedded core discovery failed" }
         $ripgrepVersion = (& $installedRipgrep --version | Select-Object -First 1)
         if ($LASTEXITCODE -ne 0 -or -not $ripgrepVersion.StartsWith("ripgrep 15.2.0")) { throw "installed ripgrep is unavailable" }
         $searchSpace = Join-Path $installedSmoke "search space"
@@ -107,7 +108,6 @@ try {
         if ($LASTEXITCODE -ne 1) { throw "managed ripgrep did not respect ignore rules" }
         & $installedRipgrep -l "no-such-ripgrep-match" $searchSpace | Out-Null
         if ($LASTEXITCODE -ne 1) { throw "managed ripgrep did not report an empty search" }
-        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "installed embedded core discovery failed" }
         & $installed --config config.yaml run installed-offline | Set-Content -Encoding utf8 result.json
         $result = Get-Content -Raw result.json | ConvertFrom-Json
         if ($result.output -ne "installed-offline" -or $result.profile -ne "echo") { throw "installed smoke failed" }
