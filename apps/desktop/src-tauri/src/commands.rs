@@ -235,7 +235,7 @@ pub(crate) async fn create_run(
         })?;
         if space.configuration.accepted_global_revision < settings.global_configuration.revision {
             return Err(CommandErrorDto::busy(
-                "This Workspace has a pending configuration update. Review and apply it before starting new work.",
+                "This Workspace has a saved settings update. It will apply automatically when idle; check Settings if confirmation or a retry is needed.",
             ));
         }
         if state.configuration_draining_for(&target_id).await {

@@ -1,5 +1,7 @@
 param(
-    [string]$ReleaseVersion = $env:COLOSSUS_DESKTOP_RELEASE_VERSION
+    [string]$ReleaseVersion = $env:COLOSSUS_DESKTOP_RELEASE_VERSION,
+    [ValidateSet("all", "build", "bind", "bundle", "finalize")]
+    [string]$Phase = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,13 +48,16 @@ $Target = if ($env:COLOSSUS_DESKTOP_TARGET) {
     "x86_64-pc-windows-msvc"
 }
 if ($Target -ne "x86_64-pc-windows-msvc") {
-    Fail "the first Desktop preview supports only x86_64-pc-windows-msvc"
+    Fail "Windows Desktop packaging currently supports only x86_64-pc-windows-msvc"
 }
-if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @("developer_preview", "validation_only")) {
-    Fail "unsigned Windows packaging is restricted to developer_preview or validation_only"
-}
-if ($env:COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED") {
-    Fail "unsigned Windows packaging requires COLOSSUS_DESKTOP_TEAM_ID=UNSIGNED"
+if ($Phase -eq "all") {
+    if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -ne "validation_only" -or
+        $env:COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED") {
+        Fail "unsigned Windows packaging is restricted to validation_only with COLOSSUS_DESKTOP_TEAM_ID=UNSIGNED"
+    }
+} elseif ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @("stable", "developer_preview") -or
+    $env:COLOSSUS_DESKTOP_TEAM_ID -ne "OBSCURITY_LABS_LLC") {
+    Fail "signed Windows packaging requires stable or developer_preview with COLOSSUS_DESKTOP_TEAM_ID=OBSCURITY_LABS_LLC"
 }
 $TargetRoot = if ($env:CARGO_TARGET_DIR) {
     if ([IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
@@ -116,6 +121,20 @@ $TauriOverride = [ordered]@{
         createUpdaterArtifacts = $false
     }
 }
+if ($Phase -eq "bundle") {
+    $TauriOverride.bundle["windows"] = [ordered]@{
+        signCommand = [ordered]@{
+            cmd = "pwsh"
+            args = @(
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                (Join-Path $PSScriptRoot "ci/sign-tauri-windows.ps1"),
+                "%1"
+            )
+        }
+    }
+}
 if ($ReleaseVersion) {
     $TauriOverride.version = $ReleaseVersion
 }
@@ -128,90 +147,145 @@ $TauriOverrideJson = $TauriOverride | ConvertTo-Json -Compress -Depth 4
 
 Push-Location $Repository
 try {
-    cargo xtask desktop prepare --profile release --target $Target
-    if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
+    if ($Phase -in @("all", "build")) {
+        cargo xtask desktop prepare --profile release --target $Target
+        if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
 
-    Push-Location $Desktop
-    try {
-        Invoke-CheckedCommand "renderer TypeScript app check" $TypeScript @("--noEmit", "-p", "tsconfig.app.json")
-        Invoke-CheckedCommand "renderer TypeScript node check" $TypeScript @("--noEmit", "-p", "tsconfig.node.json")
-        Invoke-CheckedCommand "renderer Vite build" $Vite @("build")
-        Invoke-CheckedCommand `
-            "renderer bundle size check" `
-            "node" `
-            @((Join-Path $Repository "scripts/check-desktop-renderer-bundle.mjs"), ".")
-    } finally {
-        Pop-Location
+        Push-Location $Desktop
+        try {
+            Invoke-CheckedCommand "renderer TypeScript app check" $TypeScript @("--noEmit", "-p", "tsconfig.app.json")
+            Invoke-CheckedCommand "renderer TypeScript node check" $TypeScript @("--noEmit", "-p", "tsconfig.node.json")
+            Invoke-CheckedCommand "renderer Vite build" $Vite @("build")
+            Invoke-CheckedCommand `
+                "renderer bundle size check" `
+                "node" `
+                @((Join-Path $Repository "scripts/check-desktop-renderer-bundle.mjs"), ".")
+        } finally {
+            Pop-Location
+        }
+
+        Push-Location $Desktop
+        try {
+            $BuildArguments = @(
+                "build",
+                "--target", $Target,
+                "--no-sign",
+                "--no-bundle",
+                "--config", $TauriOverridePath
+            )
+            $BuildArguments += @("--", "--locked")
+            & $Tauri @BuildArguments
+            if ($LASTEXITCODE -ne 0) { Fail "Tauri application build failed" }
+        } finally {
+            Pop-Location
+        }
+
+        foreach ($Path in @($Main, $StagedSidecar, $StagedCli)) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+                Fail "expected release input is missing"
+            }
+        }
+
+        # Cargo may hard-link the top-level Windows executable to its hashed artifact.
+        # Replace it with an identical single-link file before the binding helper opens it.
+        Detach-Executable $Main
     }
 
-    Push-Location $Desktop
-    try {
-        $BuildArguments = @(
-            "build",
-            "--target", $Target,
-            "--no-sign",
-            "--no-bundle",
-            "--config", $TauriOverridePath
-        )
-        $BuildArguments += @("--", "--locked")
-        & $Tauri @BuildArguments
-        if ($LASTEXITCODE -ne 0) { Fail "Tauri application build failed" }
-    } finally {
-        Pop-Location
+    if ($Phase -eq "build") {
+        Write-Output $Main
+        return
     }
 
-    foreach ($Path in @($Main, $StagedSidecar, $StagedCli)) {
-        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            Fail "expected release input is missing"
+    if ($Phase -eq "bind") {
+        foreach ($Path in @($StagedSidecar, $StagedCli)) {
+            & (Join-Path $PSScriptRoot "ci/verify-authenticode.ps1") -Path $Path
+        }
+        if ((Get-AuthenticodeSignature -LiteralPath $Main).Status -ne "NotSigned") {
+            Fail "desktop executable must be unsigned until after manifest binding"
         }
     }
 
-    # Cargo may hard-link the top-level Windows executable to its hashed artifact.
-    # Replace it with an identical single-link file before the binding helper opens it.
-    Detach-Executable $Main
+    if ($Phase -in @("all", "bind")) {
+        node (Join-Path $PSScriptRoot "write-desktop-bundle-manifest.mjs") `
+            --target $Target `
+            --release-channel $env:COLOSSUS_DESKTOP_RELEASE_CHANNEL `
+            --sidecar $StagedSidecar `
+            --cli $StagedCli `
+            --output $Manifest
+        if ($LASTEXITCODE -ne 0) { Fail "sealed bundle manifest generation failed" }
 
-    node (Join-Path $PSScriptRoot "write-desktop-bundle-manifest.mjs") `
-        --target $Target `
-        --release-channel $env:COLOSSUS_DESKTOP_RELEASE_CHANNEL `
-        --sidecar $StagedSidecar `
-        --cli $StagedCli `
-        --output $Manifest
-    if ($LASTEXITCODE -ne 0) { Fail "sealed bundle manifest generation failed" }
+        node (Join-Path $PSScriptRoot "patch-desktop-manifest-binding.mjs") `
+            --executable $Main `
+            --manifest $Manifest
+        if ($LASTEXITCODE -ne 0) { Fail "desktop manifest binding failed" }
+    }
 
-    node (Join-Path $PSScriptRoot "patch-desktop-manifest-binding.mjs") `
-        --executable $Main `
-        --manifest $Manifest
-    if ($LASTEXITCODE -ne 0) { Fail "desktop manifest binding failed" }
+    if ($Phase -eq "bind") {
+        Write-Output $Main
+        return
+    }
 
-    Push-Location $Desktop
-    try {
-        $BundleStartedAtUtc = [DateTime]::UtcNow
-        $BundleArguments = @(
-            "bundle",
-            "--target", $Target,
-            "--bundles", "nsis",
-            "--no-sign",
-            "--ci"
+    if ($Phase -in @("bundle", "finalize")) {
+        foreach ($Path in @($StagedSidecar, $StagedCli)) {
+            & (Join-Path $PSScriptRoot "ci/verify-authenticode.ps1") -Path $Path
+        }
+    }
+    if ($Phase -eq "bundle" -and
+        (Get-AuthenticodeSignature -LiteralPath $Main).Status -ne "NotSigned") {
+        Fail "Tauri must patch the unsigned desktop executable before signing it"
+    }
+
+    if ($Phase -in @("all", "bundle")) {
+
+        Push-Location $Desktop
+        try {
+            $BundleStartedAtUtc = [DateTime]::UtcNow
+            $BundleArguments = @(
+                "bundle",
+                "--target", $Target,
+                "--bundles", "nsis",
+                "--ci"
+            )
+            if ($Phase -eq "all") {
+                $BundleArguments += "--no-sign"
+            }
+            $BundleArguments += @("--config", $TauriOverridePath)
+            & $Tauri @BundleArguments
+            if ($LASTEXITCODE -ne 0) { Fail "NSIS packaging failed" }
+        } finally {
+            Pop-Location
+        }
+
+        $Installers = @(
+            Get-ChildItem -LiteralPath (Join-Path $ReleaseRoot "bundle/nsis") `
+                -Filter "*.exe" -File |
+                Where-Object { $_.LastWriteTimeUtc -ge $BundleStartedAtUtc }
         )
-        $BundleArguments += @("--config", $TauriOverridePath)
-        & $Tauri @BundleArguments
-        if ($LASTEXITCODE -ne 0) { Fail "NSIS packaging failed" }
-    } finally {
-        Pop-Location
+        if ($Installers.Count -ne 1) {
+            Fail "NSIS packaging must produce exactly one installer"
+        }
+        $Installer = $Installers[0]
+        if ($Phase -eq "bundle") {
+            & (Join-Path $PSScriptRoot "ci/verify-authenticode.ps1") -Path $Installer.FullName
+        }
     }
 
-    $Installers = @(
-        Get-ChildItem -LiteralPath (Join-Path $ReleaseRoot "bundle/nsis") `
-            -Filter "*.exe" -File |
-            Where-Object { $_.LastWriteTimeUtc -ge $BundleStartedAtUtc }
-    )
-    if ($Installers.Count -ne 1) {
-        Fail "NSIS packaging must produce exactly one installer"
+    if ($Phase -eq "bundle") {
+        Write-Output $Installer.FullName
+        return
     }
-    $Installer = $Installers[0]
+
+    if ($Phase -eq "finalize") {
+        $Installers = @(Get-ChildItem -LiteralPath (Join-Path $ReleaseRoot "bundle/nsis") -Filter "*.exe" -File)
+        if ($Installers.Count -ne 1) {
+            Fail "NSIS packaging must produce exactly one installer"
+        }
+        $Installer = $Installers[0]
+        & (Join-Path $PSScriptRoot "ci/verify-authenticode.ps1") -Path $Installer.FullName
+    }
     $InstallerSignature = "$($Installer.FullName).sig"
     if (Test-Path -LiteralPath $InstallerSignature) {
-        Fail "unsigned Windows packaging unexpectedly created an updater signature"
+        Fail "Windows packaging unexpectedly created an updater signature"
     }
     $Checksum = (Get-FileHash -LiteralPath $Installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$Checksum  $($Installer.Name)" | Set-Content -LiteralPath "$($Installer.FullName).sha256" -Encoding ascii
@@ -219,7 +293,7 @@ try {
         -Destination (Join-Path $ReleaseRoot "colossus-bundle-manifest.json") -Force
     Write-Output $Installer.FullName
 } finally {
-    if (Test-Path -LiteralPath $Manifest -PathType Leaf) {
+    if ($Phase -in @("all", "finalize") -and (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
         Remove-Item -LiteralPath $Manifest -Force
     }
     if (Test-Path -LiteralPath $TauriOverridePath -PathType Leaf) {

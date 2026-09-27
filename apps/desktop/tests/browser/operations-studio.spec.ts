@@ -1423,14 +1423,11 @@ test("every settings tab fills the viewport and keeps actions anchored", async (
       Math.abs(gaps.viewportGap ?? -1),
       `${tab} viewport gap`,
     ).toBeLessThanOrEqual(1);
-    if (tab === "Defaults") {
-      expect(
-        Math.abs(gaps.actionGap ?? -1),
-        "Defaults action gap",
-      ).toBeLessThanOrEqual(1);
-    } else {
-      expect(gaps.actionGap).toBeNull();
-    }
+    expect(
+      Math.abs(gaps.actionGap ?? -1),
+      `${tab} global status gap`,
+    ).toBeLessThanOrEqual(1);
+    await expect(page.locator(".managed-settings-actions")).toHaveCount(1);
   }
 
   await page.setViewportSize({ width: 700, height: 640 });

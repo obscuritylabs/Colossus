@@ -208,14 +208,13 @@ the `ADHOC` sentinel and identity `-`, but its runtime intentionally rejects Man
 startup. Stable packaging rejects both ad-hoc channels, and stable release publication
 for the production Desktop track still requires Developer ID plus notarization.
 
-Stable core `vX.Y.Z` tags skip every Desktop job. They publish CLI and SDK candidates
-without any Apple signing, notarization, or Tauri updater credential. Production Desktop
-credentials belong to a separate future release track and must not be added to the core
-release environment.
+Stable core `vX.Y.Z` tags publish signed Windows x64 Desktop and Windows CLI candidates
+alongside the SDK. They need no Apple signing, notarization, or Tauri updater credential;
+automatic Windows updates remain disabled until a separate updater key and feed exist.
 
-A canonical `vX.Y.Z-preview.N` Developer Preview tag is the credential-free runnable
-Desktop path: it uses the ad-hoc preview channel, reads no Apple signing secret, and
-creates clearly named unnotarized macOS and unsigned Windows assets. Manual dispatch of
+A canonical `vX.Y.Z-preview.N` Developer Preview tag uses the ad-hoc macOS preview
+channel and creates an unnotarized macOS archive plus signed Windows Desktop assets.
+It reads no Apple signing secret. Manual dispatch of
 a preview version remains validation-only, embeds the rejected `ADHOC` sentinel, labels
 its artifacts `VALIDATION-ONLY-ADHOC`, and cannot create a runnable app or draft release.
 Manual dispatch of a stable version instead validates the immutable SDK candidate and

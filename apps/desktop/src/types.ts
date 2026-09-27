@@ -545,6 +545,9 @@ export interface ManagedSpaceConfigurationSnapshot {
   status:
     | "active"
     | "update_available"
+    | "update_waiting"
+    | "update_confirmation"
+    | "update_failed"
     | "draining"
     | "starting"
     | "restarting"

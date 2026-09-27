@@ -131,7 +131,7 @@ test("Tauri bundles only the two native-owned executables", () => {
   });
 });
 
-test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
+test("Windows Desktop seals signed releases in the required order", () => {
   const config = json("apps/desktop/src-tauri/tauri.windows.conf.json");
   assert.deepEqual(config.bundle.targets, ["nsis"]);
   assert.deepEqual(config.bundle.resources, {
@@ -146,8 +146,10 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
 
   const packaging = read("scripts/package-desktop-windows.ps1");
   assert.match(packaging, /x86_64-pc-windows-msvc/u);
-  assert.match(packaging, /developer_preview", "validation_only/u);
+  assert.match(packaging, /"stable", "developer_preview"/u);
+  assert.match(packaging, /COLOSSUS_DESKTOP_TEAM_ID -ne "OBSCURITY_LABS_LLC"/u);
   assert.match(packaging, /COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED"/u);
+  assert.match(packaging, /"all", "build", "bind", "bundle", "finalize"/u);
   assert.match(
     packaging,
     /cargo metadata --locked --no-deps --format-version 1/u,
@@ -173,9 +175,28 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
   assert.doesNotMatch(packaging, /\[IO\.File\]::Replace/u);
   assert.match(packaging, /Get-FileHash[\s\S]*detached executable/u);
   assert.match(packaging, /"--bundles", "nsis"/u);
+  assert.match(packaging, /sign-tauri-windows\.ps1/u);
+  assert.match(packaging, /signCommand = \[ordered\]@\{/u);
+  assert.match(packaging, /if \(\$Phase -eq "all"\) \{\s*\$BundleArguments \+= "--no-sign"/u);
+  assert.match(packaging, /Tauri must patch the unsigned desktop executable before signing it/u);
   assert.match(packaging, /LastWriteTimeUtc -ge \$BundleStartedAtUtc/u);
   assert.match(packaging, /Get-FileHash/u);
-  assert.doesNotMatch(packaging, /stable/u);
+  assert.match(packaging, /verify-authenticode\.ps1/u);
+  const nestedVerification = packaging.indexOf('if ($Phase -eq "bind")');
+  const mainBinding = packaging.indexOf('patch-desktop-manifest-binding.mjs', nestedVerification);
+  const mainVerification = packaging.indexOf('if ($Phase -in @("bundle", "finalize"))', mainBinding);
+  const installerVerification = packaging.indexOf('if ($Phase -eq "finalize")', mainVerification);
+  assert.ok(nestedVerification < mainBinding && mainBinding < mainVerification);
+  assert.ok(mainVerification < installerVerification);
+
+  const signer = read("scripts/ci/sign-tauri-windows.ps1");
+  assert.match(signer, /Import-Module ArtifactSigning/u);
+  assert.match(signer, /Invoke-ArtifactSigning/u);
+  assert.match(signer, /verify-authenticode\.ps1/u);
+  assert.match(signer, /"\.exe", "\.dll", "\.tmp"/u);
+  assert.match(signer, /NSIS !uninstfinalize passes its PE uninstaller/u);
+  assert.match(signer, /ReadUInt32\(\) -ne 0x00004550/u);
+  assert.match(signer, /Tauri signing input has an invalid existing signature/u);
 });
 
 test("repository import keeps its action footer inside compact windows", () => {
@@ -397,7 +418,9 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   const terminal = json(
     "apps/desktop/src-tauri/capabilities/terminal-pty.json",
   );
-  assert.deepEqual(main.windows, ["main"]);
+  assert.deepEqual(main.webviews, ["main"]);
+  assert.equal(main.windows, undefined);
+  assert.equal(main.remote, undefined);
   assert.deepEqual(terminal.windows, ["terminal"]);
   assert.equal(terminal.local, true);
   assert.deepEqual(terminal.permissions, [
@@ -758,7 +781,7 @@ test("Space search indexes only bounded released thread metadata", () => {
     /path|prompt|message|tool|output|credential|secret/iu,
   );
   const commands = read("apps/desktop/src-tauri/src/desktop_commands.rs");
-  assert.match(commands, /app\.emit\(\s*"space-status-changed"/u);
+  assert.match(commands, /app\.emit_to\(\s*tauri::EventTarget::webview\("main"\),\s*"space-status-changed"/u);
   assert.match(commands, /"space-attention"/u);
 });
 
@@ -1083,17 +1106,20 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
     "  desktop_windows_preview:",
     signStart,
   );
-  const gateStart = workflow.indexOf("  gate:", windowsStart);
+  const signedWindowsStart = workflow.indexOf("  desktop_windows_signed:", windowsStart);
+  const gateStart = workflow.indexOf("  gate:", signedWindowsStart);
   assert.ok(
     buildStart >= 0 &&
       buildStart < signStart &&
       signStart < windowsStart &&
+      windowsStart < signedWindowsStart &&
       windowsStart < gateStart,
   );
 
   const buildJob = workflow.slice(buildStart, signStart);
   const signJob = workflow.slice(signStart, windowsStart);
-  const windowsJob = workflow.slice(windowsStart, gateStart);
+  const windowsJob = workflow.slice(windowsStart, signedWindowsStart);
+  const signedWindowsJob = workflow.slice(signedWindowsStart, gateStart);
   assert.match(buildJob, /npm ci --ignore-scripts/u);
   assert.match(buildJob, /package-desktop-macos build/u);
   assert.match(buildJob, /Colossus Desktop\.unsigned\.zip/u);
@@ -1157,17 +1183,33 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
 
   assert.match(
     windowsJob,
-    /if: needs\.validate\.outputs\.target_channel != 'stable'/u,
+    /if: needs\.validate\.outputs\.publish_draft != 'true' && needs\.validate\.outputs\.target_channel != 'stable'/u,
   );
   assert.match(windowsJob, /runs-on: windows-latest-l/u);
   assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
   assert.match(windowsJob, /package-desktop-windows\.ps1/u);
   assert.match(windowsJob, /Get-FileHash/u);
-  assert.match(windowsJob, /codeSigning = "unsigned_developer_preview"/u);
+  assert.match(windowsJob, /codeSigning = "unsigned_validation_only"/u);
   assert.match(windowsJob, /smartScreenWarningExpected = \$true/u);
   assert.match(windowsJob, /Start-Process -FilePath \$installer/u);
   assert.match(windowsJob, /Start-Process -FilePath \$uninstallers/u);
   assert.match(windowsJob, /Colossus processes remained after uninstall/u);
+
+  assert.match(signedWindowsJob, /environment: release-signing/u);
+  assert.match(signedWindowsJob, /id-token: write/u);
+  assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
+  assert.match(signedWindowsJob, /azure\/login@[0-9a-f]{40}/u);
+  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 1);
+  const signedBuild = signedWindowsJob.indexOf("-Phase build");
+  const nestedSign = signedWindowsJob.indexOf("Sign bundled sidecar and CLI");
+  const bind = signedWindowsJob.indexOf("-Phase bind");
+  const bundle = signedWindowsJob.indexOf("-Phase bundle");
+  const finalize = signedWindowsJob.indexOf("-Phase finalize");
+  assert.ok(signedBuild < nestedSign && nestedSign < bind && bind < bundle);
+  assert.ok(bundle < finalize);
+  assert.match(signedWindowsJob, /Bundle NSIS and sign patched app, uninstaller, and installer/u);
+  assert.match(signedWindowsJob, /codeSigning = 'azure_artifact_signing'/u);
+  assert.match(signedWindowsJob, /Start-Process -FilePath \$installed\[0\]\.FullName/u);
 
   const archiveCheck = signJob.indexOf(
     "node ./scripts/verify-desktop-unsigned-archive.mjs",
@@ -1202,6 +1244,7 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
     workflow,
     /if \[ "\$TARGET_CHANNEL" = stable \]; then[\s\S]*test "\$MACOS_DESKTOP_RESULT" = skipped[\s\S]*test "\$WINDOWS_DESKTOP_RESULT" = skipped/u,
   );
+  assert.match(workflow, /desktop_windows_signed="\$WINDOWS_SIGNED_DESKTOP_RESULT"/u);
 });
 
 test("standalone Desktop release builds stay bounded before sealed packaging", () => {
@@ -1218,7 +1261,7 @@ test("standalone Desktop release builds stay bounded before sealed packaging", (
   assert.match(patcher, /MAX_EXECUTABLE_BYTES = 1024 \* 1024 \* 1024/u);
 });
 
-test("stable Desktop updates stay independent and unsigned previews have no update authority", () => {
+test("Windows signed releases use manual updates until a separate updater key is configured", () => {
   const manifest = read("apps/desktop/src-tauri/Cargo.toml");
   const build = read("apps/desktop/src-tauri/build.rs");
   const updater = read("apps/desktop/src-tauri/src/updates.rs");
@@ -1230,10 +1273,11 @@ test("stable Desktop updates stay independent and unsigned previews have no upda
   assert.match(manifest, /tauri-plugin-updater = \{ version = "=2\.9\.0"/u);
   assert.match(build, /COLOSSUS_DESKTOP_UPDATE_ENDPOINT/u);
   assert.match(build, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY/u);
-  assert.match(build, /let updates_enabled = release_channel == "stable";/u);
+  assert.match(build, /let updates_enabled = release_channel == "stable"/u);
+  assert.match(build, /target_os == "windows" && update_endpoint\.is_empty\(\) && update_public_key\.is_empty\(\)/u);
   assert.match(
     build,
-    /unsigned Developer Preview and validation-only Desktop builds must not advertise/u,
+    /Desktop builds without a configured update channel must not advertise/u,
   );
   assert.match(updater, /AdditionalRootCertificates/u);
   assert.match(updater, /MAX_UPDATE_BYTES/u);
@@ -1247,7 +1291,7 @@ test("stable Desktop updates stay independent and unsigned previews have no upda
   assert.match(windows, /createUpdaterArtifacts = \$false/u);
   assert.match(
     windows,
-    /unsigned Windows packaging unexpectedly created an updater signature/u,
+    /Windows packaging unexpectedly created an updater signature/u,
   );
   assert.match(release, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""/u);
   assert.match(release, /COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""/u);
@@ -1263,6 +1307,38 @@ test("stable Desktop updates stay independent and unsigned previews have no upda
   assert.doesNotMatch(channels, /developer_preview/u);
   assert.match(channels, /desktop-update-channels/u);
   assert.match(channels, /gh release upload "\$channel_tag"/u);
+});
+
+test("Windows CLI archives are signed before final release hashing", () => {
+  const workflow = read(".github/workflows/release.yml");
+  const buildStart = workflow.indexOf("  artifacts:");
+  const signStart = workflow.indexOf("  windows_cli_sign:", buildStart);
+  const bootstrapStart = workflow.indexOf("  bootstrap_installers:", signStart);
+  const gateStart = workflow.indexOf("  gate:", bootstrapStart);
+  assert.ok(buildStart >= 0 && buildStart < signStart && signStart < bootstrapStart);
+
+  const build = workflow.slice(buildStart, signStart);
+  const sign = workflow.slice(signStart, bootstrapStart);
+  const gate = workflow.slice(gateStart);
+  assert.match(build, /unsigned-colossus-\{0\}/u);
+  assert.match(sign, /if: needs\.validate\.outputs\.publish_draft == 'true'/u);
+  assert.match(sign, /environment: release-signing/u);
+  assert.match(sign, /runs-on: windows-2025/u);
+  assert.match(sign, /id-token: write/u);
+  assert.match(sign, /target: \[x86_64-pc-windows-msvc, aarch64-pc-windows-msvc\]/u);
+  assert.match(sign, /azure\/login@[0-9a-f]{40}/u);
+  assert.match(sign, /azure\/artifact-signing-action@[0-9a-f]{40}/u);
+  const unsignedCheck = sign.indexOf("unsigned CLI checksum mismatch");
+  const azureSign = sign.indexOf("Sign CLI executable");
+  const signedCheck = sign.indexOf("Verify signed CLI and seal release archive");
+  const upload = sign.indexOf("Upload signed CLI archive and checksum");
+  assert.ok(unsignedCheck < azureSign && azureSign < signedCheck && signedCheck < upload);
+  assert.match(gate, /windows_cli_sign="\$WINDOWS_CLI_SIGN_RESULT"/u);
+  assert.match(gate, /test "\$WINDOWS_CLI_SIGN_RESULT" = skipped/u);
+  assert.match(
+    gate,
+    /if \[ "\$TARGET_CHANNEL" = stable \]; then[\s\S]*if \[ "\$\{\{ needs\.validate\.outputs\.publish_draft \}\}" = true \]; then[\s\S]*desktop_windows_signed="\$WINDOWS_SIGNED_DESKTOP_RESULT"[\s\S]*test "\$WINDOWS_SIGNED_DESKTOP_RESULT" = skipped/u,
+  );
 });
 
 test("desktop browser acceptance covers the supported minimum layout", () => {
