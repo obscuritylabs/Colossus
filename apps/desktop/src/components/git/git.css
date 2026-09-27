@@ -2,6 +2,15 @@
   max-width: 250px;
   min-width: 0;
 }
+.git-control-label {
+  flex-shrink: 0;
+  color: var(--text);
+  font-weight: 650;
+}
+.git-indicator[aria-expanded="true"] {
+  background: var(--blue-soft);
+  border-color: var(--accent-border);
+}
 .git-branch-label {
   overflow: hidden;
   text-overflow: ellipsis;

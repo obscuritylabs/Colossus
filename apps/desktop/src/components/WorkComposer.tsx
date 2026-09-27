@@ -15,7 +15,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent, RefObject } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 
 import { desktopSlashCommandSuggestions } from "../slash-commands";
 import { pluginMentionSuggestions } from "../plugins";
@@ -70,6 +70,7 @@ const RESEARCH_SOURCE_OPTIONS = [
 ] as const;
 
 interface WorkComposerProps {
+  contextActions?: ReactNode;
   pluginSkills?: readonly PluginSkill[] | null;
   pluginSelections?: readonly string[];
   onRemovePluginSkill?: (id: string) => void;
@@ -123,6 +124,7 @@ interface WorkComposerProps {
 }
 
 export function WorkComposer({
+  contextActions,
   pluginSkills = null,
   pluginSelections = [],
   onRemovePluginSkill,
@@ -286,17 +288,20 @@ export function WorkComposer({
       onSubmit={onSubmit}
     >
       <div className="composer-header">
-        <Suspense
-          fallback={
-            <span className="composer-model-loading">Loading model…</span>
-          }
-        >
-          <ComposerModelChip
-            context={modelContext}
-            role={role}
-            onOpenSettings={onOpenModelSettings}
-          />
-        </Suspense>
+        <div className="composer-context">
+          <Suspense
+            fallback={
+              <span className="composer-model-loading">Loading model…</span>
+            }
+          >
+            <ComposerModelChip
+              context={modelContext}
+              role={role}
+              onOpenSettings={onOpenModelSettings}
+            />
+          </Suspense>
+          {contextActions}
+        </div>
         <div className="composer-run-actions">
           {approvalModeVisible ? (
             <label

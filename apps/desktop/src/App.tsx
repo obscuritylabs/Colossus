@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { syncSavedSettings } from "./managed-settings-updates";
 
 import {
@@ -4690,8 +4690,9 @@ export default function App() {
     setSurface(nextSurface);
   }, []);
 
-  const composer = (
+  const composer = (contextActions: ReactNode) => (
     <WorkComposer
+      contextActions={contextActions}
       pluginSkills={completionSkills}
       pluginSelections={pluginSelections}
       onRemovePluginSkill={(id) =>

@@ -34,7 +34,7 @@ export function GitIndicator({
       aria-label={`Open Git: ${label}${repository ? `, ${repository.files.length}${repository.truncated ? "+" : ""} changed files` : ""}${git.error ? ", refresh failed" : ""}`}
       aria-expanded={open}
       aria-controls="work-side-drawer"
-      title={git.error || label}
+      title={git.error || "View Git changes and commit history"}
       onClick={onClick}
     >
       {git.busy ? (
@@ -42,9 +42,15 @@ export function GitIndicator({
       ) : (
         <IconGitBranch size={15} aria-hidden="true" />
       )}
-      <span className="git-branch-label">{label}</span>
+      <span className="git-control-label">Git</span>
+      {label !== "Git" ? (
+        <span className="git-branch-label">{label}</span>
+      ) : null}
       {repository && repository.files.length > 0 ? (
-        <span className="git-change-count">
+        <span
+          className="git-change-count"
+          title={`${repository.files.length}${repository.truncated ? "+" : ""} changed files`}
+        >
           {repository.files.length}
           {repository.truncated ? "+" : ""}
         </span>

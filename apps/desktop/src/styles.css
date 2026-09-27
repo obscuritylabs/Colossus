@@ -6702,6 +6702,34 @@ p {
   padding: 6px 12px;
 }
 
+.composer-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.composer-git-control {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.composer-header .git-indicator {
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: var(--font-size-caption);
+}
+
+@media (max-width: 700px) {
+  .composer-header {
+    row-gap: 0;
+    padding-block: 2px;
+  }
+}
+
 .composer-footer {
   display: flex;
   align-items: center;

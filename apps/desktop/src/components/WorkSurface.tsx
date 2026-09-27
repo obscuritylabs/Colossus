@@ -116,7 +116,7 @@ interface WorkSurfaceProps {
   selectedSpaceName: string;
   threadPinned: boolean;
   followRequestSequence: number;
-  composer: ReactNode;
+  composer: (contextActions: ReactNode) => ReactNode;
   filesPanel: ReactNode;
   filesAvailable: boolean;
   onOpenWorkspaceFile: (path: string) => void;
@@ -910,6 +910,17 @@ export function WorkSurface({
     commitAsideWidth(resize.width);
   }
 
+  const composerVisible =
+    sessionWorkspaceView !== "topology" && sessionWorkspaceView !== "activity";
+  const gitControl = git.available ? (
+    <span className="composer-git-control" ref={gitTriggerRef}>
+      <GitIndicator
+        git={git}
+        open={activeDrawer === "git"}
+        onClick={() => toggleDrawer("git")}
+      />
+    </span>
+  ) : null;
   const content = (
     <main
       className={`work-surface${view === undefined ? " is-new-work" : ""}`}
@@ -922,15 +933,7 @@ export function WorkSurface({
             <span>Work</span>
             <span aria-hidden="true">/</span>
             <span>{status?.label ?? "New work"}</span>
-            {git.available ? (
-              <span ref={gitTriggerRef}>
-                <GitIndicator
-                  git={git}
-                  open={activeDrawer === "git"}
-                  onClick={() => toggleDrawer("git")}
-                />
-              </span>
-            ) : null}
+            {!composerVisible ? gitControl : null}
           </p>
           <h2>{title}</h2>
           {run !== undefined ? (
@@ -1329,8 +1332,7 @@ export function WorkSurface({
               </button>
             ) : null}
           </div>
-          {sessionWorkspaceView === "topology" ||
-          sessionWorkspaceView === "activity" ? null : (
+          {!composerVisible ? null : (
             <div className="work-composer-dock">
               {view !== undefined && view.pendingInteractions.length > 0 ? (
                 <div
@@ -1346,7 +1348,7 @@ export function WorkSurface({
                   ))}
                 </div>
               ) : null}
-              {composer}
+              {composer(gitControl)}
             </div>
           )}
         </section>

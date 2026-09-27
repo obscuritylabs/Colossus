@@ -6,10 +6,20 @@ test("Git shows the branch, grouped changes and history without losing a draft",
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
   await page.goto("/?fixture=operations-studio");
-  const indicator = page.getByRole("button", {
+  const composer = page.getByRole("form", {
+    name: "Send a prompt",
+    exact: true,
+  });
+  const indicator = composer.getByRole("button", {
     name: /Open Git: codex\/desktop-git/,
   });
   await expect(indicator).toBeVisible();
+  await expect(indicator.getByText("Git", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .locator(".work-surface-header")
+      .getByRole("button", { name: /Open Git:/ }),
+  ).toHaveCount(0);
   await page
     .getByRole("textbox", { name: "Prompt", exact: true })
     .fill("Keep my draft while I inspect Git.");
@@ -37,9 +47,40 @@ test("Git shows the branch, grouped changes and history without losing a draft",
     pane.getByRole("region", { name: "Commit details" }),
   ).toContainText("Affected files");
   await page.getByRole("button", { name: "Close Git panel" }).click();
+  await expect(indicator).toBeFocused();
   await expect(
     page.getByRole("textbox", { name: "Prompt", exact: true }),
   ).toHaveValue("Keep my draft while I inspect Git.");
+});
+
+test("Git stays available on views without a message composer", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio");
+  const views = page.getByRole("navigation", { name: "Session views" });
+  for (const name of ["Topology", "Activity"]) {
+    await views.getByRole("button", { name, exact: true }).click();
+    await expect(
+      page.getByRole("form", { name: "Send a prompt", exact: true }),
+    ).toHaveCount(0);
+    await page
+      .locator(".work-surface-header")
+      .getByRole("button", { name: /Open Git:/ })
+      .click();
+    await expect(
+      page.getByRole("region", { name: "Workspace Git", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Close Git panel" }).click();
+  }
+  await views
+    .getByRole("button", { name: "Conversation", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("form", { name: "Send a prompt", exact: true })
+      .getByRole("button", { name: /Open Git:/ }),
+  ).toBeVisible();
 });
 
 test("Git has its own compact width and preserves a user resize", async ({
