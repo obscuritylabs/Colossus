@@ -7,11 +7,9 @@
 
 #![cfg_attr(windows, allow(unsafe_code))]
 
-mod credentials;
 mod error;
 mod path;
 
-pub use credentials::prompt_secret;
 pub use error::WindowsNativeError;
 pub use path::{
     BoundPath, FileIdentity, create_private_directory, create_private_file, replace_private_file,

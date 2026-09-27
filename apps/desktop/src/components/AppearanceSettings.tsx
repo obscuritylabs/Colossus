@@ -26,6 +26,8 @@ export function AppearanceSettings() {
     setColorTheme,
     setTextSize,
     textSize,
+    showSecurityWarnings,
+    setShowSecurityWarnings,
   } = useAppearance();
 
   return (
@@ -93,6 +95,26 @@ export function AppearanceSettings() {
           </DropdownSelect>
         </label>
       </div>
+      <label className="compact-switch appearance-security-warnings">
+        <input
+          className="switch-input"
+          type="checkbox"
+          role="switch"
+          checked={showSecurityWarnings}
+          aria-labelledby="appearance-security-warnings-label"
+          aria-describedby="appearance-security-warnings-help"
+          onChange={(event) => setShowSecurityWarnings(event.target.checked)}
+        />
+        <span>
+          <strong id="appearance-security-warnings-label">
+            Show security warnings
+          </strong>
+          <small id="appearance-security-warnings-help">
+            Show Developer Preview and Full access banners at the top of the
+            app. Off by default.
+          </small>
+        </span>
+      </label>
     </section>
   );
 }

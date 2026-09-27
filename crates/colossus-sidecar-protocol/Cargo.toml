@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Private inherited-channel bootstrap protocol for Colossus sidecars"
 
 [dependencies]
+colossus-contracts.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

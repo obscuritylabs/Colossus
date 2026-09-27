@@ -34,6 +34,12 @@ pub(super) struct ProviderCommand {
 
 #[derive(Subcommand)]
 pub(super) enum ProviderAction {
+    /// List shared provider presets and their credential environment hints.
+    Presets,
+    /// Load a preset or custom endpoint's models before configuring a model.
+    Discover(ProviderConnectionArgs),
+    /// Choose a provider and model, then create a configuration without overwriting one.
+    Setup(ProviderSetupArgs),
     /// Show configured profiles without resolving credentials.
     Profiles,
     /// Exercise the profile model-catalog endpoint through policy.
@@ -46,6 +52,49 @@ pub(super) enum ProviderAction {
     },
     /// List normalized models through policy.
     Models { profile: Option<String> },
+}
+
+#[derive(Args, Clone, Default)]
+pub(super) struct ProviderConnectionArgs {
+    /// Provider preset ID from `provider presets`; prompts when omitted in a terminal.
+    #[arg(long)]
+    pub(super) preset: Option<String>,
+    /// API version base URL, such as https://example.com/v1 (required for custom presets).
+    #[arg(long)]
+    pub(super) base_url: Option<String>,
+    /// Name of an environment variable containing the API key, never the key itself.
+    #[arg(long, conflicts_with = "no_credential")]
+    pub(super) credential_env: Option<String>,
+    /// Use a server without authentication instead of the preset's API key hint.
+    #[arg(long)]
+    pub(super) no_credential: bool,
+}
+
+#[derive(Args)]
+pub(super) struct ProviderSetupArgs {
+    #[command(flatten)]
+    pub(super) connection: ProviderConnectionArgs,
+    /// Create a repository-local configuration rather than the user configuration.
+    #[arg(long)]
+    pub(super) local: bool,
+    /// Exact model ID for manual setup; omission loads models and prompts for a selection.
+    #[arg(long)]
+    pub(super) model: Option<String>,
+    /// Override the context limit; unknown models default to 32768.
+    #[arg(long)]
+    pub(super) context_window_tokens: Option<u64>,
+    /// Override the output limit; unknown models default to 4096.
+    #[arg(long)]
+    pub(super) max_output_tokens: Option<u64>,
+    /// Explicit tool-call capability when catalog metadata is missing or incorrect.
+    #[arg(long, action = clap::ArgAction::Set)]
+    pub(super) tool_calls: Option<bool>,
+    /// Explicit streaming capability when catalog metadata is missing or incorrect.
+    #[arg(long, action = clap::ArgAction::Set)]
+    pub(super) streaming: Option<bool>,
+    /// Explicit image-input capability when catalog metadata is missing or incorrect.
+    #[arg(long, action = clap::ArgAction::Set)]
+    pub(super) image_inputs: Option<bool>,
 }
 
 #[derive(Args)]

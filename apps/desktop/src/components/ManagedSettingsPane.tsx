@@ -1,3 +1,4 @@
+import { SettingsFrame } from "./SettingsFrame";
 import { McpHealthDetails } from "./McpHealthDetails";
 import {
   IconActivityHeartbeat,
@@ -8,6 +9,7 @@ import {
   IconCloud,
   IconCpu,
   IconDatabase,
+  IconDownload,
   IconEdit,
   IconFileImport,
   IconFolder,
@@ -22,18 +24,25 @@ import {
   IconShield,
   IconTerminal2,
   IconTrash,
-  IconWorld,
   IconX,
 } from "@tabler/icons-react";
 import {
   type InputHTMLAttributes,
+  lazy,
+  Suspense,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { PluginConfigurationEditor } from "./PluginConfigurationEditor";
 import { McpDeleteDialog } from "./McpDeleteDialog";
+import {
+  catalogDeletionBlockers,
+  deleteCatalogEntryFixture,
+  type DeletableCatalogKind,
+} from "../catalog-deletion";
 import { deleteMcpFixture, managedMcpConsumers } from "../mcp-deletion";
 
 import {
@@ -45,17 +54,21 @@ import {
   CommandFailure,
   deleteManagedCredential,
   deleteGlobalMcpServer,
+  deleteGlobalModel,
+  deleteGlobalProvider,
   diagnoseManagedMcpServer,
   diagnoseManagedModel,
   diagnoseManagedProvider,
   diagnoseManagedSearch,
   diagnoseManagedTelemetry,
+  discoverManagedProviderModels,
   getManagedExtensionInventory,
   getManagedConfiguration,
   inspectRepositoryConfiguration,
   logoutManagedMcpOAuth,
   managedMcpOAuthStatus,
   rotateManagedCredential,
+  reenterManagedCredential,
   saveGlobalDefaults,
   saveSpaceConfiguration,
   upsertGlobalMcpServer,
@@ -94,7 +107,27 @@ import type {
 } from "../types";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { DropdownSelect } from "./DropdownSelect";
+import { ProviderPresetSelect } from "./ProviderPresetSelect";
+import { ProviderIcon } from "./ProviderIcon";
+import { ProviderModelPicker } from "./ProviderModelPicker";
+import {
+  presetProviderKind,
+  resetModelMetadata,
+  selectCatalogModel,
+} from "../providerCatalog";
 import { ToastRegion, useToastQueue } from "./ToastRegion";
+
+const CatalogInventory = lazy(() =>
+  import("./CatalogInventory").then((module) => ({
+    default: module.CatalogInventory,
+  })),
+);
+
+const CatalogDeleteDialog = lazy(() =>
+  import("./CatalogDeleteDialog").then((module) => ({
+    default: module.CatalogDeleteDialog,
+  })),
+);
 
 type SettingsScope = "global" | "space";
 type GlobalTab =
@@ -102,6 +135,7 @@ type GlobalTab =
   | "models"
   | "credentials"
   | "mcp"
+  | "plugins"
   | "search"
   | "telemetry"
   | "defaults"
@@ -110,6 +144,7 @@ type SpaceTab =
   | "runtime"
   | "providers"
   | "mcp"
+  | "plugins"
   | "access"
   | "sandbox"
   | "search"
@@ -119,10 +154,12 @@ type SpaceTab =
   | "effective";
 
 interface ManagedSettingsPaneProps {
+  initialSpaceTab?: "runtime" | "providers" | undefined;
   desktop: DesktopStatus;
   connecting: boolean;
   updateChecking: boolean;
   updateMessage: string;
+  onReturnToWork?: (() => void) | undefined;
   onChooseWorkspace: () => void;
   onConfigureManaged: () => void;
   onRestartManaged: () => void;
@@ -134,6 +171,7 @@ interface ManagedSettingsPaneProps {
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onExportDiagnostics: () => void;
 }
 
 interface DefaultsDraft {
@@ -233,6 +271,7 @@ const GLOBAL_TABS: ReadonlyArray<{ id: GlobalTab; label: string }> = [
   { id: "models", label: "Models" },
   { id: "credentials", label: "Credentials" },
   { id: "mcp", label: "MCP" },
+  { id: "plugins", label: "Plugins" },
   { id: "search", label: "Search" },
   { id: "telemetry", label: "Telemetry" },
   { id: "defaults", label: "Defaults" },
@@ -243,6 +282,7 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "runtime", label: "Runtime" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
+  { id: "plugins", label: "Plugins" },
   { id: "access", label: "Access" },
   { id: "sandbox", label: "Sandbox" },
   { id: "search", label: "Search" },
@@ -253,9 +293,12 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
 ];
 
 export function managedFieldDestination(descriptor: ManagedFieldDescriptor): {
-  tab: "sandbox" | "research" | "advanced" | "runtime";
+  tab: "sandbox" | "research" | "advanced" | "runtime" | "plugins";
   section: string | null;
 } {
+  if (descriptor.id.startsWith("plugins.")) {
+    return { tab: "plugins", section: null };
+  }
   if (descriptor.id.startsWith("sandbox.")) {
     return { tab: "sandbox", section: null };
   }
@@ -318,10 +361,10 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   profile: "",
   providerProfile: "",
   model: "",
-  contextWindowTokens: 128_000,
-  maxOutputTokens: 16_384,
-  toolCalls: true,
-  streaming: true,
+  contextWindowTokens: 32_768,
+  maxOutputTokens: 4_096,
+  toolCalls: false,
+  streaming: false,
   imageInputs: false,
   reasoningEffort: null,
 };
@@ -1119,6 +1162,20 @@ function defaultOverrides(
   );
 }
 
+export function inheritedPluginValues(
+  snapshot: ManagedSettingsSnapshot,
+  space: ManagedSpaceConfigurationSnapshot,
+) {
+  const accepted = snapshot.globalConfiguration.defaults.revisions.find(
+    ({ revision }) => revision === space.configuration.acceptedGlobalRevision,
+  );
+  return new Map(
+    (accepted?.value.fieldOverrides ?? [])
+      .filter(({ fieldId }) => fieldId.startsWith("plugins."))
+      .map(({ fieldId, value }) => [fieldId, { value, source: "global" }]),
+  );
+}
+
 function overrideMap(overrides: readonly ManagedFieldOverride[]) {
   return Object.fromEntries(
     overrides.map((override) => [override.fieldId, override.value]),
@@ -1445,6 +1502,9 @@ export function buildManagedSettingsFixture(
       },
     },
     spaces,
+    credentialAvailability: Object.fromEntries(
+      credentials.map((credential) => [credential.id, "available" as const]),
+    ),
     fieldDescriptors: FIELD_DESCRIPTORS,
     lockedInvariants: [
       locked("storage.path", "Runtime storage path"),
@@ -1505,6 +1565,8 @@ function mcpEntry(
 }
 
 export function ManagedSettingsPane({
+  initialSpaceTab = "runtime",
+  onReturnToWork,
   desktop,
   connecting,
   updateChecking,
@@ -1520,6 +1582,7 @@ export function ManagedSettingsPane({
   onInstallUpdate,
   onImportCaBundle,
   onRemoveCaBundle,
+  onExportDiagnostics,
 }: ManagedSettingsPaneProps) {
   const initial = useMemo(
     () => buildManagedSettingsFixture(desktop),
@@ -1528,7 +1591,7 @@ export function ManagedSettingsPane({
   const [snapshot, setSnapshot] = useState(initial);
   const [scope, setScope] = useState<SettingsScope>("space");
   const [globalTab, setGlobalTab] = useState<GlobalTab>("mcp");
-  const [spaceTab, setSpaceTab] = useState<SpaceTab>("runtime");
+  const [spaceTab, setSpaceTab] = useState<SpaceTab>(initialSpaceTab);
   const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
   const [expandedAdvancedSections, setExpandedAdvancedSections] = useState<
     ReadonlySet<string>
@@ -1537,7 +1600,9 @@ export function ManagedSettingsPane({
     desktop.selectedSpaceId ?? initial.spaces[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [actionBusy, setBusy] = useState(false);
+  const busy = actionBusy || connecting;
+  const actionInFlight = useRef(false);
   const [failure, setFailure] = useState("");
   const { dismissToast, pushToast, toasts } = useToastQueue();
   const [defaults, setDefaults] = useState(() => defaultsDraft(initial));
@@ -1565,6 +1630,17 @@ export function ManagedSettingsPane({
     expectedRevision: number;
   } | null>(null);
   const mcpDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const [catalogDeletion, setCatalogDeletion] = useState<{
+    kind: DeletableCatalogKind;
+    resourceId: string;
+    expectedRevision: number;
+  } | null>(null);
+  const catalogDeleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const catalogToDelete = catalogDeletion
+    ? snapshot.globalConfiguration[
+        catalogDeletion.kind === "model" ? "models" : "providers"
+      ].find((entry) => entry.id === catalogDeletion.resourceId)
+    : undefined;
   const mcpToDelete = snapshot.globalConfiguration.mcpServers.find(
     (entry) => entry.id === mcpDeletion?.resourceId,
   );
@@ -1642,7 +1718,7 @@ export function ManagedSettingsPane({
   }, [selectedSpace]);
 
   useEffect(() => {
-    if (spaceTab !== "advanced" || !selectedSpace) return;
+    if (!["advanced", "plugins"].includes(spaceTab) || !selectedSpace) return;
     if (selectedSpace.status !== "active") {
       setExtensionInventory(null);
       setExtensionInventorySpaceId("");
@@ -1653,7 +1729,7 @@ export function ManagedSettingsPane({
   }, [spaceTab, selectedSpace?.id, selectedSpace?.status]);
 
   useEffect(() => {
-    if (!focusedFieldId || query || scope !== "space") return;
+    if (!focusedFieldId || query) return;
     const frame = window.requestAnimationFrame(() => {
       const target = document.getElementById(
         managedFieldElementId(focusedFieldId),
@@ -1662,7 +1738,7 @@ export function ManagedSettingsPane({
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [focusedFieldId, query, scope, spaceTab]);
+  }, [focusedFieldId, query, scope, spaceTab, globalTab]);
 
   const defaultsDirty =
     JSON.stringify(defaults) !== JSON.stringify(defaultsDraft(snapshot));
@@ -1676,12 +1752,40 @@ export function ManagedSettingsPane({
     selectedSpace?.effectiveValues.map((value) => [value.fieldId, value]) ?? [],
   );
 
+  function beginAction() {
+    if (actionInFlight.current || connecting) return false;
+    actionInFlight.current = true;
+    setBusy(true);
+    return true;
+  }
+
+  function endAction() {
+    actionInFlight.current = false;
+    setBusy(false);
+  }
+
+  async function discoverModels(
+    request: Parameters<typeof discoverManagedProviderModels>[0],
+  ) {
+    if (!beginAction()) {
+      throw new Error(
+        "Wait for the current settings operation to finish, then retry.",
+      );
+    }
+    try {
+      // Switching Settings tabs unmounts the picker, but its native request continues.
+      return await discoverManagedProviderModels(request);
+    } finally {
+      endAction();
+    }
+  }
+
   async function perform(
     action: () => Promise<ManagedSettingsSnapshot>,
     fixtureAction: () => ManagedSettingsSnapshot,
     success: string,
   ) {
-    setBusy(true);
+    if (!beginAction()) return false;
     setFailure("");
     try {
       const next = isTauriRuntime() ? await action() : fixtureAction();
@@ -1700,7 +1804,7 @@ export function ManagedSettingsPane({
       );
       return false;
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1893,7 +1997,7 @@ export function ManagedSettingsPane({
 
   async function inspectRepositoryImport() {
     if (!selectedSpace) return;
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       const proposal = isTauriRuntime()
@@ -1926,7 +2030,7 @@ export function ManagedSettingsPane({
           : "Repository configuration inspection failed.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1947,7 +2051,7 @@ export function ManagedSettingsPane({
       setFailure("Enter a new profile name for every rename decision.");
       return;
     }
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       if (isTauriRuntime()) {
@@ -1982,7 +2086,7 @@ export function ManagedSettingsPane({
           : "Repository configuration could not be applied.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -1996,18 +2100,25 @@ export function ManagedSettingsPane({
     await runMcpDiagnostic(async () => {
       const diagnostic: ManagedMcpDiagnostic = isTauriRuntime()
         ? await diagnoseManagedMcpServer(selectedSpace.id, server)
-        : {
-            server,
-            healthy: true,
-            tools: [
-              {
-                server,
-                name: "search",
-                title: "Search",
-                description: "Fixture allowlisted search tool.",
-              },
-            ],
-          };
+        : import.meta.env.DEV
+          ? (await import("../dev/mcp-health-fixture")).buildMcpHealthFixture(
+              server,
+              snapshot?.globalConfiguration.mcpServers
+                .map(currentValue)
+                .find((entry) => entry.name === server)?.transport ?? "stdio",
+            )
+          : {
+              server,
+              healthy: true,
+              tools: [
+                {
+                  server,
+                  name: "search",
+                  title: "Search",
+                  description: "Fixture allowlisted search tool.",
+                },
+              ],
+            };
       setMcpDiagnostics((current) => ({ ...current, [server]: diagnostic }));
       pushToast(
         diagnostic.healthy
@@ -2075,7 +2186,7 @@ export function ManagedSettingsPane({
   }
 
   async function runMcpDiagnostic(operation: () => Promise<void>) {
-    setBusy(true);
+    if (!beginAction()) return;
     setFailure("");
     try {
       await operation();
@@ -2086,7 +2197,7 @@ export function ManagedSettingsPane({
           : "The managed MCP operation failed.",
       );
     } finally {
-      setBusy(false);
+      endAction();
     }
   }
 
@@ -2238,7 +2349,8 @@ export function ManagedSettingsPane({
   }
 
   async function saveProvider() {
-    if (!providerEditor) return;
+    if (!providerEditor || busy) return;
+    const submitted = providerEditor;
     const provider = managedProvider(providerEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
@@ -2246,7 +2358,7 @@ export function ManagedSettingsPane({
       label: providerEditor.label,
       provider,
     };
-    await perform(
+    const saved = await perform(
       () => upsertGlobalProvider(request),
       () =>
         fixtureRevision((draft) => {
@@ -2259,11 +2371,36 @@ export function ManagedSettingsPane({
         }),
       "Provider saved.",
     );
-    setProviderEditor(null);
+    if (saved) {
+      setProviderEditor((current) => (current === submitted ? null : current));
+    }
+  }
+
+  async function removeCatalogEntry() {
+    if (!catalogDeletion || !catalogToDelete || busy) return;
+    const { kind, ...request } = catalogDeletion;
+    const deleted = await perform(
+      () =>
+        kind === "model"
+          ? deleteGlobalModel(request)
+          : deleteGlobalProvider(request),
+      () => deleteCatalogEntryFixture(snapshot, kind, request),
+      kind === "model" ? "Model deleted." : "Provider deleted.",
+    );
+    if (!deleted) return;
+    setCatalogDeletion(null);
+    if (kind === "model" && modelEditor?.resourceId === request.resourceId)
+      setModelEditor(null);
+    if (
+      kind === "provider" &&
+      providerEditor?.resourceId === request.resourceId
+    )
+      setProviderEditor(null);
   }
 
   async function saveModel() {
-    if (!modelEditor) return;
+    if (!modelEditor || busy) return;
+    const submitted = modelEditor;
     const model = managedModel(modelEditor);
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
@@ -2271,7 +2408,7 @@ export function ManagedSettingsPane({
       label: modelEditor.label,
       model,
     };
-    await perform(
+    const saved = await perform(
       () => upsertGlobalModel(request),
       () =>
         fixtureRevision((draft) => {
@@ -2284,7 +2421,9 @@ export function ManagedSettingsPane({
         }),
       "Model saved.",
     );
-    setModelEditor(null);
+    if (saved) {
+      setModelEditor((current) => (current === submitted ? null : current));
+    }
   }
 
   async function saveSearch() {
@@ -2358,13 +2497,15 @@ export function ManagedSettingsPane({
       () => createManagedCredential(request),
       () =>
         fixtureRevision((draft) => {
+          const id = crypto.randomUUID();
           draft.globalConfiguration.credentials.push({
-            id: crypto.randomUUID(),
+            id,
             label: request.label,
             kind: request.kind,
             backend: "desktop",
             createdAtMs: Date.now(),
           });
+          draft.credentialAvailability[id] = "available";
         }),
       "Credential stored securely.",
     );
@@ -2383,11 +2524,13 @@ export function ManagedSettingsPane({
           const old = draft.globalConfiguration.credentials.find(
             (credential) => credential.id === credentialId,
           )!;
+          const id = crypto.randomUUID();
           draft.globalConfiguration.credentials.push({
             ...old,
-            id: crypto.randomUUID(),
+            id,
             createdAtMs: Date.now(),
           });
+          draft.credentialAvailability[id] = "available";
         }),
       "Credential rotated. Existing configurations keep using the previous value until updated.",
     );
@@ -2402,12 +2545,28 @@ export function ManagedSettingsPane({
         }),
       () =>
         fixtureRevision((draft) => {
+          delete draft.credentialAvailability[credentialId];
           draft.globalConfiguration.credentials =
             draft.globalConfiguration.credentials.filter(
               (credential) => credential.id !== credentialId,
             );
         }),
       "Credential deleted.",
+    );
+  }
+
+  async function reenterCredential(credentialId: string) {
+    await perform(
+      () =>
+        reenterManagedCredential({
+          expectedRevision: snapshot.globalConfiguration.revision,
+          credentialId,
+        }),
+      () =>
+        fixtureRevision((draft) => {
+          draft.credentialAvailability[credentialId] = "available";
+        }),
+      "Credential restored. Existing references are unchanged.",
     );
   }
 
@@ -2474,78 +2633,93 @@ export function ManagedSettingsPane({
   );
 
   return (
-    <div className="managed-settings-shell">
-      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
-      <header className="managed-settings-header">
-        <div>
-          <p className="surface-breadcrumb">
-            Settings /{" "}
-            {scope === "global"
-              ? "Global configuration"
-              : (selectedSpace?.name ?? "Workspace")}
-          </p>
-          <h2>
-            {scope === "global"
-              ? "Global configuration"
-              : "Workspace configuration"}
-          </h2>
-          <div
-            className="managed-scope-switch"
-            role="group"
-            aria-label="Configuration scope"
-          >
-            <button
-              type="button"
-              className={scope === "global" ? "is-active" : ""}
-              aria-pressed={scope === "global"}
-              onClick={() => {
-                setFocusedFieldId(null);
-                setScope("global");
-              }}
+    <SettingsFrame
+      scope={scope}
+      onScopeChange={(next) => {
+        setFocusedFieldId(null);
+        setQuery("");
+        setScope(next);
+      }}
+      query={query}
+      onQueryChange={(value) => {
+        setFocusedFieldId(null);
+        setQuery(value);
+      }}
+      tabs={scope === "global" ? GLOBAL_TABS : SPACE_TABS}
+      activeTab={scope === "global" ? globalTab : spaceTab}
+      onTabChange={(tab) => {
+        setQuery("");
+        setFocusedFieldId(null);
+        if (scope === "global") setGlobalTab(tab as GlobalTab);
+        else setSpaceTab(tab as SpaceTab);
+      }}
+      onReturnToWork={onReturnToWork}
+      workspaceContext={
+        <div className="space-settings-context">
+          <label>
+            <span>Workspace</span>
+            <DropdownSelect
+              value={selectedSpace?.id ?? ""}
+              disabled={
+                busy ||
+                snapshot.spaces.filter((candidate) => !candidate.archived)
+                  .length === 0
+              }
+              onChange={(event) => setSelectedSpaceId(event.target.value)}
             >
-              <IconWorld size={16} aria-hidden="true" />
-              Global
-            </button>
-            <button
-              type="button"
-              className={scope === "space" ? "is-active" : ""}
-              aria-pressed={scope === "space"}
-              onClick={() => {
-                setFocusedFieldId(null);
-                setScope("space");
-              }}
-            >
-              <IconFolder size={16} aria-hidden="true" />
-              Workspace
-            </button>
-          </div>
+              {snapshot.spaces
+                .filter((candidate) => !candidate.archived)
+                .map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </DropdownSelect>
+          </label>
+          {selectedSpace ? (
+            <RuntimeStatus space={selectedSpace} />
+          ) : (
+            <small>No workspaces available</small>
+          )}
         </div>
-        <label className="managed-settings-search">
-          <IconSearch size={17} aria-hidden="true" />
-          <span className="sr-only">Search settings</span>
-          <input
-            type="search"
-            value={query}
-            placeholder="Search every setting"
-            onChange={(event) => {
-              setFocusedFieldId(null);
-              setQuery(event.target.value);
-            }}
-          />
-          {query ? (
-            <button
-              type="button"
-              aria-label="Clear settings search"
-              onClick={() => {
-                setFocusedFieldId(null);
-                setQuery("");
-              }}
-            >
-              <IconX size={15} aria-hidden="true" />
-            </button>
+      }
+    >
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      {!query ? (
+        <div className="settings-page-context">
+          <p className="surface-breadcrumb">
+            {scope === "global"
+              ? "Global / Shared resources & defaults"
+              : `Workspace / ${selectedSpace?.name ?? "Select a workspace"}`}
+          </p>
+          {scope === "space" && selectedSpace ? (
+            <div className="settings-context-actions">
+              <button
+                className="button secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void inspectRepositoryImport()}
+              >
+                <IconFileImport size={16} aria-hidden="true" />
+                {selectedSpace.configuration.import
+                  ? "Re-import config"
+                  : "Import config"}
+              </button>
+              {selectedSpace.pendingGlobalRevision ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void applyPendingRevision()}
+                >
+                  <IconRefresh size={16} aria-hidden="true" />
+                  Review and apply r{selectedSpace.pendingGlobalRevision}
+                </button>
+              ) : null}
+            </div>
           ) : null}
-        </label>
-      </header>
+        </div>
+      ) : null}
 
       {failure ? (
         <p className="managed-settings-message is-error" role="alert">
@@ -2558,13 +2732,17 @@ export function ManagedSettingsPane({
           onOpen={(result) => {
             setQuery("");
             if (result.scope === "field") {
-              setScope("space");
               const descriptor = descriptors.find(
                 (candidate) => candidate.id === result.id,
               );
               if (!descriptor) return;
               const destination = managedFieldDestination(descriptor);
               setFocusedFieldId(result.id);
+              if (destination.tab === "plugins" && scope === "global") {
+                setGlobalTab("plugins");
+                return;
+              }
+              setScope("space");
               if (destination.section) {
                 const section = destination.section;
                 setExpandedAdvancedSections((current) => {
@@ -2583,17 +2761,13 @@ export function ManagedSettingsPane({
         />
       ) : scope === "global" ? (
         <>
-          <SettingsTabs
-            tabs={GLOBAL_TABS}
-            active={globalTab}
-            onChange={(tab) => setGlobalTab(tab as GlobalTab)}
-          />
           <GlobalSettingsBody
             tab={globalTab}
             snapshot={snapshot}
             defaults={defaults}
             setDefaults={setDefaults}
             descriptors={descriptors}
+            focusedFieldId={focusedFieldId}
             busy={busy}
             mcpEditor={mcpEditor}
             setMcpEditor={setMcpEditor}
@@ -2609,9 +2783,19 @@ export function ManagedSettingsPane({
             providerEditor={providerEditor}
             setProviderEditor={setProviderEditor}
             onSaveProvider={() => void saveProvider()}
+            onDeleteCatalogEntry={(kind, resourceId, trigger) => {
+              setFailure("");
+              catalogDeleteTrigger.current = trigger;
+              setCatalogDeletion({
+                kind,
+                resourceId,
+                expectedRevision: snapshot.globalConfiguration.revision,
+              });
+            }}
             modelEditor={modelEditor}
             setModelEditor={setModelEditor}
             onSaveModel={() => void saveModel()}
+            onDiscoverModels={discoverModels}
             searchEditor={searchEditor}
             setSearchEditor={setSearchEditor}
             onSaveSearch={() => void saveSearch()}
@@ -2624,10 +2808,11 @@ export function ManagedSettingsPane({
             setCredentialKind={setCredentialKind}
             onCreateCredential={() => void createCredential()}
             onRotateCredential={(id) => void rotateCredential(id)}
+            onReenterCredential={(id) => void reenterCredential(id)}
             onDeleteCredential={(id) => void removeCredential(id)}
             onConfigureManaged={onConfigureManaged}
             desktop={desktop}
-            connecting={connecting}
+            connecting={busy}
             updateChecking={updateChecking}
             updateMessage={updateMessage}
             externalTargets={externalTargets}
@@ -2641,8 +2826,9 @@ export function ManagedSettingsPane({
             onInstallUpdate={onInstallUpdate}
             onImportCaBundle={onImportCaBundle}
             onRemoveCaBundle={onRemoveCaBundle}
+            onExportDiagnostics={onExportDiagnostics}
           />
-          {globalTab === "defaults" ? (
+          {globalTab === "defaults" || globalTab === "plugins" ? (
             <SettingsActionBar
               dirty={defaultsDirty}
               busy={busy}
@@ -2655,56 +2841,6 @@ export function ManagedSettingsPane({
         </>
       ) : (
         <>
-          <div className="space-settings-context">
-            <label>
-              <span>Workspace</span>
-              <DropdownSelect
-                value={selectedSpace?.id ?? ""}
-                onChange={(event) => setSelectedSpaceId(event.target.value)}
-              >
-                {snapshot.spaces
-                  .filter((candidate) => !candidate.archived)
-                  .map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-              </DropdownSelect>
-            </label>
-            {selectedSpace ? <RuntimeStatus space={selectedSpace} /> : null}
-            {selectedSpace ? (
-              <button
-                className="button secondary"
-                type="button"
-                disabled={busy}
-                onClick={() => void inspectRepositoryImport()}
-              >
-                <IconFileImport size={16} aria-hidden="true" />
-                {selectedSpace.configuration.import
-                  ? "Re-import config"
-                  : "Import config"}
-              </button>
-            ) : null}
-            {selectedSpace?.pendingGlobalRevision ? (
-              <button
-                className="button primary"
-                type="button"
-                disabled={busy}
-                onClick={() => void applyPendingRevision()}
-              >
-                <IconRefresh size={16} aria-hidden="true" />
-                Review and apply r{selectedSpace.pendingGlobalRevision}
-              </button>
-            ) : null}
-          </div>
-          <SettingsTabs
-            tabs={SPACE_TABS}
-            active={spaceTab}
-            onChange={(tab) => {
-              setFocusedFieldId(null);
-              setSpaceTab(tab as SpaceTab);
-            }}
-          />
           {selectedSpace ? (
             <SpaceSettingsBody
               tab={spaceTab}
@@ -2800,33 +2936,25 @@ export function ManagedSettingsPane({
           onDelete={() => void removeMcp()}
         />
       ) : null}
-    </div>
-  );
-}
-
-function SettingsTabs({
-  tabs,
-  active,
-  onChange,
-}: {
-  tabs: ReadonlyArray<{ id: string; label: string }>;
-  active: string;
-  onChange: (tab: string) => void;
-}) {
-  return (
-    <nav className="managed-settings-tabs" aria-label="Settings sections">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          className={active === tab.id ? "is-active" : ""}
-          aria-current={active === tab.id ? "page" : undefined}
-          onClick={() => onChange(tab.id)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </nav>
+      {catalogDeletion && catalogToDelete ? (
+        <Suspense fallback={null}>
+          <CatalogDeleteDialog
+            kind={catalogDeletion.kind}
+            label={catalogToDelete.label}
+            blockers={catalogDeletionBlockers(
+              snapshot,
+              catalogDeletion.kind,
+              catalogToDelete.id,
+            )}
+            busy={busy}
+            error={failure}
+            returnFocus={catalogDeleteTrigger.current}
+            onCancel={() => setCatalogDeletion(null)}
+            onDelete={() => void removeCatalogEntry()}
+          />
+        </Suspense>
+      ) : null}
+    </SettingsFrame>
   );
 }
 
@@ -2836,17 +2964,20 @@ function GlobalSettingsBody({
   defaults,
   setDefaults,
   descriptors,
+  focusedFieldId,
   busy,
   mcpEditor,
   setMcpEditor,
   onSaveMcp,
   onDeleteMcp,
+  onDeleteCatalogEntry,
   providerEditor,
   setProviderEditor,
   onSaveProvider,
   modelEditor,
   setModelEditor,
   onSaveModel,
+  onDiscoverModels,
   searchEditor,
   setSearchEditor,
   onSaveSearch,
@@ -2859,6 +2990,7 @@ function GlobalSettingsBody({
   setCredentialKind,
   onCreateCredential,
   onRotateCredential,
+  onReenterCredential,
   onDeleteCredential,
   onConfigureManaged,
   desktop,
@@ -2876,23 +3008,31 @@ function GlobalSettingsBody({
   onInstallUpdate,
   onImportCaBundle,
   onRemoveCaBundle,
+  onExportDiagnostics,
 }: {
   tab: GlobalTab;
   snapshot: ManagedSettingsSnapshot;
   defaults: DefaultsDraft;
   setDefaults: (draft: DefaultsDraft) => void;
   descriptors: ManagedFieldDescriptor[];
+  focusedFieldId: string | null;
   busy: boolean;
   mcpEditor: McpEditorDraft | null;
   setMcpEditor: (draft: McpEditorDraft | null) => void;
   onSaveMcp: () => void;
   onDeleteMcp: (resourceId: string, trigger: HTMLButtonElement) => void;
+  onDeleteCatalogEntry: (
+    kind: DeletableCatalogKind,
+    resourceId: string,
+    trigger: HTMLButtonElement,
+  ) => void;
   providerEditor: ProviderEditorDraft | null;
   setProviderEditor: (draft: ProviderEditorDraft | null) => void;
   onSaveProvider: () => void;
   modelEditor: ModelEditorDraft | null;
   setModelEditor: (draft: ModelEditorDraft | null) => void;
   onSaveModel: () => void;
+  onDiscoverModels: typeof discoverManagedProviderModels;
   searchEditor: SearchEditorDraft | null;
   setSearchEditor: (draft: SearchEditorDraft | null) => void;
   onSaveSearch: () => void;
@@ -2905,6 +3045,7 @@ function GlobalSettingsBody({
   setCredentialKind: (kind: ManagedCredentialKind) => void;
   onCreateCredential: () => void;
   onRotateCredential: (id: string) => void;
+  onReenterCredential: (id: string) => void;
   onDeleteCredential: (id: string) => void;
   onConfigureManaged: () => void;
   desktop: DesktopStatus;
@@ -2922,8 +3063,31 @@ function GlobalSettingsBody({
   onInstallUpdate: () => void;
   onImportCaBundle: () => void;
   onRemoveCaBundle: () => void;
+  onExportDiagnostics: () => void;
 }) {
   const global = snapshot.globalConfiguration;
+  if (tab === "plugins") {
+    return (
+      <PluginSettingsBody
+        descriptors={descriptors}
+        values={defaults.fields}
+        effective={new Map()}
+        scope="global"
+        focusedFieldId={focusedFieldId}
+        onChange={(id, value) =>
+          setDefaults({
+            ...defaults,
+            fields: { ...defaults.fields, [id]: value },
+          })
+        }
+        onInherit={(id) => {
+          const fields = { ...defaults.fields };
+          delete fields[id];
+          setDefaults({ ...defaults, fields });
+        }}
+      />
+    );
+  }
   if (tab === "mcp") {
     return (
       <section className="managed-settings-body" aria-labelledby="mcp-heading">
@@ -3198,7 +3362,41 @@ function GlobalSettingsBody({
           <div className="managed-list credential-list" role="list">
             {global.credentials.map((credential) => {
               const consumers = credentialConsumers.get(credential.id) ?? [];
-              const native = credential.backend === "desktop";
+              const availability =
+                snapshot.credentialAvailability[credential.id] ?? "unavailable";
+              const available = availability === "available";
+              const status = {
+                available: { label: "Stored securely", guidance: "" },
+                missing: {
+                  label: "Re-entry required",
+                  guidance:
+                    "Re-enter this token to restore existing configurations.",
+                },
+                locked: {
+                  label: "Storage locked",
+                  guidance:
+                    "Unlock your operating-system credential store, then retry.",
+                },
+                busy: {
+                  label: "Storage in use",
+                  guidance: "Close the other Colossus instance, then retry.",
+                },
+                key_missing: {
+                  label: "Encryption key missing",
+                  guidance:
+                    "The vault encryption key is missing. Existing data has been preserved.",
+                },
+                corrupt: {
+                  label: "Storage verification failed",
+                  guidance:
+                    "Credential storage could not be verified. Existing data has been preserved.",
+                },
+                unavailable: {
+                  label: "Storage unavailable",
+                  guidance:
+                    "Check the operating-system credential store, then retry.",
+                },
+              }[availability];
               return (
                 <div
                   className="managed-list-row"
@@ -3211,11 +3409,10 @@ function GlobalSettingsBody({
                   <div>
                     <strong>{credential.label}</strong>
                     <small>
-                      {credentialKindLabel(credential.kind)} ·{" "}
-                      {native
-                        ? "Secure system storage"
-                        : "External credential source"}
+                      {credentialKindLabel(credential.kind)} · Encrypted
+                      credential storage
                     </small>
+                    {status.guidance ? <small>{status.guidance}</small> : null}
                   </div>
                   <div className="credential-row-meta">
                     <span
@@ -3232,27 +3429,36 @@ function GlobalSettingsBody({
                         : "Not referenced"}
                     </span>
                     <span
-                      className={`status-chip${native ? " tone-success" : ""}`}
+                      className={`status-chip${available ? " tone-success" : ""}`}
                     >
                       <IconLock size={13} aria-hidden="true" />
-                      {native ? "Stored securely" : "External reference"}
+                      {status.label}
                     </span>
                   </div>
                   <div className="resource-actions">
                     <button
                       className="button secondary"
                       type="button"
-                      disabled={busy || !native}
-                      aria-label={`Rotate ${credential.label}`}
-                      title={`Rotate ${credential.label}`}
-                      onClick={() => onRotateCredential(credential.id)}
+                      disabled={
+                        busy || (availability !== "missing" && !available)
+                      }
+                      aria-label={`${availability === "missing" ? "Re-enter token for" : "Rotate"} ${credential.label}`}
+                      title={`${availability === "missing" ? "Re-enter token for" : "Rotate"} ${credential.label}`}
+                      onClick={() =>
+                        availability === "missing"
+                          ? onReenterCredential(credential.id)
+                          : onRotateCredential(credential.id)
+                      }
                     >
-                      <IconRefresh size={15} aria-hidden="true" /> Rotate
+                      <IconRefresh size={15} aria-hidden="true" />{" "}
+                      {availability === "missing" ? "Re-enter token" : "Rotate"}
                     </button>
                     <button
                       className="icon-button danger-icon-button"
                       type="button"
-                      disabled={busy || !native}
+                      disabled={
+                        busy || (availability !== "missing" && !available)
+                      }
                       aria-label={`Delete ${credential.label}`}
                       title={`Delete ${credential.label}`}
                       onClick={() => onDeleteCredential(credential.id)}
@@ -3275,6 +3481,9 @@ function GlobalSettingsBody({
     );
   }
   if (tab === "defaults") {
+    const defaultDescriptors = descriptors.filter(
+      (descriptor) => !descriptor.id.startsWith("plugins."),
+    );
     return (
       <section className="managed-settings-body">
         <div className="managed-section-heading">
@@ -3301,7 +3510,9 @@ function GlobalSettingsBody({
           }
         />
         <FieldGrid
-          descriptors={descriptors.filter((descriptor) => !descriptor.advanced)}
+          descriptors={defaultDescriptors.filter(
+            (descriptor) => !descriptor.advanced,
+          )}
           values={defaults.fields}
           effective={new Map()}
           scope="global"
@@ -3321,12 +3532,15 @@ function GlobalSettingsBody({
           <summary>
             <span>Advanced defaults</span>
             <small>
-              {descriptors.filter((descriptor) => descriptor.advanced).length}{" "}
+              {
+                defaultDescriptors.filter((descriptor) => descriptor.advanced)
+                  .length
+              }{" "}
               settings
             </small>
           </summary>
           <FieldGrid
-            descriptors={descriptors.filter(
+            descriptors={defaultDescriptors.filter(
               (descriptor) => descriptor.advanced,
             )}
             values={defaults.fields}
@@ -3350,392 +3564,247 @@ function GlobalSettingsBody({
   }
   if (tab === "models") {
     const activeModels = global.models.filter((entry) => !entry.archived);
-    const firstActiveProvider = global.providers.find(
-      (entry) => !entry.archived,
-    );
-    const modelConsumers = new Map(
-      activeModels.map((entry) => [
-        entry.id,
-        managedModelConsumers(snapshot, entry.id),
-      ]),
-    );
+    const activeProviders = global.providers.filter((entry) => !entry.archived);
+    const firstActiveProvider = activeProviders[0];
     const providersInUse = new Set(
       activeModels.map((entry) => currentValue(entry).providerProfile),
     ).size;
-    const routedWorkspaceCount = new Set([...modelConsumers.values()].flat())
-      .size;
     return (
-      <section
-        className="managed-settings-body models-settings"
-        aria-labelledby="models-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">AI models</p>
-            <h3 id="models-heading">Models</h3>
-            <p className="models-heading-copy">
-              Choose the models available to workspaces, their token limits, and
-              the features they support.
-            </p>
-          </div>
-          <div className="model-contract-note" aria-label="Model capabilities">
-            <IconShield size={18} aria-hidden="true" />
-            <span>
-              <strong>Supported features</strong>
-              <small>
-                Turn on only the features this model supports: tools, streaming,
-                and images.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip models-metric-strip"
-          aria-label="Model summary"
-        >
-          <Metric
-            icon={<IconCpu size={19} />}
-            value={activeModels.length}
-            label="Active models"
-          />
-          <Metric
-            icon={<IconCloud size={19} />}
-            value={providersInUse}
-            label="Providers in use"
-          />
-          <Metric
-            icon={<IconRoute size={19} />}
-            value={routedWorkspaceCount}
-            label="Workspaces using models"
-          />
-        </div>
-        <div className="model-catalog-toolbar">
-          <div>
-            <h4>Model inventory</h4>
-            <p>Add models here, then choose which workspaces can use them.</p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={Boolean(modelEditor)}
-            onClick={() =>
-              setModelEditor({
-                ...EMPTY_MODEL_DRAFT,
-                providerProfile: firstActiveProvider
-                  ? currentValue(firstActiveProvider).profile
-                  : "",
-              })
-            }
-          >
-            <IconPlus size={16} aria-hidden="true" /> Add model
-          </button>
-        </div>
-        {modelEditor ? (
-          <ModelEditor
-            draft={modelEditor}
-            providers={global.providers.filter((entry) => !entry.archived)}
-            busy={busy}
-            onChange={setModelEditor}
-            onCancel={() => setModelEditor(null)}
-            onSave={onSaveModel}
-          />
-        ) : null}
-        <section
-          className="model-inventory"
-          aria-labelledby="configured-models-heading"
-        >
-          <div className="model-inventory-heading">
-            <div>
-              <h4 id="configured-models-heading">Configured models</h4>
-              <p>
-                Compare each model's provider, token limits, and supported
-                features.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeModels.length} models`}
-            >
-              {activeModels.length}
-            </span>
-          </div>
-          <div className="managed-list model-list" role="list">
-            {activeModels.map((entry) => {
-              const model = currentValue(entry);
-              const consumers = modelConsumers.get(entry.id) ?? [];
-              const provider = global.providers.find(
-                (candidate) =>
-                  !candidate.archived &&
-                  currentValue(candidate).profile === model.providerProfile,
-              );
-              const enabledCapabilities = [
-                model.capabilities.toolCalls ? "Tools" : null,
-                model.capabilities.streaming ? "Streaming" : null,
-                model.capabilities.imageInputs ? "Images" : null,
-              ].filter((value): value is string => Boolean(value));
-              return (
-                <div
-                  className="managed-list-row model-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconCpu size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p role="status">Loading models…</p>}>
+        <CatalogInventory
+          key="models"
+          kind="model"
+          busy={busy}
+          editing={Boolean(modelEditor)}
+          summary={`${activeModels.length} configured ${activeModels.length === 1 ? "model" : "models"} · ${providersInUse} ${providersInUse === 1 ? "provider" : "providers"}`}
+          onAdd={() =>
+            setModelEditor({
+              ...EMPTY_MODEL_DRAFT,
+              providerProfile: firstActiveProvider
+                ? currentValue(firstActiveProvider).profile
+                : "",
+            })
+          }
+          rows={activeModels.map((entry) => {
+            const model = currentValue(entry);
+            const consumers = managedModelConsumers(snapshot, entry.id);
+            const provider = activeProviders.find(
+              (candidate) =>
+                currentValue(candidate).profile === model.providerProfile,
+            );
+            const capabilities = [
+              model.capabilities.toolCalls ? "Tools" : null,
+              model.capabilities.streaming ? "Streaming" : null,
+              model.capabilities.imageInputs ? "Images" : null,
+            ].filter((value): value is string => Boolean(value));
+            return {
+              id: entry.id,
+              label: entry.label,
+              name: entry.label === model.profile ? model.model : entry.label,
+              description:
+                entry.label === model.profile
+                  ? model.profile
+                  : `${model.profile} · ${model.model}`,
+              searchText: [
+                entry.label,
+                model.profile,
+                model.model,
+                provider?.label,
+                model.providerProfile,
+              ].join(" "),
+              connection: (
+                <>
+                  <ProviderIcon
+                    provider={provider ? currentValue(provider) : null}
+                  />
+                  <span>{provider?.label ?? model.providerProfile}</span>
+                </>
+              ),
+              usage: `${consumers.length} ${consumers.length === 1 ? "workspace" : "workspaces"}`,
+              onEdit: () => setModelEditor(modelDraft(entry)),
+              onDelete: (trigger) =>
+                onDeleteCatalogEntry("model", entry.id, trigger),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === model.profile
-                        ? model.model
-                        : `${model.profile} · ${model.model}`}
-                    </small>
-                    <small className="model-provider-route">
-                      Provider · {provider?.label ?? model.providerProfile}
-                    </small>
+                    <h4>Model settings</h4>
+                    <dl>
+                      <dt>Model ID</dt>
+                      <dd>{model.model}</dd>
+                      <dt>Profile ID</dt>
+                      <dd>{model.profile}</dd>
+                      <dt>Token limits</dt>
+                      <dd>
+                        {compactTokenCount(model.contextWindowTokens)} context ·{" "}
+                        {compactTokenCount(model.maxOutputTokens)} output
+                      </dd>
+                      <dt>Supported features</dt>
+                      <dd>
+                        {capabilities.length
+                          ? capabilities.join(", ")
+                          : "Text only"}
+                      </dd>
+                      <dt>Reasoning effort</dt>
+                      <dd>{model.reasoningEffort ?? "Provider default"}</dd>
+                      <dt>Version</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <div
-                    className="model-capability-list"
-                    aria-label="Capabilities"
-                  >
-                    {(enabledCapabilities.length
-                      ? enabledCapabilities
-                      : ["Text only"]
-                    ).map((capability) => (
-                      <span
-                        className="status-chip tone-success"
-                        key={capability}
-                      >
-                        {capability}
-                      </span>
-                    ))}
+                  <div>
+                    <h4>Active workspaces</h4>
+                    {consumers.length ? (
+                      <ul>
+                        {consumers.map((name, index) => (
+                          <li key={index}>{name}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No active workspace references this model.</p>
+                    )}
                   </div>
-                  <div className="model-row-meta">
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active workspace references this model."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "Not used"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {compactTokenCount(model.contextWindowTokens)} context ·{" "}
-                      {compactTokenCount(model.maxOutputTokens)} output · v
-                      {entry.currentRevision}
-                    </span>
-                  </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      onClick={() => setModelEditor(modelDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeModels.length === 0 ? (
-              <EmptySettings icon={<IconCpu size={24} />} title="No models" />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {modelEditor ? (
+            <ModelEditor
+              draft={modelEditor}
+              workspaceId={desktop.workspace?.workspaceId ?? null}
+              catalogRevision={global.revision}
+              providers={activeProviders}
+              busy={busy}
+              onChange={setModelEditor}
+              onCancel={() => setModelEditor(null)}
+              onSave={onSaveModel}
+              onDiscoverModels={onDiscoverModels}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "providers") {
     const activeProviders = global.providers.filter((entry) => !entry.archived);
-    const providerConsumers = new Map(
-      activeProviders.map((entry) => [
-        entry.id,
-        managedProviderConsumers(snapshot, entry.id),
-      ]),
-    );
-    const routedModelCount = [...providerConsumers.values()].reduce(
-      (total, consumers) => total + consumers.length,
-      0,
-    );
-    const credentialBindingCount = activeProviders.filter((entry) =>
-      Boolean(currentValue(entry).credentialId),
-    ).length;
+    const activeModels = global.models.filter((entry) => !entry.archived);
     return (
-      <section
-        className="managed-settings-body providers-settings"
-        aria-labelledby="providers-heading"
-      >
-        <div className="managed-section-heading">
-          <div>
-            <p className="eyebrow">AI connections</p>
-            <h3 id="providers-heading">Providers</h3>
-            <p className="providers-heading-copy">
-              Connect the services and accounts Colossus uses to access AI
-              models.
-            </p>
-          </div>
-          <div
-            className="provider-security-note"
-            aria-label="Provider credential safety"
-          >
-            <IconLock size={18} aria-hidden="true" />
-            <span>
-              <strong>Credentials stay protected</strong>
-              <small>
-                Colossus stores which credential to use, not its secret value.
-              </small>
-            </span>
-          </div>
-        </div>
-        <div
-          className="managed-metric-strip providers-metric-strip"
-          aria-label="Provider summary"
-        >
-          <Metric
-            icon={<IconCloud size={19} />}
-            value={activeProviders.length}
-            label="Active providers"
-          />
-          <Metric
-            icon={<IconCpu size={19} />}
-            value={routedModelCount}
-            label="Models using them"
-          />
-          <Metric
-            icon={<IconKey size={19} />}
-            value={credentialBindingCount}
-            label="Credentials used"
-          />
-        </div>
-        <div className="provider-catalog-toolbar">
-          <div>
-            <h4>Provider connections</h4>
-            <p>
-              Add a provider once, then reuse the connection for multiple
-              models.
-            </p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            disabled={Boolean(providerEditor)}
-            onClick={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
-          >
-            <IconPlus size={16} /> Add provider
-          </button>
-        </div>
-        {providerEditor ? (
-          <ProviderEditor
-            draft={providerEditor}
-            credentials={global.credentials}
-            busy={busy}
-            onChange={setProviderEditor}
-            onCancel={() => setProviderEditor(null)}
-            onSave={onSaveProvider}
-          />
-        ) : null}
-        <section
-          className="provider-inventory"
-          aria-labelledby="configured-providers-heading"
-        >
-          <div className="provider-inventory-heading">
-            <div>
-              <h4 id="configured-providers-heading">Providers</h4>
-              <p>
-                Compare each provider's endpoint, sign-in method, model usage,
-                and timeout.
-              </p>
-            </div>
-            <span
-              className="credential-count"
-              aria-label={`${activeProviders.length} providers`}
-            >
-              {activeProviders.length}
-            </span>
-          </div>
-          <div className="managed-list provider-list" role="list">
-            {activeProviders.map((entry) => {
-              const provider = currentValue(entry);
-              const consumers = providerConsumers.get(entry.id) ?? [];
-              const codex = provider.kind === "open_ai_codex";
-              const timeout = provider.timeoutMs
-                ? `${Math.round(provider.timeoutMs / 1_000)}s timeout`
-                : "Default timeout";
-              return (
-                <div
-                  className="managed-list-row provider-row"
-                  key={entry.id}
-                  role="listitem"
-                >
-                  <span className="resource-icon">
-                    <IconCloud size={18} aria-hidden="true" />
-                  </span>
+      <Suspense fallback={<p role="status">Loading providers…</p>}>
+        <CatalogInventory
+          key="providers"
+          kind="provider"
+          busy={busy}
+          editing={Boolean(providerEditor)}
+          summary={`${activeProviders.length} ${activeProviders.length === 1 ? "provider" : "providers"} · ${activeModels.length} configured ${activeModels.length === 1 ? "model" : "models"}`}
+          onAdd={() => setProviderEditor({ ...EMPTY_PROVIDER_DRAFT })}
+          rows={activeProviders.map((entry) => {
+            const provider = currentValue(entry);
+            const codex = provider.kind === "open_ai_codex";
+            const models = activeModels.filter(
+              (model) =>
+                currentValue(model).providerProfile === provider.profile,
+            );
+            const name =
+              codex && entry.label === provider.profile ? "Codex" : entry.label;
+            const description = codex
+              ? `${provider.profile} · Subscription`
+              : entry.label === provider.profile
+                ? providerEndpointLabel(provider)
+                : `${provider.profile} · ${providerEndpointLabel(provider)}`;
+            const credential = global.credentials.find(
+              (candidate) => candidate.id === provider.credentialId,
+            );
+            return {
+              id: entry.id,
+              label: entry.label,
+              name,
+              description,
+              icon: <ProviderIcon provider={provider} size={28} />,
+              searchText: [
+                name,
+                entry.label,
+                provider.profile,
+                providerEndpointLabel(provider),
+              ].join(" "),
+              connection: (
+                <>
+                  <IconLock size={16} aria-hidden="true" />
+                  {codex
+                    ? "Codex account"
+                    : provider.credentialId
+                      ? "Credential saved"
+                      : "No credential"}
+                </>
+              ),
+              usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
+              onEdit: () => setProviderEditor(providerDraft(entry)),
+              onDelete: (trigger) =>
+                onDeleteCatalogEntry("provider", entry.id, trigger),
+              details: (
+                <>
                   <div>
-                    <strong>{entry.label}</strong>
-                    <small>
-                      {entry.label === provider.profile
-                        ? providerEndpointLabel(provider)
-                        : `${provider.profile} · ${providerEndpointLabel(provider)}`}
-                    </small>
+                    <h4>Connection details</h4>
+                    <dl>
+                      <dt>Profile ID</dt>
+                      <dd>{provider.profile}</dd>
+                      <dt>API format</dt>
+                      <dd>{providerAdapterLabel(provider.kind)}</dd>
+                      {!codex ? (
+                        <>
+                          <dt>Endpoint</dt>
+                          <dd>{provider.baseUrl}</dd>
+                        </>
+                      ) : null}
+                      <dt>Sign-in</dt>
+                      <dd>
+                        {codex
+                          ? "Codex account"
+                          : (credential?.label ??
+                            (provider.credentialId
+                              ? "Credential unavailable"
+                              : "No credential"))}
+                      </dd>
+                      <dt>Request timeout</dt>
+                      <dd>
+                        {provider.timeoutMs
+                          ? `${provider.timeoutMs / 1000}s`
+                          : "Default"}
+                      </dd>
+                      <dt>Version</dt>
+                      <dd>v{entry.currentRevision}</dd>
+                    </dl>
                   </div>
-                  <span className="status-chip tone-neutral provider-adapter-chip">
-                    {providerAdapterLabel(provider.kind)}
-                  </span>
-                  <div className="provider-row-meta">
-                    <span
-                      className={`status-chip${provider.credentialId || codex ? " tone-success" : ""}`}
-                    >
-                      <IconLock size={13} aria-hidden="true" />
-                      {codex
-                        ? "Codex account"
-                        : provider.credentialId
-                          ? "Credential attached"
-                          : "No credential"}
-                    </span>
-                    <span
-                      className={`status-chip${consumers.length ? " tone-success" : ""}`}
-                      title={
-                        consumers.length
-                          ? consumers.join("\n")
-                          : "No active model references this provider."
-                      }
-                    >
-                      <IconRoute size={13} aria-hidden="true" />
-                      {consumers.length
-                        ? `Used by ${consumers.length}`
-                        : "No models"}
-                    </span>
-                    <span className="status-chip tone-neutral">
-                      {timeout} · v{entry.currentRevision}
-                    </span>
+                  <div>
+                    <h4>Configured models</h4>
+                    {models.length ? (
+                      <ul>
+                        {models.map((model) => (
+                          <li key={model.id}>
+                            {model.label}
+                            <small>{currentValue(model).model}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No configured model uses this provider.</p>
+                    )}
                   </div>
-                  <div className="resource-actions">
-                    <button
-                      className="button secondary"
-                      type="button"
-                      aria-label={`Edit ${entry.label}`}
-                      onClick={() => setProviderEditor(providerDraft(entry))}
-                    >
-                      <IconEdit size={15} aria-hidden="true" /> Edit
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {activeProviders.length === 0 ? (
-              <EmptySettings
-                icon={<IconCloud size={24} />}
-                title="No providers"
-              />
-            ) : null}
-          </div>
-        </section>
-      </section>
+                </>
+              ),
+            };
+          })}
+        >
+          {providerEditor ? (
+            <ProviderEditor
+              draft={providerEditor}
+              credentials={global.credentials}
+              busy={busy}
+              onChange={setProviderEditor}
+              onCancel={() => setProviderEditor(null)}
+              onSave={onSaveProvider}
+            />
+          ) : null}
+        </CatalogInventory>
+      </Suspense>
     );
   }
   if (tab === "search") {
@@ -4134,6 +4203,7 @@ function GlobalSettingsBody({
       onInstallUpdate={onInstallUpdate}
       onImportCaBundle={onImportCaBundle}
       onRemoveCaBundle={onRemoveCaBundle}
+      onExportDiagnostics={onExportDiagnostics}
     />
   );
 }
@@ -4197,6 +4267,30 @@ export function SpaceSettingsBody({
   extensionInventoryBusy: boolean;
   onRefreshExtensionInventory: () => void;
 }) {
+  if (tab === "plugins") {
+    return (
+      <PluginSettingsBody
+        descriptors={descriptors}
+        values={draft.fields}
+        effective={inheritedPluginValues(snapshot, selectedSpace)}
+        scope="space"
+        workspaceName={selectedSpace.name}
+        focusedFieldId={focusedFieldId}
+        onChange={(id, value) =>
+          setDraft({ ...draft, fields: { ...draft.fields, [id]: value } })
+        }
+        onInherit={(id) => removeDraftField(draft, setDraft, id)}
+      >
+        <ExtensionCatalog
+          section="Plugins"
+          inventory={extensionInventory}
+          busy={extensionInventoryBusy}
+          runtimeActive={selectedSpace.status === "active"}
+          onRefresh={onRefreshExtensionInventory}
+        />
+      </PluginSettingsBody>
+    );
+  }
   if (tab === "mcp") {
     return (
       <section className="managed-settings-layout">
@@ -4358,7 +4452,6 @@ export function SpaceSettingsBody({
             ) : null}
           </div>
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4470,7 +4563,6 @@ export function SpaceSettingsBody({
             })}
           </div>
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4553,7 +4645,6 @@ export function SpaceSettingsBody({
             </>
           ) : null}
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4593,7 +4684,7 @@ export function SpaceSettingsBody({
   }
   if (tab === "access" || tab === "runtime") {
     return (
-      <section className="managed-settings-layout">
+      <section className="managed-settings-layout settings-runtime-layout">
         <div className="managed-settings-body">
           <div className="managed-section-heading">
             <div>
@@ -4601,9 +4692,17 @@ export function SpaceSettingsBody({
               <h3>
                 {tab === "access" ? "Access and authority" : "Runtime defaults"}
               </h3>
+              <p className="managed-heading-copy">
+                Configure default behavior for this workspace.
+              </p>
             </div>
           </div>
+          <p className="settings-inheritance-note">
+            Changes here apply only to {selectedSpace.name}. Unchanged settings
+            keep their inherited value.
+          </p>
           <AuthorityControls
+            explainPermissions={tab === "access"}
             access={draft.accessProfile}
             boundary={draft.executionBoundary}
             terminal={draft.terminalEnabled}
@@ -4620,6 +4719,7 @@ export function SpaceSettingsBody({
               descriptors={descriptors.filter(
                 (descriptor) =>
                   !descriptor.advanced &&
+                  !descriptor.id.startsWith("plugins.") &&
                   !descriptor.id.startsWith("research."),
               )}
               values={draft.fields}
@@ -4633,7 +4733,6 @@ export function SpaceSettingsBody({
             />
           ) : null}
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
@@ -4845,11 +4944,11 @@ export function SpaceSettingsBody({
             ))}
           </div>
         </div>
-        <AuthoritySummary selectedSpace={selectedSpace} draft={draft} />
       </section>
     );
   }
   const filtered = descriptors.filter((descriptor) => {
+    if (descriptor.id.startsWith("plugins.")) return false;
     if (tab === "sandbox") return descriptor.id.startsWith("sandbox.");
     if (tab === "research") return descriptor.id.startsWith("research.");
     return descriptor.advanced;
@@ -4860,15 +4959,16 @@ export function SpaceSettingsBody({
         <div>
           <p className="eyebrow">Sparse Workspace overrides</p>
           <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
+          {tab === "sandbox" ? (
+            <p className="managed-heading-copy">
+              Filesystem and network rules apply to isolated execution. Select
+              the execution boundary in Access.
+            </p>
+          ) : null}
         </div>
       </div>
       {tab === "advanced" ? (
-        [
-          ...new Set([
-            ...filtered.map((descriptor) => descriptor.section),
-            "Plugins",
-          ]),
-        ]
+        [...new Set(filtered.map((descriptor) => descriptor.section))]
           .sort()
           .map((section) => {
             const sectionDescriptors = filtered.filter(
@@ -4891,11 +4991,7 @@ export function SpaceSettingsBody({
               >
                 <summary>
                   <span>{section}</span>
-                  <small>
-                    {section === "Plugins"
-                      ? "Live catalog"
-                      : `${sectionDescriptors.length} settings`}
-                  </small>
+                  <small>{sectionDescriptors.length} settings</small>
                 </summary>
                 {sectionDescriptors.length > 0 ? (
                   <FieldGrid
@@ -4942,6 +5038,50 @@ export function SpaceSettingsBody({
           title={`No ${tab} overrides`}
         />
       ) : null}
+    </section>
+  );
+}
+
+function PluginSettingsBody({
+  scope,
+  workspaceName,
+  children,
+  ...fields
+}: React.ComponentProps<typeof FieldGrid> & {
+  workspaceName?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section className="managed-settings-body plugin-settings">
+      <div className="managed-section-heading">
+        <div>
+          <p className="eyebrow">
+            {scope === "global"
+              ? "Shared plugin defaults"
+              : "Workspace overrides"}
+          </p>
+          <h3>Plugins</h3>
+          <p className="managed-heading-copy">
+            Choose available plugins and configure registries, verification, and
+            plugin-provided MCP servers.
+          </p>
+        </div>
+      </div>
+      <p className="settings-inheritance-note">
+        {scope === "global"
+          ? "Set defaults for workspaces. Existing workspaces review and apply global changes."
+          : `Changes apply to ${workspaceName}. Use Inherit to restore the value from its accepted global configuration.`}{" "}
+        Install, update, and activate packages from Plugins in the main
+        navigation.
+      </p>
+      <FieldGrid
+        {...fields}
+        scope={scope}
+        descriptors={fields.descriptors.filter((descriptor) =>
+          descriptor.id.startsWith("plugins."),
+        )}
+      />
+      {children}
     </section>
   );
 }
@@ -5065,6 +5205,7 @@ function matchesExtensionSection(section: string) {
 }
 
 function AuthorityControls({
+  explainPermissions = false,
   access,
   boundary,
   terminal,
@@ -5072,6 +5213,7 @@ function AuthorityControls({
   onBoundary,
   onTerminal,
 }: {
+  explainPermissions?: boolean;
   access: AccessProfile | null;
   boundary: ExecutionBoundary | null;
   terminal: boolean | null;
@@ -5079,6 +5221,7 @@ function AuthorityControls({
   onBoundary: (value: ExecutionBoundary | null) => void;
   onTerminal: (value: boolean | null) => void;
 }) {
+  const boundaryHelpId = useId();
   return (
     <div className="authority-control-grid">
       <label>
@@ -5106,6 +5249,7 @@ function AuthorityControls({
         <span>Execution boundary</span>
         <DropdownSelect
           aria-label="Execution boundary"
+          aria-describedby={boundaryHelpId}
           value={boundary ?? "inherit"}
           onChange={(event) =>
             onBoundary(
@@ -5120,8 +5264,10 @@ function AuthorityControls({
           <option value="workspace_isolated">Workspace isolated</option>
           <option value="full_access">Full access</option>
         </DropdownSelect>
-        <small>
-          Choose how strongly tool and process execution is isolated.
+        <small id={boundaryHelpId}>
+          {explainPermissions
+            ? "Choose how tools and processes are isolated. Full access disables filesystem and network isolation and requires native confirmation."
+            : "Choose how strongly tool and process execution is isolated."}
         </small>
       </label>
       <label>
@@ -5390,75 +5536,6 @@ function RuntimeStatus({
     <span className={`status-chip ${tone}`} title={space.statusMessage}>
       {space.status.replaceAll("_", " ")}
     </span>
-  );
-}
-
-function AuthoritySummary({
-  selectedSpace,
-  draft,
-}: {
-  selectedSpace: ManagedSpaceConfigurationSnapshot;
-  draft: SpaceDraft;
-}) {
-  const boundary =
-    draft.executionBoundary ??
-    String(
-      selectedSpace.effectiveValues.find(
-        (value) => value.fieldId === "sandbox.executionBoundary",
-      )?.value ?? "workspace_isolated",
-    );
-  return (
-    <aside className="authority-summary" aria-label="Authority summary">
-      <h3>Authority summary</h3>
-      <AuthorityItem
-        icon={<IconCpu size={18} />}
-        label="Process"
-        value={draft.accessProfile?.replace("_", " ") ?? "Inherited"}
-      />
-      <AuthorityItem
-        icon={<IconNetwork size={18} />}
-        label="Network"
-        value={
-          boundary === "offline_isolated" ? "Offline" : "Managed destinations"
-        }
-      />
-      <AuthorityItem
-        icon={<IconTerminal2 size={18} />}
-        label="Environment"
-        value={draft.terminalEnabled ? "Local terminal" : "Managed variables"}
-      />
-      <AuthorityItem
-        icon={<IconFolder size={18} />}
-        label="Filesystem"
-        value={boundary === "full_access" ? "Host access" : "Workspace root"}
-      />
-      {boundary === "full_access" ? (
-        <p className="authority-warning">
-          <IconAlertTriangle size={17} />
-          Full access requires native confirmation.
-        </p>
-      ) : null}
-    </aside>
-  );
-}
-
-function AuthorityItem({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="authority-item">
-      <span>{icon}</span>
-      <div>
-        <strong>{label}</strong>
-        <small>{value}</small>
-      </div>
-    </div>
   );
 }
 
@@ -6458,7 +6535,7 @@ function ProviderEditor({
       aria-labelledby="provider-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        if (!busy) onSave();
       }}
     >
       <div className="provider-editor-heading">
@@ -6476,6 +6553,7 @@ function ProviderEditor({
           className="icon-button"
           type="button"
           aria-label="Close provider editor"
+          disabled={busy}
           onClick={onCancel}
         >
           <IconX size={17} />
@@ -6495,6 +6573,7 @@ function ProviderEditor({
           <label>
             <span>Display label</span>
             <input
+              disabled={busy}
               value={draft.label}
               placeholder="For example, OpenRouter production"
               aria-describedby="provider-label-help"
@@ -6508,6 +6587,7 @@ function ProviderEditor({
           <label>
             <span>Profile ID</span>
             <input
+              disabled={busy}
               value={draft.profile}
               placeholder="openrouter-production"
               aria-describedby="provider-profile-help"
@@ -6530,10 +6610,26 @@ function ProviderEditor({
           <h5 id="provider-editor-connection-heading">Connection</h5>
           <p>Choose the provider API format and endpoint.</p>
         </div>
+        <ProviderPresetSelect
+          kind={draft.kind}
+          baseUrl={draft.baseUrl}
+          busy={busy}
+          onSelect={(preset) =>
+            onChange({
+              ...draft,
+              kind: presetProviderKind(preset),
+              baseUrl: preset.baseUrl ?? "",
+              label: draft.label || preset.label,
+              profile: draft.profile || preset.id,
+              credentialId: "",
+            })
+          }
+        />
         <div className="provider-editor-grid provider-connection-grid">
           <label>
             <span>Adapter</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.kind}
               aria-describedby="provider-adapter-help"
               onChange={(event) =>
@@ -6557,7 +6653,7 @@ function ProviderEditor({
               value={
                 codex ? "https://chatgpt.com/backend-api/codex" : draft.baseUrl
               }
-              disabled={codex}
+              disabled={busy || codex}
               aria-describedby="provider-endpoint-help"
               required
               onChange={(event) =>
@@ -6585,7 +6681,7 @@ function ProviderEditor({
             <span>Credential reference</span>
             <DropdownSelect
               value={codex ? "" : draft.credentialId}
-              disabled={codex}
+              disabled={busy || codex}
               aria-describedby="provider-credential-help"
               onChange={(event) =>
                 onChange({ ...draft, credentialId: event.target.value })
@@ -6632,6 +6728,7 @@ function ProviderEditor({
           <label>
             <span>Request timeout (ms)</span>
             <input
+              disabled={busy}
               type="number"
               min={1}
               max={3_600_000}
@@ -6655,7 +6752,12 @@ function ProviderEditor({
         </div>
       </section>
       <div className="mcp-editor-actions">
-        <button className="button secondary" type="button" onClick={onCancel}>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
         <button className="button primary" type="submit" disabled={busy}>
@@ -6667,31 +6769,53 @@ function ProviderEditor({
   );
 }
 
+function resetModelDraft(draft: ModelEditorDraft): ModelEditorDraft {
+  const model = resetModelMetadata(managedModel(draft));
+  return { ...draft, ...model, ...model.capabilities };
+}
+
 function ModelEditor({
   draft,
+  workspaceId,
+  catalogRevision,
   providers,
   busy,
   onChange,
   onCancel,
   onSave,
+  onDiscoverModels,
 }: {
   draft: ModelEditorDraft;
+  workspaceId: string | null;
+  catalogRevision: number;
   providers: CatalogEntry<ManagedProviderCatalogValue>[];
   busy: boolean;
   onChange: (draft: ModelEditorDraft) => void;
   onCancel: () => void;
   onSave: () => void;
+  onDiscoverModels: typeof discoverManagedProviderModels;
 }) {
+  const provider = providers
+    .map(currentValue)
+    .find((candidate) => candidate.profile === draft.providerProfile);
   const title = draft.resourceId
     ? `Edit ${draft.label || "model"}`
     : "Add model";
+  const connectionKey = JSON.stringify([
+    workspaceId,
+    catalogRevision,
+    provider?.profile,
+    provider?.kind,
+    provider?.baseUrl,
+    provider?.credentialId,
+  ]);
   return (
     <form
       className="mcp-editor catalog-editor model-editor"
       aria-labelledby="model-editor-heading"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        if (!busy) onSave();
       }}
     >
       <div className="model-editor-heading">
@@ -6706,6 +6830,7 @@ function ModelEditor({
           className="icon-button"
           type="button"
           aria-label="Close model editor"
+          disabled={busy}
           onClick={onCancel}
         >
           <IconX size={17} />
@@ -6725,6 +6850,7 @@ function ModelEditor({
           <label>
             <span>Display label</span>
             <input
+              disabled={busy}
               value={draft.label}
               placeholder="For example, Primary reasoning model"
               aria-describedby="model-label-help"
@@ -6738,6 +6864,7 @@ function ModelEditor({
           <label>
             <span>Profile ID</span>
             <input
+              disabled={busy}
               value={draft.profile}
               placeholder="primary-reasoning"
               aria-describedby="model-profile-help"
@@ -6764,11 +6891,25 @@ function ModelEditor({
           <label>
             <span>Provider profile</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.providerProfile}
               aria-describedby="model-provider-help"
+              renderOptionIcon={(option) => {
+                const entry = providers.find(
+                  (candidate) =>
+                    currentValue(candidate).profile === option.value,
+                );
+                return entry ? (
+                  <ProviderIcon provider={currentValue(entry)} />
+                ) : null;
+              }}
               required
               onChange={(event) =>
-                onChange({ ...draft, providerProfile: event.target.value })
+                onChange({
+                  ...resetModelDraft(draft),
+                  providerProfile: event.target.value,
+                  model: "",
+                })
               }
             >
               <option value="">Select provider</option>
@@ -6788,12 +6929,16 @@ function ModelEditor({
           <label>
             <span>Model identifier</span>
             <input
+              disabled={busy}
               value={draft.model}
               placeholder="Provider-specific model name"
               aria-describedby="model-identifier-help"
               required
               onChange={(event) =>
-                onChange({ ...draft, model: event.target.value })
+                onChange({
+                  ...resetModelDraft(draft),
+                  model: event.target.value,
+                })
               }
             />
             <small id="model-identifier-help">
@@ -6801,6 +6946,41 @@ function ModelEditor({
             </small>
           </label>
         </div>
+        <ProviderModelPicker
+          key={connectionKey}
+          connectionKey={connectionKey}
+          model={draft.model}
+          disabled={busy || workspaceId === null || provider === undefined}
+          onLoad={async () => {
+            if (workspaceId === null || !provider) return [];
+            const result = await onDiscoverModels({
+              workspaceId,
+              providerKind: provider.kind,
+              baseUrl: provider.baseUrl,
+              credentialAction: provider.credentialId ? "reuse" : "none",
+              ...(provider.credentialId
+                ? { credentialId: provider.credentialId }
+                : {}),
+            });
+            if (result.errorMessage) throw new Error(result.errorMessage);
+            return result.models;
+          }}
+          onSelect={(entry) => {
+            const selected = selectCatalogModel(managedModel(draft), entry);
+            onChange({
+              ...draft,
+              ...selected,
+              ...selected.capabilities,
+              label: draft.label || entry.display_name || entry.id,
+              profile:
+                draft.profile ||
+                entry.id.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 64),
+            });
+          }}
+        />
+        {workspaceId === null ? (
+          <p>Choose a Workspace to load this provider’s models.</p>
+        ) : null}
       </section>
       <section
         className="model-editor-section"
@@ -6816,6 +6996,7 @@ function ModelEditor({
           <label>
             <span>Context window (tokens)</span>
             <input
+              disabled={busy}
               type="number"
               min={1_024}
               value={draft.contextWindowTokens}
@@ -6834,6 +7015,7 @@ function ModelEditor({
           <label>
             <span>Maximum output (tokens)</span>
             <input
+              disabled={busy}
               type="number"
               min={1}
               value={draft.maxOutputTokens}
@@ -6862,6 +7044,7 @@ function ModelEditor({
         <div className="model-capability-grid">
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.toolCalls}
               onChange={(event) =>
                 onChange({ ...draft, toolCalls: event.target.checked })
@@ -6874,6 +7057,7 @@ function ModelEditor({
           </label>
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.streaming}
               onChange={(event) =>
                 onChange({ ...draft, streaming: event.target.checked })
@@ -6886,6 +7070,7 @@ function ModelEditor({
           </label>
           <label className="compact-switch model-capability-toggle">
             <SwitchInput
+              disabled={busy}
               checked={draft.imageInputs}
               onChange={(event) =>
                 onChange({ ...draft, imageInputs: event.target.checked })
@@ -6901,6 +7086,7 @@ function ModelEditor({
           <label>
             <span>Reasoning effort</span>
             <DropdownSelect
+              disabled={busy}
               value={draft.reasoningEffort ?? "inherit"}
               aria-describedby="model-reasoning-help"
               onChange={(event) =>
@@ -6937,7 +7123,12 @@ function ModelEditor({
         </div>
       </section>
       <div className="mcp-editor-actions">
-        <button className="button secondary" type="button" onClick={onCancel}>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
         <button className="button primary" type="submit" disabled={busy}>
@@ -7880,6 +8071,28 @@ function DesktopSettings(
                   Remove bundle
                 </button>
               ) : null}
+            </div>
+          </div>
+          <div className="managed-list-row desktop-control-row" role="listitem">
+            <span className="resource-icon">
+              <IconDownload size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <strong>Diagnostics</strong>
+              <small>
+                Export sanitized runtime health and recent MCP checks for
+                support.
+              </small>
+            </div>
+            <span className="status-chip tone-neutral">Local support</span>
+            <div className="resource-actions">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={props.onExportDiagnostics}
+              >
+                Export diagnostics
+              </button>
             </div>
           </div>
           <div className="managed-list-row desktop-control-row" role="listitem">

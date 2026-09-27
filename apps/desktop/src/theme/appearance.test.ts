@@ -8,6 +8,7 @@ import {
   parseAppearancePreference,
   readAppearancePreference,
   readHostAppearancePreference,
+  readNativeDialogAppearance,
   resolveColorTheme,
   storeAppearancePreference,
   storeHostAppearancePreference,
@@ -15,6 +16,31 @@ import {
 } from "./appearance";
 
 describe("appearance preferences", () => {
+  it("captures only the rendered native-dialog theme and text size", () => {
+    const values = new Map([
+      ["data-theme", "dark"],
+      ["data-text-size", "large"],
+      ["data-unrelated", "not-sent"],
+    ]);
+    const root = { getAttribute: (name: string) => values.get(name) ?? null };
+    expect(readNativeDialogAppearance(root)).toEqual({
+      colorScheme: "dark",
+      textSize: "large",
+    });
+    values.set("data-theme", "light");
+    values.set("data-text-size", "compact");
+    expect(readNativeDialogAppearance(root)).toEqual({
+      colorScheme: "light",
+      textSize: "compact",
+    });
+    values.set("data-theme", "arbitrary-css");
+    values.delete("data-text-size");
+    expect(readNativeDialogAppearance(root)).toEqual({
+      colorScheme: "system",
+      textSize: "comfortable",
+    });
+  });
+
   it("falls back safely for missing, invalid, and partially invalid values", () => {
     expect(parseAppearancePreference(null)).toEqual(DEFAULT_APPEARANCE);
     expect(parseAppearancePreference("not json")).toEqual(DEFAULT_APPEARANCE);
@@ -22,7 +48,27 @@ describe("appearance preferences", () => {
       parseAppearancePreference(
         JSON.stringify({ colorTheme: "light", textSize: "enormous" }),
       ),
-    ).toEqual({ colorTheme: "light", textSize: "comfortable" });
+    ).toEqual({ ...DEFAULT_APPEARANCE, colorTheme: "light" });
+  });
+
+  it("keeps security warnings off for new and existing preferences", () => {
+    expect(DEFAULT_APPEARANCE.showSecurityWarnings).toBe(false);
+    expect(
+      parseAppearancePreference(
+        JSON.stringify({ colorTheme: "dark", textSize: "large" }),
+      ),
+    ).toEqual({
+      colorTheme: "dark",
+      textSize: "large",
+      showSecurityWarnings: false,
+    });
+    for (const value of [false, null, "true", 1]) {
+      expect(
+        parseAppearancePreference(
+          JSON.stringify({ showSecurityWarnings: value }),
+        ).showSecurityWarnings,
+      ).toBe(false);
+    }
   });
 
   it("reads and writes the versioned device-local preference", () => {
@@ -35,14 +81,16 @@ describe("appearance preferences", () => {
     storeAppearancePreference(storage, {
       colorTheme: "dark",
       textSize: "large",
+      showSecurityWarnings: true,
     });
 
     expect(values.get(APPEARANCE_STORAGE_KEY)).toBe(
-      '{"colorTheme":"dark","textSize":"large"}',
+      '{"colorTheme":"dark","textSize":"large","showSecurityWarnings":true}',
     );
     expect(readAppearancePreference(storage)).toEqual({
       colorTheme: "dark",
       textSize: "large",
+      showSecurityWarnings: true,
     });
   });
 
@@ -132,7 +180,7 @@ describe("appearance preferences", () => {
     storageListener?.({ key: null, newValue: null, storageArea: localStorage });
 
     expect(observed).toEqual([
-      { colorTheme: "dark", textSize: "large" },
+      { ...DEFAULT_APPEARANCE, colorTheme: "dark", textSize: "large" },
       DEFAULT_APPEARANCE,
     ]);
     unsubscribe();
@@ -151,7 +199,11 @@ describe("appearance preferences", () => {
     expect(resolveColorTheme("dark", false)).toBe("dark");
 
     expect(
-      applyAppearance(root, { colorTheme: "system", textSize: "large" }, false),
+      applyAppearance(
+        root,
+        { ...DEFAULT_APPEARANCE, textSize: "large" },
+        false,
+      ),
     ).toBe("light");
     expect(Object.fromEntries(attributes)).toEqual({
       "data-theme": "light",

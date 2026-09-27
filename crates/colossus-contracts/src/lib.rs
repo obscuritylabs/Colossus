@@ -1,4 +1,4 @@
-//! Versioned serializable contracts crossing Colossus boundaries.
+//! Versioned boundary contracts and non-serializable native secret values.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 mod agent;
 mod command_approval;
 mod command_output;
+mod credentials;
 mod decisions;
 mod distribution;
 mod integrations;
@@ -20,6 +21,7 @@ mod plugin_reads;
 mod plugin_selection;
 mod plugins;
 mod presentation;
+mod provider_presets;
 mod research;
 mod sandbox;
 mod security;
@@ -30,6 +32,7 @@ mod workflow;
 pub use agent::*;
 pub use command_approval::*;
 pub use command_output::*;
+pub use credentials::*;
 pub use decisions::*;
 pub use distribution::*;
 pub use integrations::*;
@@ -43,6 +46,7 @@ pub use plugin_reads::*;
 pub use plugin_selection::*;
 pub use plugins::*;
 pub use presentation::*;
+pub use provider_presets::*;
 pub use research::*;
 pub use sandbox::*;
 pub use security::*;

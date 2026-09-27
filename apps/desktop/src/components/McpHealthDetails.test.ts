@@ -38,6 +38,10 @@ describe("MCP health details", () => {
     expect(html).toContain("2 additional CA certificates loaded");
     expect(html).toContain("colossus mcp doctor");
     expect(html).toContain("Export diagnostics");
+    expect(html.indexOf("2 additional CA certificates loaded")).toBeLessThan(
+      html.indexOf("<details"),
+    );
+    expect(html).not.toContain("<details open");
     expect(html).not.toContain("No allowlisted tools");
     expect(html).not.toContain("allowlisted tools discovered.");
   });
@@ -75,6 +79,32 @@ describe("MCP health details", () => {
     expect(html).toContain("MCP health check succeeded.");
     expect(html).toContain("1 allowlisted tools discovered.");
     expect(html).toContain("list_issues");
+    expect(html).toContain("<summary>Discovered tools</summary>");
+    expect(html).toContain("<li><code>list_issues</code></li>");
     expect(html).not.toContain("No allowlisted tools");
+  });
+
+  it("shows the failure stage and HTTP status without requiring report expansion", () => {
+    const html = renderToStaticMarkup(
+      createElement(McpHealthDetails, {
+        diagnostic: {
+          server: "github",
+          healthy: false,
+          tools: [],
+          report: {
+            healthy: false,
+            elapsedMs: 52,
+            stage: "tool_discovery",
+            failure: { code: "http_status", httpStatus: 403 },
+            configuration: null,
+          },
+        },
+      }),
+    );
+    const summary = html.slice(0, html.indexOf("<details"));
+    expect(summary).toContain("tool discovery");
+    expect(summary).toContain("HTTP 403");
+    expect(summary).toContain("52 ms");
+    expect(html).not.toContain("TLS trust");
   });
 });

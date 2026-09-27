@@ -74,8 +74,10 @@ native scrollback byte-for-byte.
 | Key | Context | Action |
 | --- | --- | --- |
 | `Enter` | Composer | Submit the current turn |
-| `Enter` | Multiline composer | Insert a newline |
-| `Ctrl-Enter` / `Alt-Enter` | Multiline composer | Submit the current turn |
+| `Shift-Enter` | Composer, on a terminal that reports the modifier | Insert a newline at the cursor without submitting or accepting completion |
+| `Enter` | `/multiline on` fallback mode | Insert a newline, or accept an explicitly selected completion |
+| `Ctrl-D` | Nonempty `/multiline on` composer | Submit the current turn |
+| `Ctrl-Enter` / `Alt-Enter` | `/multiline on` composer | Submit the current turn when the terminal reports these modifiers |
 | `Up` / `Down` | Composer | From the first composer line, `Up` enters submitted-input history. While browsing, `Up` / `Down` move through entries; `Down` past the newest restores the original draft and cursor. |
 | `Ctrl-R` | Composer | Search submitted-input history |
 | `Ctrl-C` | Idle TUI | Exit, including when a draft or non-running overlay is open |
@@ -106,6 +108,16 @@ native scrollback byte-for-byte.
 | `Enter` | Theme browser | Save the previewed theme |
 | `D` / `G` | Plan execution dock | Select Direct or Goal Mode; Enter still confirms |
 | `Enter` | Plan execution dock | Confirm the explicitly selected strategy; no strategy is preselected |
+
+The TUI requests enhanced keyboard reporting on Unix terminals. Some terminals or
+terminal multiplexers still send the same event for `Shift-Enter` and `Enter`;
+pressing `Shift-Enter` on those terminals submits. If your terminal does not report
+the modifier, run `/multiline on` before composing a multiline prompt. In that
+fallback mode, `Enter` inserts a newline or accepts a selected completion, and
+`Ctrl-D` submits a nonempty draft; `Ctrl-Enter` and `Alt-Enter` remain supported
+when reported distinctly.
+`/multiline off` restores the default `Enter` behavior, and `/multiline toggle`
+switches between them. The preference persists through `/tui save`.
 
 Typing `/` at the beginning of a draft opens slash-command completion. Typing `@` at a
 skill-token boundary opens completion for qualified active-plugin skills

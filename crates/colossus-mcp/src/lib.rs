@@ -48,6 +48,7 @@ use http_client::HardenedStreamableHttpClient;
 #[cfg(test)]
 use http_client::content_type_matches;
 
+mod oauth_record;
 mod oauth_store;
 use oauth_store::OAuthStoreFactory;
 #[cfg(test)]

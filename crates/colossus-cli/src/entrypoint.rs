@@ -115,6 +115,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
     } else {
         std::env::set_current_dir(&runtime_options.workspace)?;
     }
+    if provider_setup::dispatch(&cli, &home, &home_workspace, &runtime_options).await? {
+        return Ok(());
+    }
     if let Command::Config(ConfigCommand {
         command:
             ConfigAction::Init {
@@ -460,6 +463,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         },
         Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
         Command::Provider(command) => match command.command {
+            ProviderAction::Presets | ProviderAction::Discover(_) | ProviderAction::Setup(_) => unreachable!("handled before runtime construction"),
             ProviderAction::Profiles => print_json(&runtime.provider_profiles())?,
             ProviderAction::Doctor {
                 profile,

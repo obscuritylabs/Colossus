@@ -54,6 +54,9 @@ impl From<CredentialResolutionError> for ProviderError {
 mod normalization;
 use normalization::*;
 
+mod model_catalog;
+use model_catalog::*;
+
 mod tool_names;
 use tool_names::*;
 

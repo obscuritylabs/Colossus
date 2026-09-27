@@ -8,6 +8,7 @@ export type TextSizePreference = (typeof TEXT_SIZE_OPTIONS)[number];
 export interface AppearancePreference {
   colorTheme: ColorThemePreference;
   textSize: TextSizePreference;
+  showSecurityWarnings: boolean;
 }
 
 export interface AppearanceStorage {
@@ -40,11 +41,32 @@ export interface AppearanceRoot {
   setAttribute(name: string, value: string): void;
 }
 
+export interface NativeDialogAppearance {
+  colorScheme: ResolvedColorTheme | "system";
+  textSize: TextSizePreference;
+}
+
+/** Capture the appearance visible when the operator opens a native dialog. */
+export function readNativeDialogAppearance(
+  root: Pick<Element, "getAttribute"> | undefined = typeof document ===
+  "undefined"
+    ? undefined
+    : document.documentElement,
+): NativeDialogAppearance {
+  const theme = root?.getAttribute("data-theme");
+  const textSize = root?.getAttribute("data-text-size");
+  return {
+    colorScheme: theme === "dark" || theme === "light" ? theme : "system",
+    textSize: includes(TEXT_SIZE_OPTIONS, textSize) ? textSize : "comfortable",
+  };
+}
+
 export const APPEARANCE_STORAGE_KEY = "colossus.desktop.appearance.v1";
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   colorTheme: "system",
   textSize: "comfortable",
+  showSecurityWarnings: false,
 };
 
 function includes<const T extends readonly string[]>(
@@ -69,6 +91,7 @@ export function parseAppearancePreference(
       textSize: includes(TEXT_SIZE_OPTIONS, value.textSize)
         ? value.textSize
         : DEFAULT_APPEARANCE.textSize,
+      showSecurityWarnings: value.showSecurityWarnings === true,
     };
   } catch {
     return DEFAULT_APPEARANCE;

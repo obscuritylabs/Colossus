@@ -76,8 +76,18 @@ fn exercise(worker_host: bool) {
     let terminal = Terminal::start(command);
     terminal.wait("Enter sends");
     terminal.send(b"/plu\t");
-    terminal.wait("/plugins");
-    terminal.send(b"\x1b\x03");
+    terminal.wait_for_composer("plugin completion", |draft| draft.starts_with("/plugins"));
+    terminal.wait("┌ Commands");
+    terminal.send(b"\x1b");
+    terminal.wait_until("autocomplete dismissal", |screen| {
+        !screen.contains("┌ Commands")
+    });
+    terminal.send(b"\x03");
+    // A fresh session renders this placeholder only when its draft is empty.
+    // Observe the clear before pasting, otherwise the old completion can remain.
+    terminal.wait_for_composer("empty welcome composer", |draft| {
+        draft == "Implement {feature}"
+    });
     let inventory = terminal.command("/plugins", "Bundled with Colossus");
     assert!(inventory.contains("colossus"));
     assert!(!inventory.contains("Item 1"));

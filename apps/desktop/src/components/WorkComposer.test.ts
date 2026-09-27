@@ -31,7 +31,6 @@ function renderComposer(
       approvalModeVisible: true,
       approvalModeAvailable: true,
       approvalModeChanging: false,
-      targetLabel: "Colossus",
       canCompose: true,
       submitting: false,
       continuation: false,
@@ -73,6 +72,21 @@ function renderRevisionComposer(): string {
 }
 
 describe("WorkComposer capabilities", () => {
+  it("keeps normal prompts uncluttered and shows the byte limit near capacity", () => {
+    const normal = renderComposer(true, { mode: "execute" });
+    expect(normal).toContain("Enter to send · Shift+Enter for a new line");
+    expect(normal).not.toContain("65,536");
+    expect(normal).toContain("Ask before actions that need approval.");
+    const nearLimit = renderComposer(false, { promptBytes: 60000 });
+    expect(nearLimit).toContain("60,000 / 65,536 bytes");
+    const overLimit = renderComposer(false, {
+      promptBytes: 70000,
+      promptOverLimit: true,
+    });
+    expect(overLimit).toContain('class="counter-over-limit"');
+    expect(overLimit).toContain('id="prompt-byte-limit-error"');
+    expect(overLimit).toContain("Prompt is too large.");
+  });
   it("protects the draft while queued mentions are being resolved", () => {
     const markup = renderComposer(false, {
       submitting: true,
@@ -169,20 +183,17 @@ describe("WorkComposer capabilities", () => {
     expect(markup).not.toContain("Choose workspace context");
   });
 
-  it("renders context controls only after the capability is advertised", () => {
+  it("renders attachment controls after the capability is advertised", () => {
     const markup = renderComposer(true);
 
     expect(markup).toContain('aria-label="Attach a file"');
-    expect(markup).toContain('aria-label="Choose workspace context"');
   });
 
-  it("describes the durable non-mutating Plan Mode contract", () => {
+  it("explains planning before changes in plain language", () => {
     const markup = renderComposer(false);
 
     expect(markup).toContain("work-composer is-plan-mode");
-    expect(markup).toContain(
-      "Plan creates a new durable draft; implementation and external mutation are blocked.",
-    );
+    expect(markup).toContain("Create a plan before making changes.");
     expect(markup).toContain("Describe the work you want Colossus to plan…");
   });
 

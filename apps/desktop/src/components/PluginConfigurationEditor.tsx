@@ -359,6 +359,7 @@ function ObjectFields({
                     }
                   />
                   <button
+                    className="button secondary"
                     type="button"
                     onClick={() => change(rows.filter((_, at) => at !== index))}
                   >
@@ -366,7 +367,11 @@ function ObjectFields({
                   </button>
                 </fieldset>
               ))}
-              <button type="button" onClick={() => change([...rows, {}])}>
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => change([...rows, {}])}
+              >
                 Add identity
               </button>
             </fieldset>
@@ -505,6 +510,7 @@ function NamedMap({
             )
           )}
           <button
+            className="button secondary"
             type="button"
             onClick={() =>
               onChange(
@@ -525,6 +531,7 @@ function NamedMap({
         <input value={name} onChange={(event) => setName(event.target.value)} />
       </label>
       <button
+        className="button secondary"
         type="button"
         disabled={!name.trim() || Object.hasOwn(entries, name.trim())}
         onClick={add}

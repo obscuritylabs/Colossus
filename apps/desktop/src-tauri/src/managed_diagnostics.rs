@@ -1,4 +1,6 @@
-use colossus_worker_protocol::{McpDiagnosticCode, McpDiagnosticFailure, McpHealthReport};
+use colossus_worker_protocol::{
+    McpDiagnosticCode, McpDiagnosticFailure, McpHealthReport, WorkerControlError,
+};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -317,7 +319,7 @@ pub(crate) async fn diagnose_managed_provider(
         .await?
         .provider_doctor(&request.profile)
         .await
-        .map_err(|_| diagnostic_error("The provider health test failed."))?;
+        .map_err(|error| profile_diagnostic_error("provider", &error))?;
     readiness_diagnostic("provider", request.profile, value)
 }
 
@@ -331,7 +333,7 @@ pub(crate) async fn diagnose_managed_model(
         .await?
         .model_doctor(&request.profile)
         .await
-        .map_err(|_| diagnostic_error("The model health test failed."))?;
+        .map_err(|error| profile_diagnostic_error("model", &error))?;
     readiness_diagnostic("model", request.profile, value)
 }
 
@@ -429,6 +431,38 @@ pub(crate) async fn worker_for(
 
 fn diagnostic_error(message: &str) -> CommandErrorDto {
     CommandErrorDto::local_sanitized("managed_diagnostic", message, true)
+}
+
+fn profile_diagnostic_error(kind: &str, error: &WorkerControlError) -> CommandErrorDto {
+    // Worker and transport errors can contain private paths or provider data.
+    // Release only a fixed category and recovery guidance to the renderer.
+    let (code, detail) = match error {
+        WorkerControlError::Io(_) => (
+            "managed_diagnostic_transport",
+            "The local worker connection failed before a diagnostic report was received. Restart the Workspace and retry.",
+        ),
+        WorkerControlError::Protocol(_) => (
+            "managed_diagnostic_protocol",
+            "The local worker diagnostic channel rejected a request or response. Restart the Workspace; if this continues, update Desktop and its bundled runtime together.",
+        ),
+        WorkerControlError::Remote(_) => (
+            "managed_diagnostic_rejected",
+            "The worker could not complete the diagnostic request. Check that the profile is saved and available in this Workspace, then retry.",
+        ),
+        WorkerControlError::Unavailable => (
+            "managed_diagnostic_unavailable",
+            "The local worker is unavailable. Start or restart the Workspace and retry.",
+        ),
+        WorkerControlError::Busy => (
+            "managed_diagnostic_timeout",
+            "The local worker did not respond in time. Retry when the Workspace is ready.",
+        ),
+    };
+    CommandErrorDto::local_sanitized(
+        code,
+        &format!("The {kind} health test failed. {detail}"),
+        true,
+    )
 }
 
 fn readiness_diagnostic(
@@ -533,7 +567,52 @@ fn renderer_safe_text(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ManagedMcpOAuthLoginDto, extension_inventory, readiness_diagnostic};
+    use super::{
+        ManagedMcpOAuthLoginDto, WorkerControlError, extension_inventory, profile_diagnostic_error,
+        readiness_diagnostic,
+    };
+
+    #[test]
+    fn profile_diagnostic_errors_identify_the_failure_without_releasing_raw_errors() {
+        for (error, code, guidance) in [
+            (
+                WorkerControlError::Io(std::io::Error::other("private-path secret-token")),
+                "managed_diagnostic_transport",
+                "connection failed",
+            ),
+            (
+                WorkerControlError::Protocol("private-path secret-token".into()),
+                "managed_diagnostic_protocol",
+                "rejected a request or response",
+            ),
+            (
+                WorkerControlError::Remote("private-path secret-token".into()),
+                "managed_diagnostic_rejected",
+                "profile is saved",
+            ),
+            (
+                WorkerControlError::Unavailable,
+                "managed_diagnostic_unavailable",
+                "Start or restart",
+            ),
+            (
+                WorkerControlError::Busy,
+                "managed_diagnostic_timeout",
+                "did not respond in time",
+            ),
+        ] {
+            for kind in ["provider", "model"] {
+                let diagnostic = profile_diagnostic_error(kind, &error);
+                assert_eq!(diagnostic.code, code);
+                assert!(diagnostic.message.contains(kind));
+                assert!(diagnostic.message.contains(guidance));
+                assert!(diagnostic.retryable);
+                let serialized = serde_json::to_string(&diagnostic).expect("safe diagnostic");
+                assert!(!serialized.contains("private-path"));
+                assert!(!serialized.contains("secret-token"));
+            }
+        }
+    }
 
     #[test]
     fn readiness_diagnostics_drop_provider_responses_and_bound_renderer_text() {

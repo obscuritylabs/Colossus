@@ -79,6 +79,7 @@ mod output;
 mod pickers;
 mod plugin_requests;
 mod presentation_commands;
+mod provider_setup;
 mod public_api_admin;
 mod service_args;
 mod terminal_io;

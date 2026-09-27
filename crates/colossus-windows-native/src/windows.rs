@@ -1,6 +1,5 @@
 use crate::{FileIdentity, WindowsNativeError};
 use std::{
-    ffi::OsStr,
     fs::{self, File, OpenOptions},
     mem::{size_of, zeroed},
     os::windows::{
@@ -13,20 +12,14 @@ use std::{
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
-    Foundation::{ERROR_CANCELLED, GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR},
+    Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE, LocalFree, NO_ERROR},
     Security::{
         ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER,
         Authorization::{
             EXPLICIT_ACCESS_W, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
             SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
         },
-        CreateWellKnownSid,
-        Credentials::{
-            CREDUI_FLAGS_ALWAYS_SHOW_UI, CREDUI_FLAGS_DO_NOT_PERSIST,
-            CREDUI_FLAGS_EXCLUDE_CERTIFICATES, CREDUI_FLAGS_GENERIC_CREDENTIALS,
-            CREDUI_FLAGS_KEEP_USERNAME, CREDUI_INFOW, CredUIPromptForCredentialsW,
-        },
-        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetTokenInformation,
+        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetTokenInformation,
         InitializeSecurityDescriptor, IsValidSid, NO_INHERITANCE, OWNER_SECURITY_INFORMATION, PSID,
         SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl,
@@ -61,7 +54,6 @@ use windows_sys::Win32::{
         },
     },
 };
-use zeroize::Zeroizing;
 
 pub(super) fn configure_suspended_process(command: &mut std::process::Command) {
     command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
@@ -945,7 +937,7 @@ fn file_information(file: &File) -> Result<BY_HANDLE_FILE_INFORMATION, WindowsNa
     }
 }
 
-fn file_identity(file: &File) -> Result<FileIdentity, WindowsNativeError> {
+pub(super) fn file_identity(file: &File) -> Result<FileIdentity, WindowsNativeError> {
     // SAFETY: the output points to an initialized fixed-size structure for the exact
     // information class and the borrowed File keeps the HANDLE valid for the call.
     let mut info: FILE_ID_INFO = unsafe { zeroed() };
@@ -990,73 +982,6 @@ pub(super) fn file_link_count(file: &File) -> Result<u64, WindowsNativeError> {
         return Err(WindowsNativeError::InvalidInput);
     }
     Ok(u64::from(info.nNumberOfLinks))
-}
-
-pub(super) fn prompt_secret(
-    title: &str,
-    message: &str,
-    target: &str,
-    maximum_chars: usize,
-) -> Result<Zeroizing<String>, WindowsNativeError> {
-    let title = wide(title);
-    let message = wide(message);
-    let target = wide(target);
-    let mut username = wide("provider");
-    username.resize(514, 0);
-    let mut password = vec![0_u16; maximum_chars + 1];
-    let mut save = 0;
-    let info = CREDUI_INFOW {
-        cbSize: u32::try_from(size_of::<CREDUI_INFOW>()).expect("structure size fits u32"),
-        hwndParent: std::ptr::null_mut(),
-        pszMessageText: message.as_ptr(),
-        pszCaptionText: title.as_ptr(),
-        hbmBanner: std::ptr::null_mut(),
-    };
-    // SAFETY: all strings are NUL terminated, output buffers have the advertised
-    // lengths, persistence is disabled, and no authentication context is supplied.
-    let result = unsafe {
-        CredUIPromptForCredentialsW(
-            &raw const info,
-            target.as_ptr(),
-            null(),
-            0,
-            username.as_mut_ptr(),
-            u32::try_from(username.len()).expect("username bound fits u32"),
-            password.as_mut_ptr(),
-            u32::try_from(password.len()).expect("password bound fits u32"),
-            &raw mut save,
-            CREDUI_FLAGS_ALWAYS_SHOW_UI
-                | CREDUI_FLAGS_DO_NOT_PERSIST
-                | CREDUI_FLAGS_EXCLUDE_CERTIFICATES
-                | CREDUI_FLAGS_GENERIC_CREDENTIALS
-                | CREDUI_FLAGS_KEEP_USERNAME,
-        )
-    };
-    if result == ERROR_CANCELLED {
-        password.fill(0);
-        return Err(WindowsNativeError::Cancelled);
-    }
-    if result != NO_ERROR {
-        password.fill(0);
-        return Err(last_error("show credential prompt"));
-    }
-    let end = password
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(password.len());
-    let decoded = String::from_utf16(&password[..end]).map_err(|_| {
-        password.fill(0);
-        WindowsNativeError::InvalidInput
-    })?;
-    password.fill(0);
-    if decoded.is_empty() {
-        return Err(WindowsNativeError::InvalidInput);
-    }
-    Ok(Zeroizing::new(decoded))
-}
-
-fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
-    value.as_ref().encode_wide().chain(Some(0)).collect()
 }
 
 fn last_error(operation: &'static str) -> WindowsNativeError {

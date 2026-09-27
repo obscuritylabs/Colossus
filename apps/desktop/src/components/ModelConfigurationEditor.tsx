@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -15,6 +15,15 @@ import {
   automaticProviderTimeoutMs,
 } from "../providerTimeout";
 import { DropdownSelect } from "./DropdownSelect";
+import { ProviderPresetSelect } from "./ProviderPresetSelect";
+import { ProviderModelPicker } from "./ProviderModelPicker";
+import {
+  resetModelMetadata,
+  selectCatalogModel,
+  presetProviderKind,
+} from "../providerCatalog";
+import { discoverManagedProviderModels } from "../api";
+import { requiresAdvancedModelSetup } from "../onboarding";
 
 const ROLES = [
   "primary",
@@ -25,6 +34,16 @@ const ROLES = [
   "research_worker",
   "research_synthesizer",
 ] as const;
+
+const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
+  primary: "Primary",
+  risk_evaluator: "Risk evaluator",
+  context_summarizer: "Context summarizer",
+  subagent_default: "Default subagent",
+  research_planner: "Research planner",
+  research_worker: "Research worker",
+  research_synthesizer: "Research synthesizer",
+};
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = [
   "none",
@@ -39,6 +58,8 @@ const REASONING_EFFORTS: readonly ReasoningEffort[] = [
 
 export type EditableProvider = ManagedProviderConfigurationInput & {
   effectiveTimeoutMs: number;
+  credentialRevision?: number;
+  persistedCredentialProfile?: string;
 };
 
 interface EditableConfiguration {
@@ -46,14 +67,70 @@ interface EditableConfiguration {
   models: ManagedModelConfiguration[];
 }
 
-function defaultBaseUrl(kind: ProviderKind): string {
-  if (kind === "open_ai_codex") {
-    return "https://chatgpt.com/backend-api/codex";
+export interface ManagedSetupDraft extends EditableConfiguration {
+  roles: Record<string, string>;
+  accessProfile: ApplyManagedModelConfigurationRequest["accessProfile"];
+  executionBoundary: ApplyManagedModelConfigurationRequest["executionBoundary"];
+}
+
+export function renameProviderProfile(
+  configuration: EditableConfiguration,
+  index: number,
+  profile: string,
+): EditableConfiguration {
+  if (
+    configuration.providers.some(
+      (provider, currentIndex) =>
+        currentIndex !== index && provider.profile === profile,
+    )
+  ) {
+    return configuration;
   }
-  if (kind === "openai_responses") {
-    return "https://api.openai.com/v1";
+  const previous = configuration.providers[index]?.profile;
+  return {
+    providers: configuration.providers.map((provider, currentIndex) =>
+      currentIndex === index ? { ...provider, profile } : provider,
+    ),
+    models: configuration.models.map((model) =>
+      model.providerProfile === previous
+        ? { ...model, providerProfile: profile }
+        : model,
+    ),
+  };
+}
+
+export function renameModelProfile(
+  models: ManagedModelConfiguration[],
+  roles: Record<string, string>,
+  index: number,
+  profile: string,
+) {
+  if (
+    models.some(
+      (model, currentIndex) =>
+        currentIndex !== index && model.profile === profile,
+    )
+  ) {
+    return { models, roles };
   }
-  return "https://openrouter.ai/api/v1";
+  const previous = models[index]?.profile;
+  return {
+    models: models.map((model, currentIndex) =>
+      currentIndex === index ? { ...model, profile } : model,
+    ),
+    roles: Object.fromEntries(
+      Object.entries(roles).map(([role, model]) => [
+        role,
+        model === previous ? profile : model,
+      ]),
+    ),
+  };
+}
+
+function nextProfile(prefix: string, profiles: string[]): string {
+  let index = 1;
+  while (profiles.includes(`${prefix}-${index}`)) index += 1;
+  return `${prefix}-${index}`;
 }
 
 function timeoutLabel(timeoutMs: number): string {
@@ -67,7 +144,7 @@ function initialProviders(desktop: DesktopStatus): EditableProvider[] {
       {
         profile: "primary-provider",
         providerKind: "openai_compatible",
-        baseUrl: defaultBaseUrl("openai_compatible"),
+        baseUrl: "",
         timeoutMs: null,
         effectiveTimeoutMs: REMOTE_PROVIDER_TIMEOUT_MS,
         credentialAction: "replace",
@@ -84,6 +161,9 @@ function initialProviders(desktop: DesktopStatus): EditableProvider[] {
         ? provider.effectiveTimeoutMs
         : automaticProviderTimeoutMs(provider.baseUrl),
     credentialAction: provider.hasCredential ? "reuse" : "none",
+    ...(provider.hasCredential
+      ? { persistedCredentialProfile: provider.profile }
+      : {}),
   }));
 }
 
@@ -93,11 +173,15 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
       {
         profile: "primary",
         providerProfile: "primary-provider",
-        model: "deepseek/deepseek-v4-flash",
-        contextWindowTokens: 128_000,
-        maxOutputTokens: 16_000,
+        model: "",
+        contextWindowTokens: 32_768,
+        maxOutputTokens: 4_096,
         reasoningEffort: null,
-        capabilities: { toolCalls: true, streaming: true, imageInputs: false },
+        capabilities: {
+          toolCalls: false,
+          streaming: false,
+          imageInputs: false,
+        },
       },
     ];
   }
@@ -121,20 +205,21 @@ export function changeProviderProtocol(
         ? {
             ...provider,
             providerKind,
-            baseUrl: defaultBaseUrl(providerKind),
+            baseUrl: "",
             credentialAction:
               providerKind === "open_ai_codex"
                 ? "none"
-                : provider.credentialAction,
-            effectiveTimeoutMs: automaticProviderTimeoutMs(
-              defaultBaseUrl(providerKind),
-            ),
+                : provider.credentialAction === "reuse"
+                  ? "replace"
+                  : provider.credentialAction,
+            effectiveTimeoutMs: REMOTE_PROVIDER_TIMEOUT_MS,
+            credentialId: "",
           }
         : provider,
     ),
     models: models.map((model) =>
       model.providerProfile === previous.profile
-        ? { ...model, model: "" }
+        ? { ...resetModelMetadata(model), model: "" }
         : model,
     ),
   };
@@ -159,7 +244,13 @@ export async function submitModelConfiguration(
   return apply({
     workspaceId,
     providers: providers.map(
-      ({ effectiveTimeoutMs: _, ...provider }) => provider,
+      ({
+        effectiveTimeoutMs: _,
+        credentialRevision: __,
+        persistedCredentialProfile: ___,
+        credentialId,
+        ...provider
+      }) => ({ ...provider, ...(credentialId ? { credentialId } : {}) }),
     ),
     models,
     roles,
@@ -174,20 +265,29 @@ interface ModelConfigurationEditorProps {
   onApply: (request: ApplyManagedModelConfigurationRequest) => Promise<boolean>;
   onCodexLogin: () => Promise<void>;
   onCodexLogout: () => Promise<void>;
-  onBack: () => void;
+  onBack?: (draft: ManagedSetupDraft) => void;
+  initialDraft?: ManagedSetupDraft;
+  onCatalogLoadingChange?: (loading: boolean) => void;
 }
 
 export function ModelConfigurationEditor({
   desktop,
-  busy,
+  busy: runtimeBusy,
   onApply,
   onCodexLogin,
   onCodexLogout,
   onBack,
+  initialDraft,
+  onCatalogLoadingChange,
 }: ModelConfigurationEditorProps) {
-  const [providers, setProviders] = useState(() => initialProviders(desktop));
-  const [models, setModels] = useState(() => initialModels(desktop));
+  const [providers, setProviders] = useState(
+    () => initialDraft?.providers ?? initialProviders(desktop),
+  );
+  const [models, setModels] = useState(
+    () => initialDraft?.models ?? initialModels(desktop),
+  );
   const [roles, setRoles] = useState<Record<string, string>>(() => {
+    if (initialDraft) return initialDraft.roles;
     const primary =
       desktop.managedModelConfiguration.roles.primary ??
       initialModels(desktop)[0]?.profile ??
@@ -201,15 +301,29 @@ export function ModelConfigurationEditor({
   });
   const [accessProfile, setAccessProfile] = useState<
     ApplyManagedModelConfigurationRequest["accessProfile"]
-  >(desktop.accessProfile);
+  >(initialDraft?.accessProfile ?? desktop.accessProfile);
   const [executionBoundary, setExecutionBoundary] = useState<
     ApplyManagedModelConfigurationRequest["executionBoundary"]
-  >(desktop.executionBoundary);
+  >(initialDraft?.executionBoundary ?? desktop.executionBoundary);
+  const [loadingModelIndex, setLoadingModelIndex] = useState<number | null>(
+    null,
+  );
+  const busy = runtimeBusy || loadingModelIndex !== null;
+  const workspaceRef = useRef(desktop.workspace?.workspaceId);
+  workspaceRef.current = desktop.workspace?.workspaceId;
 
   function updateProvider(index: number, update: Partial<EditableProvider>) {
     setProviders((current) =>
       current.map((provider, currentIndex) =>
-        currentIndex === index ? { ...provider, ...update } : provider,
+        currentIndex === index
+          ? {
+              ...provider,
+              ...update,
+              credentialRevision:
+                (provider.credentialRevision ?? 0) +
+                ("credentialAction" in update ? 1 : 0),
+            }
+          : provider,
       ),
     );
   }
@@ -252,43 +366,103 @@ export function ModelConfigurationEditor({
     >
       <div className="selected-workspace-row">
         <div>
-          <strong>Provider connections</strong>
+          <strong>Advanced model setup</strong>
           <span>
-            API keys are entered only in a native prompt. ChatGPT authorization
-            uses the installed Codex CLI.
+            Connect providers and choose models for different tasks. API keys
+            are entered in a secure dialog and saved encrypted. Connect Codex
+            with your ChatGPT account.
           </span>
         </div>
-        <button
-          className="text-button"
-          type="button"
-          disabled={busy}
-          onClick={onBack}
-        >
-          Simple setup
-        </button>
+        {onBack && !requiresAdvancedModelSetup({ providers, models, roles }) ? (
+          <button
+            className="text-button"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              onBack({
+                providers,
+                models,
+                roles,
+                accessProfile,
+                executionBoundary,
+              })
+            }
+          >
+            Back to basic setup
+          </button>
+        ) : null}
       </div>
 
       {providers.map((provider, index) => (
         <fieldset className="provider-fields" key={`provider-${index}`}>
           <legend>Provider {index + 1}</legend>
+          <ProviderPresetSelect
+            kind={provider.providerKind}
+            baseUrl={provider.baseUrl}
+            busy={busy}
+            {...(index === 0 &&
+            desktop.managedModelConfiguration.providers.length === 0
+              ? { defaultPresetId: "openrouter" }
+              : {})}
+            onSelect={(preset) => {
+              updateProvider(index, {
+                providerKind: presetProviderKind(preset),
+                baseUrl: preset.baseUrl ?? "",
+                credentialAction:
+                  preset.credentialEnv || preset.baseUrl === null
+                    ? "replace"
+                    : "none",
+                credentialId: "",
+                effectiveTimeoutMs: automaticProviderTimeoutMs(
+                  preset.baseUrl ?? "",
+                ),
+              });
+              setModels((current) =>
+                current.map((model) =>
+                  model.providerProfile === provider.profile
+                    ? { ...resetModelMetadata(model), model: "" }
+                    : model,
+                ),
+              );
+            }}
+          />
           <label>
-            <span>Profile</span>
+            <span>Connection ID</span>
             <input
               value={provider.profile}
               maxLength={64}
               required
               spellCheck={false}
               disabled={busy}
-              onChange={(event) =>
-                updateProvider(index, { profile: event.target.value })
+              readOnly={
+                provider.credentialAction === "reuse" &&
+                provider.persistedCredentialProfile !== undefined &&
+                !provider.credentialId
               }
+              onChange={(event) => {
+                const next = renameProviderProfile(
+                  { providers, models },
+                  index,
+                  event.target.value,
+                );
+                setProviders(next.providers);
+                setModels(next.models);
+              }}
             />
+            {provider.credentialAction === "reuse" &&
+            provider.persistedCredentialProfile !== undefined &&
+            !provider.credentialId ? (
+              <small>
+                Load models before renaming this saved connection, or choose to
+                replace its API key.
+              </small>
+            ) : null}
           </label>
           <label>
-            <span>Protocol</span>
+            <span>API format</span>
             <DropdownSelect
               value={provider.providerKind}
-              disabled={busy}
+              disabled={busy || provider.providerKind === "open_ai_codex"}
               onChange={(event) => {
                 const providerKind = event.target.value as ProviderKind;
                 const next = changeProviderProtocol(
@@ -301,15 +475,17 @@ export function ModelConfigurationEditor({
                 setModels(next.models);
               }}
             >
-              <option value="openai_compatible">OpenAI-compatible</option>
+              <option value="openai_compatible">
+                Chat Completions (OpenAI-compatible)
+              </option>
               <option value="openai_responses">OpenAI Responses</option>
-              <option value="open_ai_codex">
+              <option value="open_ai_codex" disabled>
                 ChatGPT subscription (Codex)
               </option>
             </DropdownSelect>
           </label>
           <label className="provider-wide-field">
-            <span>Base URL</span>
+            <span>API base URL</span>
             <input
               value={provider.baseUrl}
               maxLength={2048}
@@ -320,13 +496,25 @@ export function ModelConfigurationEditor({
                 const baseUrl = event.target.value;
                 updateProvider(index, {
                   baseUrl,
+                  credentialId: "",
+                  credentialAction:
+                    provider.credentialAction === "reuse"
+                      ? "replace"
+                      : provider.credentialAction,
                   effectiveTimeoutMs: automaticProviderTimeoutMs(baseUrl),
                 });
+                setModels((current) =>
+                  current.map((model) =>
+                    model.providerProfile === provider.profile
+                      ? { ...resetModelMetadata(model), model: "" }
+                      : model,
+                  ),
+                );
               }}
             />
           </label>
           <label>
-            <span>Timeout</span>
+            <span>Request timeout</span>
             <DropdownSelect
               value={provider.timeoutMs === null ? "automatic" : "custom"}
               disabled={busy}
@@ -347,18 +535,18 @@ export function ModelConfigurationEditor({
           </label>
           {provider.timeoutMs !== null ? (
             <label>
-              <span>Custom timeout (ms)</span>
+              <span>Custom timeout (milliseconds)</span>
               <input
                 type="number"
                 min={1}
                 value={provider.timeoutMs}
                 required
                 disabled={busy}
-                onChange={(event) =>
+                onChange={(event) => {
                   updateProvider(index, {
                     timeoutMs: Number(event.target.value),
-                  })
-                }
+                  });
+                }}
               />
             </label>
           ) : null}
@@ -382,35 +570,61 @@ export function ModelConfigurationEditor({
             </div>
           ) : (
             <label>
-              <span>Credential</span>
+              <span>API key</span>
               <DropdownSelect
                 value={provider.credentialAction}
                 disabled={busy}
-                onChange={(event) =>
+                onChange={(event) => {
+                  if (event.target.value === provider.credentialAction) return;
                   updateProvider(index, {
                     credentialAction: event.target.value as CredentialAction,
-                  })
-                }
+                    credentialId: "",
+                  });
+                }}
               >
-                <option value="none">No credential</option>
-                <option value="reuse">Reuse stored credential</option>
-                <option value="replace">Enter or replace natively</option>
+                <option value="none">No API key required</option>
+                <option
+                  value="reuse"
+                  disabled={
+                    provider.persistedCredentialProfile !== undefined &&
+                    provider.profile !== provider.persistedCredentialProfile &&
+                    !provider.credentialId
+                  }
+                >
+                  Use saved API key
+                </option>
+                <option value="replace">Enter or replace API key</option>
               </DropdownSelect>
             </label>
           )}
           {providers.length > 1 ? (
-            <button
-              className="text-button"
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                setProviders((current) =>
-                  current.filter((_, currentIndex) => currentIndex !== index),
-                )
-              }
-            >
-              Remove provider
-            </button>
+            <>
+              {models.some(
+                (model) => model.providerProfile === provider.profile,
+              ) ? (
+                <p className="provider-wide-field">
+                  Choose another provider for this connection’s models before
+                  removing it.
+                </p>
+              ) : null}
+              <button
+                className="text-button"
+                type="button"
+                disabled={
+                  busy ||
+                  models.some(
+                    (model) => model.providerProfile === provider.profile,
+                  )
+                }
+                onClick={() =>
+                  setProviders((current) =>
+                    current.filter((_, currentIndex) => currentIndex !== index),
+                  )
+                }
+              >
+                Remove provider
+              </button>
+            </>
           ) : null}
         </fieldset>
       ))}
@@ -423,9 +637,12 @@ export function ModelConfigurationEditor({
             setProviders((current) => [
               ...current,
               {
-                profile: `provider-${current.length + 1}`,
+                profile: nextProfile(
+                  "provider",
+                  current.map((provider) => provider.profile),
+                ),
                 providerKind: "openai_compatible",
-                baseUrl: defaultBaseUrl("openai_compatible"),
+                baseUrl: "",
                 timeoutMs: null,
                 effectiveTimeoutMs: REMOTE_PROVIDER_TIMEOUT_MS,
                 credentialAction: "none",
@@ -441,25 +658,36 @@ export function ModelConfigurationEditor({
         <fieldset className="provider-fields" key={`model-${index}`}>
           <legend>Model {index + 1}</legend>
           <label>
-            <span>Profile</span>
+            <span>Model configuration ID</span>
             <input
               value={model.profile}
               maxLength={64}
               required
               spellCheck={false}
               disabled={busy}
-              onChange={(event) =>
-                updateModel(index, { profile: event.target.value })
-              }
+              onChange={(event) => {
+                const next = renameModelProfile(
+                  models,
+                  roles,
+                  index,
+                  event.target.value,
+                );
+                setModels(next.models);
+                setRoles(next.roles);
+              }}
             />
           </label>
           <label>
-            <span>Provider profile</span>
+            <span>Provider connection</span>
             <DropdownSelect
               value={model.providerProfile}
               disabled={busy}
               onChange={(event) =>
-                updateModel(index, { providerProfile: event.target.value })
+                updateModel(index, {
+                  ...resetModelMetadata(model),
+                  providerProfile: event.target.value,
+                  model: "",
+                })
               }
             >
               {providerProfiles.map((profile) => (
@@ -469,6 +697,84 @@ export function ModelConfigurationEditor({
               ))}
             </DropdownSelect>
           </label>
+          <div className="provider-wide-field">
+            <ProviderModelPicker
+              connectionKey={JSON.stringify([
+                desktop.workspace?.workspaceId,
+                providers
+                  .filter(
+                    (provider) => provider.profile === model.providerProfile,
+                  )
+                  .map((provider) => [
+                    provider.profile,
+                    provider.providerKind,
+                    provider.baseUrl,
+                    provider.credentialRevision,
+                  ]),
+              ])}
+              model={model.model}
+              disabled={
+                busy ||
+                desktop.workspace === null ||
+                !providers.some(
+                  (provider) =>
+                    provider.profile === model.providerProfile &&
+                    provider.baseUrl.trim() !== "",
+                )
+              }
+              onLoad={async () => {
+                const provider = providers.find(
+                  (candidate) => candidate.profile === model.providerProfile,
+                );
+                if (!provider || desktop.workspace === null) return [];
+                const workspaceId = desktop.workspace.workspaceId;
+                setLoadingModelIndex(index);
+                onCatalogLoadingChange?.(true);
+                try {
+                  const result = await discoverManagedProviderModels({
+                    workspaceId,
+                    providerProfile: provider.profile,
+                    providerKind: provider.providerKind,
+                    baseUrl: provider.baseUrl,
+                    credentialAction: provider.credentialAction,
+                    ...(provider.credentialId
+                      ? { credentialId: provider.credentialId }
+                      : {}),
+                  });
+                  if (
+                    result.credentialId &&
+                    workspaceRef.current === workspaceId
+                  )
+                    setProviders((current) =>
+                      current.map((candidate) =>
+                        candidate.profile === provider.profile &&
+                        candidate.providerKind === provider.providerKind &&
+                        candidate.baseUrl === provider.baseUrl &&
+                        candidate.credentialRevision ===
+                          provider.credentialRevision &&
+                        candidate.credentialAction ===
+                          provider.credentialAction &&
+                        candidate.credentialId === provider.credentialId
+                          ? {
+                              ...candidate,
+                              credentialId: result.credentialId!,
+                              credentialAction: "reuse",
+                            }
+                          : candidate,
+                      ),
+                    );
+                  if (result.errorMessage) throw new Error(result.errorMessage);
+                  return result.models;
+                } finally {
+                  setLoadingModelIndex(null);
+                  onCatalogLoadingChange?.(false);
+                }
+              }}
+              onSelect={(entry) =>
+                updateModel(index, selectCatalogModel(model, entry))
+              }
+            />
+          </div>
           <label className="provider-wide-field">
             <span>Provider model ID</span>
             <input
@@ -478,12 +784,15 @@ export function ModelConfigurationEditor({
               spellCheck={false}
               disabled={busy}
               onChange={(event) =>
-                updateModel(index, { model: event.target.value })
+                updateModel(index, {
+                  ...resetModelMetadata(model),
+                  model: event.target.value,
+                })
               }
             />
           </label>
           <label>
-            <span>Context window</span>
+            <span>Context window (tokens)</span>
             <input
               type="number"
               min={1024}
@@ -498,7 +807,7 @@ export function ModelConfigurationEditor({
             />
           </label>
           <label>
-            <span>Maximum output</span>
+            <span>Maximum output (tokens)</span>
             <input
               type="number"
               min={1}
@@ -548,7 +857,7 @@ export function ModelConfigurationEditor({
                 })
               }
             />
-            <span>Tool calls</span>
+            <span>Tool use</span>
           </label>
           <label>
             <input
@@ -580,21 +889,28 @@ export function ModelConfigurationEditor({
                 })
               }
             />
-            <span>Image inputs</span>
+            <span>Images</span>
           </label>
           {models.length > 1 ? (
-            <button
-              className="text-button"
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                setModels((current) =>
-                  current.filter((_, currentIndex) => currentIndex !== index),
-                )
-              }
-            >
-              Remove model
-            </button>
+            <>
+              {Object.values(roles).includes(model.profile) ? (
+                <p className="provider-wide-field">
+                  Assign this model’s roles to another model before removing it.
+                </p>
+              ) : null}
+              <button
+                className="text-button"
+                type="button"
+                disabled={busy || Object.values(roles).includes(model.profile)}
+                onClick={() =>
+                  setModels((current) =>
+                    current.filter((_, currentIndex) => currentIndex !== index),
+                  )
+                }
+              >
+                Remove model
+              </button>
+            </>
           ) : null}
         </fieldset>
       ))}
@@ -607,15 +923,18 @@ export function ModelConfigurationEditor({
             setModels((current) => [
               ...current,
               {
-                profile: `model-${current.length + 1}`,
+                profile: nextProfile(
+                  "model",
+                  current.map((model) => model.profile),
+                ),
                 providerProfile: providerProfiles[0] ?? "",
                 model: "",
-                contextWindowTokens: 128_000,
-                maxOutputTokens: 16_000,
+                contextWindowTokens: 32_768,
+                maxOutputTokens: 4_096,
                 reasoningEffort: null,
                 capabilities: {
-                  toolCalls: true,
-                  streaming: true,
+                  toolCalls: false,
+                  streaming: false,
                   imageInputs: false,
                 },
               },
@@ -627,12 +946,12 @@ export function ModelConfigurationEditor({
       ) : null}
 
       <fieldset className="provider-fields">
-        <legend>Role routing</legend>
+        <legend>Models for each role</legend>
         {ROLES.map((role) => (
           <label key={role}>
-            <span>{role.replaceAll("_", " ")}</span>
+            <span>{ROLE_LABELS[role]}</span>
             <DropdownSelect
-              value={roles[role] ?? ""}
+              value={roles[role] ?? roles.primary ?? ""}
               disabled={busy}
               onChange={(event) =>
                 setRoles((current) => ({
@@ -650,7 +969,7 @@ export function ModelConfigurationEditor({
           </label>
         ))}
         <label className="provider-wide-field">
-          <span>Access profile</span>
+          <span>Tool access</span>
           <DropdownSelect
             value={accessProfile}
             disabled={busy}
@@ -662,19 +981,15 @@ export function ModelConfigurationEditor({
             }
           >
             <option value="minimal">Minimal — no workspace tools</option>
-            <option value="pinned">
-              Pinned — exact tools configured in Settings
-            </option>
+            <option value="pinned">Custom — tools selected in Settings</option>
             <option value="development">
-              Development — approval-gated effects
+              Development — tools with approval checks
             </option>
-            <option value="allow_all">
-              Allow all — every declared built-in tool
-            </option>
+            <option value="allow_all">Allow all — all built-in tools</option>
           </DropdownSelect>
         </label>
         <label className="provider-wide-field">
-          <span>Execution boundary</span>
+          <span>Command isolation</span>
           <DropdownSelect
             value={executionBoundary}
             disabled={busy}
@@ -695,18 +1010,18 @@ export function ModelConfigurationEditor({
       {executionBoundary === "full_access" ? (
         <div className="unsafe-execution-note" role="alert">
           <p>
-            <strong>Unsafe: Full access.</strong> Commands can use host files,
-            environment variables, and network access without Colossus
-            isolation. Approval mode is configured separately.
+            <strong>Full access is unsafe.</strong> Commands can access files on
+            your computer, environment variables, and the network without
+            isolation. Approval settings still apply.
           </p>
         </div>
       ) : null}
 
       <div className="provider-security-note">
         <p>
-          HTTPS endpoints and loopback HTTP are accepted. New or changed
-          endpoints require native confirmation. Finish or cancel active Managed
-          Local runs before applying changes.
+          Use HTTPS for remote providers. HTTP is allowed only for local servers
+          on this computer. You’ll be asked to approve new or changed
+          connections. Finish or cancel active tasks before saving.
         </p>
       </div>
       <button
@@ -717,7 +1032,9 @@ export function ModelConfigurationEditor({
           (requiresCodexAuth && !codexSignedIn)
         }
       >
-        {busy ? "Applying model configuration…" : "Apply model configuration"}
+        {runtimeBusy && loadingModelIndex === null
+          ? "Please wait…"
+          : "Save and start"}
       </button>
     </form>
   );

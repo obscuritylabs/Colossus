@@ -98,10 +98,15 @@ pub(crate) enum ControlOperation {
     },
     ProviderDoctor {
         profile: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
         include_provider_response: bool,
+    },
+    ProviderModels {
+        profile: Option<String>,
     },
     ModelDoctor {
         profile: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
         include_provider_response: bool,
     },
     SearchQuery {
@@ -118,6 +123,12 @@ pub(crate) enum ControlOperation {
         approval_mode: WorkerApprovalMode,
     },
     WorkflowList,
+}
+
+// Match WorkerOperation's canonical representation: default-valued diagnostic
+// flags must be omitted on both sides of the authenticated request.
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -332,6 +343,13 @@ mod tests {
     #[test]
     fn control_operations_have_the_worker_wire_shape() {
         assert_eq!(
+            serde_json::to_value(ControlOperation::ProviderModels {
+                profile: Some("setup-provider".into()),
+            })
+            .expect("provider models"),
+            serde_json::json!({"operation": "provider_models", "profile": "setup-provider"})
+        );
+        assert_eq!(
             serde_json::to_value(ControlOperation::Ping).expect("ping"),
             serde_json::json!({"operation": "ping"})
         );
@@ -407,7 +425,6 @@ mod tests {
             serde_json::json!({
                 "operation": "provider_doctor",
                 "profile": "openapi",
-                "include_provider_response": false,
             })
         );
         assert_eq!(
@@ -419,7 +436,6 @@ mod tests {
             serde_json::json!({
                 "operation": "model_doctor",
                 "profile": "primary",
-                "include_provider_response": false,
             })
         );
         assert_eq!(

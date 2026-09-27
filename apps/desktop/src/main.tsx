@@ -7,6 +7,7 @@ import {
 } from "./theme/AppearanceProvider";
 import "./theme/theme.css";
 import "./styles.css";
+import "./settings-layout.css";
 
 const root = document.getElementById("root");
 

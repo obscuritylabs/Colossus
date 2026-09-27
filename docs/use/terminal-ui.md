@@ -181,7 +181,11 @@ values are never stored as presentation preferences.
 - In the default inline mode, use the terminal's normal wheel and scrollback shortcuts.
   With `--alt-screen`, use PageUp/PageDown and End to navigate the retained transcript.
 - Use Ctrl-R to search encrypted prompt history.
-- Toggle multiline composition with `/multiline toggle`.
+- Press Shift-Enter to insert a newline in a prompt; Enter submits. If your terminal
+  reports Shift-Enter as Enter, use `/multiline on` before composing: Enter then inserts
+  newlines (or accepts a selected completion) and Ctrl-D submits. `/multiline off`
+  restores the default; Ctrl/Alt-Enter
+  continue to submit in fallback mode when your terminal reports them distinctly.
 
 The composer accepts up to eight future turns while a run is active. Failure or
 cancellation pauses the queue for confirmation.

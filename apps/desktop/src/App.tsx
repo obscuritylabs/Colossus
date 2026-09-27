@@ -67,7 +67,6 @@ import type {
 import {
   ExecutionBoundaryBanner,
   executionBoundaryBannerVisible,
-  managedRuntimeBoundaryActive,
 } from "./components/ExecutionBoundaryBanner";
 import { OperationsSurface } from "./components/OperationsSurface";
 import { pluginSelectionKey } from "./plugins";
@@ -88,7 +87,11 @@ import { WorkSurface } from "./components/WorkSurface";
 import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
-import { managedOnboardingRequired } from "./onboarding";
+import {
+  managedOnboardingRequired,
+  managedSetupLaunchFailure,
+} from "./onboarding";
+import { useAppearance } from "./theme/AppearanceProvider";
 import {
   parseDesktopSlashCommand,
   type DesktopSlashAction,
@@ -365,8 +368,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
       : [],
     roles: FIXTURE_MODE ? { primary: "primary" } : {},
   },
-  accessProfile: "allow_all",
-  executionBoundary: "full_access",
+  accessProfile: FIXTURE_MODE ? "allow_all" : "minimal",
+  executionBoundary: FIXTURE_MODE ? "full_access" : "offline_isolated",
   approvalMode: "ask",
   terminalEnabled: false,
   additionalCaBundle: {
@@ -829,6 +832,7 @@ type RunSubmissionResult =
   | { type: "stale" };
 
 export default function App() {
+  const { showSecurityWarnings } = useAppearance();
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE
@@ -924,6 +928,9 @@ export default function App() {
   const desktopRef = useRef(desktop);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
+  const [settingsStartTab, setSettingsStartTab] = useState<
+    "runtime" | "providers"
+  >("runtime");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] =
     useState<WorkspaceFileOpenRequest | null>(null);
@@ -3390,8 +3397,10 @@ export default function App() {
       }
       const status = await configureManagedRuntime(request);
       await acceptDesktopStatus(status, true);
-      setShowOnboarding(false);
-      return status.connection.state === "connected";
+      const failure = managedSetupLaunchFailure(status);
+      setShowOnboarding(failure !== null);
+      setActionError(failure);
+      return failure === null;
     } catch (error: unknown) {
       const failure = commandError(error);
       markConnectionFailure(failure);
@@ -3455,8 +3464,10 @@ export default function App() {
       }
       const status = await applyManagedModelConfiguration(request);
       await acceptDesktopStatus(status, true);
-      setShowOnboarding(false);
-      return status.connection.state === "connected";
+      const failure = managedSetupLaunchFailure(status);
+      setShowOnboarding(failure !== null);
+      setActionError(failure);
+      return failure === null;
     } catch (error: unknown) {
       const failure = commandError(error);
       markConnectionFailure(failure);
@@ -4664,6 +4675,7 @@ export default function App() {
   const openWorkNavigation = useCallback(() => setWorkNavigationOpen(true), []);
   const selectSurface = useCallback((nextSurface: WorkspaceSurface) => {
     setWorkNavigationOpen(false);
+    if (nextSurface === "settings") setSettingsStartTab("runtime");
     setSurface(nextSurface);
   }, []);
 
@@ -4700,9 +4712,15 @@ export default function App() {
         (activeRun === undefined || isTerminalStatus(activeRun.status))
       }
       approvalModeChanging={approvalModeChanging}
-      targetLabel={
-        activeRun === undefined ? "Colossus" : agentRoleLabel(activeRun.role)
-      }
+      modelContext={{
+        targetKind: selectedTarget?.kind ?? null,
+        configuration: desktop.managedModelConfiguration,
+      }}
+      onOpenModelSettings={() => {
+        setSettingsStartTab("providers");
+        setWorkNavigationOpen(false);
+        setSurface("settings");
+      }}
       canCompose={canCompose}
       submitting={submitting}
       continuation={continuation}
@@ -4763,16 +4781,19 @@ export default function App() {
   );
   const onboardingRequired = managedOnboardingRequired(desktop);
   const onboardingActive = showOnboarding || onboardingRequired;
-  const developerPreview = releaseChannel === "developer_preview";
-  const unsafeExecutionBannerVisible = executionBoundaryBannerVisible(
-    desktop.managedState,
-    desktop.executionBoundary,
-  );
+  const developerPreview =
+    showSecurityWarnings && releaseChannel === "developer_preview";
+  const unsafeExecutionBannerVisible =
+    showSecurityWarnings &&
+    executionBoundaryBannerVisible(
+      desktop.managedState,
+      desktop.executionBoundary,
+    );
 
   return (
     <div
       ref={appShellRef}
-      className={`app-shell${developerPreview ? " app-shell--developer-preview" : ""}${unsafeExecutionBannerVisible ? " app-shell--unsafe-execution" : ""}`}
+      className={`app-shell${surface === "settings" && !onboardingActive ? " app-shell--settings" : ""}${developerPreview ? " app-shell--developer-preview" : ""}${unsafeExecutionBannerVisible ? " app-shell--unsafe-execution" : ""}`}
       style={
         workSidebarWidthRef.current === null
           ? undefined
@@ -4784,12 +4805,14 @@ export default function App() {
       <a className="skip-link" href="#primary-workspace">
         Skip to workspace
       </a>
-      <ReleaseChannelBanner
-        releaseChannel={releaseChannel}
-        releaseMetadata={releaseMetadata}
-      />
+      {showSecurityWarnings && (
+        <ReleaseChannelBanner
+          releaseChannel={releaseChannel}
+          releaseMetadata={releaseMetadata}
+        />
+      )}
       <ExecutionBoundaryBanner
-        active={managedRuntimeBoundaryActive(desktop.managedState)}
+        active={unsafeExecutionBannerVisible}
         boundary={desktop.executionBoundary}
       />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
@@ -4804,7 +4827,7 @@ export default function App() {
         />
       ) : null}
 
-      {onboardingActive ? null : (
+      {onboardingActive || surface === "settings" ? null : (
         <WorkSidebar
           runs={chat.recentRuns}
           spaces={desktop.spaces}
@@ -4875,7 +4898,14 @@ export default function App() {
         <OnboardingSurface
           desktop={desktop}
           busy={connecting}
-          error={actionError?.message ?? ""}
+          error={[
+            actionError?.message,
+            ...(actionError?.violations.map(
+              (violation) => violation.description,
+            ) ?? []),
+          ]
+            .filter(Boolean)
+            .join(" ")}
           onChooseWorkspace={handleChooseWorkspace}
           onConfigure={handleConfigureManaged}
           onApplyConfiguration={handleApplyManagedModelConfiguration}
@@ -5036,6 +5066,8 @@ export default function App() {
         />
       ) : (
         <OperationsSurface
+          initialSettingsTab={settingsStartTab}
+          onReturnToWork={() => selectSurface("work")}
           pluginSelections={pluginSelections}
           onUsePluginSkill={(id) => {
             setConversationSkills((current) => ({

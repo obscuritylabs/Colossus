@@ -40,6 +40,7 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-codex-auth` | Keep OAuth/device-flow parsing, storage, and redaction tests. |
 | `colossus-context` | Keep compaction budgets, snapshots, and deterministic fallback unit tests. |
 | `colossus-contracts` | Keep serialization, validation, and stable contract-shape tests. |
+| `colossus-credentials` | Keep encrypted persistence, process restart, initialization interruption, lease, scope/key/tamper, path, size, and sanitized-error conformance tests; run real OS-store acceptance on Windows, macOS, and Linux. |
 | `colossus-darwin-process` | Keep platform process-isolation and limit tests on macOS CI. |
 | `colossus-domain` | Keep dependency-free domain invariant tests. |
 | `colossus-fuzzing` | Keep corpus regressions and fuzz harness compilation; they cover hostile parsers. |
@@ -121,6 +122,23 @@ During iteration, run the changed crate's library tests and directly affected ta
 Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
 `cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
 for prerequisites and CI mapping.
+
+### Desktop provider setup acceptance
+
+Prepare current bundled binaries with `cargo xtask desktop prepare --profile debug`,
+then run `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_catalog_ -- --ignored`.
+This operator-owned native acceptance tier requires loopback access and the platform
+credential store. It uses disposable private homes, the verified bundled sidecar,
+authenticated worker IPC, and the production provider gateway. It proves first-run
+Chat Completions and Responses model discovery without a selected model, card limits,
+absent authorization for unauthenticated endpoints, real encrypted-vault credential
+forwarding on Windows/macOS, and successful retries after malformed catalogs and
+HTTP 401. Successful runs verify removal of their exact generated runtime keys and
+homes; cleanup failures fail the test. During an existing test failure, cleanup
+diagnostics preserve that original failure and may leave generated resources for
+inspection. It does not
+automate native consent or credential-entry dialogs; those still require on-screen
+acceptance. Browser mocks alone do not exercise this native boundary.
 
 ### Plan Mode acceptance
 
@@ -261,6 +279,37 @@ failure is a blocked native check, not an offline-runtime pass; do not replace e
 or platform credentials to hide it. Use a fresh explicit `COLOSSUS_HOME` and a scratch
 workspace for manual acceptance. The browser-to-worker bridge is separate evidence and
 does not substitute for native dialogs or operating-system integration.
+
+The credential-vault matrix in pre-merge acceptance runs deterministic conformance on
+Windows, macOS, and Linux, then runs
+`cargo test --locked -p colossus-credentials --lib platform_master_key_survives_vault_reopen -- --ignored`
+against the real OS store. The test owns synthetic records and a dedicated generated
+key, checks exact bytes from a second process, and deletes only that generated key.
+Linux needs an unlocked persistent Secret Service collection inside a D-Bus session.
+Initialization fault tests cover each durable transition and an acknowledged-write
+failure; separate tests cover ownership conflicts, tampering, and unsafe paths.
+
+Desktop's private native UI crate has Windows real-control tests. Its AppKit driver
+must run on the process main thread:
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-macos`.
+The Windows driver uses an isolated window station and clipboard to exercise native
+paste and keyboard messages without changing the user's clipboard:
+`cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-windows`.
+Both platform lanes own these checks. Manual acceptance additionally pastes 761, 762,
+2,560, 2,561, 8,192, and 65,536 bytes, rejects 65,537, tests keyboard navigation,
+cancellation and parent closure, and follows save/restart/load through a real MCP
+discovery and tool call. Record actual Splunk deployment acceptance separately;
+synthetic loopback credentials do not prove a deployment's header limits.
+
+Both Desktop platform lanes also run the native backend acceptance test
+`managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp`
+with `--lib -- --ignored --exact` and `COLOSSUS_ACCEPTANCE_SIDECAR` set to the absolute
+path of the prepared matching sidecar. Separate processes save and reopen 8,192- and
+65,536-byte synthetic credentials through Desktop's vault, use production bootstrap
+construction, and verify exact provider and MCP discovery/tool-call authorization at
+a loopback server. The fixture checks renderer metadata, released output, and generated
+files for plaintext and removes only its generated platform key and private home.
+This backend test is separate from native input and physical Desktop acceptance.
 
 Windows release smoke fixtures use fresh owner-private directories under the current
 user profile, not the runner's potentially shared temporary directory. The Windows

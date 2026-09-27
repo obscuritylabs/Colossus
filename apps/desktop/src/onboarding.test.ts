@@ -4,6 +4,8 @@ import {
   buildManagedRuntimeRequest,
   managedOnboardingRequired,
   managedProviderDefaults,
+  managedSetupLaunchFailure,
+  requiresAdvancedModelSetup,
   runOfflineSelfTest,
   submitManagedRuntimeConfiguration,
 } from "./onboarding";
@@ -25,6 +27,76 @@ const draft: ManagedProviderDraft = {
 };
 
 describe("Managed Local onboarding", () => {
+  it("completes setup only when the saved runtime is connected", () => {
+    const connection = {
+      targetId: "managed-local",
+      message: "The runtime exited during startup.",
+    };
+    expect(
+      managedSetupLaunchFailure({
+        connection: { ...connection, state: "connected" },
+      }),
+    ).toBeNull();
+    for (const state of [
+      "restarting",
+      "disconnected",
+      "failed",
+      "starting",
+    ] as const) {
+      expect(
+        managedSetupLaunchFailure({ connection: { ...connection, state } }),
+      ).toMatchObject({
+        code: "managed_setup_not_connected",
+        message: expect.stringContaining(connection.message),
+        retryable: true,
+        outcomeUnknown: false,
+      });
+    }
+  });
+
+  it("keeps custom routing, reasoning and timeouts in the full configuration editor", () => {
+    const configuration = {
+      providers: [
+        { profile: "primary-provider", timeoutMs: null as number | null },
+      ],
+      models: [
+        {
+          profile: "primary",
+          providerProfile: "primary-provider",
+          reasoningEffort: null as "high" | null,
+        },
+      ],
+      roles: { primary: "primary" },
+    };
+    expect(requiresAdvancedModelSetup(configuration)).toBe(false);
+    expect(
+      requiresAdvancedModelSetup({
+        ...configuration,
+        providers: [{ ...configuration.providers[0]!, timeoutMs: 900000 }],
+      }),
+    ).toBe(true);
+    expect(
+      requiresAdvancedModelSetup({
+        ...configuration,
+        models: [{ ...configuration.models[0]!, reasoningEffort: "high" }],
+      }),
+    ).toBe(true);
+    expect(
+      requiresAdvancedModelSetup({
+        ...configuration,
+        roles: { ...configuration.roles, research_worker: "primary" },
+      }),
+    ).toBe(true);
+    expect(
+      requiresAdvancedModelSetup({
+        ...configuration,
+        providers: [
+          { ...configuration.providers[0]!, profile: "custom-provider" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("requires setup when Managed Local is selected without a provider", () => {
     const desktop = {
       selectedTargetId: "managed-local",
@@ -98,7 +170,7 @@ describe("Managed Local onboarding", () => {
     ).toBeNull();
   });
 
-  it("submits no provider credential or origin through renderer IPC", async () => {
+  it("submits no provider credential value through renderer IPC", async () => {
     const configure = vi.fn().mockResolvedValue(true);
 
     await expect(
@@ -126,12 +198,34 @@ describe("Managed Local onboarding", () => {
     ).rejects.toThrow("native failure");
   });
 
-  it("provides deterministic, non-secret defaults for supported providers", () => {
+  it("requires a discovered or explicitly entered model instead of a stale hardcoded ID", () => {
     expect(managedProviderDefaults("openai_responses")).toEqual({
-      model: "gpt-5",
+      model: "",
     });
     expect(managedProviderDefaults("openai_compatible")).toEqual({
-      model: "deepseek/deepseek-v4-flash",
+      model: "",
+    });
+  });
+
+  it("passes custom endpoints, opaque credential references and reviewed model metadata", () => {
+    const modelMetadata = {
+      contextWindowTokens: 8192,
+      maxOutputTokens: 4096,
+      toolCalls: true,
+      imageInputs: false,
+      streaming: false,
+    };
+    expect(
+      buildManagedRuntimeRequest(workspace, {
+        ...draft,
+        baseUrl: "http://localhost:1234/v1",
+        credentialId: "credential-opaque",
+        modelMetadata,
+      }),
+    ).toMatchObject({
+      baseUrl: "http://localhost:1234/v1",
+      credentialId: "credential-opaque",
+      modelMetadata,
     });
   });
 
@@ -146,14 +240,14 @@ describe("Managed Local onboarding", () => {
       [
         {
           state: "running",
-          message: "Checking the bundled runtime without contacting a model…",
+          message: "Checking that Colossus can run on this computer…",
         },
       ],
       [
         {
           state: "passed",
           message:
-            "Offline runtime self-test passed. No provider was contacted.",
+            "Installation check passed. No model provider was contacted.",
         },
       ],
     ]);

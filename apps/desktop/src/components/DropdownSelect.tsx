@@ -52,6 +52,7 @@ interface DropdownSelectProps {
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
   onChange?: (event: DropdownSelectChangeEvent) => void;
+  renderOptionIcon?: (option: DropdownSelectOption) => ReactNode;
 }
 
 function optionText(node: ReactNode): string {
@@ -143,6 +144,7 @@ export function DropdownSelect({
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   onChange,
+  renderOptionIcon,
 }: DropdownSelectProps) {
   const options = useMemo(() => dropdownOptions(children), [children]);
   const generatedId = useId();
@@ -441,7 +443,14 @@ export function DropdownSelect({
         onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleKeyDown}
       >
-        <span className="app-select-value">{selectedLabel}</span>
+        <span className="app-select-label">
+          {selectedOption && renderOptionIcon ? (
+            <span className="app-select-icon" aria-hidden="true">
+              {renderOptionIcon(selectedOption)}
+            </span>
+          ) : null}
+          <span className="app-select-value">{selectedLabel}</span>
+        </span>
         <IconChevronDown
           className="app-select-chevron"
           size={15}
@@ -501,7 +510,14 @@ export function DropdownSelect({
                       <IconCheck size={14} stroke={2.2} />
                     ) : null}
                   </span>
-                  <span>{option.label}</span>
+                  <span className="app-select-label">
+                    {renderOptionIcon ? (
+                      <span className="app-select-icon" aria-hidden="true">
+                        {renderOptionIcon(option)}
+                      </span>
+                    ) : null}
+                    <span>{option.label}</span>
+                  </span>
                 </button>
               ))}
             </div>,

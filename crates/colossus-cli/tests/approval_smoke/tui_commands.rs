@@ -116,10 +116,10 @@ fn both_tui_hosts_review_long_argv_before_deciding_in_a_real_pty() {
         terminal.wait("Approval required");
         assert!(!marker.exists());
         terminal.resize_frame(32, 60);
-        terminal.wait_until("approval after narrow resize", |screen| {
+        terminal.wait_until_visual_rows("approval after narrow resize", |screen, rows| {
             screen.contains("Approval required")
-                && screen
-                    .lines()
+                && rows
+                    .iter()
                     .any(|line| line.ends_with('┐') && line.chars().count() == 60)
         });
         terminal.send(b"r");

@@ -213,6 +213,21 @@ impl WorkerControlClient {
         .await
     }
 
+    /// Discover normalized model metadata through the runtime effect gateway.
+    pub async fn provider_models(
+        &self,
+        profile: &str,
+    ) -> Result<serde_json::Value, WorkerControlError> {
+        validate_profile_name(profile)?;
+        self.call_with_timeout(
+            ControlOperation::ProviderModels {
+                profile: Some(profile.into()),
+            },
+            REQUEST_TIMEOUT.max(Duration::from_secs(35)),
+        )
+        .await
+    }
+
     /// Exercise one provider catalog endpoint without releasing response bodies.
     pub async fn provider_doctor(
         &self,
@@ -276,6 +291,14 @@ impl WorkerControlClient {
         &self,
         operation: ControlOperation,
     ) -> Result<serde_json::Value, WorkerControlError> {
+        self.call_with_timeout(operation, REQUEST_TIMEOUT).await
+    }
+
+    async fn call_with_timeout(
+        &self,
+        operation: ControlOperation,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, WorkerControlError> {
         let mut stream = self.connect().await?;
         let connection_nonce = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
@@ -288,7 +311,7 @@ impl WorkerControlClient {
             operation,
             &connection_nonce,
         )?;
-        let frame: WorkerFrame = tokio::time::timeout(REQUEST_TIMEOUT, async {
+        let frame: WorkerFrame = tokio::time::timeout(timeout, async {
             write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
             read_message(&mut stream, MAX_FRAME_BYTES).await
         })

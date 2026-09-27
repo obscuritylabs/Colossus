@@ -165,6 +165,9 @@ pub(super) async fn dispatch_to_worker_if_active(
         }
         Command::Provider(command) => {
             let operation = match &command.command {
+                ProviderAction::Presets
+                | ProviderAction::Discover(_)
+                | ProviderAction::Setup(_) => return Ok(false),
                 ProviderAction::Profiles => WorkerOperation::ProviderProfiles,
                 ProviderAction::Doctor {
                     profile,

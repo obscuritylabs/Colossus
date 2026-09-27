@@ -28,7 +28,7 @@ pub enum McpOAuthCredentialStoreKind {
     /// Select plaintext state for keyless deployments and protected storage otherwise.
     #[default]
     Auto,
-    /// Store OAuth credentials in the operating-system credential store.
+    /// Store OAuth records in a private vault protected by an operating-system key.
     Platform,
     /// Store OAuth credentials in an owner-private plaintext redb sidecar.
     PlaintextState,
@@ -164,6 +164,9 @@ fn empty_object() -> Value {
 pub struct McpServerSummary {
     /// Stable configuration name.
     pub name: String,
+    /// Whether this adapter can attempt a call. Remote health is checked lazily.
+    #[serde(default = "default_true")]
+    pub available: bool,
     /// Fixed transport implemented by this adapter.
     pub transport: String,
     /// Whether this remote server may operate without MCP session identifiers.
@@ -173,6 +176,10 @@ pub struct McpServerSummary {
     pub allowed_tools: Vec<String>,
     /// Tool names configured for research collection.
     pub research_tools: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Safe, allowlist-filtered MCP tool description.

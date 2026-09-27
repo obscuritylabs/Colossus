@@ -10,7 +10,7 @@ license.workspace = true
 colossus-domain.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
-

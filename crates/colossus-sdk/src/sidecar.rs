@@ -4,6 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use colossus_api::{ApiScope, ApplicationKind, scopes};
+pub use colossus_contracts::HostSecret;
 use colossus_sidecar_protocol::{
     BootstrapGrant, BootstrapRequest, HostCredential, PROTOCOL_VERSION, SecretString,
     encode_worker_authentication,
@@ -198,23 +199,17 @@ impl SidecarApprovalBrokerGrant {
     }
 }
 
-/// One host-resolved provider credential retained only in zeroizing native memory.
+/// One host-resolved external credential retained only in zeroizing native memory.
 pub struct SidecarHostCredential {
     id: String,
-    secret: SecretString,
+    secret: HostSecret,
 }
 
 impl SidecarHostCredential {
     /// Bind a credential to an opaque identifier referenced as `host:<id>`.
-    pub fn new(id: impl Into<String>, secret: crate::Secret) -> SdkResult<Self> {
-        let secret = std::str::from_utf8(secret.expose())
-            .map_err(|_| SdkError::InvalidConfiguration("host credential must be UTF-8"))?;
-        let credential = HostCredential::new(
-            id,
-            SecretString::new(secret.to_owned())
-                .map_err(|_| SdkError::InvalidConfiguration("host credential is invalid"))?,
-        )
-        .map_err(|_| SdkError::InvalidConfiguration("host credential identifier is invalid"))?;
+    pub fn new(id: impl Into<String>, secret: HostSecret) -> SdkResult<Self> {
+        let credential = HostCredential::new(id, secret)
+            .map_err(|_| SdkError::InvalidConfiguration("host credential identifier is invalid"))?;
         Ok(Self {
             id: credential.id,
             secret: credential.secret,
@@ -222,12 +217,8 @@ impl SidecarHostCredential {
     }
 
     pub(crate) fn wire(&self) -> SdkResult<HostCredential> {
-        HostCredential::new(
-            self.id.clone(),
-            SecretString::new(self.secret.expose().to_owned())
-                .map_err(|_| SdkError::SidecarFailed)?,
-        )
-        .map_err(|_| SdkError::SidecarFailed)
+        HostCredential::new(self.id.clone(), self.secret.duplicate())
+            .map_err(|_| SdkError::SidecarFailed)
     }
 }
 
@@ -528,6 +519,22 @@ impl SidecarBootstrapConfig {
         Ok(request)
     }
 
+    /// Validate and bound the actual tagged frame before any child is spawned.
+    pub(crate) fn encoded_request(
+        &self,
+        options: &SidecarOptions,
+        canonical_workspace: &std::path::Path,
+        workspace_identity: WorkspaceIdentity,
+    ) -> SdkResult<Zeroizing<Vec<u8>>> {
+        let request = self.request(options, canonical_workspace, workspace_identity)?;
+        colossus_sidecar_protocol::encode_frame(&colossus_sidecar_protocol::ParentFrame::Bootstrap(
+            Box::new(request),
+        ))
+        .map_err(|_| {
+            SdkError::InvalidConfiguration("sidecar bootstrap exceeds the 2 MiB frame limit")
+        })
+    }
+
     pub(crate) fn workspace(&self) -> &std::path::Path {
         &self.workspace
     }
@@ -659,6 +666,60 @@ mod tests {
 
     fn runtime() -> ManagedRuntimeConfig {
         ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal)
+    }
+
+    #[test]
+    fn host_credentials_accept_large_values_without_widening_session_credentials() {
+        let token = "s".repeat(64 * 1024);
+        let credential =
+            SidecarHostCredential::new("mcp-large", HostSecret::new(token.clone()).unwrap())
+                .unwrap();
+        assert!(credential.wire().unwrap().secret.expose() == token);
+        assert!(!format!("{credential:?}").contains(&token));
+        assert!(crate::Secret::new(vec![b's'; 762]).is_err());
+    }
+
+    #[test]
+    fn bootstrap_is_bounded_before_spawn_using_actual_json_escaping() {
+        let options = SidecarOptions::new(
+            InstanceId::from_uuid(Uuid::now_v7()),
+            AppPrivateInstanceDir::new(TEST_WORKSPACE).unwrap(),
+            VerifiedExecutable::new(
+                TEST_WORKSPACE,
+                crate::Sha256Digest::from_hex(&"11".repeat(32)).unwrap(),
+            )
+            .unwrap(),
+            ApiMajor::new(1).unwrap(),
+        )
+        .unwrap();
+        for (count, character, allowed) in [(31, "x", true), (32, "x", false), (16, "\"", false)] {
+            let credentials = (0..count)
+                .map(|index| {
+                    SidecarHostCredential::new(
+                        format!("credential-{index}"),
+                        HostSecret::new(character.repeat(64 * 1024)).unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            let bootstrap = SidecarBootstrapConfig::new(
+                TEST_WORKSPACE,
+                runtime(),
+                primary_grant(&[scopes::RUNS_READ]),
+            )
+            .unwrap()
+            .with_host_credentials(credentials)
+            .unwrap();
+            let result = bootstrap.encoded_request(
+                &options,
+                std::path::Path::new(TEST_WORKSPACE),
+                WorkspaceIdentity::from_unix_parts(42, 84),
+            );
+            assert_eq!(result.is_ok(), allowed);
+            if let Err(error) = result {
+                assert!(error.to_string().contains("2 MiB"));
+            }
+        }
     }
 
     #[cfg(windows)]

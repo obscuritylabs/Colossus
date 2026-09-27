@@ -13,7 +13,7 @@ use crate::{
     dto::{CommandErrorDto, ConnectionStatusDto},
 };
 
-const MAX_MODEL_BYTES: usize = 256;
+const MODEL_ID_GUIDANCE: &str = "Model ID must use only letters, numbers, hyphens, underscores, periods, colons, or slashes (up to 256 ASCII characters).";
 const MAX_PROFILE_BYTES: usize = 64;
 pub(crate) const MANAGED_MODEL_ROLES: [&str; 7] = [
     "primary",
@@ -443,6 +443,8 @@ pub(crate) struct ManagedProviderInput {
     pub(crate) base_url: String,
     pub(crate) timeout_ms: Option<u64>,
     pub(crate) credential_action: CredentialActionInput,
+    #[serde(default)]
+    pub(crate) credential_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -489,6 +491,15 @@ impl ApplyManagedModelConfigurationInput {
         }
         let mut providers = BTreeSet::new();
         for provider in &self.providers {
+            if provider.credential_id.is_some()
+                && (provider.credential_action != CredentialActionInput::Reuse
+                    || provider.provider_kind == ProviderKindSetting::Codex)
+            {
+                return Err(CommandErrorDto::invalid(
+                    "credentialId",
+                    "Only an API provider reusing a saved credential can select a credential.",
+                ));
+            }
             let provider_connection_valid = if provider.provider_kind == ProviderKindSetting::Codex
             {
                 provider.base_url == provider_base_url(provider.provider_kind)
@@ -514,18 +525,36 @@ impl ApplyManagedModelConfigurationInput {
             if !valid_profile(&model.profile)
                 || !models.insert(model.profile.as_str())
                 || !providers.contains(model.provider_profile.as_str())
-                || validate_managed_model_identifier(&model.model).is_err()
-                || model.context_window_tokens < 1_024
-                || model.max_output_tokens == 0
-                || model
-                    .context_window_tokens
-                    .checked_sub(model.max_output_tokens)
-                    .and_then(|remaining| remaining.checked_sub(safety))
-                    .is_none_or(|input| input == 0)
             {
                 return Err(CommandErrorDto::invalid(
                     "models",
-                    "A model profile, provider reference, model ID, or token limit is invalid.",
+                    "Each model needs a unique configuration ID and a configured provider connection.",
+                ));
+            }
+            if validate_managed_model_identifier(&model.model).is_err() {
+                return Err(CommandErrorDto::invalid("model", MODEL_ID_GUIDANCE));
+            }
+            if model.context_window_tokens < 1_024 {
+                return Err(CommandErrorDto::invalid(
+                    "contextWindowTokens",
+                    "Context window must be at least 1,024 tokens.",
+                ));
+            }
+            if model.max_output_tokens == 0 {
+                return Err(CommandErrorDto::invalid(
+                    "maxOutputTokens",
+                    "Maximum output must be at least 1 token.",
+                ));
+            }
+            if model
+                .context_window_tokens
+                .checked_sub(model.max_output_tokens)
+                .and_then(|remaining| remaining.checked_sub(safety))
+                .is_none_or(|input| input == 0)
+            {
+                return Err(CommandErrorDto::invalid(
+                    "maxOutputTokens",
+                    "Maximum output is too large for this context window. Leave room for input plus a safety reserve of 10% of the context window (at least 512 tokens).",
                 ));
             }
         }
@@ -592,24 +621,49 @@ pub(crate) struct ConfigureManagedRuntimeInput {
     pub(crate) execution_boundary: ExecutionBoundarySetting,
     #[serde(default)]
     pub(crate) replace_credential: bool,
+    #[serde(default)]
+    pub(crate) base_url: Option<String>,
+    #[serde(default)]
+    pub(crate) credential_id: Option<String>,
+    #[serde(default)]
+    pub(crate) no_credential: bool,
+    #[serde(default)]
+    pub(crate) model_metadata: Option<SetupModelMetadataInput>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SetupModelMetadataInput {
+    pub(crate) context_window_tokens: Option<u64>,
+    pub(crate) max_output_tokens: Option<u64>,
+    pub(crate) tool_calls: Option<bool>,
+    pub(crate) image_inputs: Option<bool>,
+    pub(crate) streaming: Option<bool>,
 }
 
 impl ConfigureManagedRuntimeInput {
     pub(crate) fn validate(&self) -> Result<(), CommandErrorDto> {
+        if let Some(base_url) = self.base_url.as_deref() {
+            crate::provider_catalog::validate_setup_endpoint(self.provider_kind, base_url)?;
+        }
+        if self.credential_id.is_some()
+            && (self.no_credential
+                || self.replace_credential
+                || self.provider_kind == ProviderKindSetting::Codex)
+        {
+            return Err(CommandErrorDto::invalid(
+                "credentialId",
+                "The credential selection conflicts with the provider authentication choice.",
+            ));
+        }
         if uuid::Uuid::parse_str(&self.workspace_id).is_err() {
             return Err(CommandErrorDto::invalid(
                 "workspaceId",
                 "The workspace selection is no longer valid.",
             ));
         }
-        if self.model.is_empty()
-            || self.model.len() > MAX_MODEL_BYTES
-            || self.model.chars().any(char::is_control)
-        {
-            return Err(CommandErrorDto::invalid(
-                "model",
-                "The provider model is invalid.",
-            ));
+        if validate_managed_model_identifier(&self.model).is_err() {
+            return Err(CommandErrorDto::invalid("model", MODEL_ID_GUIDANCE));
         }
         if self.provider_kind == ProviderKindSetting::Codex && self.replace_credential {
             return Err(CommandErrorDto::invalid(
@@ -633,6 +687,10 @@ mod tests {
             access_profile: AccessProfileSetting::Development,
             execution_boundary: ExecutionBoundarySetting::WorkspaceIsolated,
             replace_credential: false,
+            base_url: None,
+            credential_id: None,
+            no_credential: false,
+            model_metadata: None,
         }
     }
 
@@ -645,6 +703,7 @@ mod tests {
                 base_url: base_url.into(),
                 timeout_ms: Some(30_000),
                 credential_action: CredentialActionInput::None,
+                credential_id: None,
             }],
             models: vec![ManagedModelInput {
                 profile: "primary".into(),
@@ -669,11 +728,10 @@ mod tests {
     }
 
     #[test]
-    fn managed_input_has_no_renderer_credential_or_origin_surface() {
+    fn managed_input_has_no_renderer_secret_surface() {
         let input = input();
         let debug = format!("{input:?}");
         assert!(!debug.contains("api_key"));
-        assert!(!debug.contains("base_url"));
         assert!(input.validate().is_ok());
     }
 
@@ -805,6 +863,68 @@ mod tests {
         let settings = input.providers_with_credentials(&BTreeMap::new());
         assert_eq!(settings[0].timeout_ms, None);
         assert_eq!(settings[0].effective_timeout_ms(), 900_000);
+    }
+
+    #[test]
+    fn setup_model_id_errors_identify_the_field_without_echoing_input() {
+        for identifier in [
+            "~deepseek/deepseek-v4-flash-latest".to_owned(),
+            "model with spaces".to_owned(),
+            "vendor/model@revision".to_owned(),
+            "x".repeat(257),
+        ] {
+            let mut simple = input();
+            simple.model.clone_from(&identifier);
+            let mut advanced = managed_input("https://models.example.test/v1");
+            advanced.models[0].model.clone_from(&identifier);
+            advanced.models[0].context_window_tokens = 1_310_720;
+            advanced.models[0].max_output_tokens = 655_360;
+            for error in [
+                simple.validate().expect_err("unsupported simple model ID"),
+                advanced
+                    .validate()
+                    .expect_err("unsupported advanced model ID"),
+            ] {
+                assert_eq!(error.violations[0].field, "model");
+                assert_eq!(error.violations[0].description, MODEL_ID_GUIDANCE);
+                assert!(!format!("{error:?}").contains(&identifier));
+            }
+        }
+    }
+
+    #[test]
+    fn setup_accepts_supported_model_ids_and_large_valid_token_budgets() {
+        for identifier in [
+            "deepseek/deepseek-v4-flash-latest".to_owned(),
+            "local/model_name.v2:latest".to_owned(),
+            "x".repeat(256),
+        ] {
+            let mut simple = input();
+            simple.model.clone_from(&identifier);
+            simple.validate().expect("supported simple model ID");
+            let mut advanced = managed_input("https://models.example.test/v1");
+            advanced.models[0].model = identifier;
+            advanced.models[0].context_window_tokens = 1_310_720;
+            advanced.models[0].max_output_tokens = 655_360;
+            advanced.validate().expect("supported ID and token budget");
+        }
+    }
+
+    #[test]
+    fn setup_token_errors_identify_the_limit_to_correct() {
+        for (context, output, field, guidance) in [
+            (1_023, 1, "contextWindowTokens", "at least 1,024"),
+            (32_768, 0, "maxOutputTokens", "at least 1 token"),
+            (32_768, 32_768, "maxOutputTokens", "Leave room for input"),
+            (1_024, 512, "maxOutputTokens", "at least 512 tokens"),
+        ] {
+            let mut advanced = managed_input("https://models.example.test/v1");
+            advanced.models[0].context_window_tokens = context;
+            advanced.models[0].max_output_tokens = output;
+            let error = advanced.validate().expect_err("invalid model limit");
+            assert_eq!(error.violations[0].field, field);
+            assert!(error.violations[0].description.contains(guidance));
+        }
     }
 
     #[test]

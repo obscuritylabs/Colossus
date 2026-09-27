@@ -572,8 +572,13 @@ impl Runtime {
                                 .with_plaintext_oauth_storage(&path, repository_id.clone())?,
                         }
                     }
-                    KeyConfig::Platform { service, .. } => mcp_executor
-                        .with_platform_oauth_storage(service.clone(), repository_id.clone()),
+                    KeyConfig::Platform { .. } => mcp_executor.with_oauth_vault(
+                        crate::credential_vault::platform_oauth_vault(
+                            colossus_home_root.as_ref(),
+                            &storage_path,
+                        )?,
+                        repository_id.clone(),
+                    ),
                     KeyConfig::Environment { .. } => {
                         let path = storage_path.with_extension("mcp-oauth.redb");
                         match config.open_resolved_home_file(&path)? {
@@ -590,14 +595,13 @@ impl Runtime {
                         }
                     }
                 },
-                McpOAuthCredentialStoreKind::Platform => {
-                    let service = match &config.storage.keys {
-                        KeyConfig::None => "colossus-mcp-oauth".into(),
-                        KeyConfig::Platform { service, .. } => service.clone(),
-                        KeyConfig::Environment { .. } => "colossus-mcp-oauth".into(),
-                    };
-                    mcp_executor.with_platform_oauth_storage(service, repository_id.clone())
-                }
+                McpOAuthCredentialStoreKind::Platform => mcp_executor.with_oauth_vault(
+                    crate::credential_vault::platform_oauth_vault(
+                        colossus_home_root.as_ref(),
+                        &storage_path,
+                    )?,
+                    repository_id.clone(),
+                ),
                 McpOAuthCredentialStoreKind::PlaintextState => {
                     let path = storage_path.with_extension("mcp-oauth.redb");
                     match config.open_resolved_home_file(&path)? {
@@ -824,13 +828,16 @@ impl Runtime {
             executables: access_executables
                 .iter()
                 .map(|path| {
-                    if config.sandbox.backend == "oci" {
-                        Ok(path.clone())
-                    } else {
-                        fs::canonicalize(path)
-                    }
+                    resolve_configured_executable(
+                        path,
+                        &config.sandbox.backend,
+                        &active_plugin_extensions.mcp,
+                    )
                 })
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<std::io::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
         });
         let trace_tool_executor: Arc<dyn ToolExecutor> = Arc::new(TraceToolExecutor {
             journal: Arc::clone(&journal),

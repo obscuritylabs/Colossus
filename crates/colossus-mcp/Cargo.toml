@@ -24,7 +24,6 @@ getrandom.workspace = true
 hex.workspace = true
 http.workspace = true
 jsonschema.workspace = true
-keyring.workspace = true
 redb.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
@@ -40,6 +39,7 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+colossus-provider.workspace = true
 rcgen.workspace = true
 tokio-rustls.workspace = true
 colossus-testkit.workspace = true

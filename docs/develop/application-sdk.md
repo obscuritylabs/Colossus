@@ -293,8 +293,9 @@ requires the `ADHOC` sentinel, an ad-hoc signature with no Team Identifier, the 
 code identifiers, strict signature verification, and the same executable/manifest hash
 binding. It is runnable for time-bounded testing, but it does not establish Apple
 publisher identity and is not notarized. Native code exposes only this bounded channel
-name to the renderer so Desktop can keep a persistent **Developer Preview** warning on
-screen; no signing identity, filesystem path, or credential enters renderer state.
+name to the renderer for the **Developer Preview** banner, shown when the device-local
+**Show security warnings** preference is enabled (off by default). No signing identity,
+filesystem path, or credential enters renderer state.
 
 The `validation_only` channel also uses the `ADHOC` sentinel but remains non-runnable and
 is accepted only for CI structure checks; Managed Local rejects it. Debug builds use the

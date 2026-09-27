@@ -1,6 +1,34 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { PluginInventory, PluginRequest } from "./plugins";
+import { readNativeDialogAppearance } from "./theme/appearance";
+import type { ProviderPreset, ProviderCatalogModel } from "./providerCatalog";
+
+export function getProviderPresets(): Promise<ProviderPreset[]> {
+  return call("get_provider_presets");
+}
+
+export interface DiscoverProviderModelsRequest {
+  workspaceId: string;
+  providerKind: import("./types").ProviderKind;
+  baseUrl: string;
+  credentialAction: import("./types").CredentialAction;
+  credentialId?: string;
+  providerProfile?: string;
+}
+
+export function discoverManagedProviderModels(
+  request: DiscoverProviderModelsRequest,
+): Promise<{
+  models: ProviderCatalogModel[];
+  credentialId: string | null;
+  errorMessage?: string | null;
+}> {
+  return call("discover_managed_provider_models", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
+}
 
 export function getPluginInventory(targetId: string): Promise<PluginInventory> {
   return call("get_plugin_inventory", { targetId });
@@ -437,6 +465,23 @@ export function upsertGlobalProvider(request: {
   return call("upsert_global_provider", { request });
 }
 
+export interface DeleteGlobalCatalogEntryRequest {
+  expectedRevision: number;
+  resourceId: string;
+}
+
+export function deleteGlobalProvider(
+  request: DeleteGlobalCatalogEntryRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_provider", { request });
+}
+
+export function deleteGlobalModel(
+  request: DeleteGlobalCatalogEntryRequest,
+): Promise<ManagedSettingsSnapshot> {
+  return call("delete_global_model", { request });
+}
+
 export function upsertGlobalModel(request: {
   expectedRevision: number;
   resourceId: string | null;
@@ -481,14 +526,20 @@ export function createManagedCredential(request: {
   label: string;
   kind: ManagedCredentialKind;
 }): Promise<ManagedSettingsSnapshot> {
-  return call("create_managed_credential", { request });
+  return call("create_managed_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function rotateManagedCredential(request: {
   expectedRevision: number;
   credentialId: string;
 }): Promise<ManagedSettingsSnapshot> {
-  return call("rotate_managed_credential", { request });
+  return call("rotate_managed_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function deleteManagedCredential(request: {
@@ -496,6 +547,16 @@ export function deleteManagedCredential(request: {
   credentialId: string;
 }): Promise<ManagedSettingsSnapshot> {
   return call("delete_managed_credential", { request });
+}
+
+export function reenterManagedCredential(request: {
+  expectedRevision: number;
+  credentialId: string;
+}): Promise<ManagedSettingsSnapshot> {
+  return call("reenter_managed_credential", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function onSpaceStatusChanged(
@@ -535,13 +596,19 @@ export function readWorkspaceFile(
 export function configureManagedRuntime(
   request: ConfigureManagedRuntimeRequest,
 ): Promise<DesktopStatus> {
-  return call("configure_managed_runtime", { request });
+  return call("configure_managed_runtime", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function applyManagedModelConfiguration(
   request: ApplyManagedModelConfigurationRequest,
 ): Promise<DesktopStatus> {
-  return call("apply_managed_model_configuration", { request });
+  return call("apply_managed_model_configuration", {
+    request,
+    appearance: readNativeDialogAppearance(),
+  });
 }
 
 export function restartManagedRuntime(): Promise<DesktopStatus> {
