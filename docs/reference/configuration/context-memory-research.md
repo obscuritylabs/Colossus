@@ -170,9 +170,10 @@ compact and restore are independently authorized state transitions.
 
 ## Memory configuration
 
-Memory records are durable, scoped, non-secret background context. Active decisions are
-binding context and take precedence over memories; memories are explicitly presented to
-the model as background rather than instructions.
+Memory records are durable, scoped, non-secret background context. Active key decisions
+apply across sessions in the same workspace as binding context and take precedence over
+memories; memories are explicitly presented to the model as background rather than
+instructions.
 
 ### Memory fields
 

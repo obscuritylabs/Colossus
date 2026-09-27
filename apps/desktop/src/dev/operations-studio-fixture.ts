@@ -136,6 +136,7 @@ export function buildSessionMapFixture(): SessionMap {
     decisions: [
       {
         id: "fixture-decision-boundary",
+        sessionId: SESSION_ID,
         planId: "fixture-plan-bootstrap",
         source: "user",
         status: "active",
@@ -153,6 +154,7 @@ export function buildSessionMapFixture(): SessionMap {
       },
       {
         id: "fixture-decision-fail-closed",
+        sessionId: "fixture-session-other",
         goalId: "fixture-goal-runtime",
         source: "agent",
         status: "active",

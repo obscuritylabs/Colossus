@@ -62,7 +62,7 @@ impl ContextService {
             .map(|record| record.message.clone())
             .collect::<Vec<_>>();
         let messages = project_model_tool_observations(&messages);
-        let binding = self.decision_message(session_id)?;
+        let binding = self.decision_message()?;
         let original_messages =
             prepend_bindings(binding.clone().into_iter().collect(), messages.clone());
         let raw = estimate_tokens_for_model(&budget.model, "", &original_messages, &[]);
@@ -208,12 +208,14 @@ impl ContextService {
         self.snapshots.create(snapshot, actor).map_err(Into::into)
     }
 
-    fn decision_message(&self, session_id: &str) -> Result<Option<ModelMessage>, ContextError> {
+    fn decision_message(&self) -> Result<Option<ModelMessage>, ContextError> {
         let Some(work) = &self.work else {
             return Ok(None);
         };
-        let mut decisions =
-            work.list_decisions(Some(session_id), Some(DecisionStatus::Active), 100)?;
+        // The work repository is already isolated to the selected workspace state.
+        // Keep the originating session on each record for provenance, but apply its
+        // active commitments to every session in that workspace.
+        let mut decisions = work.list_decisions(None, Some(DecisionStatus::Active), 1_000)?;
         decisions.sort_by_key(|decision| match decision.priority {
             DecisionPriority::Critical => 0,
             DecisionPriority::High => 1,
@@ -223,7 +225,7 @@ impl ContextService {
             return Ok(None);
         }
         let mut content = String::from(
-            "[Binding active key decisions]\nApply these durable commitments unless the current user explicitly supersedes them. They are stronger than summaries and memories.\n",
+            "[Binding active workspace key decisions]\nApply these durable commitments when their conditions hold unless the current user explicitly supersedes them. They are stronger than summaries and memories.\n",
         );
         for decision in decisions {
             let item = decision_line(&decision);
@@ -248,7 +250,7 @@ impl ContextService {
         context: ExecutionContext,
     ) -> Result<Vec<ModelMessage>, ContextError> {
         let mut bindings = Vec::new();
-        if let Some(decision) = self.decision_message(session_id)? {
+        if let Some(decision) = self.decision_message()? {
             bindings.push(decision);
         }
         let query = messages

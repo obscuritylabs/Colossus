@@ -296,7 +296,7 @@ impl Runtime {
             .count();
         let active_decisions =
             self.work
-                .list_decisions(Some(session_id), Some(DecisionStatus::Active), 1_000)?;
+                .list_decisions(None, Some(DecisionStatus::Active), 1_000)?;
         let actionable_plans = self
             .work
             .list_plans(Some(session_id), None, 1_000)?

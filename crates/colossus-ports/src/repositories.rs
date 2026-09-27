@@ -230,7 +230,7 @@ pub trait WorkRepository: Send + Sync {
     /// Reconstruct one key decision from canonical events.
     fn get_decision(&self, id: &str) -> Result<Option<KeyDecision>, StoreError>;
 
-    /// List bounded decisions with optional session and status filters.
+    /// List bounded workspace decisions, optionally filtering by origin session and status.
     fn list_decisions(
         &self,
         session_id: Option<&str>,

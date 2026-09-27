@@ -305,11 +305,7 @@ impl EmbeddedInteractiveHost {
             "decisions" => self.result(
                 &self
                     .runtime
-                    .list_decisions(
-                        Some(session_id),
-                        Some(colossus_contracts::DecisionStatus::Active),
-                        100,
-                    )
+                    .list_decisions(None, Some(colossus_contracts::DecisionStatus::Active), 100)
                     .map_err(|error| error.to_string())?,
                 Some("Decisions"),
             ),

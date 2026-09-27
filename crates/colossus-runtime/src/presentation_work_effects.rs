@@ -171,7 +171,16 @@ impl WorkEffectExecutor {
                 "subagents cannot delegate recursively".into(),
             ));
         }
-        if operation_session != requested_session {
+        // Decisions are workspace-wide. A tool in any session of this runtime
+        // may manage an older decision; its original session remains audit lineage.
+        if operation_session != requested_session
+            && !matches!(
+                operation,
+                WorkOperation::DecisionUpdate { .. }
+                    | WorkOperation::DecisionArchive { .. }
+                    | WorkOperation::DecisionSupersede { .. }
+            )
+        {
             return Err(ExecutionError::Failed(
                 "work tool cannot access another session".into(),
             ));
@@ -304,13 +313,10 @@ impl EffectExecutor for WorkEffectExecutor {
                 ))
             }
             WorkOperation::DecisionList {
-                session_id,
+                session_id: _,
                 status,
                 limit,
-            } => work_result(
-                self.repository
-                    .list_decisions(Some(&session_id), status, limit),
-            ),
+            } => work_result(self.repository.list_decisions(None, status, limit)),
             WorkOperation::PlanCreate {
                 session_id,
                 prompt,

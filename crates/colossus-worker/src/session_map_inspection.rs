@@ -250,10 +250,11 @@ pub(super) async fn inspect_session_map(
         })
         .collect();
     let decisions = runtime
-        .list_decisions(Some(session_id), None, MAX_RECORDS_PER_FAMILY)?
+        .list_decisions(None, None, MAX_RECORDS_PER_FAMILY)?
         .into_iter()
         .map(|decision| WorkerSessionDecision {
             id: decision.id,
+            session_id: decision.session_id,
             goal_id: decision.goal_id,
             plan_id: decision.plan_id,
             source: decision_source(decision.source).into(),

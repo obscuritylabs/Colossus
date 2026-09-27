@@ -241,5 +241,19 @@ describe("SessionWorkspace", () => {
       expect(markup).toContain(label);
     }
     expect(markup).not.toContain("No released decisions");
+    expect(markup).toContain("Keep execution boundary unchanged");
+    expect(markup).toContain("Fail closed on identity drift");
+    expect(markup).toContain(
+      "Active and historical decisions across this Workspace",
+    );
+    const detail = renderToStaticMarkup(
+      createElement(SessionMapDetailsPanel, {
+        resource: { family: "decisions", value: sessionMap.decisions[1]! },
+        spaceName: "Colossus",
+        onBack: vi.fn(),
+      }),
+    );
+    expect(detail).toContain("Origin session");
+    expect(detail).toContain("fixture-session-other");
   });
 });

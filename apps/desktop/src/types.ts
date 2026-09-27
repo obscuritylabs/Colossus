@@ -887,6 +887,7 @@ export interface SessionMapGoal {
 
 export interface SessionMapDecision {
   id: string;
+  sessionId: string;
   goalId?: string;
   planId?: string;
   source: "user" | "agent";

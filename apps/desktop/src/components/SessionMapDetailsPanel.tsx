@@ -170,6 +170,7 @@ export function SessionMapDetailsPanel({
               {readable(resource.value.priority)}
             </Detail>
             <Detail label="Source">{readable(resource.value.source)}</Detail>
+            <Detail label="Origin session">{resource.value.sessionId}</Detail>
           </>
         ) : null}
         {resource.family === "research" ? (
