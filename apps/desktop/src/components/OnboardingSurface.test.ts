@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DesktopStatus, WorkspaceSummary } from "../types";
 import { OnboardingSurface } from "./OnboardingSurface";
+import { AppearanceProvider } from "../theme/AppearanceProvider";
 
 const workspace: WorkspaceSummary = {
   workspaceId: "workspace-opaque-1",
@@ -63,20 +64,25 @@ function renderOnboarding(
   error = "",
 ): string {
   return renderToStaticMarkup(
-    createElement(OnboardingSurface, {
-      desktop: { ...desktop(selectedWorkspace), ...overrides },
-      busy: false,
-      error,
-      onChooseWorkspace: vi.fn(),
-      onConfigure: vi.fn(),
-      onApplyConfiguration: vi.fn(),
-      onRunSelfTest: vi.fn(),
-      onCodexLogin: vi.fn(),
-      onCodexLogout: vi.fn(),
-      onUseExternal: vi.fn(),
-      dismissible,
-      onCancel: vi.fn(),
-    }),
+    createElement(
+      AppearanceProvider,
+      null,
+      createElement(OnboardingSurface, {
+        desktop: { ...desktop(selectedWorkspace), ...overrides },
+        busy: false,
+        error,
+        onChooseWorkspace: vi.fn(),
+        onConfigure: vi.fn(),
+        onApplyConfiguration: vi.fn(),
+        onRunSelfTest: vi.fn(),
+        onCodexLogin: vi.fn(),
+        onCodexLogout: vi.fn(),
+        onUseExternal: vi.fn(),
+        onImportCaBundle: vi.fn(),
+        dismissible,
+        onCancel: vi.fn(),
+      }),
+    ),
   );
 }
 
@@ -89,11 +95,16 @@ function openingButtonTag(markup: string, label: string): string {
 }
 
 describe("OnboardingSurface", () => {
-  it("starts with folder selection and allows offline verification", () => {
+  it("starts with desktop preferences and allows offline verification", () => {
     const markup = renderOnboarding(null);
 
-    expect(markup).toContain("Choose your project folder");
-    expect(markup).toContain("Choose folder");
+    expect(markup).toContain("Welcome to Colossus");
+    expect(markup).toContain("Theme");
+    expect(markup).toContain("Text size");
+    expect(markup).toContain("Advanced: CA certificates");
+    expect(markup).toContain("Import CA bundle");
+    expect(markup).toContain('aria-current="step"');
+    expect(markup).toContain("Check installation</summary>");
     expect(markup).not.toContain("provider-setup-form");
     expect(openingButtonTag(markup, "Run check")).not.toContain("disabled");
   });
@@ -112,7 +123,7 @@ describe("OnboardingSurface", () => {
   });
 
   it("shows provider setup and enables offline verification after folder selection", () => {
-    const markup = renderOnboarding(workspace);
+    const markup = renderOnboarding(workspace, {}, true);
 
     expect(markup).toContain('class="provider-setup-form"');
     expect(markup).toContain("~/tools/Colossus");
@@ -130,7 +141,7 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain(
       "Runs an offline check without setting up a provider or running a model.",
     );
-    expect(markup).not.toContain(">Cancel</button>");
+    expect(markup).toContain(">Cancel</button>");
   });
 
   it("prefills and can dismiss the settings provider editor", () => {
@@ -196,13 +207,17 @@ describe("OnboardingSurface", () => {
   });
 
   it("uses native ChatGPT auth for the Codex subscription provider", () => {
-    const markup = renderOnboarding(workspace, {
-      provider: {
-        configured: true,
-        kind: "open_ai_codex",
-        model: "gpt-5-codex",
+    const markup = renderOnboarding(
+      workspace,
+      {
+        provider: {
+          configured: true,
+          kind: "open_ai_codex",
+          model: "gpt-5-codex",
+        },
       },
-    });
+      true,
+    );
 
     expect(markup).toContain("ChatGPT subscription (Codex)");
     expect(markup).toContain("Sign in with ChatGPT");

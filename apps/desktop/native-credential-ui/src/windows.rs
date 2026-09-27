@@ -65,7 +65,7 @@ struct Session {
 }
 
 pub(crate) fn open(
-    parent: &tauri::WebviewWindow,
+    parent: &tauri::Window,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     appearance: DialogAppearance,

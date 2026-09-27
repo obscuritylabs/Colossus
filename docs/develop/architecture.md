@@ -145,6 +145,11 @@ commands dispatch it without receiving secret values from the renderer.
   commands accept the opaque selected-Workspace identity plus a validated
   relative path; they do not add model, tool, policy, state, or mutation logic to the
   renderer.
+- Desktop's opt-in browser preview is a separate human browsing surface. Native
+  session/tab state and engine integration stay in the Desktop browser manager and
+  private native adapter. Guests receive no application capability. Future browser
+  automation requires a runtime port with policy and audit; see
+  [ADR 0003](adr/0003-desktop-browser-boundary.md).
 - Desktop's native Managed Local permission selector uses the narrow authenticated
   `colossus-worker-protocol` control client. The Desktop process does not link runtime,
   model, tool, policy, or worker-host implementation crates.

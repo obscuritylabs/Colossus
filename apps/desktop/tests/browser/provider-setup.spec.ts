@@ -1,10 +1,347 @@
 import { expect, test, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+
+test("five-step setup preserves preferences and draft choices through Back and saves only at Start", async ({
+  page,
+}) => {
+  await mountSetup(page, false, false, false, true);
+  const next = page.getByRole("button", { name: "Continue", exact: true });
+  const back = page.getByRole("button", { name: "Back", exact: true });
+  await page.getByRole("radio", { name: "Light", exact: true }).check();
+  await page.getByRole("radio", { name: "Large", exact: true }).check();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("html")).toHaveAttribute("data-text-size", "large");
+  await page.getByText("Advanced: CA certificates", { exact: true }).click();
+  await page.getByRole("button", { name: "Import CA bundle" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    "1 trusted certificate imported",
+  );
+  await next.click();
+  await expect(next).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Cancel next folder selection" })
+    .click();
+  await page
+    .getByRole("button", { name: "Choose folder", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Choose your first workspace" }),
+  ).toBeVisible();
+  await expect(next).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Choose folder", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Connect a provider" }),
+  ).toBeVisible();
+  await choosePreset(page, "Custom Responses");
+  await page
+    .getByLabel("API base URL", { exact: true })
+    .fill("https://custom.example.test/v1");
+  await next.click();
+  await expect(
+    page.getByRole("heading", { name: "Choose a model" }),
+  ).toBeFocused();
+  await expect(
+    page.getByLabel("API base URL", { exact: true }),
+  ).not.toBeVisible();
+  await expect(next).toBeDisabled();
+  await page.getByRole("button", { name: "Load models", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Search models" }).fill("reasoner");
+  await page.getByRole("button", { name: /Compact Reasoner/ }).click();
+  await page
+    .getByText("Model limits and capabilities", { exact: true })
+    .click();
+  await page.getByLabel("Maximum output (tokens)").fill("2048");
+  await next.click();
+  await expect(
+    page.getByRole("heading", { name: "Ready when you are" }),
+  ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Command isolation", exact: true })
+    .click();
+  await page
+    .getByRole("option", { name: "Workspace isolated", exact: true })
+    .click();
+  await back.click();
+  await expect(
+    page.getByRole("button", { name: /Compact Reasoner/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("searchbox", { name: "Search models" }),
+  ).toHaveValue("reasoner");
+  await expect(page.getByLabel("Maximum output (tokens)")).toHaveValue("2048");
+  await back.click();
+  await expect(page.getByLabel("API base URL", { exact: true })).toHaveValue(
+    "https://custom.example.test/v1",
+  );
+  await back.click();
+  await back.click();
+  await expect(
+    page.getByRole("radio", { name: "Light", exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("radio", { name: "Large", exact: true }),
+  ).toBeChecked();
+  await next.click();
+  await next.click();
+  await next.click();
+  await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue(
+    "vendor/reasoner",
+  );
+  await next.click();
+  await expect(
+    page.getByRole("combobox", { name: "Command isolation", exact: true }),
+  ).toContainText("Workspace isolated");
+  expect(await setupSaveRequests(page)).toEqual([]);
+  await page.getByRole("button", { name: "Save and start" }).click();
+  await expect(
+    page.getByText("Configuration saved", { exact: true }),
+  ).toBeVisible();
+  expect(await setupSaveRequests(page)).toEqual([
+    expect.objectContaining({
+      providerKind: "openai_responses",
+      model: "vendor/reasoner",
+      credentialId: "saved-credential",
+      executionBoundary: "workspace_isolated",
+      modelMetadata: expect.objectContaining({
+        maxOutputTokens: 2048,
+        contextWindowTokens: 8192,
+        toolCalls: true,
+      }),
+    }),
+  ]);
+});
+
+async function setupSaveRequests(page: Page) {
+  return page.evaluate(() =>
+    (
+      window as unknown as {
+        setupRequests: { command: string; args: { request: unknown } }[];
+      }
+    ).setupRequests
+      .filter((entry) => entry.command === "configure_managed_runtime")
+      .map((entry) => entry.args.request),
+  );
+}
+
+for (const theme of ["Light", "Dark"] as const) {
+  test(`wizard remains accessible on a narrow screen in ${theme} theme`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/?fixture=setup");
+    await page.getByRole("radio", { name: theme, exact: true }).check();
+    await page.getByRole("radio", { name: "Large", exact: true }).check();
+    const next = page.getByRole("button", { name: "Continue", exact: true });
+    async function checkStep() {
+      const report = await new AxeBuilder({ page })
+        .include(".onboarding-surface")
+        .analyze();
+      expect(report.violations).toEqual([]);
+      expect(
+        await page
+          .locator(".onboarding-surface")
+          .evaluate((node) => node.scrollWidth <= node.clientWidth),
+      ).toBe(true);
+    }
+    await checkStep();
+    await next.click();
+    await checkStep();
+    await page
+      .getByRole("button", { name: "Choose folder", exact: true })
+      .click();
+    await expect(
+      page.getByRole("combobox", { name: "Provider", exact: true }),
+    ).toContainText("OpenRouter");
+    await checkStep();
+    await next.click();
+    await page
+      .getByRole("button", { name: "Load models", exact: true })
+      .click();
+    await page.getByRole("button", { name: /Example Reasoner/ }).click();
+    await checkStep();
+    await next.click();
+    await checkStep();
+    await expect(
+      page.getByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Save and start" })
+      .scrollIntoViewIfNeeded();
+    await expect(
+      page.getByRole("button", { name: "Save and start" }),
+    ).toBeInViewport();
+  });
+}
+
+test("wizard validates each step, retains errors for retry, and clears models when the provider changes", async ({
+  page,
+}) => {
+  await mountSetup(page, false, true, false, true);
+  const next = page.getByRole("button", { name: "Continue", exact: true });
+  const back = page.getByRole("button", { name: "Back", exact: true });
+  await choosePreset(page, "Custom Chat Completions");
+  for (const invalid of [
+    "",
+    "not-a-url",
+    "ftp://example.test/v1",
+    "https://secret@example.test/v1",
+  ]) {
+    await page.getByLabel("API base URL", { exact: true }).fill(invalid);
+    await expect(next).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "4 Model", exact: true }),
+    ).toBeDisabled();
+  }
+  await page
+    .getByLabel("API base URL", { exact: true })
+    .fill("https://api.example.test/v1");
+  await page.getByLabel("API base URL", { exact: true }).press("Enter");
+  expect(await setupSaveRequests(page)).toEqual([]);
+  if (
+    await page.getByRole("heading", { name: "Connect a provider" }).isVisible()
+  )
+    await next.click();
+  await page.getByLabel("Model ID", { exact: true }).fill("manual-model");
+  await page
+    .getByText("Model limits and capabilities", { exact: true })
+    .click();
+  await page.getByLabel("Maximum output (tokens)").fill("0");
+  await expect(next).toBeDisabled();
+  await page.getByLabel("Maximum output (tokens)").fill("2048");
+  await next.click();
+  await page.evaluate(() => {
+    (window as unknown as { failSave: boolean }).failSave = true;
+  });
+  await page.getByRole("button", { name: "Save and start" }).click();
+  await expect(page.locator(".page-error")).toBeVisible();
+  await expect(page.locator(".page-error")).toBeFocused();
+  await back.click();
+  await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue(
+    "manual-model",
+  );
+  await back.click();
+  await choosePreset(page, "Codex (ChatGPT subscription)");
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(next).toBeDisabled();
+  await page.getByRole("button", { name: "Sign in with ChatGPT" }).click();
+  await next.click();
+  await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("");
+  await page.getByLabel("Model ID", { exact: true }).fill("codex-model");
+  await next.click();
+  await page.evaluate(() => {
+    (window as unknown as { failSave: boolean }).failSave = false;
+  });
+  await page.getByRole("button", { name: "Save and start" }).click();
+  await expect(
+    page.getByText("Configuration saved", { exact: true }),
+  ).toBeVisible();
+});
+
+test("wizard locks navigation during discovery and resets workspace-scoped choices", async ({
+  page,
+}) => {
+  await mountSetup(page, false, true, false, true);
+  const next = page.getByRole("button", { name: "Continue", exact: true });
+  await choosePreset(page, "Custom Responses");
+  await page
+    .getByLabel("API base URL", { exact: true })
+    .fill("https://slow.example.test/v1");
+  await next.click();
+  await page.getByRole("button", { name: "Load models", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Back", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "3 Provider", exact: true }),
+  ).toBeDisabled();
+  await expect(page.getByRole("status")).toContainText("Loading models");
+  await page.getByRole("button", { name: "Switch workspace fixture" }).click();
+  await page.evaluate(() =>
+    (
+      window as unknown as { releaseSlowCatalog: () => void }
+    ).releaseSlowCatalog(),
+  );
+  await expect(
+    page.getByRole("heading", { name: "Connect a provider" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("API base URL", { exact: true })).toHaveValue(
+    "https://openrouter.ai/api/v1",
+  );
+  await next.click();
+  await expect(page.getByRole("button", { name: /stale-model/ })).toHaveCount(
+    0,
+  );
+  await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("");
+});
+
+test("welcome centers desktop preferences and keeps optional setup accessible", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=setup");
+  const heading = page.getByRole("heading", { name: "Welcome to Colossus" });
+  const next = page.getByRole("button", {
+    name: "Continue",
+    exact: true,
+  });
+  for (const viewport of [
+    { width: 1440, height: 950 },
+    { width: 880, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(heading).toBeVisible();
+    await expect(next).toBeInViewport();
+    await expect(
+      page.getByRole("button", { name: "Import connection" }),
+    ).toBeInViewport();
+    const card = await page.locator(".onboarding-card").boundingBox();
+    expect(card).not.toBeNull();
+    expect(
+      Math.abs(card!.x + card!.width / 2 - viewport.width / 2),
+    ).toBeLessThan(2);
+    if (card!.height < viewport.height - 60) {
+      expect(
+        Math.abs(card!.y + card!.height / 2 - viewport.height / 2),
+      ).toBeLessThan(2);
+    }
+  }
+  await expect(page.getByRole("heading")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Run check", exact: true }),
+  ).not.toBeVisible();
+  await page.getByText("Check installation", { exact: true }).click();
+  await page.getByRole("button", { name: "Run check", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Run again", exact: true }),
+  ).toBeVisible();
+  const report = await new AxeBuilder({ page })
+    .include(".onboarding-surface")
+    .analyze();
+  expect(report.violations).toEqual([]);
+  await page.setViewportSize({ width: 880, height: 400 });
+  await next.scrollIntoViewIfNeeded();
+  await next.click();
+  await page
+    .getByRole("button", { name: "Choose folder", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Connect a provider" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Back", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Provider", exact: true }),
+  ).toContainText("OpenRouter");
+});
 
 async function mountSetup(
   page: Page,
   configured = false,
   workspaceSelected = true,
   hasCredential = true,
+  guided = false,
 ) {
   await page.setViewportSize({ width: 1100, height: 1000 });
   await page.goto("/?fixture=operations-studio");
@@ -12,7 +349,7 @@ async function mountSetup(
     page.getByRole("heading", { name: "Harden desktop agent bootstrap" }),
   ).toBeVisible();
   await page.evaluate(
-    async ({ configured, workspaceSelected, hasCredential }) => {
+    async ({ configured, workspaceSelected, hasCredential, guided }) => {
       const state = window as unknown as {
         __TAURI_INTERNALS__: unknown;
         setupRequests: { command: string; args: Record<string, unknown> }[];
@@ -143,9 +480,10 @@ async function mountSetup(
         configured,
         workspaceSelected,
         hasCredential,
+        guided,
       );
     },
-    { configured, workspaceSelected, hasCredential },
+    { configured, workspaceSelected, hasCredential, guided },
   );
   if (workspaceSelected) {
     await expect(
@@ -428,6 +766,16 @@ test("retrying provider presets preserves an endpoint entered while loading fail
   await expect(
     page.getByRole("button", { name: "Retry loading providers" }),
   ).toBeVisible();
+  const providerBounds = await page
+    .getByRole("combobox", { name: "Provider", exact: true })
+    .boundingBox();
+  const formatBounds = await page
+    .getByRole("combobox", { name: "API format", exact: true })
+    .boundingBox();
+  expect(Math.abs(providerBounds!.y - formatBounds!.y)).toBeLessThan(2);
+  expect(Math.abs(providerBounds!.height - formatBounds!.height)).toBeLessThan(
+    2,
+  );
   await page
     .getByLabel("API base URL", { exact: true })
     .fill("https://my-custom.example.test/v1");

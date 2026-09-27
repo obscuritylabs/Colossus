@@ -26,11 +26,15 @@
   gap: 12px;
 }
 
-.provider-catalog-heading h4,
+.provider-catalog-title,
 .provider-catalog-heading p,
 .provider-catalog-count,
 .provider-catalog-note {
   margin: 0;
+}
+
+.provider-catalog-title {
+  font-size: 1rem;
 }
 
 .provider-catalog-heading p,

@@ -34,6 +34,7 @@ import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
 import { PluginIcon } from "./PluginIcon";
 import type { ComposerModelContext } from "../composer-model";
+import { useComposerAutosize } from "./useComposerAutosize";
 
 const ComposerModelChip = lazy(() =>
   import("./ComposerModelChip").then((module) => ({
@@ -173,6 +174,7 @@ export function WorkComposer({
   onRedirect,
   onSubmit,
 }: WorkComposerProps) {
+  useComposerAutosize(textareaRef, prompt);
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<
     string | null
   >(null);

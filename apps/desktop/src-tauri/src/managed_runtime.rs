@@ -276,7 +276,9 @@ async fn ensure_managed_capacity(
     Ok(())
 }
 
-async fn managed_target_has_active_work(client: &Colossus) -> Result<bool, CommandErrorDto> {
+pub(crate) async fn managed_target_has_active_work(
+    client: &Colossus,
+) -> Result<bool, CommandErrorDto> {
     let mut page_token = String::new();
     let mut seen_tokens = BTreeSet::new();
     for _ in 0..MAX_ACTIVE_RUN_PAGES {

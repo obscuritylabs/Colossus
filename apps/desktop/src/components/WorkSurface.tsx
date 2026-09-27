@@ -2,6 +2,7 @@ import {
   IconArrowDown,
   IconClock,
   IconFiles,
+  IconGlobe,
   IconFolderOpen,
   IconLayoutSidebarRight,
   IconMenu2,
@@ -14,7 +15,15 @@ import {
   IconSparkles,
   IconX,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
@@ -70,8 +79,18 @@ import {
 } from "./SessionWorkspace";
 import type { SessionWorkspaceView } from "./SessionWorkspace";
 import { ThreadDetailsPanel } from "./ThreadDetailsPanel";
+import { useBrowser } from "./browser/useBrowser";
+import { BrowserLinkContext } from "./browser/BrowserLink";
+
+const BrowserPane = lazy(() =>
+  import("./browser/BrowserPane").then((module) => ({
+    default: module.BrowserPane,
+  })),
+);
 
 interface WorkSurfaceProps {
+  browserScope?: string | null;
+  browserFixture?: boolean;
   title: string;
   view: RunView | undefined;
   conversationViews: readonly RunView[];
@@ -180,6 +199,8 @@ export function WorkSurface({
   composer,
   filesPanel,
   filesAvailable,
+  browserScope = null,
+  browserFixture = false,
   onOpenWorkspaceFile,
   artifactsAvailable,
   asideView,
@@ -242,18 +263,30 @@ export function WorkSurface({
     () => window.matchMedia("(max-width: 980px)").matches,
   );
   const [activeDrawer, setActiveDrawer] = useState<
-    "files" | "artifacts" | "aside" | "research" | "details" | null
+    "files" | "artifacts" | "aside" | "research" | "details" | "browser" | null
   >(() =>
     window.matchMedia("(min-width: 1200px)").matches ? "details" : null,
   );
   const [asideDraft, setAsideDraft] = useState<AsideDraft | null>(null);
+  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const browser = useBrowser(
+    browserScope,
+    activeDrawer === "browser",
+    browserFixture,
+  );
+  const browserTriggerRef = useRef<HTMLButtonElement>(null);
   const [selectionLauncher, setSelectionLauncher] = useState<
     (AsideDraft & { left: number; top: number }) | null
   >(null);
   const [filesDrawerMounted, setFilesDrawerMounted] = useState(false);
-  const [asidePaneWidth, setAsidePaneWidth] = useState<number | null>(
+  const [savedAsideWidth, setSavedAsideWidth] = useState<number | null>(
     readStoredAsidePaneWidth,
   );
+  const [browserPaneWidth, setBrowserPaneWidth] = useState<number | null>(null);
+  const asidePaneWidth =
+    activeDrawer === "browser" ? browserPaneWidth : savedAsideWidth;
+  const setAsidePaneWidth =
+    activeDrawer === "browser" ? setBrowserPaneWidth : setSavedAsideWidth;
   const workLayoutRef = useRef<HTMLDivElement>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const stableFeedPositionRef = useRef({ top: 0, left: 0 });
@@ -283,6 +316,7 @@ export function WorkSurface({
   const researchDrawerAvailable = run?.mode === "research";
   const researchOutput = view?.output ?? "";
   const resizableDrawer =
+    activeDrawer === "browser" ||
     activeDrawer === "aside" ||
     activeDrawer === "research" ||
     activeDrawer === "details";
@@ -502,7 +536,7 @@ export function WorkSurface({
     const observer = new ResizeObserver(fitAsideToLayout);
     observer.observe(observedLayout);
     return () => observer.disconnect();
-  }, [activeDrawer, compactLayout, resizableDrawer]);
+  }, [activeDrawer, compactLayout, resizableDrawer, setAsidePaneWidth]);
 
   useEffect(() => {
     if (
@@ -662,18 +696,21 @@ export function WorkSurface({
   }
 
   function toggleDrawer(
-    drawer: "files" | "artifacts" | "aside" | "research" | "details",
+    drawer:
+      "files" | "artifacts" | "aside" | "research" | "details" | "browser",
   ) {
     const trigger =
-      drawer === "files"
-        ? filesTriggerRef.current
-        : drawer === "artifacts"
-          ? artifactTriggerRef.current
-          : drawer === "aside"
-            ? asideTriggerRef.current
-            : drawer === "research"
-              ? researchTriggerRef.current
-              : detailsTriggerRef.current;
+      drawer === "browser"
+        ? browserTriggerRef.current
+        : drawer === "files"
+          ? filesTriggerRef.current
+          : drawer === "artifacts"
+            ? artifactTriggerRef.current
+            : drawer === "aside"
+              ? asideTriggerRef.current
+              : drawer === "research"
+                ? researchTriggerRef.current
+                : detailsTriggerRef.current;
     lastDrawerTriggerRef.current = trigger;
     if (activeDrawer === drawer) {
       if (drawer === "aside") {
@@ -812,7 +849,7 @@ export function WorkSurface({
 
   function commitAsideWidth(width: number) {
     const nextWidth = previewAsideWidth(width);
-    storeAsidePaneWidth(nextWidth);
+    if (activeDrawer !== "browser") storeAsidePaneWidth(nextWidth);
   }
 
   function finishAsideResize(pointerId: number, handle: HTMLElement) {
@@ -827,7 +864,7 @@ export function WorkSurface({
     commitAsideWidth(resize.width);
   }
 
-  return (
+  const content = (
     <main
       className={`work-surface${view === undefined ? " is-new-work" : ""}`}
       id="primary-workspace"
@@ -932,6 +969,20 @@ export function WorkSurface({
               <span className="compact-action-copy">Aside</span>
             </button>
           ) : null}
+          {browser.snapshot.available ? (
+            <button
+              ref={browserTriggerRef}
+              className="button secondary compact"
+              type="button"
+              aria-label="Open browser"
+              aria-controls="work-side-drawer"
+              aria-expanded={activeDrawer === "browser"}
+              onClick={() => toggleDrawer("browser")}
+            >
+              <IconGlobe size={15} stroke={1.7} aria-hidden="true" />
+              <span className="compact-action-copy">Browser</span>
+            </button>
+          ) : null}
           {filesAvailable ? (
             <button
               ref={filesTriggerRef}
@@ -1013,7 +1064,7 @@ export function WorkSurface({
 
       <div
         ref={workLayoutRef}
-        className={`work-layout${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}`}
+        className={`work-layout${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${activeDrawer === "browser" && browserExpanded ? " is-browser-expanded" : ""}`}
         style={
           asidePaneWidth === null
             ? undefined
@@ -1250,11 +1301,13 @@ export function WorkSurface({
             className="aside-resize-handle"
             role="separator"
             aria-label={
-              activeDrawer === "aside"
-                ? "Resize Aside conversation"
-                : activeDrawer === "research"
-                  ? "Resize Research sources"
-                  : "Resize Thread details"
+              activeDrawer === "browser"
+                ? "Resize browser pane"
+                : activeDrawer === "aside"
+                  ? "Resize Aside conversation"
+                  : activeDrawer === "research"
+                    ? "Resize Research sources"
+                    : "Resize Thread details"
             }
             aria-orientation="vertical"
             aria-valuemin={MIN_ASIDE_PANE_WIDTH}
@@ -1324,7 +1377,7 @@ export function WorkSurface({
               if (layoutWidth === undefined || layoutWidth <= 0) {
                 return;
               }
-              clearStoredAsidePaneWidth();
+              if (activeDrawer !== "browser") clearStoredAsidePaneWidth();
               setAsidePaneWidth(
                 activeDrawer === "details"
                   ? clampAsidePaneWidth(320, layoutWidth)
@@ -1344,7 +1397,8 @@ export function WorkSurface({
             onClick={closeDrawer}
           />
         ) : null}
-        {filesAvailable ||
+        {browser.snapshot.available ||
+        filesAvailable ||
         artifactsAvailable ||
         run !== undefined ||
         researchDrawerAvailable ? (
@@ -1357,20 +1411,38 @@ export function WorkSurface({
               activeDrawer !== null && compactLayout ? true : undefined
             }
             aria-label={
-              activeDrawer === "files"
-                ? "Workspace files"
-                : activeDrawer === "artifacts"
-                  ? "Artifact preview"
-                  : activeDrawer === "aside"
-                    ? "Aside conversation"
-                    : activeDrawer === "research"
-                      ? "Research sources"
-                      : activeDrawer === "details"
-                        ? "Thread details"
-                        : undefined
+              activeDrawer === "browser"
+                ? "Browser pane"
+                : activeDrawer === "files"
+                  ? "Workspace files"
+                  : activeDrawer === "artifacts"
+                    ? "Artifact preview"
+                    : activeDrawer === "aside"
+                      ? "Aside conversation"
+                      : activeDrawer === "research"
+                        ? "Research sources"
+                        : activeDrawer === "details"
+                          ? "Thread details"
+                          : undefined
             }
           >
-            {activeDrawer !== "aside" ? (
+            {activeDrawer === "browser" ? (
+              <Suspense
+                fallback={
+                  <div className="browser-empty" role="status">
+                    Opening browser…
+                  </div>
+                }
+              >
+                <BrowserPane
+                  controller={browser}
+                  expanded={browserExpanded}
+                  onExpand={() => setBrowserExpanded((expanded) => !expanded)}
+                  onClose={closeDrawer}
+                />
+              </Suspense>
+            ) : null}
+            {activeDrawer !== "aside" && activeDrawer !== "browser" ? (
               <button
                 ref={drawerCloseRef}
                 className="icon-button compact-drawer-close artifact-drawer-close"
@@ -1491,5 +1563,19 @@ export function WorkSurface({
         ) : null}
       </div>
     </main>
+  );
+  return (
+    <BrowserLinkContext
+      value={
+        browser.snapshot.available
+          ? (url) => {
+              setActiveDrawer("browser");
+              void browser.command({ type: "new", url });
+            }
+          : null
+      }
+    >
+      {content}
+    </BrowserLinkContext>
   );
 }
