@@ -178,17 +178,15 @@ async fn inactive_workspace_update_persists_without_starting_a_runtime() {
     let parent = tempfile::tempdir_in(std::env::var_os("LOCALAPPDATA").unwrap()).unwrap();
     #[cfg(not(windows))]
     let parent = tempfile::tempdir().unwrap();
-    let store = SettingsStore::open(
-        std::fs::canonicalize(parent.path())
-            .unwrap()
-            .join("settings"),
-    )
-    .unwrap();
+    // macOS temporary paths can include /var, a symlink to /private/var.
+    // Workspace identity validation expects the resolved directory path.
+    let workspace_path = std::fs::canonicalize(parent.path()).unwrap();
+    let store = SettingsStore::open(workspace_path.join("settings")).unwrap();
     let mut settings = changed_settings();
     let space_id = uuid::Uuid::now_v7().to_string();
     settings.spaces[0].id = space_id.clone();
     settings.spaces[0].workspace =
-        crate::desktop_settings::validate_workspace(parent.path()).unwrap();
+        crate::desktop_settings::validate_workspace(&workspace_path).unwrap();
     let provider_id = uuid::Uuid::now_v7().to_string();
     let model_id = uuid::Uuid::now_v7().to_string();
     settings.global_configuration.providers.push(serde_json::from_value(json!({
