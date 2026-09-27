@@ -10,12 +10,35 @@ if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "Tauri signing input is missing"
 }
 $Resolved = (Resolve-Path -LiteralPath $Path).Path
-if ([IO.Path]::GetExtension($Resolved) -notin @(".exe", ".dll")) {
-    throw "Tauri signing accepts only Windows executables and DLLs"
+$Extension = [IO.Path]::GetExtension($Resolved).ToLowerInvariant()
+if ($Extension -notin @(".exe", ".dll", ".tmp")) {
+    throw "Tauri signing accepts only Windows executables, DLLs, and NSIS temporary uninstallers"
 }
+if ($Extension -eq ".tmp") {
+    # NSIS !uninstfinalize passes its PE uninstaller as nst*.tmp before embedding it.
+    $Stream = [IO.File]::OpenRead($Resolved)
+    try {
+        $Reader = [IO.BinaryReader]::new($Stream)
+        if ($Stream.Length -lt 64 -or $Reader.ReadUInt16() -ne 0x5A4D) {
+            throw "NSIS temporary uninstaller is not a PE file"
+        }
+        $Stream.Position = 0x3C
+        $PeOffset = $Reader.ReadInt32()
+        if ($PeOffset -lt 64 -or $PeOffset -gt ($Stream.Length - 4)) {
+            throw "NSIS temporary uninstaller has an invalid PE header offset"
+        }
+        $Stream.Position = $PeOffset
+        if ($Reader.ReadUInt32() -ne 0x00004550) {
+            throw "NSIS temporary uninstaller has no PE header"
+        }
+    } finally {
+        $Stream.Dispose()
+    }
+}
+Write-Output "Tauri signing input: $Resolved"
 $Signature = Get-AuthenticodeSignature -LiteralPath $Resolved
 if ($Signature.Status -eq "Valid") {
-    if ([IO.Path]::GetExtension($Resolved) -eq ".dll" -and
+    if ($Extension -eq ".dll" -and
         $Signature.TimeStamperCertificate) {
         Write-Output "Tauri DLL already has a valid timestamped publisher signature: $Resolved"
         return

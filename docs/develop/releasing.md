@@ -241,8 +241,9 @@ exported into GitHub.
 The x64 signing runner signs both Windows CLI architectures after their native
 build and smoke tests, then recomputes each ZIP checksum. For Desktop it signs the
 sidecar and CLI before the bundle manifest is hashed. Tauri patches the manifest-bound
-app for NSIS, then invokes the Azure signer for the patched app, uninstaller, and
-installer. Every installed binary must verify as **Obscurity Labs LLC**
+app for NSIS, then invokes the Azure signer for the patched app, NSIS support DLLs,
+temporary PE uninstaller, and installer. Every installed binary must verify as
+**Obscurity Labs LLC**
 with a timestamp before release upload. A passing GitHub signing smoke run is
 recorded in the release PR; ordinary branch and manual validation builds do not
 receive signing authority.

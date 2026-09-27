@@ -274,10 +274,11 @@ additional-CA configuration and rejects HTTPS-to-HTTP redirects.
 The application update signature is separate from platform publisher identity.
 Windows release signing is staged: sign the bundled CLI and sidecar, hash them into the
 bundle manifest, and patch its digest into the Desktop executable. Tauri then patches
-the app with its NSIS bundle type and invokes the Azure signer for the app, uninstaller,
-and installer. GitHub verifies the installed binaries' Authenticode publisher and
-timestamp before uploading the final installer. Standalone Windows x64
-and ARM64 CLI archives are signed on Windows x64 after build and before final ZIP hashing.
+the app with its NSIS bundle type and invokes the Azure signer for the app, NSIS support
+DLLs, temporary PE uninstaller, and installer. GitHub verifies the installed
+binaries' Authenticode publisher and timestamp before uploading the final installer.
+Standalone Windows x64 and ARM64 CLI archives are signed on Windows x64 after build
+and before final ZIP hashing.
 
 ## Expected result
 

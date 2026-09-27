@@ -193,7 +193,9 @@ test("Windows Desktop seals signed releases in the required order", () => {
   assert.match(signer, /Import-Module ArtifactSigning/u);
   assert.match(signer, /Invoke-ArtifactSigning/u);
   assert.match(signer, /verify-authenticode\.ps1/u);
-  assert.match(signer, /"\.exe", "\.dll"/u);
+  assert.match(signer, /"\.exe", "\.dll", "\.tmp"/u);
+  assert.match(signer, /NSIS !uninstfinalize passes its PE uninstaller/u);
+  assert.match(signer, /ReadUInt32\(\) -ne 0x00004550/u);
   assert.match(signer, /Tauri signing input has an invalid existing signature/u);
 });
 
