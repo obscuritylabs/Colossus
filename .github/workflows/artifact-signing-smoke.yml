@@ -1,0 +1,78 @@
+name: Artifact Signing smoke
+
+on:
+  push:
+    tags: ["vsigning-smoke-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    name: Sign and verify Windows executable
+    runs-on: windows-2025
+    environment: release-signing
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out signing probe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20
+        with:
+          toolchain: 1.96.0
+
+      - name: Compile probe
+        shell: pwsh
+        run: |
+          'fn main() { println!("colossus-signing-probe"); }' |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP\probe.rs" -Encoding ascii
+          rustc --edition 2024 "$env:RUNNER_TEMP\probe.rs" `
+            -o "$env:RUNNER_TEMP\colossus-signing-probe.exe"
+          if ($LASTEXITCODE -ne 0) { throw "probe compilation failed" }
+          $signature = Get-AuthenticodeSignature `
+            -LiteralPath "$env:RUNNER_TEMP\colossus-signing-probe.exe"
+          if ($signature.Status -ne 'NotSigned') {
+            throw "probe must be unsigned before signing"
+          }
+
+      - name: Authenticate to Azure using GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign probe with Artifact Signing
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: colossus-code-sign
+          certificate-profile-name: colossus
+          files: ${{ runner.temp }}\colossus-signing-probe.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Authenticode publisher and run probe
+        shell: pwsh
+        run: |
+          $path = "$env:RUNNER_TEMP\colossus-signing-probe.exe"
+          $signature = Get-AuthenticodeSignature -LiteralPath $path
+          if ($signature.Status -ne 'Valid') {
+            throw "Authenticode verification failed: $($signature.Status)"
+          }
+          if ($signature.SignerCertificate.Subject -notmatch 'CN=Obscurity Labs LLC(?:,|$)') {
+            throw "unexpected signing publisher"
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw "RFC 3161 timestamp is missing"
+          }
+          $output = & $path
+          if ($LASTEXITCODE -ne 0 -or $output -ne 'colossus-signing-probe') {
+            throw "signed executable did not run correctly"
+          }
+          Write-Output "Azure Artifact Signing smoke passed"
