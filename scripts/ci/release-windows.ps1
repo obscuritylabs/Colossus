@@ -104,10 +104,16 @@ try {
         [IO.File]::WriteAllText((Join-Path $searchSpace ".ignore"), "ignored.txt`n")
         $found = @(& $installedRipgrep -l "unique-ripgrep-needle" $searchSpace)
         if ($LASTEXITCODE -ne 0 -or $found.Count -ne 1 -or -not $found[0].EndsWith("naïve.txt")) { throw "managed ripgrep did not search a Unicode path" }
-        & $installedRipgrep -l "ignored-ripgrep-needle" $searchSpace | Out-Null
-        if ($LASTEXITCODE -ne 1) { throw "managed ripgrep did not respect ignore rules" }
-        & $installedRipgrep -l "no-such-ripgrep-match" $searchSpace | Out-Null
-        if ($LASTEXITCODE -ne 1) { throw "managed ripgrep did not report an empty search" }
+        $previousNativeErrorAction = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+        try {
+            & $installedRipgrep -l "ignored-ripgrep-needle" $searchSpace | Out-Null
+            if ($LASTEXITCODE -ne 1) { throw "managed ripgrep did not respect ignore rules" }
+            & $installedRipgrep -l "no-such-ripgrep-match" $searchSpace | Out-Null
+            if ($LASTEXITCODE -ne 1) { throw "managed ripgrep did not report an empty search" }
+        } finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorAction
+        }
         & $installed --config config.yaml run installed-offline | Set-Content -Encoding utf8 result.json
         $result = Get-Content -Raw result.json | ConvertFrom-Json
         if ($result.output -ne "installed-offline" -or $result.profile -ne "echo") { throw "installed smoke failed" }
