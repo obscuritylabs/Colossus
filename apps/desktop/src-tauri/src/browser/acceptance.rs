@@ -24,7 +24,7 @@ pub(crate) fn run() {
             .create(&home)
             .expect("private acceptance home");
     }
-    let mut context = tauri::generate_context!();
+    let mut context = crate::app_context::create();
     context.config_mut().build.dev_url = None;
     context.config_mut().app.windows[0].data_directory = Some(home.join("controller"));
     context.config_mut().app.windows[0].incognito = true;

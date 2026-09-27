@@ -1,3 +1,4 @@
+mod app_context;
 mod approval_adapter;
 mod browser;
 mod bundle;
@@ -219,7 +220,7 @@ pub fn run() {
             signal_terminal,
             close_terminal,
         ])
-        .build(tauri::generate_context!())
+        .build(app_context::create())
         .expect("failed to build the Colossus desktop application");
     application.run(|app, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
