@@ -56,6 +56,21 @@ fn write_install_metadata(package: &Path) {
     .expect("package installation metadata");
 }
 
+fn write_packaged_ripgrep(package: &Path) {
+    let tools = package.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let binary = tools.join(if cfg!(windows) { "rg.exe" } else { "rg" });
+    fs::write(&binary, b"test ripgrep fixture\n").expect("tool fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("tool permissions");
+    }
+    for notice in ["COPYING", "LICENSE-MIT", "UNLICENSE"] {
+        fs::write(tools.join(notice), "fixture license\n").expect("tool notice");
+    }
+}
+
 #[cfg(unix)]
 fn prepare_package(binary: &Path, package: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -73,6 +88,7 @@ fn prepare_package(binary: &Path, package: &Path) -> PathBuf {
     fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
         .expect("installer permissions");
     write_install_metadata(package);
+    write_packaged_ripgrep(package);
     installer
 }
 
@@ -86,6 +102,7 @@ fn prepare_package(binary: &Path, package: &Path) -> PathBuf {
     )
     .expect("package installer");
     write_install_metadata(package);
+    write_packaged_ripgrep(package);
     installer
 }
 
@@ -344,7 +361,7 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     #[cfg(unix)]
     create_private_directory(&root);
     let package = root.join("package");
-    let prefix = root.join("prefix");
+    let prefix = root.join("prefix with spaces");
     let smoke = root.join("smoke");
     fs::create_dir_all(&package).expect("package directory");
     fs::create_dir_all(smoke.join("workflows")).expect("smoke workflows");
@@ -367,6 +384,18 @@ fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_
     }
     let binary = installed_binary(&prefix);
     assert!(binary.is_file());
+    let managed_tools = prefix.join(format!("bin/.colossus-tools/{}", env!("CARGO_PKG_VERSION")));
+    for name in [
+        if cfg!(windows) { "rg.exe" } else { "rg" },
+        "COPYING",
+        "LICENSE-MIT",
+        "UNLICENSE",
+    ] {
+        assert_eq!(
+            fs::read(managed_tools.join(name)).expect("installed managed tool"),
+            fs::read(package.join("tools").join(name)).expect("packaged managed tool")
+        );
+    }
     let colossus_home = prefix.join("home/.colossus");
     if colossus_home.is_dir() {
         assert_eq!(

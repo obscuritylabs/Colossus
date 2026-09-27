@@ -58,6 +58,14 @@ impl Fixture {
         fs::copy(env!("CARGO_BIN_EXE_colossus"), &packaged_binary).expect("package binary");
         fs::set_permissions(&packaged_binary, fs::Permissions::from_mode(0o755))
             .expect("binary permissions");
+        let tools = stage.join("tools");
+        fs::create_dir(&tools).expect("tool directory");
+        fs::write(tools.join("rg"), "test ripgrep fixture\n").expect("tool fixture");
+        fs::set_permissions(tools.join("rg"), fs::Permissions::from_mode(0o755))
+            .expect("tool permissions");
+        for notice in ["COPYING", "LICENSE-MIT", "UNLICENSE"] {
+            fs::write(tools.join(notice), "fixture license\n").expect("tool notice");
+        }
         for (source, destination, mode) in [
             ("release/install.sh", "install.sh", 0o755),
             ("LICENSE", "LICENSE", 0o644),

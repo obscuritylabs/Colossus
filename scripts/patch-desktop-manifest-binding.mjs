@@ -160,8 +160,9 @@ function validateManifest(bytes) {
       "releaseChannel",
       "sidecar",
       "cli",
+      "ripgrep",
     ]) ||
-    manifest.schemaVersion !== 2 ||
+    manifest.schemaVersion !== 3 ||
     manifest.profile !== "release" ||
     !RELEASE_CHANNELS.has(manifest.releaseChannel) ||
     typeof manifest.targetTriple !== "string" ||
@@ -177,6 +178,10 @@ function validateManifest(bytes) {
       manifest.targetTriple.includes("-windows-")
         ? "colossus.exe"
         : "colossus",
+    ) ||
+    !validExecutableEntry(
+      manifest.ripgrep,
+      manifest.targetTriple.includes("-windows-") ? "rg.exe" : "rg",
     )
   ) {
     fail("manifest does not have the canonical release schema");

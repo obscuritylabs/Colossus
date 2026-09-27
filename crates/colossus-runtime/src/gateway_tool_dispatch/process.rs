@@ -13,6 +13,7 @@ impl GatewayToolExecutor {
                 let danger_full_access = self.danger_full_access(&context);
                 let command = optional_tool_string(&call, "command")?;
                 let argv = optional_tool_string_array(&call, "argv")?;
+                let command_mode = command.is_some();
                 if command.is_some() == argv.is_some() {
                     return Err(ToolError::InvalidArguments {
                         tool: call.name.clone(),
@@ -62,6 +63,9 @@ impl GatewayToolExecutor {
                     model_workspace_path(&self.workspace, requested_cwd)?
                 };
                 let mut environment = optional_tool_environment(&call, "env")?;
+                if danger_full_access && command_mode {
+                    prepend_managed_ripgrep_path(&mut environment, managed_ripgrep())?;
+                }
                 let _isolated = if danger_full_access {
                     None
                 } else {
@@ -132,9 +136,72 @@ impl GatewayToolExecutor {
     }
 }
 
+fn prepend_managed_ripgrep_path(
+    environment: &mut BTreeMap<String, String>,
+    managed: Result<Option<PathBuf>, &'static str>,
+) -> Result<(), ToolError> {
+    let Some(ripgrep) = managed.map_err(|message| ToolError::Denied(message.into()))? else {
+        return Ok(());
+    };
+    let directory = ripgrep.parent().ok_or_else(|| {
+        ToolError::Denied("managed ripgrep path is invalid; reinstall Colossus".into())
+    })?;
+    let mut roots = vec![directory.to_path_buf()];
+    if let Some(requested_path) = environment
+        .get("PATH")
+        .map(|value| std::ffi::OsString::from(value.as_str()))
+        .or_else(|| std::env::var_os("PATH"))
+    {
+        roots.extend(std::env::split_paths(&requested_path));
+    }
+    let path = std::env::join_paths(roots)
+        .map_err(|error| ToolError::Failed(format!("cannot construct managed PATH: {error}")))?;
+    environment.insert("PATH".into(), path.to_string_lossy().into_owned());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_managed_ripgrep_rejects_command_before_ambient_path_can_run() {
+        let ambient = tempfile::tempdir().expect("ambient path");
+        let original_path = std::env::join_paths([ambient.path()])
+            .expect("ambient PATH")
+            .to_string_lossy()
+            .into_owned();
+        let mut environment = BTreeMap::from([("PATH".into(), original_path.clone())]);
+
+        let error = prepend_managed_ripgrep_path(
+            &mut environment,
+            Err("managed ripgrep is missing; reinstall Colossus"),
+        )
+        .expect_err("damaged managed tool must stop command execution");
+        assert!(
+            matches!(error, ToolError::Denied(message) if message.contains("reinstall Colossus"))
+        );
+        assert_eq!(environment["PATH"], original_path);
+    }
+
+    #[test]
+    fn managed_ripgrep_directory_precedes_ambient_path_in_command_mode() {
+        let managed = tempfile::tempdir().expect("managed path");
+        let ambient = tempfile::tempdir().expect("ambient path");
+        let mut environment = BTreeMap::from([(
+            "PATH".into(),
+            std::env::join_paths([ambient.path()])
+                .expect("ambient PATH")
+                .to_string_lossy()
+                .into_owned(),
+        )]);
+
+        prepend_managed_ripgrep_path(&mut environment, Ok(Some(managed.path().join("rg"))))
+            .expect("managed PATH");
+        let roots = std::env::split_paths(&std::ffi::OsString::from(&environment["PATH"]))
+            .collect::<Vec<_>>();
+        assert_eq!(roots, [managed.path(), ambient.path()]);
+    }
 
     #[test]
     fn command_intent_rejects_invalid_model_input_before_dispatch() {

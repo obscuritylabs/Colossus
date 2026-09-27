@@ -15,10 +15,17 @@ class Colossus < Formula
 
   def install
     libexec.install "colossus"
-    (bin/"colossus").write_env_script libexec/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew"
+    if (buildpath/"tools/rg").exist?
+      libexec.install "tools/rg" => "rg"
+      (share/"licenses/colossus/ripgrep").install "tools/COPYING", "tools/LICENSE-MIT", "tools/UNLICENSE"
+    end
+    (bin/"colossus").write_env_script libexec/"colossus", COLOSSUS_INSTALLER_KIND: "homebrew", COLOSSUS_BUNDLED_RIPGREP: ((libexec/"rg").exist? ? "1" : "0")
   end
 
   test do
     assert_equal "colossus #{version}", shell_output("#{bin}/colossus --version").strip
+    if (libexec/"rg").exist?
+      assert_match "ripgrep 15.2.0", shell_output("#{libexec}/rg --version")
+    end
   end
 end

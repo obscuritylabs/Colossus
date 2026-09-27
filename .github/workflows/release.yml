@@ -1008,7 +1008,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Sign bundled sidecar and CLI
+      - name: Sign bundled sidecar, CLI, and ripgrep
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: https://eus.codesigning.azure.net/
@@ -1017,6 +1017,7 @@ jobs:
           files: |
             ${{ github.workspace }}\apps\desktop\src-tauri\binaries\colossus-sidecar-x86_64-pc-windows-msvc.exe
             ${{ github.workspace }}\apps\desktop\src-tauri\binaries\colossus-x86_64-pc-windows-msvc.exe
+            ${{ github.workspace }}\apps\desktop\src-tauri\binaries\rg-x86_64-pc-windows-msvc.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256

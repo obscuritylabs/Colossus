@@ -25,15 +25,17 @@ const placeholder = `${prefix}${"0".repeat(64)}${suffix}`;
 function manifest({
   targetTriple = "aarch64-apple-darwin",
   sidecar = "colossus-sidecar",
-  cli = "colossus",
+    cli = "colossus",
+  ripgrep = "rg",
 } = {}) {
   return `${JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     targetTriple,
     profile: "release",
     releaseChannel: "developer_preview",
     sidecar: { fileName: sidecar, sha256: "a".repeat(64) },
     cli: { fileName: cli, sha256: "b".repeat(64) },
+    ripgrep: { fileName: ripgrep, sha256: "c".repeat(64) },
   })}\n`;
 }
 
@@ -114,6 +116,7 @@ test("patches a Windows PE image using Windows bundle names", () => {
         targetTriple: "x86_64-pc-windows-msvc",
         sidecar: "colossus-sidecar.exe",
         cli: "colossus.exe",
+        ripgrep: "rg.exe",
       }),
       { mode: 0o644 },
     );
@@ -149,6 +152,7 @@ test("rejects a hard-linked executable without modifying either name", () => {
         targetTriple: "x86_64-pc-windows-msvc",
         sidecar: "colossus-sidecar.exe",
         cli: "colossus.exe",
+        ripgrep: "rg.exe",
       }),
       { mode: 0o644 },
     );
