@@ -234,10 +234,6 @@ fn verify_ripgrep_digest(path: &Path, expected: &str) -> Result<(), CommandError
 fn bundle_code_signing_requirement(
     release_channel: ReleaseChannel,
 ) -> Result<MacosCodeSigningRequirement, CommandErrorDto> {
-    #[cfg(windows)]
-    if release_channel == ReleaseChannel::Stable {
-        return Err(integrity_error());
-    }
     match release_channel {
         ReleaseChannel::Development | ReleaseChannel::Stable => {
             Ok(MacosCodeSigningRequirement::AppleTeam)
@@ -460,8 +456,10 @@ fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
 
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
-    if expected_release_channel()? != ReleaseChannel::DeveloperPreview
-        || EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+    if !matches!(
+        expected_release_channel()?,
+        ReleaseChannel::Stable | ReleaseChannel::DeveloperPreview
+    ) || EXPECTED_RELEASE_TEAM_ID != "OBSCURITY_LABS_LLC"
     {
         return Err(integrity_error());
     }
@@ -543,8 +541,10 @@ fn verify_release_code_identity(
     path: &Path,
     _expected_identifier: &str,
 ) -> Result<(), CommandErrorDto> {
-    if expected_release_channel()? != ReleaseChannel::DeveloperPreview
-        || EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+    if !matches!(
+        expected_release_channel()?,
+        ReleaseChannel::Stable | ReleaseChannel::DeveloperPreview
+    ) || EXPECTED_RELEASE_TEAM_ID != "OBSCURITY_LABS_LLC"
     {
         return Err(integrity_error());
     }
@@ -661,7 +661,10 @@ mod tests {
             MacosCodeSigningRequirement::AppleTeam
         );
         #[cfg(windows)]
-        assert!(bundle_code_signing_requirement(ReleaseChannel::Stable).is_err());
+        assert_eq!(
+            bundle_code_signing_requirement(ReleaseChannel::Stable).expect("stable requirement"),
+            MacosCodeSigningRequirement::AppleTeam
+        );
         assert_eq!(
             bundle_code_signing_requirement(ReleaseChannel::DeveloperPreview)
                 .expect("preview requirement"),

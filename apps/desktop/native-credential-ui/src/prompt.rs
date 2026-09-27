@@ -41,7 +41,7 @@ impl std::error::Error for PromptError {}
 /// Returns a categorical error if native entry is unsupported, already active,
 /// cancelled, or could not open. Errors never contain the entered value.
 pub async fn prompt(
-    parent: tauri::WebviewWindow,
+    parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<HostSecret, PromptError> {
     #[cfg(not(any(windows, target_os = "macos")))]

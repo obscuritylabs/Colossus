@@ -17,7 +17,7 @@ function fixture(channel) {
   writeFileSync(join(directory, macName), "mac");
   writeFileSync(join(directory, `${macName}.sig`), "signed-mac");
   if (channel === "developer_preview") {
-    const windowsName = `Colossus-Desktop-UNSIGNED-DEVELOPER-PREVIEW-${tag}-x86_64-pc-windows-msvc-setup.exe`;
+    const windowsName = `Colossus-Desktop-DEVELOPER-PREVIEW-${tag}-x86_64-pc-windows-msvc-setup.exe`;
     writeFileSync(join(directory, windowsName), "windows");
     writeFileSync(join(directory, `${windowsName}.sig`), "signed-windows");
   }
@@ -44,7 +44,7 @@ test("preview update metadata cannot cross into stable targets", () => {
   ]);
   assert.match(
     manifest.platforms["windows-x86_64-developer_preview"].url,
-    /UNSIGNED-DEVELOPER-PREVIEW/u,
+    /Colossus-Desktop-DEVELOPER-PREVIEW/u,
   );
 });
 

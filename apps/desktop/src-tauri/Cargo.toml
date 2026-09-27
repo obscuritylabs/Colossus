@@ -9,11 +9,13 @@ license = "Apache-2.0"
 repository = "https://github.com/obscuritylabs/Colossus"
 
 [workspace]
-members = ["../native-credential-ui"]
+members = ["../native-credential-ui", "../native-browser"]
 
 [features]
 plugin-test-bridge = []
 approval-test-bridge = []
+browser-preview = []
+browser-test-bridge = ["browser-preview"]
 
 [[example]]
 name = "plugin-test-bridge"
@@ -22,6 +24,10 @@ required-features = ["plugin-test-bridge"]
 [[example]]
 name = "approval-test-bridge"
 required-features = ["approval-test-bridge"]
+
+[[example]]
+name = "browser-acceptance"
+required-features = ["browser-test-bridge"]
 
 [profile.release]
 lto = "thin"
@@ -48,6 +54,7 @@ colossus-home = { version = "=0.10.10-preview.19", path = "../../../crates/colos
 colossus-media = { version = "=0.10.10-preview.19", path = "../../../crates/colossus-media" }
 colossus-network = { version = "=0.10.10-preview.19", path = "../../../crates/colossus-network" }
 colossus-native-credential-ui = { version = "=0.1.0", path = "../native-credential-ui" }
+colossus-native-browser = { version = "=0.1.0", path = "../native-browser" }
 colossus-ports = { version = "=0.10.10-preview.19", path = "../../../crates/colossus-ports" }
 colossus-sdk = { version = "=0.10.10-preview.19", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
 colossus-sidecar-protocol = { version = "=0.10.10-preview.19", path = "../../../crates/colossus-sidecar-protocol" }
@@ -64,10 +71,11 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde-saphyr = "0.0.29"
 sha2 = "0.10.9"
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.5", features = ["unstable"] }
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-updater = { version = "=2.9.0", default-features = false, features = ["rustls-tls", "zip"] }
 tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tempfile = "3.23.0"
 url = "2.5.8"
 uuid = { version = "1.23.4", features = ["v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
