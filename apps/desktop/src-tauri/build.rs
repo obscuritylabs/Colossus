@@ -173,8 +173,7 @@ fn export_release_trust_configuration() {
     }
     let signing_status = match (target_os.as_str(), release_channel.as_str()) {
         ("windows", "validation_only") => "unsigned",
-        ("windows", "stable" | "developer_preview") => "verified",
-        ("macos", "stable") => "verified",
+        ("windows", "stable" | "developer_preview") | ("macos", "stable") => "verified",
         ("macos", "developer_preview" | "validation_only") => "ad_hoc",
         _ => "unsupported",
     };
