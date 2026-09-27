@@ -3689,7 +3689,10 @@ export default function App() {
             targetId: requestedSpace.targetId,
           },
           workspace: {
-            workspaceId: requestedSpace.spaceId,
+            workspaceId:
+              desktopRef.current.targets.find(
+                (target) => target.targetId === requestedSpace.targetId,
+              )?.workspace?.workspaceId ?? requestedSpace.spaceId,
             displayName: requestedSpace.displayName,
             displayPath: requestedSpace.displayPath,
           },

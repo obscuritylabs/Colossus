@@ -16,10 +16,12 @@ export function GitIndicator({
   git,
   open,
   onClick,
+  compact = false,
 }: {
   git: GitController;
   open: boolean;
   onClick: () => void;
+  compact?: boolean;
 }) {
   const repository = git.status?.repository;
   const label = repository
@@ -34,16 +36,21 @@ export function GitIndicator({
       aria-label={`Open Git: ${label}${repository ? `, ${repository.files.length}${repository.truncated ? "+" : ""} changed files` : ""}${git.error ? ", refresh failed" : ""}`}
       aria-expanded={open}
       aria-controls="work-side-drawer"
-      title={git.error || "View Git changes and commit history"}
+      title={
+        git.error ||
+        (git.status?.state === "not_repository"
+          ? "No Git repository in this folder"
+          : "View Git changes and commit history")
+      }
       onClick={onClick}
     >
-      {git.busy ? (
+      {git.showProgress ? (
         <IconLoader2 size={15} className="git-spinner" aria-hidden="true" />
       ) : (
         <IconGitBranch size={15} aria-hidden="true" />
       )}
-      <span className="git-control-label">Git</span>
-      {label !== "Git" ? (
+      {!compact ? <span className="git-control-label">Git</span> : null}
+      {label !== "Git" && (repository || !compact) ? (
         <span className="git-branch-label">{label}</span>
       ) : null}
       {repository && repository.files.length > 0 ? (
@@ -95,7 +102,7 @@ export function GitPane({
           >
             <IconRefresh
               size={18}
-              className={git.busy ? "git-spinner" : undefined}
+              className={git.showProgress ? "git-spinner" : undefined}
             />
           </button>
           <button
@@ -246,7 +253,7 @@ export function GitPane({
           Read-only
         </span>
         <span role="status">
-          {git.busy ? (
+          {git.showProgress ? (
             <>
               <IconLoader2
                 size={12}

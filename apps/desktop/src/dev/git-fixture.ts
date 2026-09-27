@@ -63,11 +63,11 @@ export const gitFixture = {
     try {
       const scenario = new URLSearchParams(window.location.search).get("git");
       const research = workspaceId === "fixture-research";
-      if (scenario === "slow" || (scenario === "switch" && !research))
+      if (scenario?.startsWith("slow") || (scenario === "switch" && !research))
         await new Promise((resolve) => window.setTimeout(resolve, 1200));
-      if (scenario === "error")
+      if (scenario === "error" || scenario === "slow-error")
         throw new Error("Git metadata is not readable. Refresh to try again.");
-      if (scenario === "none")
+      if (scenario === "none" || scenario === "slow-none")
         return { state: "not_repository", repository: null };
       return {
         state: "ready",
@@ -79,7 +79,9 @@ export const gitFixture = {
               ? null
               : research
                 ? "research"
-                : "codex/desktop-git",
+                : scenario === "slow-updated"
+                  ? "codex/updated-branch"
+                  : "codex/desktop-git",
           head: id,
           linkedWorktree: true,
           scoped: false,

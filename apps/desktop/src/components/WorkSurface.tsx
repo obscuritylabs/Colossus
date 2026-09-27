@@ -916,6 +916,7 @@ export function WorkSurface({
     <span className="composer-git-control" ref={gitTriggerRef}>
       <GitIndicator
         git={git}
+        compact={composerVisible}
         open={activeDrawer === "git"}
         onClick={() => toggleDrawer("git")}
       />

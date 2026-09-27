@@ -5,6 +5,16 @@ import {
   getWorkspaceGitCommit,
 } from "../../api";
 import type { GitStatus, GitCommitPage, GitCommitDetails } from "../../git";
+import { GitStatusCache } from "./statusCache";
+
+const statusCache = new GitStatusCache();
+// The native reader is shared across workspaces and WorkSurface remounts.
+let tail: Promise<unknown> = Promise.resolve();
+function queue<T>(action: () => Promise<T>): Promise<T> {
+  const result = tail.then(action, action);
+  tail = result.catch(() => undefined);
+  return result;
+}
 
 function message(error: unknown): string {
   return error instanceof Error
@@ -22,15 +32,9 @@ export function useGit(
   refreshKey: string,
 ) {
   const scope = available ? workspaceId : null;
-  // The native reader is shared across workspaces. Keep its queue alive when
-  // the selected workspace (and the client that binds it) changes.
-  const tail = useRef<Promise<unknown>>(Promise.resolve());
+  const cacheKey =
+    scope === null ? null : `${fixture ? "fixture" : "native"}:${scope}`;
   const client = useMemo(() => {
-    const queue = <T>(action: () => Promise<T>): Promise<T> => {
-      const result = tail.current.then(action, action);
-      tail.current = result.catch(() => undefined);
-      return result;
-    };
     return {
       status: (approve = false) =>
         queue(async () => {
@@ -68,32 +72,48 @@ export function useGit(
     client: typeof client;
     status: GitStatus | null;
     busy: boolean;
+    foreground: boolean;
     error: string;
-  }>({ client, status: null, busy: false, error: "" });
+  }>({
+    client,
+    status: statusCache.get(cacheKey),
+    busy: false,
+    foreground: false,
+    error: "",
+  });
   const generation = useRef(0);
   const inFlight = useRef(false);
   const pending = useRef(false);
   const refresh = useCallback(
-    async (approve = false) => {
-      if (scope === null) return;
+    async (approve = false, background = false) => {
+      if (scope === null || cacheKey === null) return;
       if (inFlight.current) {
         pending.current = true;
+        if (!background) setResult((old) => ({ ...old, foreground: true }));
         return;
       }
       inFlight.current = true;
       const version = generation.current;
       setResult((old) => ({
         client,
-        status: old.client === client ? old.status : null,
+        status: old.client === client ? old.status : statusCache.get(cacheKey),
         busy: true,
-        error: "",
+        foreground: !background,
+        error: old.client === client ? old.error : "",
       }));
       try {
         do {
           pending.current = false;
           const status = await client.status(approve);
           if (version !== generation.current) return;
-          setResult({ client, status, busy: true, error: "" });
+          statusCache.set(cacheKey, status);
+          setResult((old) => ({
+            ...old,
+            client,
+            status,
+            busy: true,
+            error: "",
+          }));
           approve = false;
         } while (pending.current);
       } catch (error) {
@@ -106,7 +126,7 @@ export function useGit(
         }
       }
     },
-    [client, scope],
+    [client, scope, cacheKey],
   );
   useEffect(() => {
     generation.current += 1;
@@ -119,7 +139,7 @@ export function useGit(
   useEffect(() => {
     if (scope === null) return;
     const update = () => {
-      if (!document.hidden) void refresh();
+      if (!document.hidden) void refresh(false, true);
     };
     window.addEventListener("focus", update);
     document.addEventListener("visibilitychange", update);
@@ -131,11 +151,15 @@ export function useGit(
     };
   }, [scope, visible, refresh]);
   useEffect(() => {
-    void refresh();
+    void refresh(false, true);
   }, [refreshKey, refresh]);
+  const status =
+    result.client === client ? result.status : statusCache.get(cacheKey);
+  const busy = result.client === client && result.busy;
   return {
-    status: result.client === client ? result.status : null,
-    busy: result.client === client && result.busy,
+    status,
+    busy,
+    showProgress: busy && (status === null || result.foreground),
     error: result.client === client ? result.error : "",
     refresh,
     client,

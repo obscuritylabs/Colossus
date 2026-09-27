@@ -14,7 +14,7 @@ test("Git shows the branch, grouped changes and history without losing a draft",
     name: /Open Git: codex\/desktop-git/,
   });
   await expect(indicator).toBeVisible();
-  await expect(indicator.getByText("Git", { exact: true })).toBeVisible();
+  await expect(indicator).toHaveText("codex/desktop-git3");
   await expect(
     page
       .locator(".work-surface-header")
@@ -64,12 +64,15 @@ test("Git stays available on views without a message composer", async ({
     await expect(
       page.getByRole("form", { name: "Send a prompt", exact: true }),
     ).toHaveCount(0);
-    await page
+    const indicator = page
       .locator(".work-surface-header")
-      .getByRole("button", { name: /Open Git:/ })
-      .click();
+      .getByRole("button", { name: /Open Git:/ });
+    await expect(indicator).toHaveText("Gitcodex/desktop-git3");
+    await indicator.click();
     await expect(
-      page.getByRole("region", { name: "Workspace Git", exact: true }),
+      page
+        .getByRole("region", { name: "Workspace Git", exact: true })
+        .getByRole("heading", { name: "Git", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Close Git panel" }).click();
   }
@@ -193,7 +196,6 @@ test("history filtering and commit details preserve navigation and focus", async
 });
 
 for (const [scenario, expected] of [
-  ["none", "No Git repository"],
   ["clean", "Working tree clean"],
   ["error", "Git metadata is not readable"],
   ["detached", "Detached"],
@@ -207,14 +209,45 @@ for (const [scenario, expected] of [
   });
 }
 
+test("a folder without Git keeps only an accessible icon in the composer", async ({
+  page,
+}) => {
+  await page.goto("/?fixture=operations-studio&git=none");
+  const indicator = page
+    .getByRole("form", { name: "Send a prompt", exact: true })
+    .getByRole("button", { name: "Open Git: No repository", exact: true });
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveText("");
+  await expect(indicator).toHaveAttribute(
+    "title",
+    "No Git repository in this folder",
+  );
+  await indicator.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Workspace Git", exact: true }),
+  ).toContainText("No Git repository");
+  await page.getByRole("button", { name: "Close Git panel" }).click();
+  await expect(indicator).toBeFocused();
+});
+
 test("slow refresh keeps the composer usable and shows progress", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
   await page.clock.install();
   await page.clock.pauseAt(new Date());
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/?fixture=operations-studio&git=slow");
-  await page.getByRole("button", { name: /Open Git:/ }).click();
+  const indicator = page.getByRole("button", { name: /Open Git:/ });
+  await expect(indicator.locator(".git-spinner")).toHaveCSS(
+    "animation-name",
+    "git-spin",
+  );
+  await expect(indicator.locator(".git-spinner")).toHaveCSS(
+    "animation-play-state",
+    "running",
+  );
+  await indicator.click();
   await expect(
     page.getByRole("region", { name: "Workspace Git", exact: true }),
   ).toContainText("Refreshing");
@@ -226,6 +259,124 @@ test("slow refresh keeps the composer usable and shows progress", async ({
   await expect(
     page.getByRole("region", { name: "Workspace Git", exact: true }),
   ).toContainText("Auto-refresh on");
+});
+
+test("background refresh keeps the branch steady, then applies new status", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.goto("/?fixture=operations-studio&git=slow");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  await page.clock.runFor(1500);
+  const indicator = page.getByRole("button", { name: /Open Git:/ });
+  const pane = page.getByRole("region", { name: "Workspace Git", exact: true });
+  await expect(indicator).toHaveText("codex/desktop-git3");
+  await page.evaluate(() => {
+    window.history.replaceState(
+      null,
+      "",
+      "/?fixture=operations-studio&git=slow-updated",
+    );
+  });
+  // Exercise a real periodic refresh with the repository pane open.
+  await page.clock.runFor(8500);
+  await expect(
+    pane.getByRole("button", { name: "Refresh Git", exact: true }),
+  ).toBeDisabled();
+  await expect(indicator).toHaveText("codex/desktop-git3");
+  await expect(indicator.locator(".git-spinner")).toHaveCount(0);
+  await expect(pane.locator(".git-spinner")).toHaveCount(0);
+  await expect(pane).toContainText("Auto-refresh on");
+  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+  await prompt.fill("Keep typing during the refresh");
+  await expect(prompt).toHaveValue("Keep typing during the refresh");
+  await page.clock.runFor(1500);
+  await expect(indicator).toHaveText("codex/updated-branch3");
+  await expect(prompt).toHaveValue("Keep typing during the refresh");
+  // Explicit refresh still gives feedback, including reduced-motion support.
+  await pane.getByRole("button", { name: "Refresh Git", exact: true }).click();
+  await expect(pane).toContainText("Refreshing");
+  await expect(indicator.locator(".git-spinner")).toBeVisible();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(indicator.locator(".git-spinner")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  await page.clock.runFor(1500);
+  await expect(pane).toContainText("Auto-refresh on");
+});
+
+test("returning to a workspace restores its cached branch while refreshing", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.goto("/?fixture=operations-studio&git=slow");
+  const indicator = page.getByRole("button", { name: /Open Git:/ });
+  await indicator.click();
+  await expect(
+    page.getByRole("region", { name: "Workspace Git", exact: true }),
+  ).toContainText("Reading repository");
+  await page.clock.runFor(1500);
+  await expect(indicator).toHaveText("codex/desktop-git3");
+  await page.getByRole("button", { name: "Research Lab", exact: true }).click();
+  await expect(indicator).not.toContainText("codex/desktop-git");
+  await expect(indicator.locator(".git-spinner")).toBeVisible();
+  await page.clock.runFor(1500);
+  await expect(indicator).toHaveText("research3");
+  await page.getByRole("button", { name: "Colossus", exact: true }).click();
+  // No clock advance: the native read is still waiting on the fixture delay.
+  await expect(indicator).toHaveText("codex/desktop-git3");
+  await expect(indicator.locator(".git-spinner")).toHaveCount(0);
+  await page.clock.runFor(1500);
+  await expect(indicator).toHaveText("codex/desktop-git3");
+  await page.getByRole("button", { name: "Research Lab", exact: true }).click();
+  await expect(indicator).toHaveText("research3");
+  await expect(indicator.locator(".git-spinner")).toHaveCount(0);
+});
+
+test("failed background refresh retains the branch and reports the error", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.goto("/?fixture=operations-studio&git=slow");
+  await page.getByRole("button", { name: /Open Git:/ }).click();
+  await page.clock.runFor(1500);
+  const indicator = page.getByRole("button", { name: /Open Git:/ });
+  await expect(indicator).toHaveText("codex/desktop-git3");
+  await page.evaluate(() => {
+    window.history.replaceState(
+      null,
+      "",
+      "/?fixture=operations-studio&git=slow-error",
+    );
+    window.dispatchEvent(new Event("focus"));
+  });
+  await page.clock.runFor(1500);
+  const pane = page.getByRole("region", { name: "Workspace Git", exact: true });
+  await expect(indicator).toContainText("codex/desktop-git");
+  await expect(indicator).toHaveAccessibleName(/refresh failed/);
+  await expect(pane.getByRole("alert")).toContainText(
+    "Showing the last successful refresh",
+  );
+  await page.evaluate(() => {
+    window.history.replaceState(
+      null,
+      "",
+      "/?fixture=operations-studio&git=slow-none",
+    );
+    window.dispatchEvent(new Event("focus"));
+  });
+  // Keep the error stable until a refresh actually succeeds.
+  await expect(pane.getByRole("alert")).toBeVisible();
+  await page.clock.runFor(1500);
+  await expect(pane.getByRole("alert")).toHaveCount(0);
+  await expect(indicator).toHaveText("");
+  await expect(pane).toContainText("No Git repository");
 });
 
 test("Git is accessible at desktop and compact widths", async ({ page }) => {
