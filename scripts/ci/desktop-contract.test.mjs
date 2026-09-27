@@ -193,7 +193,8 @@ test("Windows Desktop seals signed releases in the required order", () => {
   assert.match(signer, /Import-Module ArtifactSigning/u);
   assert.match(signer, /Invoke-ArtifactSigning/u);
   assert.match(signer, /verify-authenticode\.ps1/u);
-  assert.match(signer, /Tauri signing input must be unsigned/u);
+  assert.match(signer, /"\.exe", "\.dll"/u);
+  assert.match(signer, /Tauri signing input has an invalid existing signature/u);
 });
 
 test("repository import keeps its action footer inside compact windows", () => {

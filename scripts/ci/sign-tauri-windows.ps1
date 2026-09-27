@@ -10,11 +10,21 @@ if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "Tauri signing input is missing"
 }
 $Resolved = (Resolve-Path -LiteralPath $Path).Path
-if ([IO.Path]::GetExtension($Resolved) -ne ".exe") {
-    throw "Tauri signing accepts only Windows executables"
+if ([IO.Path]::GetExtension($Resolved) -notin @(".exe", ".dll")) {
+    throw "Tauri signing accepts only Windows executables and DLLs"
 }
-if ((Get-AuthenticodeSignature -LiteralPath $Resolved).Status -ne "NotSigned") {
-    throw "Tauri signing input must be unsigned"
+$Signature = Get-AuthenticodeSignature -LiteralPath $Resolved
+if ($Signature.Status -eq "Valid") {
+    if ([IO.Path]::GetExtension($Resolved) -eq ".dll" -and
+        $Signature.TimeStamperCertificate) {
+        Write-Output "Tauri DLL already has a valid timestamped publisher signature: $Resolved"
+        return
+    }
+    & (Join-Path $PSScriptRoot "verify-authenticode.ps1") -Path $Resolved
+    return
+}
+if ($Signature.Status -ne "NotSigned") {
+    throw "Tauri signing input has an invalid existing signature: $($Signature.Status)"
 }
 
 # The pinned Azure action installs this module earlier in the same OIDC-authenticated job.
