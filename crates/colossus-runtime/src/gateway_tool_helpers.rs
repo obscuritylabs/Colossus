@@ -746,13 +746,7 @@ impl GatewayToolExecutor {
         roots.sort();
         roots.dedup();
         roots.truncate(MAX_ROOTS);
-        if let Ok(Some(ripgrep)) = managed_ripgrep()
-            && self.executables.contains(&ripgrep)
-            && let Some(directory) = ripgrep.parent()
-        {
-            roots.retain(|root| root != directory);
-            roots.insert(0, directory.to_path_buf());
-        }
+        prioritize_granted_managed_ripgrep(&mut roots, &self.executables, managed_ripgrep())?;
         std::env::join_paths(roots)
             .map(|path| path.to_string_lossy().into_owned())
             .map_err(|error| ToolError::Failed(format!("cannot construct sanitized PATH: {error}")))
@@ -826,5 +820,58 @@ impl GatewayToolExecutor {
                 .map(str::to_owned)
                 .collect(),
         })
+    }
+}
+
+fn prioritize_granted_managed_ripgrep(
+    roots: &mut Vec<PathBuf>,
+    executables: &[PathBuf],
+    managed: Result<Option<PathBuf>, &'static str>,
+) -> Result<(), ToolError> {
+    let Some(ripgrep) = managed.map_err(|message| ToolError::Denied(message.into()))? else {
+        return Ok(());
+    };
+    if executables.contains(&ripgrep) {
+        let directory = ripgrep.parent().ok_or_else(|| {
+            ToolError::Denied("managed ripgrep path is invalid; reinstall Colossus".into())
+        })?;
+        roots.retain(|root| root != directory);
+        roots.insert(0, directory.to_path_buf());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn damaged_managed_ripgrep_rejects_isolated_command_path() {
+        let ambient = tempfile::tempdir().expect("ambient path");
+        let mut roots = vec![ambient.path().to_path_buf()];
+
+        let error = prioritize_granted_managed_ripgrep(
+            &mut roots,
+            &[],
+            Err("managed ripgrep is missing; reinstall Colossus"),
+        )
+        .expect_err("damaged managed tool must stop command execution");
+        assert!(
+            matches!(error, ToolError::Denied(message) if message.contains("reinstall Colossus"))
+        );
+        assert_eq!(roots, [ambient.path()]);
+    }
+
+    #[test]
+    fn granted_managed_ripgrep_precedes_ambient_command_roots() {
+        let managed = tempfile::tempdir().expect("managed path");
+        let ambient = tempfile::tempdir().expect("ambient path");
+        let ripgrep = managed.path().join("rg");
+        let granted_executables = vec![ripgrep.clone()];
+        let mut roots = vec![ambient.path().to_path_buf(), managed.path().to_path_buf()];
+
+        prioritize_granted_managed_ripgrep(&mut roots, &granted_executables, Ok(Some(ripgrep)))
+            .expect("managed PATH");
+        assert_eq!(roots, [managed.path(), ambient.path()]);
     }
 }

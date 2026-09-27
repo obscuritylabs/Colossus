@@ -36,19 +36,7 @@ fn managed_ripgrep_at(
             }
         }
         version_directory.join(name)
-    } else if executable
-        .file_stem()
-        .is_some_and(|stem| stem == "colossus-sidecar")
-        || (executable
-            .file_stem()
-            .is_some_and(|stem| stem == "colossus")
-            && parent
-                .join(if cfg!(windows) {
-                    "colossus-sidecar.exe"
-                } else {
-                    "colossus-sidecar"
-                })
-                .is_file())
+    } else if desktop_bundle_manifest(executable).is_some_and(|path| path.is_file())
         || bundled_marker == Some("1")
     {
         parent.join(name)
@@ -72,6 +60,32 @@ fn managed_ripgrep_at(
         .map_err(|_| "managed ripgrep cannot be resolved; reinstall Colossus")
 }
 
+fn desktop_bundle_manifest(executable: &Path) -> Option<PathBuf> {
+    let stem = executable.file_stem()?;
+    if stem != "colossus" && stem != "colossus-sidecar" {
+        return None;
+    }
+    let parent = executable.parent()?;
+    #[cfg(target_os = "macos")]
+    {
+        let contents = parent.parent()?;
+        let app = contents.parent()?;
+        (parent.file_name()? == "MacOS"
+            && contents.file_name()? == "Contents"
+            && app.extension()? == "app")
+            .then(|| contents.join("Resources/colossus-bundle-manifest.json"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Some(parent.join("colossus-bundle-manifest.json"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = parent;
+        None
+    }
+}
+
 pub(super) fn is_ripgrep_name(name: &str) -> bool {
     name == "rg" || (cfg!(windows) && name.eq_ignore_ascii_case("rg.exe"))
 }
@@ -84,6 +98,23 @@ mod tests {
     fn source_build_does_not_claim_a_system_ripgrep() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let executable = directory.path().join("colossus");
+        assert_eq!(managed_ripgrep_at(&executable, "1.2.3", None), Ok(None));
+    }
+
+    #[test]
+    fn source_build_with_a_sibling_sidecar_does_not_claim_managed_ripgrep() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let sidecar = directory.path().join(if cfg!(windows) {
+            "colossus-sidecar.exe"
+        } else {
+            "colossus-sidecar"
+        });
+        fs::write(sidecar, "fixture").expect("sidecar fixture");
+        let executable = directory.path().join(if cfg!(windows) {
+            "colossus.exe"
+        } else {
+            "colossus"
+        });
         assert_eq!(managed_ripgrep_at(&executable, "1.2.3", None), Ok(None));
     }
 
@@ -121,18 +152,19 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn desktop_bundled_cli_resolves_its_sibling_tool() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let sidecar = directory.path().join(if cfg!(windows) {
-            "colossus-sidecar.exe"
-        } else {
-            "colossus-sidecar"
-        });
-        fs::write(sidecar, "fixture").expect("sidecar fixture");
-        let ripgrep = directory
-            .path()
-            .join(if cfg!(windows) { "rg.exe" } else { "rg" });
+        let cli = desktop_cli_fixture(directory.path());
+        let manifest = desktop_bundle_manifest(&cli).expect("Desktop manifest path");
+        fs::create_dir_all(manifest.parent().expect("manifest parent"))
+            .expect("manifest directory");
+        fs::write(manifest, "fixture").expect("manifest fixture");
+        let ripgrep =
+            cli.parent()
+                .expect("CLI parent")
+                .join(if cfg!(windows) { "rg.exe" } else { "rg" });
         fs::write(&ripgrep, "fixture").expect("ripgrep fixture");
         #[cfg(unix)]
         {
@@ -140,15 +172,39 @@ mod tests {
             fs::set_permissions(&ripgrep, fs::Permissions::from_mode(0o755))
                 .expect("executable fixture");
         }
-        let cli = directory.path().join(if cfg!(windows) {
-            "colossus.exe"
-        } else {
-            "colossus"
-        });
         assert_eq!(
             managed_ripgrep_at(&cli, "1.2.3", None),
             Ok(Some(fs::canonicalize(ripgrep).expect("canonical ripgrep")))
         );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn desktop_bundle_missing_ripgrep_is_an_error() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let cli = desktop_cli_fixture(directory.path());
+        let manifest = desktop_bundle_manifest(&cli).expect("Desktop manifest path");
+        fs::create_dir_all(manifest.parent().expect("manifest parent"))
+            .expect("manifest directory");
+        fs::write(manifest, "fixture").expect("manifest fixture");
+        assert_eq!(
+            managed_ripgrep_at(&cli, "1.2.3", None),
+            Err("managed ripgrep is missing; reinstall Colossus")
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn desktop_cli_fixture(root: &Path) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        let directory = root.join("Colossus Desktop.app/Contents/MacOS");
+        #[cfg(target_os = "windows")]
+        let directory = root.to_path_buf();
+        fs::create_dir_all(&directory).expect("CLI directory");
+        directory.join(if cfg!(windows) {
+            "colossus.exe"
+        } else {
+            "colossus"
+        })
     }
 
     #[cfg(unix)]
