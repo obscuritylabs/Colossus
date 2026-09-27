@@ -284,8 +284,9 @@ if ! { [ -f "$metadata" ] && [ ! -L "$metadata" ]; }; then
     fail "package installation metadata is missing or linked"
 fi
 for source_tool_file in "$source_rg" "$source_tools/COPYING" "$source_tools/LICENSE-MIT" "$source_tools/UNLICENSE"; do
-    [ -f "$source_tool_file" ] && [ ! -L "$source_tool_file" ] ||
+    if ! { [ -f "$source_tool_file" ] && [ ! -L "$source_tool_file" ]; }; then
         fail "package ripgrep or its license notices are missing or linked"
+    fi
 done
 [ -x "$source_rg" ] || fail "package ripgrep is not executable"
 [ "$(wc -l < "$metadata" | tr -d ' ')" -eq 6 ] || fail "package metadata must contain six fields"
@@ -345,13 +346,15 @@ if [ "$(id -u)" -eq 0 ] && ! directory_is_owner_private "$prefix"; then
 fi
 tool_dir=$tool_root/$version
 if [ -e "$tool_dir" ] || [ -L "$tool_dir" ]; then
-    [ -d "$tool_dir" ] && [ ! -L "$tool_dir" ] ||
+    if ! { [ -d "$tool_dir" ] && [ ! -L "$tool_dir" ]; }; then
         fail "existing managed ripgrep directory is linked or not a directory"
+    fi
     require_private_write_directory "$tool_dir"
     for tool_file in rg COPYING LICENSE-MIT UNLICENSE; do
-        [ -f "$tool_dir/$tool_file" ] && [ ! -L "$tool_dir/$tool_file" ] &&
-            cmp -s "$source_tools/$tool_file" "$tool_dir/$tool_file" ||
+        if ! { [ -f "$tool_dir/$tool_file" ] && [ ! -L "$tool_dir/$tool_file" ] &&
+            cmp -s "$source_tools/$tool_file" "$tool_dir/$tool_file"; }; then
             fail "existing managed ripgrep differs from this release; inspect $tool_dir"
+        fi
     done
     [ -x "$tool_dir/rg" ] || fail "existing managed ripgrep is not executable"
 else
