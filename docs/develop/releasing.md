@@ -9,12 +9,12 @@ type: how-to
 
 ## Goal
 
-Publish one stable Colossus core version as six GitHub CLI archives, two reviewed
-bootstrap installers, `@obscuritylabs/colossus-sdk` on npm,
-`obscuritylabs-colossus-sdk` on PyPI,
-and `sdk/go/vX.Y.Z` from the same immutable source commit. Stable core releases do not
-contain Desktop artifacts and do not require Apple, Tauri updater, or Authenticode
-credentials.
+Publish one stable Colossus version as six GitHub CLI archives, a signed Windows x64
+Desktop installer, two reviewed bootstrap installers,
+`@obscuritylabs/colossus-sdk` on npm, `obscuritylabs-colossus-sdk` on PyPI, and
+`sdk/go/vX.Y.Z` from the same immutable source commit. Stable releases require Azure
+Artifact Signing for the Windows executables and installer. They do not include a
+macOS Desktop artifact until Apple signing and notarization are configured.
 
 ## Prerequisites
 
