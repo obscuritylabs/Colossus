@@ -49,8 +49,15 @@ for (const transport of ["http", "stdio"] as const) {
     await expect(firstName).toHaveValue(bindingName);
     await expect(firstName).toBeFocused();
     // Editing in the middle must retain the caret, not merely restore focus at the end.
-    await page.keyboard.press("Home");
+    await page.keyboard.press(
+      process.platform === "darwin" ? "Meta+ArrowLeft" : "Home",
+    );
     await page.keyboard.press("ArrowRight");
+    expect(
+      await firstName.evaluate(
+        (input: HTMLInputElement) => input.selectionStart,
+      ),
+    ).toBe(1);
     await page.keyboard.type("x");
     await expect(firstName).toHaveValue(
       `${bindingName[0]}x${bindingName.slice(1)}`,
@@ -114,7 +121,9 @@ for (const transport of ["http", "stdio"] as const) {
         bindings.getByRole("textbox", { name: "Scheme", exact: true }),
       ).toHaveValue("Bearer");
     await firstName.focus();
-    await page.keyboard.press("End");
+    await page.keyboard.press(
+      process.platform === "darwin" ? "Meta+ArrowRight" : "End",
+    );
     await page.keyboard.type("_EDITED");
     await expect(firstName).toHaveValue(`${retainedName}_EDITED`);
     await expect(firstName).toBeFocused();

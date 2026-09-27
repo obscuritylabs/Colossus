@@ -227,9 +227,9 @@ test("plugin save uses the native defaults command and retains edits on failure"
     };
   });
   await page.getByRole("button", { name: "Save global changes" }).click();
-  await expect(
-    page.locator(".managed-settings-message[role=alert]"),
-  ).toContainText("The configuration changed.");
+  await expect(page.getByRole("alert")).toContainText(
+    "The configuration changed.",
+  );
   await expect(
     page.getByRole("checkbox", { name: "Agent Plugins", exact: true }),
   ).not.toBeChecked();
