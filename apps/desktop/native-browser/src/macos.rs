@@ -3,7 +3,9 @@
 use std::{cell::RefCell, collections::HashMap};
 
 use block2::DynBlock;
-use objc2::{MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject};
+use objc2::{
+    DefinedClass, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
+};
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSError, NSHTTPURLResponse, NSObject, NSObjectProtocol, NSURL,
     ns_string,
