@@ -128,8 +128,9 @@ validation, while `main` changes are deployed by the Documentation workflow.
 
 Apply `ci:full` only after the PR is ready to merge:
 
-1. Make the branch current with `main` and wait for `Colossus PR gate` on the current
-   PR merge commit.
+1. Wait for `Colossus PR gate` on the current PR head. Resolve merge conflicts if
+   `main` has advanced; a conflict-free branch does not need a new commit solely to
+   refresh its base.
 2. Resolve every human and automated review conversation and address actionable findings
    in code and tests.
 3. Mark the PR ready for review if it is still a draft.
@@ -176,12 +177,18 @@ commit or a label event other than `ci:full` therefore leaves a failing gate wit
 allocating the acceptance runners. Only a successful `ci:full` run on the current head
 replaces that sentinel result; a skipped gate can never satisfy the ruleset.
 
+The required checks remain mandatory for the PR head, but the ruleset does not require
+the branch to include the latest `main` commit. This avoids repeating the full acceptance
+run when another PR merges while acceptance is running. If a newer `main` change affects
+the same behavior or integration contract, update the branch and rerun both gates before
+merging; a conflict-free merge alone does not prove the combined result was tested.
+
 ## Failure path
 
 - If classification is wrong or empty, fix the classifier or path contract; do not force
   a skipped gate through the aggregate job.
-- If pre-merge eligibility fails, verify draft status, actor permission, branch currency,
-  and the PR gate on the current merge commit before relabeling.
+- If pre-merge eligibility fails, verify draft status, actor permission, the current PR
+  head SHA, and its successful PR gate before relabeling.
 - If an acceptance job fails, diagnose that job, push the fix, wait for the new PR gate,
   and reapply `ci:full`.
 - If a release target fails, do not publish partial artifacts. Fix the source and create a
@@ -307,9 +314,11 @@ Only then activate protection:
 ```
 
 The `main` ruleset requires a pull request with zero mandatory approvals, resolved review
-conversations, an up-to-date branch, and both Colossus gates. It permits no bypass actors
-and blocks direct pushes, deletion, and non-fast-forward updates. GitHub merge queues are
-not part of this topology because they are unavailable for this private Team repository.
+conversations, no merge conflicts, and both Colossus gates on the PR head. It does not
+require branches to be updated solely because `main` advanced. It permits no bypass
+actors and blocks direct pushes, deletion, and non-fast-forward updates. GitHub merge
+queues are not part of this topology because they are unavailable for this private Team
+repository.
 
 ## Verification
 

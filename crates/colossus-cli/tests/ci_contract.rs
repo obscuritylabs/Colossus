@@ -761,6 +761,20 @@ fn tracked_ruleset_starts_in_evaluation_and_has_no_bypass() {
     ] {
         assert!(source.contains(required), "ruleset is missing {required}");
     }
+    let status_checks = field(ruleset, "rules")
+        .as_array()
+        .expect("ruleset rules")
+        .iter()
+        .find(|rule| rule["type"] == "required_status_checks")
+        .expect("required status checks rule");
+    let parameters = mapping(
+        field(mapping(status_checks, "status checks"), "parameters"),
+        "status checks parameters",
+    );
+    assert_eq!(
+        field(parameters, "strict_required_status_checks_policy").as_bool(),
+        Some(false),
+    );
 
     let bootstrap =
         fs::read_to_string(repository_root().join("scripts/ci/configure-repository.sh"))
