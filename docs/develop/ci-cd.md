@@ -47,8 +47,8 @@ flowchart LR
     MG --> M["Merge to main"]
     M --> T["Annotated stable or approved prerelease tag"]
     T --> V["Release readiness + six native targets"]
-    V -->|"stable"| SDKR["Immutable SDK candidate"]
-    V -->|"preview"| DPR["Unsigned Desktop previews"]
+    V -->|"stable"| SDKR["Immutable SDK candidate + signed Windows Desktop"]
+    V -->|"preview"| DPR["macOS preview + signed Windows Desktop"]
     SDKR --> RG["Colossus release gate"]
     DPR --> RG
     RG --> DR["Draft GitHub Release for human approval"]
@@ -63,7 +63,7 @@ flowchart LR
 |---|---|---|---|---:|
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
 | Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; stable SDK candidate or macOS/Windows Developer Preview packages | `Colossus release gate` | $4.50 per release |
+| Release | Push an annotated stable or approved prerelease tag | Six CLI targets; signed Windows CLI and Desktop; stable SDK or macOS Developer Preview | `Colossus release gate` | Varies with Windows signing time |
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
@@ -199,18 +199,18 @@ signed-bundle smoke.
 A stable `vX.Y.Z` target additionally regenerates and tests the TypeScript, Python, and
 Go SDKs, builds the exact npm tarball and Python wheel/source distribution, inspects
 their intrinsic metadata, and binds them to the release commit with a manifest and
-checksum set. Its aggregate gate requires every Desktop job to be skipped. It does not
-read or require Apple, Tauri updater, or Authenticode credentials.
+checksum set. Its aggregate gate also requires a signed Windows x64 Desktop installer
+and both signed Windows CLI archives. It does not require Apple or Tauri updater keys.
 
 The stable SDK job compares the public API against the most recent stable tag reachable
 from the release commit, falling back to that commit's parent for a first release. The
 base is therefore fixed relative to the release commit, so rerunning an old tag after
 `main` advances cannot report newer `main` APIs as removals.
 
-An approved `vX.Y.Z-preview.N` target takes the mutually exclusive path: the stable SDK
-candidate job is skipped, while credential-free macOS ARM and Windows x64 jobs package
-the visibly unsigned Developer Preview described below. No unsigned Desktop package can
-enter a stable core draft.
+An approved `vX.Y.Z-preview.N` target skips the stable SDK candidate and packages the
+ad-hoc signed macOS ARM preview plus a signed Windows x64 preview. The Windows signing
+job uses the `release-signing` GitHub environment and Azure OIDC; validation-only
+dispatches remain unsigned and cannot publish.
 
 ```bash
 git tag -a vX.Y.Z -m "Colossus vX.Y.Z"
@@ -219,8 +219,8 @@ git push origin vX.Y.Z
 
 ### Developer Preview channel
 
-`vX.Y.Z-preview.N` is the only credential-free tag path that may produce a runnable
-Desktop; `v0.10.1-preview.2` is the most recent example. It still runs all six CLI release
+`vX.Y.Z-preview.N` produces a runnable macOS Developer Preview and signed Windows
+Developer Preview. It still runs all six CLI release
 jobs. Its Desktop build uses the `developer_preview` channel,
 `COLOSSUS_DESKTOP_TEAM_ID=ADHOC`, and the ad-hoc identity `-`; it never reads Apple signing
 or notarization secrets. Packaging still verifies strict code signatures, fixed code
@@ -252,12 +252,12 @@ gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
 
 ### Desktop update signing and channels
 
-Only separately authorized stable Desktop builds advertise automatic updates. They require the repository variable
+Only separately authorized stable Desktop builds with a configured update channel advertise automatic updates. They require the repository variable
 `DESKTOP_UPDATE_PUBLIC_KEY`, containing the one-line base64 Tauri updater public key,
 plus the protected `DESKTOP_UPDATE_PRIVATE_KEY` secret and, when applicable,
-`DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD`. Unsigned Developer Preview and validation-only
-builds reject update endpoints and keys and never produce updater artifacts; users
-install later previews manually from GitHub Releases.
+`DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD`. Current Windows stable and Developer Preview
+builds use manual updates until that separate updater authority is configured;
+validation-only builds never produce updater artifacts.
 
 macOS packages the stable signed `.app.tar.gz` only after nested signing, outer signing,
 notarization, stapling, and final bundle verification. The stable versioned draft
@@ -272,16 +272,18 @@ such asset and skip this workflow. The native update client also uses the shared
 additional-CA configuration and rejects HTTPS-to-HTTP redirects.
 
 The application update signature is separate from platform publisher identity.
-Authenticode remains mandatory before a Windows package can enter the stable channel;
-the existing stable Windows release job remains absent and the release gate requires
-the unsigned Windows job to be skipped for stable tags.
+Windows release signing is staged: sign the bundled CLI and sidecar, hash them into the
+bundle manifest, patch its digest into the Desktop executable, sign that executable,
+build the NSIS installer, then sign the installer. GitHub verifies each Authenticode
+publisher and timestamp before uploading the final installer. Standalone Windows x64
+and ARM64 CLI archives are signed on Windows x64 after build and before final ZIP hashing.
 
 ## Expected result
 
 Routine PR updates allocate only selected Linux/documentation jobs, one deliberate final
 run provides representative pre-merge evidence, and release tags alone allocate all six
-CLI architecture jobs plus exactly one channel-specific extension: stable SDK candidates
-or unsigned Desktop Developer Previews. Registry publication and production Desktop
+CLI architecture jobs plus signed Windows release jobs and a channel-specific extension:
+stable SDK candidates or macOS Desktop Developer Previews. Registry publication and production Desktop
 authority remain independently protected. Each tier has one fail-closed aggregate check.
 
 ## Bootstrap repository enforcement

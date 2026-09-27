@@ -22,8 +22,8 @@ confirm that work uses the app-managed runtime and its bounded access profile.
 
 The offline self-test does not require a provider key or network connection.
 
-For the unsigned Windows 10/11 x64 package, use the
-[Windows Desktop Developer Preview](windows-desktop.md) guide.
+For signed Windows 10/11 x64 packages, use the
+[Windows Desktop](windows-desktop.md) guide.
 
 ## Steps
 
