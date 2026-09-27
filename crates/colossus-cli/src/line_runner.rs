@@ -178,11 +178,7 @@ pub(super) async fn line_runner(
         } else if line == "/tasks" {
             print_json(&runtime.list_tasks(Some(&active_session_id), None, 100)?)?;
         } else if line == "/decisions" {
-            print_json(&runtime.list_decisions(
-                Some(&active_session_id),
-                Some(DecisionStatus::Active),
-                100,
-            )?)?;
+            print_json(&runtime.list_decisions(None, Some(DecisionStatus::Active), 100)?)?;
         } else if line == "/goals" {
             print_json(&runtime.list_goals(Some(&active_session_id), None, 100)?)?;
         } else if let Some(objective) = line.strip_prefix("/goal ") {

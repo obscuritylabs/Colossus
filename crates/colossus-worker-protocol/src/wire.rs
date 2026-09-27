@@ -8,9 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 23 includes the typed MCP health-check operation.
+/// Version 24 adds decision origin session IDs to session-map responses.
 /// Both sides reject mismatches during the handshake and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 23;
+pub const PROTOCOL_VERSION: u16 = 24;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 ///

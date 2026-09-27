@@ -244,7 +244,8 @@ The Work surface keeps every released, listable session record available. **Snap
 lists immutable context-compaction records and opens their summary, message range,
 pinned facts, open tasks, touched files, notable tool results, and strategy. **Resources**
 links plans, sources, snapshots, and artifacts and expands delegated agents, goals,
-tasks, decisions, memories, and research runs for direct inspection. The session map
+tasks, workspace-wide key decisions, memories, and research runs for direct inspection.
+The decision view shows the session where each decision was recorded. The session map
 uses bounded projections; opening these views never exposes canonical secrets or deletes
 conversation history.
 Managed Local's native layer requires an operating-system confirmation before widening

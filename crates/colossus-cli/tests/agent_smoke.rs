@@ -442,6 +442,30 @@ sandbox:
     assert_eq!(active.as_array().map(Vec::len), Some(1));
     assert_eq!(active[0]["id"], replacement_id);
 
+    let second_session = run(binary, &config, &["sessions", "new", "Decision follow-up"]);
+    assert!(second_session.status.success());
+    let second_session: Value =
+        serde_json::from_slice(&second_session.stdout).expect("second session JSON");
+    let second_session_id = second_session["id"].as_str().expect("second session id");
+    let second_work = run(binary, &config, &["work", "--session", second_session_id]);
+    assert!(second_work.status.success());
+    let second_work: Value = serde_json::from_slice(&second_work.stdout).expect("second work JSON");
+    assert_eq!(second_work["active_decisions"][0]["id"], replacement_id);
+    let origin_filtered = run(
+        binary,
+        &config,
+        &["decisions", "list", "--session", second_session_id],
+    );
+    assert!(origin_filtered.status.success());
+    let origin_filtered: Value =
+        serde_json::from_slice(&origin_filtered.stdout).expect("origin-filtered decisions JSON");
+    assert!(
+        origin_filtered
+            .as_array()
+            .expect("decision list")
+            .is_empty()
+    );
+
     let plan = run(
         binary,
         &config,

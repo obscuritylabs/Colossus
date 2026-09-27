@@ -88,6 +88,7 @@ pub(super) enum WorkOperation {
     },
     DecisionList {
         session_id: String,
+        scope: DecisionListScope,
         status: Option<DecisionStatus>,
         limit: usize,
     },
@@ -181,6 +182,12 @@ pub(super) enum WorkOperation {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DecisionListScope {
+    Workspace,
+}
+
 impl WorkOperation {
     pub(super) fn action(&self) -> &'static str {
         match self {
@@ -225,7 +232,6 @@ impl WorkOperation {
             Self::TaskCreate { session_id, .. }
             | Self::TaskList { session_id, .. }
             | Self::DecisionCreate { session_id, .. }
-            | Self::DecisionList { session_id, .. }
             | Self::PlanCreate { session_id, .. }
             | Self::GoalCreate {
                 session_id,
@@ -234,6 +240,7 @@ impl WorkOperation {
             }
             | Self::SubagentCreate { session_id, .. }
             | Self::SubagentList { session_id, .. } => session_id,
+            Self::DecisionList { .. } => "workspace:decisions",
             Self::GoalCreate {
                 source_plan_id: Some(plan_id),
                 ..
@@ -263,7 +270,26 @@ impl WorkOperation {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkOperation;
+    use super::{DecisionListScope, WorkOperation};
+
+    #[test]
+    fn decision_list_requires_workspace_scope_and_uses_workspace_resource() {
+        let operation = WorkOperation::DecisionList {
+            session_id: "session-a".into(),
+            scope: DecisionListScope::Workspace,
+            status: None,
+            limit: 100,
+        };
+        assert_eq!(operation.resource(), "workspace:decisions");
+        let serialized = serde_json::to_value(&operation).expect("decision list request");
+        assert_eq!(serialized["scope"], "workspace");
+        let mut unscoped = serialized;
+        unscoped
+            .as_object_mut()
+            .expect("request object")
+            .remove("scope");
+        assert!(serde_json::from_value::<WorkOperation>(unscoped).is_err());
+    }
 
     #[test]
     fn approved_plan_goal_handoff_uses_execution_authority_and_plan_resource() {

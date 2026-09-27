@@ -177,6 +177,11 @@ struct RecordingDenyPolicy {
     requests: Arc<Mutex<Vec<EffectRequest>>>,
 }
 
+struct WorkspaceDecisionPolicy {
+    inner: BuiltInPolicy,
+    requests: Arc<Mutex<Vec<EffectRequest>>>,
+}
+
 #[async_trait::async_trait]
 impl PolicyDecisionPoint for RuntimePostDenyPolicy {
     async fn decide(
@@ -207,6 +212,35 @@ impl PolicyDecisionPoint for RecordingDenyPolicy {
             .expect("recorded policy requests")
             .push(request.clone());
         self.inner.decide(request).await
+    }
+
+    async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
+        self.inner.doctor().await
+    }
+}
+
+#[async_trait::async_trait]
+impl PolicyDecisionPoint for WorkspaceDecisionPolicy {
+    async fn decide(
+        &self,
+        request: &EffectRequest,
+    ) -> Result<PolicyDecision, colossus_ports::PolicyError> {
+        let mut decision = self.inner.decide(request).await?;
+        if request.action == "decision.list" {
+            self.requests
+                .lock()
+                .expect("workspace decision policy requests")
+                .push(request.clone());
+            if request.resource != "workspace:decisions"
+                || (request.phase == EffectPhase::PreEffect
+                    && request.content["scope"] != "workspace")
+            {
+                decision.outcome = DecisionOutcome::Deny;
+                decision.reason = "workspace decision read was not authorized".into();
+            }
+            decision.obligations.require_post_effect = true;
+        }
+        Ok(decision)
     }
 
     async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
@@ -4184,7 +4218,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
 }
 
 #[tokio::test]
-async fn model_work_tools_are_durable_attributed_and_session_confined() {
+async fn model_work_tools_keep_tasks_session_confined_and_decisions_workspace_wide() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
         colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
@@ -4227,9 +4261,13 @@ async fn model_work_tools_are_durable_attributed_and_session_confined() {
     for action in actions {
         policy = policy.with_action(action, DecisionOutcome::Allow);
     }
+    let decision_policy_requests = Arc::new(Mutex::new(Vec::new()));
     let gateway = Arc::new(colossus_policy::EffectGateway::new(
         Arc::clone(&journal),
-        Arc::new(policy),
+        Arc::new(WorkspaceDecisionPolicy {
+            inner: policy,
+            requests: Arc::clone(&decision_policy_requests),
+        }),
         Arc::new(colossus_policy::DenyApproval),
         colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
         [10_u8; 32],
@@ -4332,6 +4370,91 @@ async fn model_work_tools_are_durable_attributed_and_session_confined() {
         .expect("decision list");
     let listed: serde_json::Value = serde_json::from_str(&listed.output).expect("list JSON");
     assert_eq!(listed.as_array().map(Vec::len), Some(1));
+
+    let listed_from_other_session = executor
+        .execute(
+            ToolCall {
+                call_id: "decision-list-other-session".into(),
+                name: "decision.list".into(),
+                arguments: json!({"status": "active"}),
+            },
+            context("session-b"),
+        )
+        .await
+        .expect("workspace decision list");
+    let listed_from_other_session: serde_json::Value =
+        serde_json::from_str(&listed_from_other_session.output).expect("list JSON");
+    assert_eq!(listed_from_other_session[0]["id"], decision["id"]);
+    {
+        let policy_requests = decision_policy_requests
+            .lock()
+            .expect("workspace decision policy requests");
+        assert_eq!(policy_requests.len(), 4);
+        for request in policy_requests.iter() {
+            assert_eq!(request.resource, "workspace:decisions");
+            if request.phase == EffectPhase::PreEffect {
+                assert_eq!(request.content["scope"], "workspace");
+            }
+        }
+    }
+
+    let updated = executor
+        .execute(
+            ToolCall {
+                call_id: "decision-update-other-session".into(),
+                name: "decision.update".into(),
+                arguments: json!({
+                    "id": decision["id"],
+                    "decision": "All new implementation and maintenance work is Rust."
+                }),
+            },
+            context("session-b"),
+        )
+        .await
+        .expect("workspace decision update");
+    let updated: serde_json::Value = serde_json::from_str(&updated.output).expect("update JSON");
+    assert_eq!(updated["session_id"], "session-a");
+    assert_eq!(
+        updated["decision"],
+        "All new implementation and maintenance work is Rust."
+    );
+
+    let superseded = executor
+        .execute(
+            ToolCall {
+                call_id: "decision-supersede-other-session".into(),
+                name: "decision.supersede".into(),
+                arguments: json!({
+                    "id": decision["id"],
+                    "title": "Rust implementation",
+                    "decision": "All maintained implementation is Rust."
+                }),
+            },
+            context("session-b"),
+        )
+        .await
+        .expect("workspace decision supersession");
+    let superseded: serde_json::Value =
+        serde_json::from_str(&superseded.output).expect("supersede JSON");
+    let replacement_id = superseded[1]["id"].as_str().expect("replacement id");
+    assert_eq!(superseded[0]["status"], "superseded");
+    assert_eq!(superseded[1]["session_id"], "session-a");
+    assert_eq!(superseded[1]["supersedes"], decision["id"]);
+
+    let archived = executor
+        .execute(
+            ToolCall {
+                call_id: "decision-archive-other-session".into(),
+                name: "decision.archive".into(),
+                arguments: json!({"id": replacement_id}),
+            },
+            context("session-b"),
+        )
+        .await
+        .expect("workspace decision archive");
+    let archived: serde_json::Value = serde_json::from_str(&archived.output).expect("archive JSON");
+    assert_eq!(archived["status"], "archived");
+    assert_eq!(archived["session_id"], "session-a");
 
     let task_events = journal
         .read_stream(&format!("task:{task_id}"))
@@ -5506,7 +5629,7 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
     assert!(
         requests[1].messages[0]
             .content
-            .starts_with("[Binding active key decisions]")
+            .starts_with("[Binding active workspace key decisions]")
     );
     assert!(
         requests[1].messages[0]

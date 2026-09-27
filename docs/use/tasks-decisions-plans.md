@@ -9,8 +9,9 @@ type: how-to
 
 ## Goal
 
-Turn a session into durable, inspectable work: a task for status, a decision that steers
-future turns, and an approved plan whose execution is explicit.
+Turn a session into durable, inspectable work: a task for status, a key decision that
+steers future turns throughout the workspace, and an approved plan whose execution is
+explicit.
 
 ## Prerequisites
 
@@ -44,8 +45,14 @@ colossus --config .colossus/config.yaml decisions list \
   --session SESSION_ID
 ```
 
-Active decisions enter later model context as commitments. Archive or supersede a
-decision when it no longer applies; do not create a contradictory active duplicate.
+Active decisions enter later model context in every session of the same workspace state
+as commitments. Desktop and CLI/TUI retain separate state partitions for a workspace,
+so decisions do not cross those interface boundaries. The creating session remains on
+each record as provenance. Existing active decisions also gain this workspace-wide reach;
+no migration or duplicate is needed.
+Archive or supersede a decision when it no longer applies; do not create a contradictory
+active duplicate. `decisions list` without `--session` shows decisions across the
+workspace, while `--session` filters by their origin.
 
 ### 3. Generate a non-mutating plan
 
@@ -209,8 +216,9 @@ Confirm the session identity, lifecycle status, and latest revision on each reco
   automatically. Inspect `/plans` and the linked run or Goal evidence first.
 - **A Goal remains Active after cancellation or failure:** use
   `/goal resume GOAL_ID`; a new Goal would discard the remaining-budget lineage.
-- **A task or decision belongs to another session:** use the owning session rather than
-  copying its identifier into unrelated work.
+- **A task belongs to another session:** use its owning session rather than copying its
+  identifier into unrelated work. Key decisions can be inspected and managed from other
+  sessions in the same workspace state.
 - **A decision is outdated:** supersede or archive it so later context is unambiguous.
 
 ## Next step

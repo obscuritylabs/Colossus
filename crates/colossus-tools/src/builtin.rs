@@ -421,7 +421,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "decision.create".into(),
-            description: "Record an agent-interpreted durable decision for the current session."
+            description: "Record an agent-interpreted decision that applies across this workspace."
                 .into(),
             input_schema: decision_content_schema(false),
             effect_action: Some("decision.create".into()),
@@ -430,7 +430,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "decision.update".into(),
-            description: "Update one active durable decision in the current session.".into(),
+            description: "Update one active decision in this workspace.".into(),
             input_schema: decision_update_schema(),
             effect_action: Some("decision.update".into()),
             capability: Some("decision.update".into()),
@@ -438,7 +438,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "decision.list".into(),
-            description: "List bounded durable decisions from the current session.".into(),
+            description: "List bounded durable decisions from this workspace.".into(),
             input_schema: object_schema(
                 json!({
                     "status": {"type": "string", "enum": ["active", "archived", "superseded"]},
@@ -452,7 +452,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "decision.archive".into(),
-            description: "Archive one active durable decision in the current session.".into(),
+            description: "Archive one active decision in this workspace.".into(),
             input_schema: object_schema(
                 json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
                 &["id"],

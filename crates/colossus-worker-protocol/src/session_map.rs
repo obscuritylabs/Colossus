@@ -105,12 +105,14 @@ pub struct WorkerSessionGoal {
     pub updated_at: String,
 }
 
-/// One canonical key decision released for the selected session map.
+/// One workspace-wide key decision released for the selected session map.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkerSessionDecision {
     /// Durable decision identifier.
     pub id: String,
+    /// Session where the decision was originally recorded.
+    pub session_id: String,
     /// Owning goal identifier when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_id: Option<String>,

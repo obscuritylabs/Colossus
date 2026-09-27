@@ -160,6 +160,9 @@ current runtime.
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
 | Diagnostics | `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off`, `/tools` |
 
+`/decisions` lists active key decisions across the selected workspace state; `/tasks`
+and `/plans` remain tied to the current session.
+
 Use `/resume` or `/session resume` without an ID for the searchable master-detail
 browser; exact session IDs are accepted when deterministic selection matters. The
 browser keeps the running-command row, composer draft, and status footer visible while

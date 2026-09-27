@@ -91,7 +91,7 @@ impl WorkService {
         self.repository.update_task(task, actor)
     }
 
-    /// Create one active future-facing decision.
+    /// Create one active workspace decision with its originating session.
     #[allow(clippy::too_many_arguments)]
     pub fn create_decision(
         &self,
