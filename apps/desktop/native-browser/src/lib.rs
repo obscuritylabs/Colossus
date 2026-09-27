@@ -6,6 +6,8 @@
 
 mod engine;
 mod navigation;
+#[cfg(any(target_os = "macos", test))]
+mod response;
 mod types;
 
 #[cfg(target_os = "macos")]

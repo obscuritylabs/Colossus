@@ -34,13 +34,26 @@ if (build.status !== 0) process.exit(build.status ?? 1);
 // Native code creates this new directory with an owner-only DACL. Windows' shared
 // temp ancestors do not satisfy Colossus home namespace-authority requirements.
 const root = join(homedir(), `.colossus-browser-acceptance-${randomUUID()}`);
+const downloads = {
+  "/download": ["application/octet-stream", "Synthetic browser fixture"],
+  "/download-html": [
+    "text/html",
+    "<!doctype html><title>Attachment payload</title>",
+  ],
+  "/download-text": ["text/plain", "Synthetic attachment text"],
+  "/download-pdf": [
+    "application/pdf",
+    "%PDF-1.4\n% Synthetic attachment\n%%EOF",
+  ],
+};
 const server = createServer((request, response) => {
-  if (request.url === "/download") {
+  const download = downloads[request.url];
+  if (download) {
     response.writeHead(200, {
-      "Content-Type": "application/octet-stream",
+      "Content-Type": download[0],
       "Content-Disposition": 'attachment; filename="browser-fixture.txt"',
     });
-    response.end("Synthetic browser fixture");
+    response.end(download[1]);
     return;
   }
   response.writeHead(200, {

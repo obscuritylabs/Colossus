@@ -4,6 +4,7 @@
 pub(crate) mod acceptance;
 pub(crate) mod commands;
 mod dto;
+mod inspection;
 mod manager;
 mod registry;
 mod viewport;

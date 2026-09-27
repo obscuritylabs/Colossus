@@ -376,27 +376,38 @@ async fn handoffs(
         app.webviews().len() == 4,
         "popup created an unmanaged native view"
     );
-    action(
-        app,
-        BrowserAction::Navigate {
-            tab_id: b.to_owned(),
-            url: format!("{address}/download"),
-        },
-    )
-    .await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let snapshot = state
-        .browser
-        .snapshot()
-        .await
-        .map_err(|e| anyhow::anyhow!(e.message))?;
-    anyhow::ensure!(
-        snapshot
-            .tabs
-            .iter()
-            .any(|t| t.notice.as_deref().is_some_and(|n| n.contains("download"))),
-        "download lacked a visible fallback"
-    );
+    for endpoint in ["download", "download-html", "download-text", "download-pdf"] {
+        action(
+            app,
+            BrowserAction::Navigate {
+                tab_id: b.to_owned(),
+                url: format!("{address}/{endpoint}"),
+            },
+        )
+        .await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = state
+                .browser
+                .snapshot()
+                .await
+                .map_err(|e| anyhow::anyhow!(e.message))?;
+            if snapshot.tabs.iter().any(|tab| {
+                tab.id == b
+                    && tab
+                        .notice
+                        .as_deref()
+                        .is_some_and(|n| n.contains("download"))
+            }) {
+                break;
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "{endpoint} lacked a visible download fallback"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
     println!("PASS popup and download handling");
     Ok(())
 }

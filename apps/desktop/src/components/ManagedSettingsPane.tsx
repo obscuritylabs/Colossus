@@ -2745,7 +2745,7 @@ export function ManagedSettingsPane({
         </div>
       ) : null}
 
-      {failure ? (
+      {failure && query ? (
         <p className="managed-settings-message is-error" role="alert">
           {failure}
         </p>

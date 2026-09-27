@@ -4,7 +4,10 @@ use std::{cell::RefCell, collections::HashMap};
 
 use block2::DynBlock;
 use objc2::{MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::{MainThreadMarker, NSArray, NSError, NSObject, NSObjectProtocol, NSURL};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSError, NSHTTPURLResponse, NSObject, NSObjectProtocol, NSURL,
+    ns_string,
+};
 use objc2_web_kit::{
     WKFrameInfo, WKMediaCaptureType, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
     WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy, WKOpenPanelParameters,
@@ -76,7 +79,17 @@ define_class!(
             response: &WKNavigationResponse,
             reply: &DynBlock<dyn Fn(WKNavigationResponsePolicy)>,
         ) {
-            let allowed = unsafe { response.canShowMIMEType() };
+            // WebKit can render attachment responses; the HTTP disposition still
+            // requires the system-browser download fallback.
+            let native_response = unsafe { response.response() };
+            let disposition = native_response
+                .downcast_ref::<NSHTTPURLResponse>()
+                .and_then(|http| http.valueForHTTPHeaderField(ns_string!("Content-Disposition")))
+                .map(|value| value.to_string());
+            let allowed = crate::response::allows_response(
+                unsafe { response.canShowMIMEType() },
+                disposition.as_deref(),
+            );
             if !allowed {
                 (self.ivars().sink)(BrowserEvent::Download);
             }

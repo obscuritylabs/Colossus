@@ -9,6 +9,7 @@ use tauri::{
 
 use super::{
     dto::{BrowserAction, BrowserSnapshotDto, BrowserTabDto},
+    inspection::{SNAPSHOT_BUDGET, collect_pages},
     registry::{MAX_TABS, Registry, Tab},
 };
 use crate::{desktop_settings::SettingsStore, dto::CommandErrorDto};
@@ -101,23 +102,24 @@ impl BrowserManager {
                 .map(|t| (t.dto.id.clone(), t.view.clone()))
                 .collect()
         };
-        for (id, view) in views {
-            if let Ok(mut page) = engine::inspect(&view).await {
-                let mut state = self.lock()?;
-                if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
-                    #[cfg(windows)]
-                    {
-                        page.loading = tab.dto.page.loading;
-                    }
-                    if page.url == "about:blank" {
-                        if page.loading {
-                            page.url.clone_from(&tab.dto.page.url);
-                        } else {
-                            page.url.clear();
-                        }
-                    }
-                    tab.dto.page = page;
+        let inspections = views
+            .into_iter()
+            .map(|(id, view)| async move { (id, engine::inspect(&view).await) });
+        for (id, mut page) in collect_pages(inspections, SNAPSHOT_BUDGET).await {
+            let mut state = self.lock()?;
+            if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
+                #[cfg(windows)]
+                {
+                    page.loading = tab.dto.page.loading;
                 }
+                if page.url == "about:blank" {
+                    if page.loading {
+                        page.url.clone_from(&tab.dto.page.url);
+                    } else {
+                        page.url.clear();
+                    }
+                }
+                tab.dto.page = page;
             }
         }
         Ok(self.lock()?.snapshot())
