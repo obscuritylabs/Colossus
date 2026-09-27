@@ -12,6 +12,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -110,7 +111,7 @@ test("Desktop surfaces use the shared theme and readable typography contracts", 
   );
 });
 
-test("Tauri bundles only the two native-owned executables", () => {
+test("development Tauri configuration uses prepared native executables", () => {
   const config = json("apps/desktop/src-tauri/tauri.conf.json");
   assert.equal(config.build.removeUnusedCommands, true);
   assert.equal(config.bundle.active, true);
@@ -165,6 +166,8 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
   assert.equal(packaging.match(/"--config", \$TauriOverridePath/gu)?.length, 2);
   assert.doesNotMatch(packaging, /\$VersionOverride/u);
   assert.match(packaging, /write-desktop-bundle-manifest\.mjs/u);
+  assert.match(packaging, /stage-ripgrep\.mjs/u);
+  assert.match(packaging, /--ripgrep \$StagedRipgrep/u);
   assert.match(packaging, /patch-desktop-manifest-binding\.mjs/u);
   const detach = packaging.indexOf("[IO.File]::Move");
   const binding = packaging.indexOf("patch-desktop-manifest-binding.mjs");
@@ -928,11 +931,14 @@ test("release packaging records hashes only after nested signing", () => {
   const source = read("scripts/package-desktop-macos");
   const sidecar = source.indexOf('sign_one "$sidecar"');
   const cli = source.indexOf('sign_one "$cli"');
+  const ripgrep = source.indexOf('sign_one "$rg"');
   const manifest = source.indexOf("write-desktop-bundle-manifest.mjs");
   const binding = source.indexOf("patch-desktop-manifest-binding.mjs");
   const main = source.indexOf('sign_one "$main"');
   const app = source.indexOf('sign_one "$app"');
-  assert.ok(sidecar >= 0 && sidecar < cli && cli < manifest);
+  assert.ok(sidecar >= 0 && sidecar < cli && cli < ripgrep && ripgrep < manifest);
+  assert.match(source, /stage-ripgrep\.mjs/u);
+  assert.match(source, /--ripgrep "\$rg"/u);
   assert.ok(manifest < binding && binding < main && main < app);
   assert.equal(/codesign\s+--force[^\n]*--deep/u.test(source), false);
   assert.match(source, /COLOSSUS_DESKTOP_NOTARY_KEYCHAIN/u);
@@ -1329,12 +1335,20 @@ test("release manifest writer emits exact final binary digests", () => {
     );
     mkdirSync(macos, { recursive: true, mode: 0o755 });
     mkdirSync(resources, { recursive: true, mode: 0o755 });
+    const notices = join(resources, "ripgrep");
+    mkdirSync(notices, { mode: 0o755 });
+    for (const name of ["COPYING", "LICENSE-MIT", "UNLICENSE"]) {
+      writeFileSync(join(notices, name), "test license\n", { mode: 0o644 });
+    }
     const sidecar = join(macos, "colossus-sidecar");
     const cli = join(macos, "colossus");
+    const ripgrep = join(macos, "rg");
     copyFileSync(process.execPath, sidecar);
     copyFileSync(process.execPath, cli);
+    copyFileSync(process.execPath, ripgrep);
     chmodSync(sidecar, 0o755);
     chmodSync(cli, 0o755);
+    chmodSync(ripgrep, 0o755);
     const output = join(resources, "colossus-bundle-manifest.json");
     execFileSync(process.execPath, [
       join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
@@ -1346,17 +1360,20 @@ test("release manifest writer emits exact final binary digests", () => {
       sidecar,
       "--cli",
       cli,
+      "--ripgrep",
+      ripgrep,
       "--output",
       output,
     ]);
     const manifest = JSON.parse(readFileSync(output, "utf8"));
     assert.deepEqual(manifest, {
-      schemaVersion: 2,
+      schemaVersion: 3,
       targetTriple: "aarch64-apple-darwin",
       profile: "release",
       releaseChannel: "developer_preview",
       sidecar: { fileName: "colossus-sidecar", sha256: digest(sidecar) },
       cli: { fileName: "colossus", sha256: digest(cli) },
+      ripgrep: { fileName: "rg", sha256: digest(ripgrep) },
     });
     if (process.platform !== "win32") {
       assert.equal(lstatSync(output).mode & 0o777, 0o644);
@@ -1381,6 +1398,18 @@ test("release manifest writer emits exact final binary digests", () => {
         "stable",
       ]);
       assert.notEqual(wrongChannel.status, 0);
+      appendFileSync(ripgrep, "tampered");
+      const tamperedRipgrep = spawnSync(process.execPath, [
+        join(repository, "scripts/verify-desktop-bundle.mjs"),
+        "--app",
+        join(root, "Colossus Desktop.app"),
+        "--target",
+        "aarch64-apple-darwin",
+        "--release-channel",
+        "developer_preview",
+      ]);
+      assert.notEqual(tamperedRipgrep.status, 0);
+      copyFileSync(process.execPath, ripgrep);
       appendFileSync(cli, "tampered");
       const tampered = spawnSync(process.execPath, [
         join(repository, "scripts/verify-desktop-bundle.mjs"),
@@ -1407,6 +1436,8 @@ test("release manifest writer emits exact final binary digests", () => {
         sidecar,
         "--cli",
         cli,
+        "--ripgrep",
+        ripgrep,
         "--output",
         output,
       ]);
@@ -1424,10 +1455,13 @@ test("release manifest writer uses final Windows executable names", () => {
   try {
     const sidecar = join(root, "colossus-sidecar-x86_64-pc-windows-msvc.exe");
     const cli = join(root, "colossus-x86_64-pc-windows-msvc.exe");
+    const ripgrep = join(root, "rg-x86_64-pc-windows-msvc.exe");
     copyFileSync(process.execPath, sidecar);
     copyFileSync(process.execPath, cli);
+    copyFileSync(process.execPath, ripgrep);
     chmodSync(sidecar, 0o755);
     chmodSync(cli, 0o755);
+    chmodSync(ripgrep, 0o755);
     const output = join(root, "colossus-bundle-manifest.json");
     execFileSync(process.execPath, [
       join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
@@ -1439,11 +1473,13 @@ test("release manifest writer uses final Windows executable names", () => {
       sidecar,
       "--cli",
       cli,
+      "--ripgrep",
+      ripgrep,
       "--output",
       output,
     ]);
     assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), {
-      schemaVersion: 2,
+      schemaVersion: 3,
       targetTriple: "x86_64-pc-windows-msvc",
       profile: "release",
       releaseChannel: "developer_preview",
@@ -1452,6 +1488,7 @@ test("release manifest writer uses final Windows executable names", () => {
         sha256: digest(sidecar),
       },
       cli: { fileName: "colossus.exe", sha256: digest(cli) },
+      ripgrep: { fileName: "rg.exe", sha256: digest(ripgrep) },
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

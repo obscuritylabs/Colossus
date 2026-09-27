@@ -558,6 +558,16 @@ impl GatewayToolExecutor {
                 message: "argv[0] must name an executable".into(),
             });
         }
+        let managed = if is_ripgrep_name(requested) {
+            managed_ripgrep().map_err(|message| ToolError::Denied(message.into()))?
+        } else {
+            None
+        };
+        if let Some(ref executable) = managed
+            && (danger_full_access || self.executables.contains(executable))
+        {
+            return Ok(executable.clone());
+        }
         if danger_full_access {
             return ambient_executable(requested).ok_or_else(|| {
                 ToolError::Denied(format!(
@@ -598,9 +608,12 @@ impl GatewayToolExecutor {
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [executable] => Ok((*executable).clone()),
-            [] => Err(ToolError::Denied(format!(
-                "executable {requested} is not explicitly configured"
-            ))),
+            [] => Err(ToolError::Denied(if managed.is_some() {
+                "managed ripgrep is installed but this sandbox does not grant its exact executable path"
+                    .into()
+            } else {
+                format!("executable {requested} is not explicitly configured")
+            })),
             _ => Err(ToolError::Denied(format!(
                 "executable name {requested} is ambiguous; use its configured absolute path"
             ))),
@@ -733,6 +746,13 @@ impl GatewayToolExecutor {
         roots.sort();
         roots.dedup();
         roots.truncate(MAX_ROOTS);
+        if let Ok(Some(ripgrep)) = managed_ripgrep()
+            && self.executables.contains(&ripgrep)
+            && let Some(directory) = ripgrep.parent()
+        {
+            roots.retain(|root| root != directory);
+            roots.insert(0, directory.to_path_buf());
+        }
         std::env::join_paths(roots)
             .map(|path| path.to_string_lossy().into_owned())
             .map_err(|error| ToolError::Failed(format!("cannot construct sanitized PATH: {error}")))

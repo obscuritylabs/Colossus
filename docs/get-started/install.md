@@ -31,13 +31,34 @@ checksum mismatches.
 
 Choose one installation owner and keep using it for upgrades:
 
-- **Direct installer (recommended):** one native binary, an owner-local receipt, and
-  install-aware `colossus update` support.
+- **Direct installer (recommended):** the native CLI, pinned ripgrep, an owner-local
+  receipt, and install-aware `colossus update` support.
 - **Nix:** the repository flake installs the latest release pinned in that flake; Nix
   remains the owner and `colossus update` will not mutate the store.
 - **Homebrew:** the official `obscuritylabs/homebrew-tap` installs the reviewed native
   macOS archive; Homebrew remains the owner for upgrades and removal.
 - **Manual archive:** the offline and root-owned system-install path.
+
+Releases built with managed ripgrep include version 15.2.0 for each supported
+target. The release build downloads the pinned upstream archive and verifies its
+SHA-256 from
+[`release/ripgrep.json`](https://github.com/obscuritylabs/Colossus/blob/main/release/ripgrep.json),
+and carries its `COPYING`, `LICENSE-MIT`, and `UNLICENSE` notices. Installation and
+subsequent workspace searches require no ripgrep download. The direct installer keeps
+the tool at `PREFIX/bin/.colossus-tools/VERSION/rg` (`rg.exe` on Windows), beside the
+CLI. Per-user tool directories stay owner private. A root-owned install under a public
+prefix makes the tool directories readable and executable by users without granting
+them write access. The tool is not added to the user's PATH.
+Homebrew and Nix place it beside their underlying CLI executable in `libexec`; Desktop
+places it beside the sidecar in the application bundle. Each package manager or Desktop
+updater owns replacement and removal of its copy.
+
+`filesystem.search` remains the built-in, policy-checked search tool. It works in Plan
+Mode without running a process and continues to honor its existing workspace and ignore
+rules. `shell.run` can resolve the managed `rg` for an approved execution context; the
+managed copy takes precedence over a system copy when its exact executable is granted.
+Installing ripgrep does not grant shell execution where policy denies it. Source builds
+without a managed copy can still use an explicitly granted system `rg`.
 
 ## Steps
 
@@ -313,6 +334,11 @@ release.
 Inspect the receipt before removing anything. Confirm that `installerKind` is `direct`
 and that `binaryPath` is the executable you intend to remove. Delete that one binary
 and the receipt; remove the parent directories only when they are empty.
+The versioned ripgrep directory is retained across upgrades so a running older
+Colossus process can finish. After all older processes have exited, remove obsolete
+version directories under `PREFIX/bin/.colossus-tools`; on full uninstall, remove the
+current version directory too. Inspect these directories before removing them, using
+the same ownership checks as the binary and receipt.
 
 === "macOS and Linux"
 

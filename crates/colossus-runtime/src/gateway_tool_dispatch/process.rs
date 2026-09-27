@@ -13,6 +13,7 @@ impl GatewayToolExecutor {
                 let danger_full_access = self.danger_full_access(&context);
                 let command = optional_tool_string(&call, "command")?;
                 let argv = optional_tool_string_array(&call, "argv")?;
+                let command_mode = command.is_some();
                 if command.is_some() == argv.is_some() {
                     return Err(ToolError::InvalidArguments {
                         tool: call.name.clone(),
@@ -62,6 +63,24 @@ impl GatewayToolExecutor {
                     model_workspace_path(&self.workspace, requested_cwd)?
                 };
                 let mut environment = optional_tool_environment(&call, "env")?;
+                if danger_full_access
+                    && command_mode
+                    && let Ok(Some(ripgrep)) = managed_ripgrep()
+                    && let Some(directory) = ripgrep.parent()
+                {
+                    let mut roots = vec![directory.to_path_buf()];
+                    if let Some(requested_path) = environment
+                        .get("PATH")
+                        .map(|value| std::ffi::OsString::from(value.as_str()))
+                        .or_else(|| std::env::var_os("PATH"))
+                    {
+                        roots.extend(std::env::split_paths(&requested_path));
+                    }
+                    let path = std::env::join_paths(roots).map_err(|error| {
+                        ToolError::Failed(format!("cannot construct managed PATH: {error}"))
+                    })?;
+                    environment.insert("PATH".into(), path.to_string_lossy().into_owned());
+                }
                 let _isolated = if danger_full_access {
                     None
                 } else {

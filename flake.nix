@@ -51,13 +51,26 @@
             installPhase = ''
               runHook preInstall
               install -Dm755 colossus "$out/libexec/colossus"
+              if test -f tools/rg; then
+                install -Dm755 tools/rg "$out/libexec/rg"
+                for notice in COPYING LICENSE-MIT UNLICENSE; do
+                  install -Dm644 "tools/$notice" "$out/share/licenses/colossus/ripgrep/$notice"
+                done
+                bundled_rg=1
+              else
+                bundled_rg=0
+              fi
               makeWrapper "$out/libexec/colossus" "$out/bin/colossus" \
-                --set COLOSSUS_INSTALLER_KIND nix
+                --set COLOSSUS_INSTALLER_KIND nix \
+                --set COLOSSUS_BUNDLED_RIPGREP "$bundled_rg"
               runHook postInstall
             '';
             doInstallCheck = true;
             installCheckPhase = ''
               test "$("$out/bin/colossus" --version)" = "colossus ${version}"
+              if test -x "$out/libexec/rg"; then
+                "$out/libexec/rg" --version | grep '^ripgrep 15.2.0'
+              fi
             '';
             meta = {
               description = "Auditable runtime for agent work and durable automation";

@@ -379,6 +379,14 @@ LC_ALL=C sort "$entries" > "$sorted_entries"
         "$package/colossus" \
         "$package/install-metadata" \
         "$package/install.sh"
+    if LC_ALL=C grep -q "^$package/tools/" "$entries"; then
+        printf '%s\n' \
+            "$package/tools/" \
+            "$package/tools/rg" \
+            "$package/tools/COPYING" \
+            "$package/tools/LICENSE-MIT" \
+            "$package/tools/UNLICENSE"
+    fi
     if [ "$kernel" = Linux ]; then
         printf '%s\n' \
             "$package/colossus.apparmor.in" \
@@ -402,13 +410,20 @@ package_root=$extract_root/$package
 if ! { [ -d "$package_root" ] && [ ! -L "$package_root" ]; }; then
     fail "archive root is unsafe"
 fi
-for regular_file in LICENSE README.md colossus install-metadata install.sh; do
+required_files='LICENSE README.md colossus install-metadata install.sh'
+if [ -d "$package_root/tools" ]; then
+    required_files="$required_files tools/rg tools/COPYING tools/LICENSE-MIT tools/UNLICENSE"
+fi
+for regular_file in $required_files; do
     if ! { [ -f "$package_root/$regular_file" ] && [ ! -L "$package_root/$regular_file" ]; }; then
         fail "archive member is missing, linked, or not regular: $regular_file"
     fi
 done
 if ! { [ -x "$package_root/colossus" ] && [ -x "$package_root/install.sh" ]; }; then
     fail "archive executables do not have the required mode"
+fi
+if [ -d "$package_root/tools" ] && [ ! -x "$package_root/tools/rg" ]; then
+    fail "archive ripgrep is not executable"
 fi
 
 metadata=$package_root/install-metadata

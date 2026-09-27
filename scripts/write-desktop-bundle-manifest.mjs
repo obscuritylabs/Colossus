@@ -29,6 +29,7 @@ const EXPECTED_ARGUMENTS = new Set([
   "--release-channel",
   "--sidecar",
   "--cli",
+  "--ripgrep",
   "--output",
 ]);
 
@@ -38,9 +39,9 @@ function fail(message) {
 }
 
 function parseArguments(argv) {
-  if (argv.length !== 10) {
+  if (argv.length !== 12) {
     fail(
-      "expected --target, --release-channel, --sidecar, --cli, and --output",
+      "expected --target, --release-channel, --sidecar, --cli, --ripgrep, and --output",
     );
   }
   const values = new Map();
@@ -108,6 +109,11 @@ const cli = validatedBinary(values.get("--cli"), [
   cliName,
   `colossus-${target}${windowsTarget ? ".exe" : ""}`,
 ]);
+const ripgrepName = windowsTarget ? "rg.exe" : "rg";
+const ripgrep = validatedBinary(values.get("--ripgrep"), [
+  ripgrepName,
+  `rg-${target}${windowsTarget ? ".exe" : ""}`,
+]);
 const output = values.get("--output");
 if (
   !isAbsolute(output) ||
@@ -125,7 +131,7 @@ if (realpathSync(parent) !== parent) {
 }
 
 const manifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   targetTriple: target,
   profile: "release",
   releaseChannel,
@@ -136,6 +142,10 @@ const manifest = {
   cli: {
     fileName: cliName,
     sha256: await sha256(cli),
+  },
+  ripgrep: {
+    fileName: ripgrepName,
+    sha256: await sha256(ripgrep),
   },
 };
 const temporary = join(parent, `.colossus-bundle-manifest.${process.pid}.tmp`);

@@ -48,6 +48,7 @@ release_channel=${COLOSSUS_DESKTOP_RELEASE_CHANNEL:-}
 desktop_identifier=com.obscuritylabs.colossus.desktop
 sidecar_identifier=com.obscuritylabs.colossus.desktop.sidecar
 cli_identifier=com.obscuritylabs.colossus.desktop.cli
+rg_identifier=com.obscuritylabs.colossus.desktop.ripgrep
 
 canonical_apple_team_id() {
     value=$1
@@ -140,8 +141,9 @@ validate_bundle_inputs() {
     main="$macos/$main_name"
     sidecar="$macos/colossus-sidecar"
     cli="$macos/colossus"
+    rg="$macos/rg"
     manifest="$resources/colossus-bundle-manifest.json"
-    for binary in "$sidecar" "$cli" "$main"; do
+    for binary in "$sidecar" "$cli" "$rg" "$main"; do
         [ ! -L "$binary" ] || fail "$binary must not be a symlink"
         [ -f "$binary" ] || fail "$binary is missing"
         chmod 0755 "$binary"
@@ -182,13 +184,16 @@ build_unsigned_app() {
     fi
 
     COLOSSUS_DESKTOP_TARGET=$target "$script_dir/prepare-desktop-binaries" release
+    node "$script_dir/stage-ripgrep.mjs" --target "$target" \
+        --output "$desktop/src-tauri/binaries" --binary-name "rg-$target"
 
     cd "$desktop"
+    tauri_override='{"bundle":{"externalBin":["binaries/colossus-sidecar","binaries/colossus","binaries/rg"],"resources":{"binaries/COPYING":"ripgrep/COPYING","binaries/LICENSE-MIT":"ripgrep/LICENSE-MIT","binaries/UNLICENSE":"ripgrep/UNLICENSE"}}}'
     if [ -n "$release_version" ]; then
-        tauri_override=$(printf '{"version":"%s"}' "$release_version")
+        tauri_override=$(printf '{"version":"%s","bundle":{"externalBin":["binaries/colossus-sidecar","binaries/colossus","binaries/rg"],"resources":{"binaries/COPYING":"ripgrep/COPYING","binaries/LICENSE-MIT":"ripgrep/LICENSE-MIT","binaries/UNLICENSE":"ripgrep/UNLICENSE"}}}' "$release_version")
         "$tauri" build --config "$tauri_override" --no-sign --bundles app -- --locked
     else
-        "$tauri" build --no-sign --bundles app -- --locked
+        "$tauri" build --config "$tauri_override" --no-sign --bundles app -- --locked
     fi
     cd "$repository"
 
@@ -257,11 +262,13 @@ sign_app() {
     # after their hashes have been recorded.
     sign_one "$sidecar" "$sidecar_identifier"
     sign_one "$cli" "$cli_identifier"
+    sign_one "$rg" "$rg_identifier"
     node "$script_dir/write-desktop-bundle-manifest.mjs" \
         --target "$target" \
         --release-channel "$release_channel" \
         --sidecar "$sidecar" \
         --cli "$cli" \
+        --ripgrep "$rg" \
         --output "$manifest"
 
     node "$script_dir/patch-desktop-manifest-binding.mjs" \
@@ -273,6 +280,7 @@ sign_app() {
 
     verify_signed_code "$sidecar" "$sidecar_identifier"
     verify_signed_code "$cli" "$cli_identifier"
+    verify_signed_code "$rg" "$rg_identifier"
     verify_signed_code "$main" "$desktop_identifier"
     verify_signed_code "$app" "$desktop_identifier"
     codesign --verify --deep --strict --verbose=2 "$app"
@@ -307,6 +315,7 @@ sign_app() {
         xcrun stapler staple "$app"
         verify_signed_code "$sidecar" "$sidecar_identifier"
         verify_signed_code "$cli" "$cli_identifier"
+        verify_signed_code "$rg" "$rg_identifier"
         verify_signed_code "$main" "$desktop_identifier"
         verify_signed_code "$app" "$desktop_identifier"
         codesign --verify --deep --strict --verbose=2 "$app"

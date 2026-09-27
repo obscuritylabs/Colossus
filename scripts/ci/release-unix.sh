@@ -38,6 +38,7 @@ rm -rf "$stage"
 mkdir -p "$stage" dist
 install -m 0755 "$binary" "$stage/colossus"
 install -m 0755 release/install.sh "$stage/install.sh"
+node scripts/stage-ripgrep.mjs --target "$target" --output "$stage/tools"
 cat > "$stage/install-metadata" <<EOF
 schema_version=1
 version=$version
@@ -75,6 +76,21 @@ cp release/smoke-config.yaml "$installed_smoke/config.yaml"
     cd "$installed_smoke"
     export COLOSSUS_HOME="$installed_smoke/colossus-home"
     "$prefix/bin/colossus" --version | grep '^colossus '
+    "$prefix/bin/.colossus-tools/$version/rg" --version | grep '^ripgrep 15.2.0'
+    mkdir -p 'search space'
+    printf 'unique-ripgrep-needle\n' > 'search space/naïve.txt'
+    printf 'ignored-ripgrep-needle\n' > 'search space/ignored.txt'
+    printf 'ignored.txt\n' > 'search space/.ignore'
+    "$prefix/bin/.colossus-tools/$version/rg" -l 'unique-ripgrep-needle' 'search space' |
+        grep -F 'search space/naïve.txt'
+    if "$prefix/bin/.colossus-tools/$version/rg" -l 'ignored-ripgrep-needle' 'search space'; then
+        echo 'managed ripgrep unexpectedly searched an ignored file' >&2
+        exit 1
+    fi
+    if "$prefix/bin/.colossus-tools/$version/rg" -l 'no-such-ripgrep-match' 'search space'; then
+        echo 'managed ripgrep unexpectedly reported an empty search result' >&2
+        exit 1
+    fi
     "$prefix/bin/colossus" --config config.yaml plugins list >plugins.json
     jq -e '.[0].origin == "bundled" and .[0].available and (.[0].skills | length) == 4' plugins.json >/dev/null
     "$prefix/bin/colossus" --config config.yaml run installed-offline >result.json

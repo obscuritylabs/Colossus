@@ -67,6 +67,7 @@ $ReleaseRoot = Join-Path $TargetRoot "$Target/release"
 $Main = Join-Path $ReleaseRoot "colossus-desktop.exe"
 $StagedSidecar = Join-Path $Native "binaries/colossus-sidecar-$Target.exe"
 $StagedCli = Join-Path $Native "binaries/colossus-$Target.exe"
+$StagedRipgrep = Join-Path $Native "binaries/rg-$Target.exe"
 $Manifest = Join-Path $Native "binaries/colossus-bundle-manifest.json"
 $Tauri = Join-Path $Desktop "node_modules/.bin/tauri.cmd"
 $TypeScript = Join-Path $Desktop "node_modules/.bin/tsc.cmd"
@@ -114,6 +115,13 @@ $TauriOverride = [ordered]@{
     }
     bundle = [ordered]@{
         createUpdaterArtifacts = $false
+        externalBin = @("binaries/colossus-sidecar", "binaries/colossus", "binaries/rg")
+        resources = [ordered]@{
+            "binaries/colossus-bundle-manifest.json" = "colossus-bundle-manifest.json"
+            "binaries/COPYING" = "ripgrep/COPYING"
+            "binaries/LICENSE-MIT" = "ripgrep/LICENSE-MIT"
+            "binaries/UNLICENSE" = "ripgrep/UNLICENSE"
+        }
     }
 }
 if ($ReleaseVersion) {
@@ -130,6 +138,11 @@ Push-Location $Repository
 try {
     cargo xtask desktop prepare --profile release --target $Target
     if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
+    node (Join-Path $PSScriptRoot "stage-ripgrep.mjs") `
+        --target $Target `
+        --output (Join-Path $Native "binaries") `
+        --binary-name "rg-$Target.exe"
+    if ($LASTEXITCODE -ne 0) { Fail "ripgrep staging failed" }
 
     Push-Location $Desktop
     try {
@@ -160,7 +173,7 @@ try {
         Pop-Location
     }
 
-    foreach ($Path in @($Main, $StagedSidecar, $StagedCli)) {
+    foreach ($Path in @($Main, $StagedSidecar, $StagedCli, $StagedRipgrep)) {
         if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
             Fail "expected release input is missing"
         }
@@ -175,6 +188,7 @@ try {
         --release-channel $env:COLOSSUS_DESKTOP_RELEASE_CHANNEL `
         --sidecar $StagedSidecar `
         --cli $StagedCli `
+        --ripgrep $StagedRipgrep `
         --output $Manifest
     if ($LASTEXITCODE -ne 0) { Fail "sealed bundle manifest generation failed" }
 

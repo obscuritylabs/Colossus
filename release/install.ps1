@@ -242,6 +242,8 @@ function Test-PrivilegedSystemInstall() {
 }
 
 $sourceBinary = Join-Path $PSScriptRoot "colossus.exe"
+$sourceTools = Join-Path $PSScriptRoot "tools"
+$sourceRipgrep = Join-Path $sourceTools "rg.exe"
 $metadataPath = Join-Path $PSScriptRoot "install-metadata"
 if (-not (Test-Path -LiteralPath $sourceBinary -PathType Leaf)) {
     Throw-InstallerError "package colossus.exe is missing"
@@ -249,6 +251,16 @@ if (-not (Test-Path -LiteralPath $sourceBinary -PathType Leaf)) {
 $sourceItem = Get-Item -LiteralPath $sourceBinary -Force
 if (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     Throw-InstallerError "package colossus.exe cannot be a link or reparse point"
+}
+foreach ($toolFile in @("rg.exe", "COPYING", "LICENSE-MIT", "UNLICENSE")) {
+    $path = Join-Path $sourceTools $toolFile
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Throw-InstallerError "package ripgrep or its license notices are missing"
+    }
+    $item = Get-Item -LiteralPath $path -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        Throw-InstallerError "package ripgrep or its license notices cannot be linked"
+    }
 }
 if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
     Throw-InstallerError "package installation metadata is missing"
@@ -305,7 +317,6 @@ $binaryVersion = (& $sourceBinary --version | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $binaryVersion -cne "colossus $($metadata.version)") {
     Throw-InstallerError "package binary version disagrees with metadata"
 }
-
 $colossusHome = $null
 if (-not (Test-PrivilegedSystemInstall)) {
     $colossusHome = Initialize-ColossusHome
@@ -316,6 +327,36 @@ Assert-NoReparseComponents $binDirectory
 New-Item -ItemType Directory -Path $binDirectory -Force | Out-Null
 Assert-NoReparseComponents $binDirectory
 Assert-OwnedDirectory $binDirectory
+$toolRoot = Join-Path $binDirectory ".colossus-tools"
+Assert-NoReparseComponents $toolRoot
+New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+Assert-NoReparseComponents $toolRoot
+Assert-OwnedDirectory $toolRoot
+$toolDirectory = Join-Path $toolRoot $metadata.version
+if (Test-Path -LiteralPath $toolDirectory) {
+    Assert-NoReparseComponents $toolDirectory
+    Assert-OwnedDirectory $toolDirectory
+    foreach ($toolFile in @("rg.exe", "COPYING", "LICENSE-MIT", "UNLICENSE")) {
+        $existing = Join-Path $toolDirectory $toolFile
+        if (-not (Test-Path -LiteralPath $existing -PathType Leaf) -or
+            ((Get-Item -LiteralPath $existing -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            (Get-FileHash -LiteralPath $existing -Algorithm SHA256).Hash -cne
+                (Get-FileHash -LiteralPath (Join-Path $sourceTools $toolFile) -Algorithm SHA256).Hash) {
+            Throw-InstallerError "existing managed ripgrep differs from this release; inspect $toolDirectory"
+        }
+    }
+} else {
+    $temporaryToolDirectory = Join-Path $toolRoot (".install." + [Guid]::NewGuid())
+    New-Item -ItemType Directory -Path $temporaryToolDirectory | Out-Null
+    try {
+        foreach ($toolFile in @("rg.exe", "COPYING", "LICENSE-MIT", "UNLICENSE")) {
+            Copy-Item -LiteralPath (Join-Path $sourceTools $toolFile) -Destination (Join-Path $temporaryToolDirectory $toolFile)
+        }
+        [IO.Directory]::Move($temporaryToolDirectory, $toolDirectory)
+    } finally {
+        Remove-Item -LiteralPath $temporaryToolDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 $receiptRoot = $env:LOCALAPPDATA
 if ([string]::IsNullOrWhiteSpace($receiptRoot)) {
@@ -413,6 +454,7 @@ if (-not $binaryCommitted) {
     Throw-InstallerError "installation did not commit"
 }
 Write-Output "installed $target"
+Write-Output "installed managed ripgrep at $(Join-Path $toolDirectory 'rg.exe')"
 Write-Output "recorded direct installation receipt at $receipt"
 if ($null -ne $colossusHome) {
     Write-Output "prepared Colossus home at $colossusHome"
